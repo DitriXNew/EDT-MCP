@@ -12,41 +12,48 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
-import java.util.function.BiFunction;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
- * Tests for the post-write disk-export barrier in {@link AbstractMetadataWriteTool} (issue #406).
+ * Tests for the post-write disk-export barrier in {@link AbstractMetadataWriteTool} (issues #406 and
+ * #408).
  * <p>
  * The behaviour under test is the DECISION: a metadata write whose {@code .mdo} export has not
  * reached disk must not answer "done", because the two files a top-object change touches are
- * exported as independent tasks, so the working tree passes through a state where the
- * configuration references an object whose file is already gone.
+ * exported as independent tasks, so the working tree passes through a state where the configuration
+ * references an object whose file is already gone.
  * <p>
- * These tests drive {@link AbstractMetadataWriteTool#awaitDiskExport} directly rather than
- * {@code execute}: the latter marshals onto the SWT UI thread, which no headless test has. The
- * export environment is stubbed through the package-visible seam, which is also what lets the
- * false-refusal cases be asserted at all - "the wait could not observe anything" has to be
- * distinguishable from "the wait observed a pending export".
+ * Since #408 the barrier no longer re-derives WHERE the write went from the response; the call
+ * states it through a {@link WriteScope} while it runs. These tests therefore drive
+ * {@link AbstractMetadataWriteTool#awaitDiskExport} with an explicit scope - {@code execute} would
+ * marshal onto the SWT UI thread, which no headless test has. The export environment is stubbed
+ * through the package-visible seam, which is also what lets the false-refusal cases be asserted at
+ * all: "the wait could not observe anything" has to be distinguishable from "the wait observed a
+ * pending export".
  */
 public class AbstractMetadataWriteToolTest
 {
     private static final String PROJECT = "TestConfiguration"; //$NON-NLS-1$
     private static final String EXTENSION = "TestConfiguration.tests"; //$NON-NLS-1$
 
-    /** Records what the barrier asked about, so a wait on the WRONG project is visible. */
+    /** Records what the barrier asked about, in order, so a wait on the WRONG project is visible. */
     private static final class RecordingEnvironment implements AbstractMetadataWriteTool.IExportEnvironment
     {
         private final DiskExportState answer;
+        final List<String> asked = new ArrayList<>();
         String askedFor;
         long deadlineMs;
         int calls;
@@ -59,6 +66,7 @@ public class AbstractMetadataWriteToolTest
         @Override
         public DiskExportState waitForDiskExport(String projectName, long timeoutMs)
         {
+            asked.add(projectName);
             askedFor = projectName;
             deadlineMs = timeoutMs;
             calls++;
@@ -70,18 +78,12 @@ public class AbstractMetadataWriteToolTest
     private static class StubTool extends AbstractMetadataWriteTool
     {
         private final RecordingEnvironment environment;
-        private final BiFunction<Map<String, String>, JsonObject, Collection<String>> scope;
+
+        Boolean sawDrainEstablished;
 
         StubTool(RecordingEnvironment environment)
         {
-            this(environment, null);
-        }
-
-        StubTool(RecordingEnvironment environment,
-            BiFunction<Map<String, String>, JsonObject, Collection<String>> scope)
-        {
             this.environment = environment;
-            this.scope = scope;
         }
 
         @Override
@@ -91,9 +93,11 @@ public class AbstractMetadataWriteToolTest
         }
 
         @Override
-        protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
+        protected String refreshAfterExportAwait(Map<String, String> params, String result,
+            boolean drainEstablished)
         {
-            return scope == null ? super.exportProjectsToAwait(params, result) : scope.apply(params, result);
+            sawDrainEstablished = Boolean.valueOf(drainEstablished);
+            return result;
         }
 
         @Override
@@ -133,11 +137,45 @@ public class AbstractMetadataWriteToolTest
         return ToolResult.success().put("action", "executed").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /** A scope that said nothing at all - the compatibility case. */
+    private static WriteScope silent()
+    {
+        return new WriteScope();
+    }
+
+    private static WriteScope wroteIn(String... projectNames)
+    {
+        WriteScope scope = new WriteScope();
+        for (String projectName : projectNames)
+        {
+            scope.wrote(projectName);
+        }
+        return scope;
+    }
+
+    /** @return the {@code writtenProjects} member, or {@code null} when it is absent */
+    private static List<String> publishedProjects(String json)
+    {
+        JsonObject object = JsonParser.parseString(json).getAsJsonObject();
+        if (!object.has(WriteScope.RESULT_MEMBER))
+        {
+            return null;
+        }
+        List<String> projects = new ArrayList<>();
+        JsonArray array = object.getAsJsonArray(WriteScope.RESULT_MEMBER);
+        for (int i = 0; i < array.size(); i++)
+        {
+            projects.add(array.get(i).getAsString());
+        }
+        return projects;
+    }
+
     @Test
     public void testPendingExportTurnsASuccessIntoAnActionableRefusal()
     {
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
-        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson());
+        String answer =
+            new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), wroteIn(PROJECT));
 
         assertTrue("a pending export must not be reported as success", //$NON-NLS-1$
             answer.contains("\"success\":false")); //$NON-NLS-1$
@@ -153,13 +191,16 @@ public class AbstractMetadataWriteToolTest
     }
 
     @Test
-    public void testDrainedExportReturnsTheToolsOwnResultUntouched()
+    public void testDrainedExportReturnsTheToolsOwnPayloadPlusItsWriteScope()
     {
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
         String result = successJson();
 
-        assertSame("a drained export must not rewrite the tool's answer", result, //$NON-NLS-1$
-            new StubTool(environment).awaitDiskExport(params(PROJECT), result));
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT));
+
+        assertTrue("a drained export must not rewrite the tool's own members: " + answer, //$NON-NLS-1$
+            answer.contains("\"action\":\"executed\"") && answer.contains("\"success\":true")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Collections.singletonList(PROJECT), publishedProjects(answer));
         assertEquals(1, environment.calls);
     }
 
@@ -170,7 +211,8 @@ public class AbstractMetadataWriteToolTest
         // waits for must be the number its refusal names - a message quoting a deadline the code
         // does not use is how an operator gets sent to look in the wrong place.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
-        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson());
+        String answer =
+            new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), wroteIn(PROJECT));
 
         // Close to the declared 60s, not merely "finite": an unbounded or wildly large deadline
         // would pass a `> 0` check while defeating the unattended-safety reason the bound exists.
@@ -189,10 +231,11 @@ public class AbstractMetadataWriteToolTest
         // evidence that anything is pending, and refusing on it would break healthy callers. This
         // is why the seam is tri-state and not a boolean.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.UNOBSERVABLE);
-        String result = successJson();
 
-        assertSame("an unobservable export state must not produce a refusal", result, //$NON-NLS-1$
-            new StubTool(environment).awaitDiskExport(params(PROJECT), result));
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), wroteIn(PROJECT));
+
+        assertTrue("an unobservable export state must not produce a refusal: " + answer, //$NON-NLS-1$
+            answer.contains("\"success\":true")); //$NON-NLS-1$
     }
 
     @Test
@@ -203,48 +246,61 @@ public class AbstractMetadataWriteToolTest
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
         String result = ToolResult.error("Node not found: Catalog.Nope").toJson(); //$NON-NLS-1$
 
-        assertSame(result, new StubTool(environment).awaitDiskExport(params(PROJECT), result));
+        assertSame(result, new StubTool(environment).awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT)));
         assertEquals("an error result must not reach the export wait", 0, environment.calls); //$NON-NLS-1$
     }
 
     @Test
-    public void testANonMutatingCallIsNeverWaitedOn()
+    public void testACallThatStatesItQueuedNothingIsNeverWaitedOn()
     {
         // A preview has no export of its own; making it wait would only let unrelated background
         // export work refuse it.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
-        String result = successJson();
+        WriteScope scope = new WriteScope();
+        scope.queuedNothing();
 
-        assertSame(result,
-            new StubTool(environment, (p, r) -> Collections.emptyList())
-                .awaitDiskExport(params(PROJECT), result));
+        StubTool tool = new StubTool(environment);
+        String answer = tool.awaitDiskExport(params(PROJECT), successJson(), scope);
+
         assertEquals("a preview must not reach the export wait", 0, environment.calls); //$NON-NLS-1$
+        // "Nothing was queued" is ESTABLISHED, not unknown: the post-wait step is entitled to run
+        // work that only makes sense once the queue is behind it.
+        assertEquals(Boolean.TRUE, tool.sawDrainEstablished);
+        // ... and the caller is told so with an empty list, which is a finding.
+        assertEquals(Collections.emptyList(), publishedProjects(answer));
     }
 
     @Test
-    public void testTheSameToolWaitsOrNotDependingOnWhatTheRESULTSays()
+    public void testSayingNothingAtAllIsNotTheSameAsSayingNothingWasQueued()
     {
-        // The no-op exemption has to discriminate on the RESULT, not on the tool or the arguments.
-        // adopt_metadata_object is the real case: "alreadyAdopted" is a SUCCESS that queued no
-        // export, while "adopted" on the very same tool, with the very same arguments, did. A hook
-        // that only saw the parameters could not tell these two apart, so it would either wait on
-        // a no-op (and let unrelated background work refuse a healthy call) or skip a real write.
-        BiFunction<Map<String, String>, JsonObject, Collection<String>> scope =
-            (p, r) -> "alreadyAdopted".equals(AbstractMetadataWriteTool.resultString(r, "action")) //$NON-NLS-1$ //$NON-NLS-2$
-                ? Collections.emptyList() : Collections.singletonList(p.get("projectName")); //$NON-NLS-1$
+        // The distinction the whole contract turns on. A tool that never states its scope is
+        // UNKNOWN, and unknown keeps the pre-#408 behaviour - wait for the project it was asked
+        // about - because assuming either extreme silently changes what a tool does.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
 
-        RecordingEnvironment onNoOp = new RecordingEnvironment(DiskExportState.PENDING);
-        String noOp = ToolResult.success().put("action", "alreadyAdopted").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-        assertSame("a successful no-op must not be refused over somebody else's pending export", //$NON-NLS-1$
-            noOp, new StubTool(onNoOp, scope).awaitDiskExport(params(PROJECT), noOp));
-        assertEquals("a no-op must not even reach the export wait", 0, onNoOp.calls); //$NON-NLS-1$
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), silent());
 
-        RecordingEnvironment onRealWrite = new RecordingEnvironment(DiskExportState.PENDING);
-        String wrote = ToolResult.success().put("action", "adopted").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-        String answer = new StubTool(onRealWrite, scope).awaitDiskExport(params(PROJECT), wrote);
-        assertEquals("a real write MUST still be waited on", 1, onRealWrite.calls); //$NON-NLS-1$
-        assertTrue("and a real write with a pending export must still be refused: " + answer, //$NON-NLS-1$
-            answer.contains("\"success\":false")); //$NON-NLS-1$
+        assertEquals("a silent call must still be waited for, as before #408", 1, environment.calls); //$NON-NLS-1$
+        assertEquals(PROJECT, environment.askedFor);
+        assertNull("an unknown scope must publish NOTHING - an empty list would claim a finding " //$NON-NLS-1$
+            + "the tool never made: " + answer, publishedProjects(answer)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnActualWriteBeatsAnEarlierStatementThatNothingWasQueued()
+    {
+        // resync_to_disk really is written this way: it reports "already in sync, nothing to
+        // export" and only THEN has its dangling-reference cleanup re-export Configuration.mdo. If
+        // the first statement won, that export would never be waited for.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
+        WriteScope scope = new WriteScope();
+        scope.queuedNothing();
+        scope.wrote(PROJECT);
+
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), scope);
+
+        assertEquals(1, environment.calls);
+        assertEquals(Collections.singletonList(PROJECT), publishedProjects(answer));
     }
 
     @Test
@@ -252,28 +308,108 @@ public class AbstractMetadataWriteToolTest
     {
         // adopt_metadata_object takes the BASE configuration by contract and writes into the
         // EXTENSION. A barrier keyed on projectName would wait for a project with nothing queued
-        // and pass while the real target is still exporting - so it must follow the result.
+        // and pass while the real target is still exporting.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
-        String result = ToolResult.success().put("extensionProject", EXTENSION).toJson(); //$NON-NLS-1$
 
-        new StubTool(environment,
-            (p, r) -> Collections.singletonList(AbstractMetadataWriteTool.resultString(r, "extensionProject"))) //$NON-NLS-1$
-                .awaitDiskExport(params(PROJECT), result);
+        String answer =
+            new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), wroteIn(EXTENSION));
 
         assertEquals("the barrier must wait for the project that was written, not the one asked for", //$NON-NLS-1$
             EXTENSION, environment.askedFor);
+        assertEquals(Collections.singletonList(EXTENSION), publishedProjects(answer));
     }
 
     @Test
-    public void testTheWaitFallsBackToProjectNameWhenTheDeclaredKeyIsAbsent()
+    public void testACascadeParticipantIsWaitedForButCanNeverRefuse()
     {
+        // The delete cascade: EDT's refactoring cleans the references held by dependent extensions,
+        // we never submitted anything there, and the set is "every open extension of the target" -
+        // what EDT SCANS. Awaiting it under the strict grade would let an unrelated wedged export in
+        // an untouched extension fail a healthy delete, which is why the grade exists.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
+        WriteScope scope = new WriteScope();
+        scope.cascadedInto(EXTENSION);
+
+        StubTool tool = new StubTool(environment);
+        String answer = tool.awaitDiskExport(params(PROJECT), successJson(), scope);
+
+        assertEquals("the participant must still be waited for", 1, environment.calls); //$NON-NLS-1$
+        assertEquals(EXTENSION, environment.askedFor);
+        assertTrue("a stall in a project we never submitted to must not refuse the call: " + answer, //$NON-NLS-1$
+            answer.contains("\"success\":true")); //$NON-NLS-1$
+        assertEquals("but it must not be reported as established either", Boolean.FALSE, //$NON-NLS-1$
+            tool.sawDrainEstablished);
+        // "The platform MAY have written here" must not be published under a name that says "wrote".
+        assertEquals(Collections.emptyList(), publishedProjects(answer));
+    }
+
+    @Test
+    public void testWrittenProjectsAreWaitedForBeforeCascadeParticipants()
+    {
+        // One budget covers the whole set, so the order decides who gets it: the projects a stall
+        // can actually be blamed on must be settled before the ones it cannot.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
-        // Declared key, but this particular branch did not report it.
-        String result = successJson();
+        WriteScope scope = new WriteScope();
+        scope.cascadedInto(EXTENSION);
+        scope.wrote(PROJECT);
 
-        new StubTool(environment).awaitDiskExport(params(PROJECT), result);
+        new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), scope);
 
-        assertEquals(PROJECT, environment.askedFor);
+        assertEquals(Arrays.asList(PROJECT, EXTENSION), environment.asked);
+    }
+
+    @Test
+    public void testAProjectBothWrittenAndCascadedIntoIsWaitedForOnceUnderTheStrongerGrade()
+    {
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
+        WriteScope scope = new WriteScope();
+        scope.wrote(PROJECT);
+        scope.cascadedInto(PROJECT);
+
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), scope);
+
+        assertEquals("one project, one wait", 1, environment.calls); //$NON-NLS-1$
+        assertTrue("and the grade that can refuse must win: " + answer, //$NON-NLS-1$
+            answer.contains("\"success\":false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWaitIsNotStartedOnASliceTooSmallToBeWorthIt()
+    {
+        // A slice too small to drain anything is not a cheap wait but a harmful one: the platform
+        // wait it starts cannot be cancelled, while the per-project claim that keeps a SECOND
+        // un-cancellable wait from being scheduled lapses after 3x its own timeout. So a leftover
+        // fraction of the shared budget must buy nothing rather than buy that. Before #408 the loop
+        // clamped the remainder to 1ms and started the wait anyway.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
+        StubTool tool = new StubTool(environment)
+        {
+            @Override
+            protected long exportDeadlineMs()
+            {
+                return 900L;
+            }
+        };
+
+        String answer = tool.awaitDiskExport(params(PROJECT), successJson(), wroteIn(PROJECT));
+
+        assertEquals("a slice below the floor must not start a wait at all", 0, environment.calls); //$NON-NLS-1$
+        assertTrue("and not starting a wait is not a refusal: " + answer, //$NON-NLS-1$
+            answer.contains("\"success\":true")); //$NON-NLS-1$
+        assertEquals("but nothing was established about that project either", Boolean.FALSE, //$NON-NLS-1$
+            tool.sawDrainEstablished);
+    }
+
+    @Test
+    public void testTheFloorDoesNotFireOnAFullBudget()
+    {
+        // The other half of the guard: with the real budget every declared project is still asked,
+        // so the floor cannot quietly turn the barrier off.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
+
+        new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), wroteIn(PROJECT, EXTENSION));
+
+        assertEquals(Arrays.asList(PROJECT, EXTENSION), environment.asked);
     }
 
     @Test
@@ -284,7 +420,7 @@ public class AbstractMetadataWriteToolTest
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
         String result = "not json at all"; //$NON-NLS-1$
 
-        assertSame(result, new StubTool(environment).awaitDiskExport(params(PROJECT), result));
+        assertSame(result, new StubTool(environment).awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT)));
         assertEquals(0, environment.calls);
         assertNull(environment.askedFor);
     }
@@ -295,8 +431,63 @@ public class AbstractMetadataWriteToolTest
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
         String result = successJson();
 
-        assertSame(result, new StubTool(environment).awaitDiskExport(new HashMap<>(), result));
+        assertSame(result, new StubTool(environment).awaitDiskExport(new HashMap<>(), result, silent()));
         assertEquals(0, environment.calls);
+    }
+
+    @Test
+    public void testAnUndeterminableScopeWaitsItsFallbackAndPublishesNothing()
+    {
+        // apply_quick_fix: EDT's fix extension point reports nothing about what the fix touched, so
+        // the classification stays - but it must not reach the caller as a claim about writes.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
+        WriteScope scope = new WriteScope();
+        scope.undeterminable("the platform does not say", Collections.singletonList(PROJECT)); //$NON-NLS-1$
+
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), scope);
+
+        assertEquals(1, environment.calls);
+        assertEquals(PROJECT, environment.askedFor);
+        assertNull("'I could not tell' must not be published as 'I wrote nowhere': " + answer, //$NON-NLS-1$
+            publishedProjects(answer));
+    }
+
+    @Test
+    public void testAnUndeterminableScopeWithAnEmptyFallbackSkipsTheWait()
+    {
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
+        WriteScope scope = new WriteScope();
+        scope.undeterminable("a module fix queues no .mdo export", Collections.<String> emptyList()); //$NON-NLS-1$
+
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), scope);
+
+        assertEquals("the classification must be honoured, not the projectName default", 0, //$NON-NLS-1$
+            environment.calls);
+        assertNull(publishedProjects(answer));
+    }
+
+    @Test
+    public void testThePublishedListIsSortedAndDeduplicated()
+    {
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
+
+        String answer = new StubTool(environment)
+            .awaitDiskExport(params(PROJECT), successJson(), wroteIn(EXTENSION, PROJECT, EXTENSION));
+
+        assertEquals(Arrays.asList(PROJECT, EXTENSION), publishedProjects(answer));
+    }
+
+    @Test
+    public void testARefusalCarriesNoWriteScope()
+    {
+        // The member describes a successful call's writes; a refusal is not one, and bolting the
+        // list onto it would suggest the refusal is a report about those projects.
+        RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
+
+        String answer =
+            new StubTool(environment).awaitDiskExport(params(PROJECT), successJson(), wroteIn(PROJECT));
+
+        assertNull(publishedProjects(answer));
     }
 
     /** Overrides ONLY what the base class leaves abstract, plus the seam - nothing else. */
@@ -344,12 +535,13 @@ public class AbstractMetadataWriteToolTest
     public void testAWriteToolThatOverridesNothingStillGetsTheBarrier()
     {
         // The reason the barrier lives in the base class rather than at the ~34 export call sites:
-        // a tool added later inherits it without doing anything. This pins the two defaults that
-        // make that true - "this call mutates" and "wait for projectName".
+        // a tool added later inherits it without doing anything. This pins the default that makes
+        // that true - a call that states nothing is still waited for, on the project it was asked
+        // about, exactly as before #408.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
         InheritedDefaultsTool plain = new InheritedDefaultsTool(environment);
 
-        String answer = plain.awaitDiskExport(params(PROJECT), successJson());
+        String answer = plain.awaitDiskExport(params(PROJECT), successJson(), silent());
 
         assertFalse("a tool that overrides nothing must still refuse on a pending export", //$NON-NLS-1$
             answer.contains("\"success\":true")); //$NON-NLS-1$

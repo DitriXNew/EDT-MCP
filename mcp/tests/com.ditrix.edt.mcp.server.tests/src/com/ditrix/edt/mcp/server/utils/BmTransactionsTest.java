@@ -81,4 +81,43 @@ public class BmTransactionsTest
         verify(model).execute(any());
         verify(model, never()).executeReadonlyTask(any());
     }
+
+    @Test
+    public void testForceExportToDiskRecordsTheProjectIntoTheCallsWriteScope()
+    {
+        // The #408 mechanism, pinned at the point that makes it a mechanism rather than a
+        // convention: this is the ONE place the plugin hands save tasks to the platform, reached
+        // from ~20 call sites across three tools and from the shared form/rights writers. Because
+        // the record is taken here, a tool declares where it wrote by DOING the write - a new tool
+        // cannot forget a step it never has to take.
+        org.eclipse.core.resources.IProject project =
+            mock(org.eclipse.core.resources.IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+
+        com.ditrix.edt.mcp.server.tools.base.WriteScope scope =
+            new com.ditrix.edt.mcp.server.tools.base.WriteScope();
+        com.ditrix.edt.mcp.server.tools.base.WriteScope.runWithScope(scope,
+            () -> BmTransactions.forceExportToDisk(project, "Catalog.Products")); //$NON-NLS-1$
+
+        // Headless there are no EDT services, so the submission itself cannot succeed - and that is
+        // the case worth pinning: the record is taken for the ATTEMPT. A refused submission is not
+        // evidence that the call did not write (the model change stands, and a list submission that
+        // threw part way through is not even evidence that nothing was queued), so dropping the
+        // project there is how the barrier used to end up waiting for the wrong one.
+        assertEquals(java.util.Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
+            scope.writtenProjects());
+    }
+
+    @Test
+    public void testForceExportToDiskOutsideAWriteCallRecordsNothingAndDoesNotThrow()
+    {
+        // The same helper is reachable from paths that are not a write tool's call at all
+        // (build_external_objects runs in a Job). Recording must simply not happen there.
+        org.eclipse.core.resources.IProject project =
+            mock(org.eclipse.core.resources.IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+
+        assertTrue("no services headless, so no submission - and no exception either", //$NON-NLS-1$
+            !BmTransactions.forceExportToDisk(project, "Catalog.Products")); //$NON-NLS-1$
+    }
 }

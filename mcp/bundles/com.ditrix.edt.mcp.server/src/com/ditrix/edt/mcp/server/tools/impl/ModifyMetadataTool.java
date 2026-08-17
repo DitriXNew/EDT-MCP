@@ -68,6 +68,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -426,6 +427,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
                 + "\"group 'Main' at index 1\"") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
     }
 
@@ -2193,6 +2195,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             exportFqns.add(contentFqn);
         }
+        // The settings were written whether or not an FQN could be collected to export (#408).
+        WriteScope.recordWrite(ctx.project);
         boolean persisted =
             !exportFqns.isEmpty() && BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildDcsResult(normFqn, result, persisted, localeUnused);

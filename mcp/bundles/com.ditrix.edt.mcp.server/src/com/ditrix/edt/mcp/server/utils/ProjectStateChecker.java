@@ -592,6 +592,41 @@ public final class ProjectStateChecker
         return unsettledParticipants;
     }
 
+    /**
+     * The projects a cascade rooted at {@code base} takes part in, besides {@code base} itself.
+     * <p>
+     * The SAME selection the cascade pre-flight settles on, exposed so the post-flight export wait
+     * cannot drift away from it: two independent readings of "who takes part" is how a cascade ends
+     * up settling one set and awaiting another. It is a fresh reading, not a snapshot of the
+     * pre-flight one - a project can be closed in between, and the set that matters to the wait is
+     * the one in force when the write happened.
+     * <p>
+     * It answers "who COULD take part", not "who was written": EDT's refactoring does not report
+     * what it touched, which is exactly why a caller must grade these projects as ones it may have
+     * written in rather than ones it did.
+     *
+     * @param base the project the cascade mutates; {@code null} yields an empty list
+     * @return the participating projects, never {@code null}
+     */
+    public static List<IProject> cascadeParticipants(IProject base)
+    {
+        if (base == null)
+        {
+            return new ArrayList<>();
+        }
+        try
+        {
+            return findParticipants(base, CascadeEnvironment.DEFAULT);
+        }
+        catch (RuntimeException e)
+        {
+            // This reading only ever WIDENS a wait. Failing to read it must therefore never fail the
+            // operation that already happened - the caller falls back to awaiting what it can name
+            // itself, which is what it did before the participants were awaited at all.
+            return new ArrayList<>();
+        }
+    }
+
     private static List<IProject> findParticipants(IProject base, CascadeEnvironment env)
     {
         List<IProject> participants = new ArrayList<>();

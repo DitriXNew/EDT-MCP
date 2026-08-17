@@ -27,6 +27,7 @@ import java.util.function.UnaryOperator;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
 /**
  * Lightweight contract tests for {@link ResyncToDiskTool}: tool metadata, the bundled
@@ -705,39 +706,6 @@ public class ResyncToDiskToolTest
     }
 
     @Test
-    public void testTheExportScopeIsEmptyOnlyWhenNothingWasWrittenAtAll()
-    {
-        // Pinned against the REAL tool so the key names have to match what it emits (#406).
-        ResyncToDiskTool tool = new ResyncToDiskTool();
-        Map<String, String> params = Collections.singletonMap("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        JsonObject noOp = new JsonObject();
-        noOp.addProperty("objectsExported", 0); //$NON-NLS-1$
-        noOp.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
-        assertTrue("an in-sync project exports nothing, so there is nothing of ours to await", //$NON-NLS-1$
-            tool.exportProjectsToAwait(params, noOp).isEmpty());
-
-        JsonObject exported = new JsonObject();
-        exported.addProperty("objectsExported", 3); //$NON-NLS-1$
-        exported.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
-        assertEquals("a real export must be awaited", Collections.singletonList("TestConfiguration"), //$NON-NLS-1$ //$NON-NLS-2$
-            new ArrayList<>(tool.exportProjectsToAwait(params, exported)));
-
-        // The dangling cleanup re-exports Configuration on its own, so it counts as a write even
-        // when the missing-subset export list was empty.
-        JsonObject cleaned = new JsonObject();
-        cleaned.addProperty("objectsExported", 0); //$NON-NLS-1$
-        cleaned.addProperty("danglingRemovedCount", 2); //$NON-NLS-1$
-        assertEquals("removing dangling references rewrites Configuration.mdo and must be awaited", //$NON-NLS-1$
-            Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
-            new ArrayList<>(tool.exportProjectsToAwait(params, cleaned)));
-
-        assertEquals("a result missing the counters must be awaited, not silently skipped", //$NON-NLS-1$
-            Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
-            new ArrayList<>(tool.exportProjectsToAwait(params, new JsonObject())));
-    }
-
-    @Test
     public void testATruncatedDiskReportIsLabelledAndItsWholeProjectCountsAreLeftAlone()
     {
         // missingBefore is capped at MAX_LISTED_FQNS while missingBeforeCount stays the true
@@ -797,7 +765,18 @@ public class ResyncToDiskToolTest
 
         String drive(Map<String, String> params, String result)
         {
-            return awaitDiskExport(params, result);
+            // The real tool records an export at the choke point, so the barrier is entered with
+            // the project declared; these tests drive the barrier directly, so they say it here.
+            WriteScope scope = new WriteScope();
+            scope.wrote(params.get("projectName")); //$NON-NLS-1$
+            return awaitDiskExport(params, result, scope);
+        }
+
+        String driveWithNothingQueued(Map<String, String> params, String result)
+        {
+            WriteScope scope = new WriteScope();
+            scope.queuedNothing();
+            return awaitDiskExport(params, result, scope);
         }
 
         @Override
@@ -916,7 +895,7 @@ public class ResyncToDiskToolTest
         params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("revalidate", "true"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        tool.drive(params, json.toString());
+        tool.driveWithNothingQueued(params, json.toString());
 
         assertEquals("a no-op must still revalidate, and must not wait for anything", //$NON-NLS-1$
             Collections.singletonList("revalidated"), order); //$NON-NLS-1$
