@@ -28,3 +28,6 @@ log.log
 # Proxy module build output
 proxy/target/
 tests/TestConfiguration/.scannerwork/
+
+# Scratch: EDT workspace .metadata dumps pulled in for diagnosis (logs, telemetry)
+tmp/
