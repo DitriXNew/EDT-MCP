@@ -2435,12 +2435,15 @@ public final class LaunchUpdateDialogAutoConfirmer
                 + "instead of pressing the dialog's default button blind", null); //$NON-NLS-1$
             return false;
         }
-        notePortReassign(detail);
         Activator.logInfo("Standalone server port conflict: moving the server to free ports on " //$NON-NLS-1$
             + "the caller's request (standaloneServerPortConflict=reassign) — EDT rewrites the " //$NON-NLS-1$
             + "server configuration. Conflict was: " //$NON-NLS-1$
             + (detail == null ? "<no readable detail>" : detail)); //$NON-NLS-1$
         pressButton(reassign);
+        // Recorded only AFTER the press actually went through: a listener that throws leaves the
+        // caller cancelling instead, and "the server was re-addressed" must never be reported
+        // for a rewrite that did not happen.
+        notePortReassign(detail);
         return true;
     }
 

@@ -135,5 +135,6 @@ survives EDT being killed. Stopping it (or stopping the server in EDT's *Servers
 usually preferable to re-addressing the server.
 
 The same parameter exists on `debug_launch` and `run_yaxunit_tests`, which start the server too.
-Those launches are fire-and-forget, so a refusal is reported by `debug_status` under
-`recentLaunchFailures`.
+Where the refusal shows up differs: `debug_launch` is fire-and-forget, so it reports through
+`debug_status` under `recentLaunchFailures`; `run_yaxunit_tests` reports through its own named job -
+in the initial response, or from `get_job_status(jobId)`.
