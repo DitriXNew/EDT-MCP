@@ -753,6 +753,10 @@ public class UpdateDatabaseTool implements IMcpTool
                     }
                     catch (ApplicationException ex)
                     {
+                        // FIRST, before any early return or rethrow: if "Find free port" was
+                        // pressed, the server configuration is already rewritten and that stands
+                        // whatever happens to the update afterwards.
+                        portsReassigned = watch.portsReassigned();
                         // A standalone-server target publishes THROUGH its server, so the update
                         // starts it first; when its ports are busy EDT raises the port-conflict
                         // modal, the auto-confirmer cancels it (see LaunchUpdateDialogAutoConfirmer)

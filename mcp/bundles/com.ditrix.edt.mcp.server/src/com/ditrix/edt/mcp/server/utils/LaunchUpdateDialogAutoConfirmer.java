@@ -443,8 +443,28 @@ public final class LaunchUpdateDialogAutoConfirmer
      * everyone, so a concurrent call that did not ask for a re-address must not have one performed
      * under it.
      */
-    private static final List<StandaloneServerPortConflictPolicy> PORT_CONFLICT_ARMS =
-        new ArrayList<>();
+    private static final List<PortConflictArm> PORT_CONFLICT_ARMS = new ArrayList<>();
+
+    /**
+     * One outstanding port-conflict arm: the answer a call chose, paired with the INFOBASE whose
+     * server that call may start.
+     *
+     * <p>The pairing is what makes the writing answer attributable. Without it a {@code reassign}
+     * arm authorised the press for ANY port-conflict dialog the filter saw — including one raised
+     * for a different standalone server by a concurrent launch or by a human — and EDT would then
+     * rewrite that unrelated server's configuration.
+     */
+    private static final class PortConflictArm
+    {
+        final StandaloneServerPortConflictPolicy policy;
+        final String infobaseName;
+
+        PortConflictArm(StandaloneServerPortConflictPolicy policy, String infobaseName)
+        {
+            this.policy = policy;
+            this.infobaseName = infobaseName;
+        }
+    }
 
     /**
      * Outstanding arms of the external-changes conflict matcher — one entry per {@code arm}
@@ -478,6 +498,13 @@ public final class LaunchUpdateDialogAutoConfirmer
      * once that operation finishes is the right advice — unlike a button miss, nothing is broken.
      */
     public static final String PORT_REASON_VETOED = "port-reassign-vetoed"; //$NON-NLS-1$
+
+    /**
+     * {@link ConflictWatch#portConflictReason()} value: the dialog could not be attributed to any
+     * armed call — it named another server, or the caller could not resolve its own infobase name.
+     * Cancelling is then the only answer that writes nothing to a stand nobody proved was theirs.
+     */
+    public static final String PORT_REASON_NOT_ATTRIBUTED = "port-not-attributed"; //$NON-NLS-1$
 
     /** {@link #lastConflictCancelReason()} value: the call's own policy asked to cancel. */
     public static final String CANCEL_REASON_POLICY = "policy"; //$NON-NLS-1$
@@ -1079,7 +1106,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             // anyway would let that window answer another operation's dialog.
             if (portPolicy != null)
             {
-                PORT_CONFLICT_ARMS.add(portPolicy);
+                PORT_CONFLICT_ARMS.add(new PortConflictArm(portPolicy, trimToNull(infobaseName)));
             }
             if (conflictPolicy != null)
             {
@@ -1203,7 +1230,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             // Mirrors the add in arm(...): only an arm that took a port policy releases one.
             if (portPolicy != null)
             {
-                releasePortConflictArm(portPolicy);
+                releasePortConflictArm(portPolicy, trimToNull(infobaseName));
             }
             if (conflictPolicy != null)
             {
@@ -2222,7 +2249,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             String refusalReason;
             synchronized (LOCK)
             {
-                if (reassignRequested())
+                if (reassignRequested(detail))
                 {
                     if (pressReassignButton(shell, detail))
                     {
@@ -2235,7 +2262,8 @@ public final class LaunchUpdateDialogAutoConfirmer
                 {
                     // Told apart: a caller that asked to move the server but was outvoted by a
                     // concurrent one gets different advice from a caller whose own policy refused.
-                    refusalReason = reassignAskedFor() ? PORT_REASON_VETOED : PORT_REASON_POLICY;
+                    refusalReason = portArmsFor(detail).isEmpty() ? PORT_REASON_NOT_ATTRIBUTED
+                        : (reassignAskedFor(detail) ? PORT_REASON_VETOED : PORT_REASON_POLICY);
                 }
             }
             notePortConflict(detail, refusalReason);
@@ -2262,12 +2290,39 @@ public final class LaunchUpdateDialogAutoConfirmer
         }
     }
 
-    /** Whether any outstanding arm asked for {@code reassign} — picks the refusal REASON. */
-    private static boolean reassignAskedFor()
+    /**
+     * The outstanding arms this dialog is demonstrably about: those whose infobase the dialog text
+     * names ({@link #namesThisServer}). Must be called with {@code LOCK} held.
+     *
+     * <p>An arm that could not name its own infobase never matches: the writing answer requires
+     * PROOF that the dialog is this caller's, not the absence of proof that it is someone else's.
+     */
+    private static List<PortConflictArm> portArmsFor(String detail)
+    {
+        List<PortConflictArm> attributed = new ArrayList<>();
+        for (PortConflictArm arm : PORT_CONFLICT_ARMS)
+        {
+            if (namesThisServer(detail, arm.infobaseName))
+            {
+                attributed.add(arm);
+            }
+        }
+        return attributed;
+    }
+
+    /** Whether any arm this dialog is attributable to asked for {@code reassign}. */
+    private static boolean reassignAskedFor(String detail)
     {
         synchronized (LOCK)
         {
-            return PORT_CONFLICT_ARMS.contains(StandaloneServerPortConflictPolicy.REASSIGN);
+            for (PortConflictArm arm : portArmsFor(detail))
+            {
+                if (arm.policy == StandaloneServerPortConflictPolicy.REASSIGN)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -2296,19 +2351,36 @@ public final class LaunchUpdateDialogAutoConfirmer
      * for a re-address is refused", never "a caller who did not ask gets one". Must be called with
      * {@code LOCK} held.
      */
-    private static void releasePortConflictArm(StandaloneServerPortConflictPolicy portPolicy)
+    private static void releasePortConflictArm(StandaloneServerPortConflictPolicy portPolicy,
+        String infobaseName)
     {
-        StandaloneServerPortConflictPolicy effective =
-            portPolicy == null ? StandaloneServerPortConflictPolicy.DEFAULT : portPolicy;
-        if (PORT_CONFLICT_ARMS.remove(effective)
-            || PORT_CONFLICT_ARMS.remove(StandaloneServerPortConflictPolicy.REASSIGN))
+        if (removeFirstPortArm(a -> a.policy == portPolicy
+            && Objects.equals(a.infobaseName, infobaseName)))
         {
             return;
         }
-        if (!PORT_CONFLICT_ARMS.isEmpty())
+        // Fails CLOSED when the exact pair is absent (a caller that armed through one overload and
+        // released through another): a REASSIGN entry goes first, because the wrong outcome of an
+        // imbalance must be "a caller who asked for a re-address is refused", never the reverse.
+        if (removeFirstPortArm(a -> a.policy == StandaloneServerPortConflictPolicy.REASSIGN)
+            || removeFirstPortArm(a -> true))
         {
-            PORT_CONFLICT_ARMS.remove(PORT_CONFLICT_ARMS.size() - 1);
+            return;
         }
+    }
+
+    /** Removes the first arm matching the predicate; {@code true} when one was removed. */
+    private static boolean removeFirstPortArm(java.util.function.Predicate<PortConflictArm> test)
+    {
+        for (java.util.Iterator<PortConflictArm> it = PORT_CONFLICT_ARMS.iterator(); it.hasNext();)
+        {
+            if (test.test(it.next()))
+            {
+                it.remove();
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -2321,12 +2393,25 @@ public final class LaunchUpdateDialogAutoConfirmer
      * press — see {@link #answerPortConflictDialog} — or a concurrent {@code arm} can turn the
      * answer stale in between.
      */
-    private static boolean reassignRequested()
+    private static boolean reassignRequested(String detail)
     {
         synchronized (LOCK)
         {
-            return !PORT_CONFLICT_ARMS.isEmpty()
-                && !PORT_CONFLICT_ARMS.contains(StandaloneServerPortConflictPolicy.CANCEL);
+            List<PortConflictArm> attributed = portArmsFor(detail);
+            if (attributed.isEmpty())
+            {
+                // Not attributable to any armed call: never perform the WRITING answer on a dialog
+                // that may belong to another server entirely.
+                return false;
+            }
+            for (PortConflictArm arm : attributed)
+            {
+                if (arm.policy != StandaloneServerPortConflictPolicy.REASSIGN)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -2564,6 +2649,17 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static String portConflictError(String detail, String reason)
     {
+        if (PORT_REASON_NOT_ATTRIBUTED.equals(reason))
+        {
+            return "the standalone server could not start because its network ports are already " //$NON-NLS-1$
+                + "in use" //$NON-NLS-1$
+                + (detail == null ? "." : ": " + detail) //$NON-NLS-1$ //$NON-NLS-2$
+                + " The conflict dialog could not be attributed to this call - it named a server " //$NON-NLS-1$
+                + "this call is not the one starting, or the infobase name could not be resolved - " //$NON-NLS-1$
+                + "so it was cancelled rather than answered with a choice that rewrites someone " //$NON-NLS-1$
+                + "else's server configuration. If it belonged to another operation running at the " //$NON-NLS-1$
+                + "same time, retry; otherwise free the busy ports."; //$NON-NLS-1$
+        }
         if (PORT_REASON_VETOED.equals(reason))
         {
             return "the standalone server could not start because its network ports are already " //$NON-NLS-1$
@@ -2629,11 +2725,12 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * @param policy the answer this arm chose (may be {@code null} = default)
      */
-    static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy)
+    static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy, String infobaseName)
     {
         synchronized (LOCK)
         {
-            PORT_CONFLICT_ARMS.add(policy == null ? StandaloneServerPortConflictPolicy.DEFAULT : policy);
+            PORT_CONFLICT_ARMS.add(new PortConflictArm(
+                policy == null ? StandaloneServerPortConflictPolicy.DEFAULT : policy, infobaseName));
         }
     }
 
@@ -2642,11 +2739,11 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * @param policy the policy the matching {@code arm} was taken with (may be {@code null})
      */
-    static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy)
+    static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy, String infobaseName)
     {
         synchronized (LOCK)
         {
-            releasePortConflictArm(policy);
+            releasePortConflictArm(policy, infobaseName);
         }
     }
 
@@ -2660,9 +2757,9 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /** Test seam: the unanimity decision {@link #answerPortConflictDialog} presses on. */
-    static boolean reassignAllowedForTest()
+    static boolean reassignAllowedForTest(String detail)
     {
-        return reassignRequested();
+        return reassignRequested(detail);
     }
 
     /**

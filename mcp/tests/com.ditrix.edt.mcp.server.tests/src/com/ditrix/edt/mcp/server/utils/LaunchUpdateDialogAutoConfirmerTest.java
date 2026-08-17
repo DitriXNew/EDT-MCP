@@ -756,21 +756,52 @@ public class LaunchUpdateDialogAutoConfirmerTest
 
     // === "Find free port" needs unanimity, and the bookkeeping must not drift (review of #435) ===
 
+    /** A dialog text naming the server of infobase "TestConfiguration #1". */
+    private static final String PORT_DETAIL =
+        "Standalone server \"Standalone server for TestConfiguration #1\" conflicts ...";
+
+    @Test
+    public void testReassignArmOfAnotherServerDoesNotAuthoriseThePress()
+    {
+        // THE P1 this pairing exists for: a reassign arm must authorise the writing answer only
+        // for the server it named, or a concurrent launch (or a human) starting a DIFFERENT server
+        // gets its configuration rewritten.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "SomeOtherBase");
+        assertFalse("an arm for another server must not authorise this dialog",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "SomeOtherBase");
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
+    public void testArmThatCouldNotNameItsInfobaseNeverAuthorisesThePress()
+    {
+        // No name, no proof: the refusal is the only answer that writes nothing.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, null);
+        assertFalse(LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, null);
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
     @Test
     public void testLoneReassignArmIsAllowedAndBalancedArmsLeaveNothingBehind()
     {
         assertEquals("the suite must start from no outstanding arms", 0,
             LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN);
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
         assertTrue("a lone reassign arm may move the server",
-            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN);
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
         assertEquals("a matched arm/disarm pair must leave nothing behind", 0,
             LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
         assertFalse("and with no arm at all nothing may be pressed",
-            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
     }
 
     @Test
@@ -779,17 +810,17 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // The press rewrites the server configuration for everyone using that server, so a
         // concurrent call that did not ask for it must be able to veto.
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN);
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL);
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
         assertFalse("a single cancelling arm must veto the move",
-            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL);
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
         assertTrue("once it leaves, the remaining reassign arm is alone again",
-            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN);
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
         assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
     }
 
@@ -800,18 +831,18 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // widest overload and releasing through a narrower one (which passes the default) must not
         // leave a "reassign" behind for the next, unrelated caller to be answered with.
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN);
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL);
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
         assertEquals("the arm must be gone, not merely re-labelled", 0,
             LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
 
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL);
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
         assertFalse("a later cancelling caller must NOT inherit the earlier reassign",
-            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL);
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
         assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
     }
 
@@ -819,10 +850,10 @@ public class LaunchUpdateDialogAutoConfirmerTest
     public void testUnbalancedDisarmCannotDriveTheArmCountNegative()
     {
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN);
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
         assertEquals("a stray disarm must be a no-op, not a negative count", 0,
             LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
-        assertFalse(LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+        assertFalse(LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
     }
 
     @Test
