@@ -19,11 +19,13 @@ import org.eclipse.ui.PlatformUI;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -55,8 +57,19 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      */
     private static final long EXPORT_DEADLINE_MS = 60_000L;
 
+    /**
+     * The smallest slice of the shared budget still worth spending on a wait.
+     * <p>
+     * Not a tuning knob: below this a wait cannot plausibly observe a pipeline drain, while it still
+     * starts an un-cancellable platform wait and takes out a per-project claim that lapses after
+     * {@code 3x} its own timeout - i.e. it buys nothing and spends the only guard against a second
+     * un-cancellable wait for the same project.
+     */
+    private static final long MIN_USEFUL_WAIT_MS = 1_000L;
+
     /** The result member every tool sets to say whether it succeeded. */
     private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
+
 
     @Override
     public ResponseType getResponseType()
@@ -86,8 +99,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         }
 
         AtomicReference<String> resultRef = new AtomicReference<>();
+        WriteScope scope = new WriteScope();
         Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> {
+        display.syncExec(() -> WriteScope.runWithScope(scope, () -> {
+            // Bound around the tool's own work so that submitting an export IS declaring one: the
+            // single place this plugin hands save tasks to the platform records into whatever scope
+            // is bound.
             try
             {
                 resultRef.set(executeOnUiThread(params));
@@ -97,12 +114,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 Activator.logError("Error in " + getName(), e); //$NON-NLS-1$
                 resultRef.set(ToolResult.error(e.getMessage()).toJson());
             }
-        });
+        }));
 
         // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's
         // derived-data pipeline, and waiting for it while holding the UI thread is how a headless
         // MCP call turns into a hung workbench.
-        return awaitDiskExport(params, resultRef.get());
+        return awaitDiskExport(params, resultRef.get(), scope);
     }
 
     /**
@@ -123,12 +140,13 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      *
      * @param params the tool parameters
      * @param result the JSON the tool produced
+     * @param scope what the call itself said about where it wrote
      * @return {@code result} unchanged, or an actionable error when the export is still pending
      */
     // Protected, not package-visible: a subclass's own test drives the barrier through this entry
     // to pin that its post-barrier work is ordered AFTER the drain, and that ordering is not
     // observable from anywhere else.
-    protected String awaitDiskExport(Map<String, String> params, String result)
+    protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
     {
         // Parsed once, and only a SUCCESS is parsed at all: an error is a well-formed JSON object
         // too, and treating one as a write would make a rejected argument wait out the whole
@@ -138,42 +156,138 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             return result;
         }
-        Collection<String> projects = exportProjectsToAwait(params, success);
-        if (projects == null || projects.isEmpty())
+        WriteScope.Verdict verdict = scope.verdict(defaultProjectsToAwait(params));
+        if (verdict.written().isEmpty() && verdict.cascaded().isEmpty())
         {
             // Nothing to WAIT for, but the post-wait step still runs: a tool may have work that
             // must not start until the barrier is behind it, and skipping it here would silently
             // drop that work for exactly the calls that queued nothing. Reported as established:
             // this call put nothing in the queue, so there is nothing about it left unfinished.
-            return refreshAfterExportAwait(params, result, true);
+            return publish(verdict, refreshAfterExportAwait(params, result, true));
         }
         // ONE budget for the whole set, not one per project: a cascade that touches the base and
         // three extensions must not be able to take four deadlines to answer.
-        long deadlineAtMs = System.currentTimeMillis() + EXPORT_DEADLINE_MS;
+        long deadlineAtMs = System.currentTimeMillis() + exportDeadlineMs();
         // Tracked, because DRAINED and UNOBSERVABLE are not the same news for a tool whose next
         // step reads the disk: only the first says the export finished. Passing them on as one
         // would be the "wider than the code" mistake this PR keeps finding.
         boolean drainEstablished = true;
-        for (String projectName : projects)
+        // Written first, so the projects a stall can be blamed on get the budget rather than the
+        // ones it cannot.
+        for (String projectName : verdict.written())
         {
-            if (projectName == null || projectName.isEmpty())
-            {
-                // A named-but-unusable entry is not a project we established anything about, so it
-                // must not leave the verdict at its optimistic initial value: skipping the wait is
-                // not the same as the wait having succeeded.
-                drainEstablished = false;
-                continue;
-            }
-            long remainingMs = Math.max(1L, deadlineAtMs - System.currentTimeMillis());
-            BuildUtils.DiskExportState state =
-                exportEnvironment().waitForDiskExport(projectName, remainingMs);
+            BuildUtils.DiskExportState state = waitWithin(deadlineAtMs, projectName);
             if (state == BuildUtils.DiskExportState.PENDING)
             {
                 return exportNotConfirmed(projectName);
             }
             drainEstablished &= state == BuildUtils.DiskExportState.DRAINED;
         }
-        return refreshAfterExportAwait(params, result, drainEstablished);
+        for (String projectName : verdict.cascaded())
+        {
+            // A stall here can never refuse: this call never went near that project's export path,
+            // so a queue that will not drain there is not evidence about this call. Awaiting it is
+            // still worth doing - it is the difference between answering over a half-written
+            // extension and not - which is why the outcome only clears the "established" flag.
+            drainEstablished &= waitWithin(deadlineAtMs, projectName) == BuildUtils.DiskExportState.DRAINED;
+        }
+        return publish(verdict, refreshAfterExportAwait(params, result, drainEstablished));
+    }
+
+    /**
+     * @return the shared budget for the whole awaited set; overridden only by tests, so the
+     *     "a slice too small to be worth starting" guard can be reached without a 60-second test
+     */
+    protected long exportDeadlineMs()
+    {
+        return EXPORT_DEADLINE_MS;
+    }
+
+    /**
+     * Runs one bounded wait inside the shared budget, or declines to start it.
+     * <p>
+     * A slice too small to drain anything is not a cheap wait, it is a harmful one: the platform
+     * wait it starts cannot be cancelled, while the per-project claim that keeps a second
+     * un-cancellable wait from being scheduled lapses after {@code 3x} the timeout - so a 1ms slice
+     * buys nothing and gives up the one guard there is.
+     * <p>
+     * Declining is reported as UNOBSERVABLE, which is the truth - nothing was observed about that
+     * project - and which for a project this call WROTE in means a success that establishes nothing
+     * about it rather than a refusal. That is deliberate: a refusal has to rest on an observation,
+     * and there was none. It is reachable only for the second and later entries of a set, i.e. only
+     * since a call could name more than one project.
+     *
+     * @param deadlineAtMs when the shared budget runs out
+     * @param projectName the project to wait for
+     * @return how the wait ended, or {@link BuildUtils.DiskExportState#UNOBSERVABLE} when it was not
+     *     worth starting
+     */
+    private BuildUtils.DiskExportState waitWithin(long deadlineAtMs, String projectName)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            // A named-but-unusable entry is not a project we established anything about, so it must
+            // not leave the verdict at its optimistic initial value: skipping the wait is not the
+            // same as the wait having succeeded.
+            return BuildUtils.DiskExportState.UNOBSERVABLE;
+        }
+        long remainingMs = deadlineAtMs - System.currentTimeMillis();
+        if (remainingMs < MIN_USEFUL_WAIT_MS)
+        {
+            return BuildUtils.DiskExportState.UNOBSERVABLE;
+        }
+        return exportEnvironment().waitForDiskExport(projectName, remainingMs);
+    }
+
+    /**
+     * Adds the call's own account of where it wrote to the response it is about to return.
+     * <p>
+     * Done in ONE place, from the very value the barrier waited on, so what the caller is told and
+     * what the tool waited for cannot drift apart. Left out entirely - rather than published as an
+     * empty list - when the call did not state its scope: an empty list is a finding ("this call
+     * wrote in no project of its own"), and showing it for a call that merely could not tell would
+     * be the same over-claim this whole path exists to remove.
+     *
+     * @param verdict the barrier's reading of the call
+     * @param result the JSON about to be returned
+     * @return the JSON to return
+     */
+    private static String publish(WriteScope.Verdict verdict, String result)
+    {
+        Collection<String> projects = verdict.publishable();
+        if (projects == null)
+        {
+            return result;
+        }
+        JsonObject success = successObject(result);
+        if (success == null)
+        {
+            // The post-wait hook may have turned the success into a refusal; a refusal has no write
+            // scope to report.
+            return result;
+        }
+        JsonArray array = new JsonArray();
+        for (String project : projects)
+        {
+            array.add(project);
+        }
+        success.add(WriteScope.RESULT_MEMBER, array);
+        return GsonProvider.toJson(success);
+    }
+
+    /**
+     * What to wait for when the call said nothing about where it wrote: the project it was asked
+     * about. Kept so a tool that declares nothing behaves exactly as it did before #408 rather than
+     * silently starting to wait for everything or for nothing.
+     *
+     * @param params the tool parameters
+     * @return the default wait set
+     */
+    private static Collection<String> defaultProjectsToAwait(Map<String, String> params)
+    {
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        return projectName == null || projectName.isEmpty() ? Collections.emptyList()
+            : Collections.singletonList(projectName);
     }
 
     /**
@@ -201,48 +315,6 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
-     * Which export queues this call asks to see drained before it answers - the projects it
-     * CLAIMS to have written. An empty collection means "await nothing".
-     * <p>
-     * Deliberately a claim rather than a guarantee: a tool may knowingly under-claim, and
-     * {@code delete_metadata} does for the cascade case. The barrier is only ever as complete as
-     * the answer it is given.
-     * <p>
-     * The single question the barrier asks. It is deliberately asked of the RESULT and returns a
-     * SET rather than a yes/no, because both halves of "wait for what" vary per call and neither
-     * can be read off the arguments or off the class:
-     * <ul>
-     * <li>{@code apply_quick_fix} rewrites BSL source and queues no {@code .mdo} export at all, so
-     * waiting could only let unrelated work in the same project refuse a healthy edit;</li>
-     * <li>{@code adopt_metadata_object} is called with the BASE configuration by contract and
-     * writes into the EXTENSION;</li>
-     * <li>a confirmed {@code delete_metadata} cascade also cleans references in the dependent
-     * extensions, whose exports this hook does NOT currently claim - see the reason and the cost
-     * at that tool's override;</li>
-     * <li>an adoption of an already-adopted object, a resync of an in-sync project and a delete
-     * PREVIEW are successes that queued nothing.</li>
-     * </ul>
-     * Asking "did it write?" and "whose project?" separately is what produced those as four
-     * separate defects; asking which exports THIS call queued puts them all to one question, so a
-     * tool added later answers it in one place instead of becoming a fifth. It does not follow that
-     * every answer is complete - a tool can still under-claim, and {@code delete_metadata} knowingly
-     * does for the cascade case.
-     * <p>
-     * The default is the project named in {@code projectName}: a tool that says nothing is assumed
-     * to have written where it was asked to.
-     *
-     * @param params the tool parameters
-     * @param result the tool's own result, already known to be a success
-     * @return the projects to await; empty to skip the wait entirely
-     */
-    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
-    {
-        String projectName = params.get(McpKeys.PROJECT_NAME);
-        return projectName == null || projectName.isEmpty() ? Collections.emptyList()
-            : Collections.singletonList(projectName);
-    }
-
-    /**
      * Lets a tool restate anything in its result that the export wait has just made out of date.
      * <p>
      * A tool that reports on DISK state samples it inside {@code executeOnUiThread}, which is
@@ -265,7 +337,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
-     * Reads a string member of a result, for a subclass deciding {@link #exportProjectsToAwait}.
+     * Reads a string member of a result, for a subclass restating part of its own answer.
      *
      * @param result the tool's own result
      * @param member the member to read

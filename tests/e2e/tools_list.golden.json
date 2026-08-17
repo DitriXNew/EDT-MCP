@@ -46,6 +46,12 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -648,6 +654,12 @@
         },
         "targetNamespace": {
           "type": "string"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1182,6 +1194,12 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -3204,6 +3222,12 @@
         },
         "template": {
           "type": "object"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -3511,6 +3535,12 @@
         },
         "totalTopObjects": {
           "type": "integer"
+        },
+        "writtenProjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

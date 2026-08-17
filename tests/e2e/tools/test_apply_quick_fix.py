@@ -288,6 +288,21 @@ def test_never_reports_success_without_actually_changing_anything():
                 continue
 
             # Acceptable outcome 2: claimed applied -> the effect must be real.
+            # #408: this is the ONE tool that cannot say where it wrote - EDT's fix extension
+            # point reports nothing about what the variant touched - so it must publish NO write
+            # scope at all. An empty list here would be a claim ("I wrote nowhere") the tool is
+            # in no position to make.
+            # SCOPE OF THIS ASSERTION, stated so it is not read as more: it pins that the member
+            # never appears, which an UNDECLARED scope would also satisfy - so it does not
+            # distinguish "declared undeterminable" from "declared nothing at all". The
+            # classification itself is pinned in ApplyQuickFixToolTest; the wiring between it and
+            # the barrier is not observable from outside, because the two differ only in what is
+            # WAITED for.
+            structured = r.structured if isinstance(r.structured, dict) else {}
+            if "writtenProjects" in structured:
+                raise AssertionError(
+                    "apply_quick_fix cannot know what the fix touched, so it must publish no "
+                    "write scope at all; got %r" % (structured.get("writtenProjects"),))
             wait_for_project_ready()
             after = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
             if after >= before:

@@ -55,6 +55,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
@@ -1143,6 +1144,12 @@ public final class FormElementWriter
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
         });
+        // The write is committed at this point whether or not an export can be submitted below, and
+        // the export IS skipped when the content form has no FQN to name. Stating the project here
+        // is what keeps that branch a write with a known scope instead of a call that says nothing
+        // (issue #408); where the submission does happen it records the same project again, which
+        // is one entry either way.
+        WriteScope.recordWrite(ctx.project);
         boolean exported = contentFormFqn != null && !contentFormFqn.isEmpty()
             && BmTransactions.forceExportToDisk(ctx.project, contentFormFqn);
         if (exported)
@@ -1187,6 +1194,11 @@ public final class FormElementWriter
             work.run(mdFormInTx(ctx, tx), tx);
             return null;
         });
+        // AFTER the transaction, not before it: a rollback leaves nothing written, and a scope that
+        // had already claimed the project would make the barrier wait for an export of a change
+        // that never happened. Stated at all because this writer submits no export of its own - the
+        // caller exports the owning .mdo - so the choke point never sees this project (#408).
+        WriteScope.recordWrite(ctx.project);
     }
 
     /** Re-fetches the MD-form inside the transaction, failing clearly when it has gone. */

@@ -88,27 +88,4 @@ public class AdoptMetadataObjectToolTest
         assertTrue(schema.contains("\"persisted\"")); //$NON-NLS-1$
     }
 
-    @Test
-    public void testTheExportScopeIsTheExtensionAndOnlyForARealAdoption()
-    {
-        // Pinned against the REAL tool, not a stub carrying a copy of the rule: both the key and
-        // the value have to match what this tool actually emits, and a stub stays green through a
-        // typo in either (#406).
-        AdoptMetadataObjectTool tool = new AdoptMetadataObjectTool();
-        Map<String, String> params = Collections.singletonMap("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        JsonObject noOp = new JsonObject();
-        noOp.addProperty("action", "alreadyAdopted"); //$NON-NLS-1$ //$NON-NLS-2$
-        noOp.addProperty("extensionProject", "TestConfiguration.tests"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("'alreadyAdopted' queued no export, so nothing must be awaited", //$NON-NLS-1$
-            tool.exportProjectsToAwait(params, noOp).isEmpty());
-
-        JsonObject adopted = new JsonObject();
-        adopted.addProperty("action", "adopted"); //$NON-NLS-1$ //$NON-NLS-2$
-        adopted.addProperty("extensionProject", "TestConfiguration.tests"); //$NON-NLS-1$ //$NON-NLS-2$
-        // projectName is the BASE configuration by contract; the write goes to the EXTENSION.
-        assertEquals("a real adoption must await the EXTENSION, not the project it was called with", //$NON-NLS-1$
-            Collections.singletonList("TestConfiguration.tests"), //$NON-NLS-1$
-            new ArrayList<>(tool.exportProjectsToAwait(params, adopted)));
-    }
 }

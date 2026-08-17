@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
@@ -128,43 +129,24 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             .build();
     }
 
-    @Override
-    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
+    /**
+     * What to await for a fix whose reach the platform will not report.
+     * <p>
+     * Package-visible so both branches can be pinned directly: the classification is the whole of
+     * this tool's answer to "where did I write", and a test that could only reach it through a live
+     * EDT fix run would not pin it at all.
+     *
+     * @param modulePath the module position of the marker that was fixed, empty/{@code null} when it
+     *     had none
+     * @param projectName the project the call named
+     * @return the projects to await
+     */
+    static Collection<String> undeterminableFallback(String modulePath, String projectName)
     {
-        // Two kinds of marker, two answers - and the tool knows which it fixed, so this is
-        // classified rather than assumed in either direction.
-        //
-        // A MODULE marker is fixed by editing that module, which TYPICALLY queues nothing for
-        // .mdo export; waiting anyway would let unrelated metadata work in the same project refuse
-        // a successful edit - a false refusal on a healthy input.
-        //
-        // A marker with NO module position is usually an object-level one raised on the model - and
-        // then its fix is overwhelmingly likely to queue the same export every metadata write
-        // queues. It can also just be a marker whose locator did not resolve, which is why this
-        // branch is the CONSERVATIVE one rather than the confident one: waiting costs a pause,
-        // not answering early costs a half-written tree. Skipping the wait there lets the caller commit a tree the fix has not finished
-        // writing. Neither half is a law - see the known limit below - but the two point opposite
-        // ways often enough that one answer for both is wrong either way round.
-        //
-        // Answering "empty" for both was the first shape of this defect and answering "the project"
-        // for both is its mirror; the discriminator is the marker's own module position, which this
-        // class already relies on to tell the two apart when it reports and orders candidates.
-        //
-        // KNOWN LIMIT, stated because it is a real one: the module position describes where the
-        // PROBLEM was, not everything the chosen fix touched. EDT's fix extension point does not
-        // forbid a variant on a module-positioned diagnostic from also changing the model, and
-        // nothing here can see that. Such a fix is waited for too little.
-        //
-        // The direction is deliberate rather than accidental: that residual is a MISSED check,
-        // which for this tool is exactly the pre-#406 behaviour, whereas guessing the other way
-        // would refuse work that succeeded. See issue #408 - the durable answer is for the tool to
-        // report what it wrote, instead of having it inferred from where the marker sat.
-        String modulePath = resultString(result, KEY_MODULE_PATH);
         if (modulePath != null && !modulePath.isEmpty())
         {
             return Collections.emptyList();
         }
-        String projectName = params.get(KEY_PROJECT);
         return projectName == null || projectName.isEmpty() ? Collections.<String> emptyList()
             : Collections.singletonList(projectName);
     }
@@ -264,7 +246,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         }
         MarkerMatch chosen = matches.get(chosenIdx);
 
-        return applyFix(fixManager, dtProject, chosen, variant);
+        return applyFix(fixManager, dtProject, chosen, variant, projectName);
     }
 
     /**
@@ -447,7 +429,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
      * returns where no change was applied.
      */
     private static String applyFix(IFixManager fixManager, IDtProject dtProject, MarkerMatch chosen,
-        int variant)
+        int variant, String projectName)
     {
         FixProcessHandle handle = fixManager.prepareFix(chosen.marker, dtProject);
         if (handle == null)
@@ -507,6 +489,25 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                     + "via write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
             }
             fixManager.executeFix(handle, new NullProgressMonitor());
+
+            // The one write in this plugin whose scope cannot be stated: EDT's fix extension point
+            // reports NOTHING about what the variant touched, and the point does not forbid a fix on
+            // a module-positioned diagnostic from changing the model as well. So this stays a
+            // classification - but it is recorded here, at the call whose opacity is the reason,
+            // rather than re-derived afterwards from the response, and it publishes no write scope
+            // at all, because "I could not tell" must never reach the caller as "I wrote nowhere".
+            //
+            // The classification itself is unchanged and deliberately asymmetric. A MODULE marker is
+            // fixed by editing that module, which typically queues no .mdo export; waiting anyway
+            // would let unrelated metadata work in the same project refuse a successful edit. A
+            // marker with NO module position is usually an object-level one raised on the model, and
+            // its fix is overwhelmingly likely to queue the same export every metadata write queues -
+            // and it can also be a marker whose locator simply did not resolve, which is why that
+            // branch is the conservative one: waiting costs a pause, answering early costs a
+            // half-written tree. One answer for both was this defect's first shape, and its mirror.
+            WriteScope.recordUndeterminable(
+                "EDT's quick-fix extension point does not report what the fix touched", //$NON-NLS-1$
+                undeterminableFallback(chosen.modulePath, projectName));
 
             return ToolResult.success()
                 .put("success", true) //$NON-NLS-1$

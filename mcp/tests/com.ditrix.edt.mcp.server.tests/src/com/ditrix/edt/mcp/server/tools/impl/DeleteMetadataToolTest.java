@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -1578,30 +1579,6 @@ public class DeleteMetadataToolTest
         assertEquals("the prompt counts the member plus its contained elements", 4, seen[0]); //$NON-NLS-1$
     }
 
-    @Test
-    public void testAPreviewAwaitsNothingAndAConfirmAwaitsExactlyTheTargetProject()
-    {
-        // The scope question (#406): which exports did THIS call queue?
-        DeleteMetadataTool tool = new DeleteMetadataTool();
-        JsonObject result = new JsonObject();
-
-        Map<String, String> preview = new HashMap<>();
-        preview.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("a preview mutates nothing, so it queued no export and must await none", //$NON-NLS-1$
-            tool.exportProjectsToAwait(preview, result).isEmpty());
-
-        Map<String, String> confirm = new HashMap<>(preview);
-        confirm.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
-        // EXACT equality, not "contains": the scope is the target and nothing else. A wait that
-        // also covered the dependent extensions was tried and rejected in review - the set EDT
-        // exposes is what it SCANS, not what it WRITES, so awaiting a scanned-but-untouched
-        // extension would fail a healthy delete on somebody else's wedged export. A `contains`
-        // assertion would let that come back unnoticed.
-        assertEquals("a confirmed delete awaits the target project and nothing else", //$NON-NLS-1$
-            Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
-            new ArrayList<>(tool.exportProjectsToAwait(confirm, result)));
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────────────────
     // The generic delete SUBMITS its container export, and submits it after performing (#408)
     //
@@ -1667,7 +1644,8 @@ public class DeleteMetadataToolTest
         fixture.refactoringService = refactoringService;
         fixture.resolution = BmModelResolver.resolve(project, modelManager);
         fixture.tool = new DeleteMetadataTool((name, preview) -> decision,
-            (projectName, timeoutMs) -> null, recorder.submitter());
+            (projectName, timeoutMs) -> null, recorder.submitter(),
+            base -> fixture.participants);
         return fixture;
     }
 
@@ -1678,12 +1656,79 @@ public class DeleteMetadataToolTest
         IProject project;
         IMdRefactoringService refactoringService;
         BmModelResolver.Resolution resolution;
+        List<IProject> participants = new ArrayList<>();
 
         String run(String containerFqn, boolean confirm)
         {
             return tool.prepareMdClassDelete(project, "CommonModule.Calc", mock(MdObject.class), //$NON-NLS-1$
                 containerFqn, confirm, false, refactoringService, resolution);
         }
+    }
+
+    @Test
+    public void testAConfirmedDeleteDeclaresTheTargetItWroteAndTheExtensionsTheCascadeReaches()
+    {
+        // #408: the barrier used to re-derive the wait from the `confirm` ARGUMENT, which says the
+        // caller authorized a destructive path - not that anything was written, and not where. Now
+        // the call states it, and states the two kinds apart.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("TestConfiguration.tests"); //$NON-NLS-1$
+        fixture.participants.add(extension);
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () -> fixture.run("Configuration", true)); //$NON-NLS-1$
+
+        assertEquals("the target is a project this call WROTE in", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), scope.writtenProjects()); //$NON-NLS-1$
+        // Not written, awaited: EDT's refactoring cleans the references held by dependent
+        // extensions and reports nothing about which of them it touched, and the set we can name is
+        // "every open extension of the target" - what EDT SCANS. Declaring these as WRITTEN would
+        // let an unrelated wedged export in an untouched extension refuse a healthy delete, which
+        // is exactly why the earlier attempt to widen this wait was rejected.
+        assertEquals("the cascade participants are awaited, not claimed as written", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration.tests"), scope.cascadeProjects()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testADeleteStillDeclaresTheTargetWhenItsContainerExportCannotBeQueued()
+    {
+        // The gap the container submission alone leaves: when the container cannot be named, no
+        // export is submitted, so nothing is recorded at the choke point - and the delete has
+        // still happened. Without the explicit statement the call would fall back to "said
+        // nothing", and a cascade declaration would make it look declared while dropping the
+        // target from the strict wait entirely.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () -> fixture.run("", true)); //$NON-NLS-1$
+
+        assertTrue("no container FQN means no submission at all: " + recorder.calls, //$NON-NLS-1$
+            recorder.calls.stream().noneMatch(call -> call.startsWith("submit"))); //$NON-NLS-1$
+        assertEquals("the delete happened, so the project it happened in must still be declared", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), scope.writtenProjects()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARefusedDeleteDeclaresNoWriteAtAll()
+    {
+        // Consent REJECT: nothing ran, so there is nothing to declare - and in particular the
+        // participants must not be declared off the back of an authorization that never happened.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.REJECT, null);
+        IProject extension = mock(IProject.class);
+        fixture.participants.add(extension);
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () -> fixture.run("Configuration", true)); //$NON-NLS-1$
+
+        assertTrue("a refused delete wrote nowhere", scope.writtenProjects().isEmpty()); //$NON-NLS-1$
+        assertTrue("and reached no cascade", scope.cascadeProjects().isEmpty()); //$NON-NLS-1$
     }
 
     @Test

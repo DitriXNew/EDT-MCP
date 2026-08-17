@@ -148,6 +148,12 @@ def test_confirm_deletes_member_attribute():
     })
     assert_ok(r, "delete the seeded attribute")
     assert r.structured.get("action") == "executed", "member delete must execute: %r" % (r.structured,)
+    # #408: a confirmed delete states the project it wrote in, so the barrier waits for the export
+    # of THAT project rather than for whatever the arguments named. The cascade participants are
+    # awaited too but deliberately NOT listed here - "the platform may have written there" must not
+    # be published under a name that says "wrote".
+    assert r.structured.get("writtenProjects") == [PROJECT],         "a confirmed delete must publish the project it wrote in: %r" % (
+            r.structured.get("writtenProjects"),)
     # The member half of #408, and it must come BEFORE any other MCP round trip: a member's
     # container IS its owning top object, so the owner .mdo is the file this call queued the export
     # of, and it has to be correct the moment the call returned. An intervening call is time an
@@ -266,6 +272,11 @@ def test_preview_without_confirm_lists_changepoints_and_does_not_mutate():
     assert "blockingReferencesCount" in r.structured, "preview must report the blocking-reference count"
     assert_contains(r.structured.get("message", ""), "confirm=true",
                     "preview message must instruct re-calling with confirm=true")
+
+    # #408: the preview states that it queued nothing, instead of the barrier inferring it from
+    # the `confirm` ARGUMENT - which says the caller authorized a destructive path, not that
+    # anything was written.
+    assert r.structured.get("writtenProjects") == [],         "a preview writes nowhere and must say so: %r" % (r.structured.get("writtenProjects"),)
 
     assert_contains(_list_commonmodules(), "Calc", "preview must NOT delete CommonModule.Calc")
     assert_no_diff("a preview must not touch the project on disk")

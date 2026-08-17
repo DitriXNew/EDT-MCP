@@ -71,6 +71,14 @@ def test_already_adopted_object_is_benign_not_readopted():
     if s.get("extensionProject") != TESTS_PROJECT:
         raise AssertionError("expected extensionProject=%s; got %r" % (TESTS_PROJECT, s.get("extensionProject")))
 
+    # #408: "queued nothing" is a FINDING and is published as an empty list. The distinction
+    # that matters is against ABSENT, which means "the tool could not tell" - collapsing the two
+    # is what let a no-op success and an unknown scope share one value in the old barrier.
+    if s.get("writtenProjects") != []:
+        raise AssertionError(
+            "a success that queued nothing must publish an EMPTY writtenProjects, got %r"
+            % (s.get("writtenProjects"),))
+
     assert_no_diff("adopt of an already-adopted object must not touch the base project")
 
 
