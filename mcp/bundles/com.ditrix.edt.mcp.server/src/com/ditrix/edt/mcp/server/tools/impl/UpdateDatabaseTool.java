@@ -761,10 +761,6 @@ public class UpdateDatabaseTool implements IMcpTool
                     }
                     catch (ApplicationException ex)
                     {
-                        // FIRST, before any early return or rethrow: if "Find free port" was
-                        // pressed, the server configuration is already rewritten and that stands
-                        // whatever happens to the update afterwards.
-                        portsReassigned = watch.portsReassigned();
                         // A standalone-server target publishes THROUGH its server, so the update
                         // starts it first; when its ports are busy EDT raises the port-conflict
                         // modal, the auto-confirmer cancels it (see LaunchUpdateDialogAutoConfirmer)
@@ -788,6 +784,10 @@ public class UpdateDatabaseTool implements IMcpTool
                     }
                     finally
                     {
+                        // EVERY exit of the watched update, not just the declared platform
+                        // exception: once "Find free port" is pressed the server configuration is
+                        // rewritten, and a RuntimeException on the way out must not swallow that.
+                        portsReassigned = watch.portsReassigned();
                         LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
                             infobaseName, armedPortPolicy);
                     }
@@ -810,10 +810,6 @@ public class UpdateDatabaseTool implements IMcpTool
                         return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
                             externalChanges, watch.reason())).toJson();
                     }
-                    // Read INSIDE the window (it is deregistered on close): the update succeeded,
-                    // but only because EDT re-addressed the server, and the caller must be told —
-                    // that is a change to their stand, not to this infobase.
-                    portsReassigned = watch.portsReassigned();
                 }
             }
 
@@ -829,10 +825,19 @@ public class UpdateDatabaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
-            ToolResult errorResult = ToolResult.error("Unexpected error: " + e.getMessage()); //$NON-NLS-1$
+            ToolResult errorResult = ToolResult.error("Unexpected error: " + e.getMessage() //$NON-NLS-1$
+                + (portsReassigned
+                    ? " NOTE: before this failure EDT had already moved the standalone server to " //$NON-NLS-1$
+                        + "free ports and rewritten its configuration " //$NON-NLS-1$
+                        + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
+                    : "")); //$NON-NLS-1$
             if (terminatedClient)
             {
                 errorResult.put(KEY_TERMINATED_CLIENT, true);
+            }
+            if (portsReassigned)
+            {
+                errorResult.put(KEY_PORTS_REASSIGNED, true);
             }
             return errorResult.toJson();
         }
