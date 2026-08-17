@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
@@ -1206,7 +1207,8 @@ public class RunYaxunitTestsToolTest
             String tests, String tags)
     {
         return new RunYaxunitTestsTool.RunRequest("Cfg", "Proj", "App", extensions, modules, tests,
-            tags, 45, true, null, ExternalInfobaseChangesPolicy.OVERRIDE, false);
+            tags, 45, true, null, ExternalInfobaseChangesPolicy.OVERRIDE,
+            StandaloneServerPortConflictPolicy.CANCEL, false);
     }
 
     @Test
@@ -1318,7 +1320,8 @@ public class RunYaxunitTestsToolTest
             ExternalInfobaseChangesPolicy policy, boolean debug)
     {
         return new RunYaxunitTestsTool.RunRequest(CFG, PROJ, APP, extensions, modules, tests, tags,
-            timeout, updateBeforeLaunch, updateScope, policy, debug);
+            timeout, updateBeforeLaunch, updateScope, policy,
+            StandaloneServerPortConflictPolicy.CANCEL, debug);
     }
 
     /** The default request every variant below differs from in exactly one field. */
@@ -1511,11 +1514,14 @@ public class RunYaxunitTestsToolTest
         ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
         Map<String, RunYaxunitTestsTool.RunRequest> variants = new LinkedHashMap<>();
         variants.put("configName", new RunYaxunitTestsTool.RunRequest("OtherCfg", PROJ, APP, null,
-            null, null, null, 45, true, null, override, false));
+            null, null, null, 45, true, null, override,
+            StandaloneServerPortConflictPolicy.CANCEL, false));
         variants.put("projectName", new RunYaxunitTestsTool.RunRequest(CFG, "OtherProj", APP, null,
-            null, null, null, 45, true, null, override, false));
+            null, null, null, 45, true, null, override,
+            StandaloneServerPortConflictPolicy.CANCEL, false));
         variants.put("applicationId", new RunYaxunitTestsTool.RunRequest(CFG, PROJ, "OtherApp",
-            null, null, null, null, 45, true, null, override, false));
+            null, null, null, null, 45, true, null, override,
+            StandaloneServerPortConflictPolicy.CANCEL, false));
         variants.put("extensions", request("Ext", null, null, null, 45, true, null, override,
             false));
         variants.put("modules", request(null, "Mod", null, null, 45, true, null, override, false));
@@ -1529,6 +1535,9 @@ public class RunYaxunitTestsToolTest
             override, false));
         variants.put("externalChanges", request(null, null, null, null, 45, true, null,
             ExternalInfobaseChangesPolicy.IMPORT, false));
+        variants.put("portConflict", new RunYaxunitTestsTool.RunRequest(CFG, PROJ, APP, null,
+            null, null, null, 45, true, null, override,
+            StandaloneServerPortConflictPolicy.REASSIGN, false));
         variants.put("debug", request(null, null, null, null, 45, true, null, override, true));
         return variants;
     }

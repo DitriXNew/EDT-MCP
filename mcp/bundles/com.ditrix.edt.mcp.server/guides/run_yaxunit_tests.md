@@ -202,3 +202,15 @@ instead of writing anything.
 ## Pre-launch recomputation
 
 The pre-launch auto-chain (`updateBeforeLaunch=true`, the default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all.
+
+## Standalone server: busy ports
+
+Launching an application served by a 1C STANDALONE SERVER starts that server first. If one of its
+ports (HTTP gate / debug server / SSH gate) is already bound — most often by an `ibsrv` left over
+from an earlier EDT session — EDT raises the modal **"Standalone server port conflict"** /
+**"Конфликт портов автономного сервера"** and waits for a human.
+
+`standaloneServerPortConflict` answers it: `cancel` (default) refuses, so the launch fails and the
+reason — with the busy ports named — appears in `debug_status` under `recentLaunchFailures`;
+`reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
+changes the address its clients connect to. See the `update_database` guide for the full table.

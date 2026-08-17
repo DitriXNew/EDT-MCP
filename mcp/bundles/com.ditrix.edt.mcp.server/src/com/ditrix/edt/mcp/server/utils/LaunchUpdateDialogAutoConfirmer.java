@@ -292,7 +292,7 @@ public final class LaunchUpdateDialogAutoConfirmer
      * Localized labels of the port-conflict modal's "Cancel" button
      * ({@code StandaloneServerUiDialogPortConflictDecisionPrompter_Button_cancel},
      * "Отменить") — the answer this filter presses. The OTHER button ("Find free port" /
-     * "Найти свободный порт") is the dialog's DEFAULT, and it is never pressed blind: it
+     * "\u041D\u0430\u0439\u0442\u0438 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0439 \u043F\u043E\u0440\u0442") is the dialog's DEFAULT, and it is never pressed blind: it
      * makes EDT pick new ports and REWRITE the server's {@code config.yaml}, changing the
      * address every existing client of that server is bookmarked against. Cancelling writes
      * nothing and turns the hang into a failure the caller can act on.
@@ -300,6 +300,18 @@ public final class LaunchUpdateDialogAutoConfirmer
     static final Set<String> PORT_CONFLICT_CANCEL_BUTTONS = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList("Cancel", //$NON-NLS-1$
             "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C"))); //$NON-NLS-1$
+
+    /**
+     * Localized labels of the port-conflict modal's "Find free port" button
+     * ({@code StandaloneServerUiDialogPortConflictDecisionPrompter_Button_update}) — the dialog's
+     * DEFAULT button. Pressed ONLY for {@link StandaloneServerPortConflictPolicy#REASSIGN}, and
+     * even then BY LABEL rather than as "the default button": it makes EDT pick other ports and
+     * REWRITE the server configuration, so a build whose button bar this plugin cannot read must
+     * fall back to cancelling, never to whatever happens to be default.
+     */
+    static final Set<String> PORT_CONFLICT_REASSIGN_BUTTONS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList("Find free port", //$NON-NLS-1$
+            "\u041D\u0430\u0439\u0442\u0438 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0439 \u043F\u043E\u0440\u0442"))); //$NON-NLS-1$
 
     /**
      * English message-body prefix of EDT's "Debug session already exists" launch
@@ -423,6 +435,19 @@ public final class LaunchUpdateDialogAutoConfirmer
      * application-modal, no MCP call can clear it, and every later call queues behind it.
      */
     private static int portConflictArmCount;
+
+    /**
+     * How many of the outstanding port-conflict arms asked for
+     * {@link StandaloneServerPortConflictPolicy#REASSIGN}.
+     *
+     * <p>"Find free port" is pressed only when EVERY outstanding arm asked for it
+     * ({@code portConflictReassignArmCount == portConflictArmCount}). The dialog names the
+     * SERVER, not the infobase, so it cannot be attributed to one caller the way the
+     * external-changes modal can — and the answer REWRITES that server's configuration for
+     * everyone. Unanimity is therefore the only safe rule: a concurrent call that did not ask
+     * for a re-address must not have one performed under it.
+     */
+    private static int portConflictReassignArmCount;
 
     /**
      * Outstanding arms of the external-changes conflict matcher — one entry per {@code arm}
@@ -973,6 +998,31 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
     {
+        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+            StandaloneServerPortConflictPolicy.DEFAULT);
+    }
+
+    /**
+     * Arms the auto-confirmer, additionally choosing how EDT's standalone-server port-conflict
+     * modal is answered. MUST be paired with the six-argument {@code disarm} passing the same
+     * values.
+     *
+     * @param updateDialog arm the "Application update" TITLE matcher
+     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     * @param conflictPolicy the button to press on the external-changes conflict modal, or
+     *            {@code null} to leave that modal alone
+     * @param infobaseName the infobase this update targets, as EDT names it (may be {@code null})
+     * @param portPolicy how to answer the port-conflict modal: {@code CANCEL} (default) refuses
+     *            and writes nothing; {@code REASSIGN} presses "Find free port", which makes EDT
+     *            REWRITE the server configuration. {@code null} is read as the default. The
+     *            reassign answer requires UNANIMITY across the outstanding arms — see
+     *            {@link #portConflictReassignArmCount}
+     */
+    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+        ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
+        StandaloneServerPortConflictPolicy portPolicy)
+    {
         if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null)
         {
             return;
@@ -998,9 +1048,12 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
             // Armed by EVERY arm (the early return above already proved this call arms
             // something): the port-conflict modal blocks the standalone-server START that
-            // the launch paths and update_database alike depend on, and its auto-answer
-            // writes nothing — see portConflictArmCount.
+            // the launch paths and update_database alike depend on — see portConflictArmCount.
             portConflictArmCount++;
+            if (portPolicy == StandaloneServerPortConflictPolicy.REASSIGN)
+            {
+                portConflictReassignArmCount++;
+            }
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName),
@@ -1073,6 +1126,27 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
     {
+        disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+            StandaloneServerPortConflictPolicy.DEFAULT);
+    }
+
+    /**
+     * Disarms an arm made with the six-argument
+     * {@link #arm(boolean, boolean, boolean, ExternalInfobaseChangesPolicy, String,
+     * StandaloneServerPortConflictPolicy)} — pass the SAME values, so the port-conflict
+     * policy counter is released by the arm that took it.
+     *
+     * @param updateDialog release one update-matcher arm
+     * @param sessionDialog release one session-matcher arm
+     * @param restructureDialog release one restructure-matcher arm
+     * @param conflictPolicy release one conflict-matcher arm of THIS policy, or {@code null}
+     * @param infobaseName the name passed to {@code arm} (may be {@code null})
+     * @param portPolicy the port-conflict policy passed to {@code arm} (may be {@code null})
+     */
+    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors arm(...)
+        ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
+        StandaloneServerPortConflictPolicy portPolicy)
+    {
         if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null)
         {
             return;
@@ -1097,6 +1171,11 @@ public final class LaunchUpdateDialogAutoConfirmer
             if (portConflictArmCount > 0)
             {
                 portConflictArmCount--;
+            }
+            if (portPolicy == StandaloneServerPortConflictPolicy.REASSIGN
+                && portConflictReassignArmCount > 0)
+            {
+                portConflictReassignArmCount--;
             }
             if (conflictPolicy != null)
             {
@@ -1814,7 +1893,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             // conflict modal: the busy-port list is read from the dialog BODY.
             if (isPortConflictTitle(safeShellText(shell)))
             {
-                shell.getDisplay().asyncExec(() -> cancelPortConflictDialog(shell));
+                shell.getDisplay().asyncExec(() -> answerPortConflictDialog(shell));
                 return;
             }
             // Distinguish the two modals (the body walk is cheap and also drives the
@@ -2095,7 +2174,7 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * <p>Runs on the UI thread; never throws onto it.
      */
-    private static void cancelPortConflictDialog(Shell shell)
+    private static void answerPortConflictDialog(Shell shell)
     {
         try
         {
@@ -2104,12 +2183,17 @@ public final class LaunchUpdateDialogAutoConfirmer
                 return;
             }
             String detail = summarizePortConflictText(collectDialogText(shell));
+            if (reassignRequested() && pressReassignButton(shell, detail))
+            {
+                return;
+            }
             notePortConflict(detail);
             Button cancel = findButtonByLabel(shell, 0, PORT_CONFLICT_CANCEL_BUTTONS);
             Activator.logError("Standalone server port conflict during an unattended MCP call: " //$NON-NLS-1$
                 + (detail == null ? "<the dialog carried no readable detail>" : detail) //$NON-NLS-1$
                 + " — cancelling EDT's port-conflict dialog (its default 'Find free port' " //$NON-NLS-1$
-                + "would rewrite the server configuration)", null); //$NON-NLS-1$
+                + "would rewrite the server configuration; pass " //$NON-NLS-1$
+                + "standaloneServerPortConflict='reassign' to allow that)", null); //$NON-NLS-1$
             if (cancel != null)
             {
                 pressButton(cancel);
@@ -2119,8 +2203,51 @@ public final class LaunchUpdateDialogAutoConfirmer
         }
         catch (RuntimeException e)
         {
-            Activator.logError("Failed to cancel the standalone-server port-conflict dialog", e); //$NON-NLS-1$
+            Activator.logError("Failed to answer the standalone-server port-conflict dialog", e); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Whether the port conflict may be answered with "Find free port": every outstanding arm
+     * asked for {@link StandaloneServerPortConflictPolicy#REASSIGN}. Unanimity, because the
+     * press rewrites the SERVER's configuration for every user of that server and the dialog
+     * carries nothing that could attribute it to one call.
+     */
+    private static boolean reassignRequested()
+    {
+        synchronized (LOCK)
+        {
+            return portConflictArmCount > 0 && portConflictReassignArmCount == portConflictArmCount;
+        }
+    }
+
+    /**
+     * Presses the port-conflict modal's "Find free port" button, located BY LABEL.
+     *
+     * @param shell the dialog shell
+     * @param detail the busy-port summary, recorded so the caller can report the re-address
+     * @return {@code true} when the button was found and pressed; {@code false} when it was not,
+     *         so the caller falls back to cancelling (the button is the dialog's DEFAULT, and a
+     *         configuration rewrite must never happen through a blind default press)
+     */
+    private static boolean pressReassignButton(Shell shell, String detail)
+    {
+        Button reassign = findButtonByLabel(shell, 0, PORT_CONFLICT_REASSIGN_BUTTONS);
+        if (reassign == null)
+        {
+            Activator.logError("Standalone server port conflict: standaloneServerPortConflict=" //$NON-NLS-1$
+                + "reassign was requested but the 'Find free port' button was not found by " //$NON-NLS-1$
+                + "label (an EDT build or locale this plugin does not know) — cancelling " //$NON-NLS-1$
+                + "instead of pressing the dialog's default button blind", null); //$NON-NLS-1$
+            return false;
+        }
+        notePortReassign(detail);
+        Activator.logInfo("Standalone server port conflict: moving the server to free ports on " //$NON-NLS-1$
+            + "the caller's request (standaloneServerPortConflict=reassign) — EDT rewrites the " //$NON-NLS-1$
+            + "server configuration. Conflict was: " //$NON-NLS-1$
+            + (detail == null ? "<no readable detail>" : detail)); //$NON-NLS-1$
+        pressButton(reassign);
+        return true;
     }
 
     /**
@@ -2178,6 +2305,22 @@ public final class LaunchUpdateDialogAutoConfirmer
         return sb.length() == 0 ? null : sb.toString();
     }
 
+    /**
+     * Records an auto-answered "Find free port" into every open window, so the caller can report
+     * that its operation succeeded ONLY because EDT re-addressed the server. Distinct from
+     * {@link #notePortConflict}: nothing failed here, but the stand changed.
+     */
+    private static void notePortReassign(String detail)
+    {
+        synchronized (LOCK)
+        {
+            for (ConflictWatch watch : CONFLICT_WATCHES)
+            {
+                watch.recordPortReassign(detail);
+            }
+        }
+    }
+
     /** Records an auto-cancelled port conflict into every open window (see {@link ConflictWatch}). */
     private static void notePortConflict(String detail)
     {
@@ -2216,8 +2359,8 @@ public final class LaunchUpdateDialogAutoConfirmer
             + "rewrites the server configuration and changes the address its clients connect " //$NON-NLS-1$
             + "to. Free those ports and retry — most often the holder is an ibsrv process left " //$NON-NLS-1$
             + "over from an earlier EDT session (stop it, or stop the server in EDT's Servers " //$NON-NLS-1$
-            + "view). To move the server instead, start it once from the EDT UI and answer " //$NON-NLS-1$
-            + "'Find free port' there."; //$NON-NLS-1$
+            + "view). To let EDT move the server instead, re-call with " //$NON-NLS-1$
+            + "standaloneServerPortConflict='reassign'."; //$NON-NLS-1$
     }
 
     /**
@@ -2229,6 +2372,17 @@ public final class LaunchUpdateDialogAutoConfirmer
     static void recordPortConflictForTest(String detail)
     {
         notePortConflict(detail);
+    }
+
+    /**
+     * Test seam: records an auto-answered "Find free port" exactly as the UI-thread press path
+     * does, so the resulting contract can be asserted headlessly.
+     *
+     * @param detail the busy-port summary (may be {@code null})
+     */
+    static void recordPortReassignForTest(String detail)
+    {
+        notePortReassign(detail);
     }
 
     /**
@@ -2298,6 +2452,8 @@ public final class LaunchUpdateDialogAutoConfirmer
         private String reason;
         private boolean portConflict;
         private String portConflictDetail;
+        private boolean portsReassigned;
+        private String portReassignDetail;
 
         ConflictWatch(String infobaseName)
         {
@@ -2350,6 +2506,47 @@ public final class LaunchUpdateDialogAutoConfirmer
             synchronized (LOCK)
             {
                 return portConflictDetail;
+            }
+        }
+
+        /**
+         * Records that the port conflict was answered with "Find free port" — the operation
+         * proceeds, but EDT rewrote the server's port configuration to make it possible.
+         */
+        void recordPortReassign(String detail)
+        {
+            portsReassigned = true;
+            if (detail != null && portReassignDetail == null)
+            {
+                portReassignDetail = detail;
+            }
+        }
+
+        /**
+         * Did this operation only get through because EDT moved the standalone server to free
+         * ports (the caller passed {@code standaloneServerPortConflict=reassign})? Not a
+         * failure — but the stand changed, so the caller must say so.
+         *
+         * @return {@code true} when a re-address was performed while this window was open
+         */
+        public boolean portsReassigned()
+        {
+            synchronized (LOCK)
+            {
+                return portsReassigned;
+            }
+        }
+
+        /**
+         * The busy-port summary of the conflict that triggered the re-address.
+         *
+         * @return the detail, or {@code null} when none was readable
+         */
+        public String portReassignDetail()
+        {
+            synchronized (LOCK)
+            {
+                return portReassignDetail;
             }
         }
 

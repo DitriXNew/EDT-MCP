@@ -312,3 +312,20 @@ def test_unknown_external_infobase_changes_value_is_rejected():
     assert_error_quality(e, names=[bad], suggests=["override", "import", "cancel"],
                          ctx="unknown externalInfobaseChanges names the bad value and lists the accepted ones")
     assert_no_diff("a rejected update must not touch the project on disk")
+
+
+@e2e_test(tool="update_database", kind="read")
+def test_unknown_standalone_server_port_conflict_value_is_rejected():
+    """standaloneServerPortConflict answers EDT's blocking "Standalone server port
+    conflict" modal. One of its two answers makes EDT REWRITE the server configuration,
+    so a typo must never resolve to it - nor silently fall back to the default. An
+    unrecognised token is rejected up front, naming the bad value and the accepted ones."""
+    bad = "find-free-port"
+    r = call("update_database", {
+        "projectName": PROJECT,
+        "applicationId": BOGUS_APP_ID,
+        "standaloneServerPortConflict": bad,
+    })
+    e = assert_error(r, "unknown standaloneServerPortConflict value")
+    assert_error_quality(e, names=[bad], suggests=["cancel", "reassign"],
+                         ctx="unknown standaloneServerPortConflict names the bad value and lists the accepted ones")

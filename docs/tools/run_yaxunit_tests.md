@@ -1,6 +1,6 @@
 # run_yaxunit_tests
 
-Run YAXUnit tests as a named background job and return a JUnit Markdown report. The start call waits up to `timeout` (default and maximum 45s, larger values are clamped): a short run returns the report unchanged in that call; otherwise **Pending** returns the jobId to poll with get_job_status. The job owns resolution, preparation, launch and report collection, and its progress names the current phase (resolve / prep:terminate / prep:recompute / prep:db-update / spawn / run). A repeated start with the same execution parameters attaches only while that job is running, preventing a duplicate launch; use jobId, not repeated arguments, to address a known run. A phase that stops changing is the server's only signal — it means either a legitimately long stage or one blocked on a modal dialog in EDT, and the tool cannot tell them apart: look at EDT before waiting indefinitely. Pass `debug=true` to use the same named-job path for a DEBUG launch: a short start returns the launch handle, while Pending returns jobId for get_job_status; call wait_for_break after the handle arrives. The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all. Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').
+Run YAXUnit tests as a named background job and return a JUnit Markdown report. The start call waits up to `timeout` (default and maximum 45s): a short run returns the report in that call, otherwise Pending returns a jobId to poll with get_job_status. Address a known run by jobId, NOT by repeating the arguments - a repeated start attaches only while that job is still running, and otherwise launches a second run. Parameters and examples: get_tool_guide('run_yaxunit_tests').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -16,7 +16,8 @@ Run YAXUnit tests as a named background job and return a JUnit Markdown report. 
 | updateBeforeLaunch | — | boolean | Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale), auto-answering the platform's update dialogs. This makes a blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's own windows still waits for a human, and the tool reports it as a Pending whose phase stops changing. false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are retained by jobId until registry eviction, while a new start after completion always executes a fresh run regardless of this flag. |
 | updateScope | — | string | Which projects to rebuild+update before the run: 'all' (configuration + dependent extensions, default), 'configuration', or 'extension:<ProjectName>' (comma-separate several). Forces a derived-data recompute so a freshly edited extension's .cfe is regenerated and loaded into the infobase before the run. Unknown extension names fail the call (the error lists the available names). Only applies when updateBeforeLaunch=true. |
 | externalInfobaseChanges | — | string | How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it. |
-| debug | — | boolean | Default false: poll and return the report. true: use the same named-job path to launch in DEBUG mode so breakpoints fire. A short start returns the launch handle and you call wait_for_break next; if resolution or preparation outlives timeout, Pending returns jobId for get_job_status. |
+| standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
+| debug | — | boolean | true launches in DEBUG mode so breakpoints fire: a short start returns the launch handle and you call wait_for_break next, while Pending returns a jobId for get_job_status. Default false polls and returns the report. |
 
 ## Guide
 Starts a named background job that launches the 1C:Enterprise application with the `RunUnitTests` startup parameter, waits for the launch to terminate, parses the JUnit XML report, and retains that report by `jobId`. A short run still returns its Markdown report directly from the start call. The full report is also written to `report.md` next to `junit.xml`.
@@ -219,6 +220,22 @@ The modal's own default button is **Import**, which would rewrite the project so
 plugin never presses it blind: if the labelled button for the selected policy cannot be found (an
 unshipped locale, a reworded button) the dialog is cancelled and the update reports the failure
 instead of writing anything.
+
+## Pre-launch recomputation
+
+The pre-launch auto-chain (`updateBeforeLaunch=true`, the default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all.
+
+## Standalone server: busy ports
+
+Launching an application served by a 1C STANDALONE SERVER starts that server first. If one of its
+ports (HTTP gate / debug server / SSH gate) is already bound — most often by an `ibsrv` left over
+from an earlier EDT session — EDT raises the modal **"Standalone server port conflict"** /
+**"Конфликт портов автономного сервера"** and waits for a human.
+
+`standaloneServerPortConflict` answers it: `cancel` (default) refuses, so the launch fails and the
+reason — with the busy ports named — appears in `debug_status` under `recentLaunchFailures`;
+`reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
+changes the address its clients connect to. See the `update_database` guide for the full table.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

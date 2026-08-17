@@ -399,3 +399,19 @@ def test_tags_filter_also_accepts_a_comma_separated_string():
         ctx="a comma-separated tag filter is accepted like the array form",
     )
     assert_no_diff("a rejected launch must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_unknown_standalone_server_port_conflict_value_is_rejected():
+    """standaloneServerPortConflict answers EDT's blocking "Standalone server port
+    conflict" modal. One of its two answers makes EDT REWRITE the server configuration,
+    so a typo must never resolve to it - nor silently fall back to the default. An
+    unrecognised token is rejected up front, naming the bad value and the accepted ones."""
+    bad = "find-free-port"
+    r = call("run_yaxunit_tests", {
+        "launchConfigurationName": "no such configuration at all",
+        "standaloneServerPortConflict": bad,
+    })
+    e = assert_error(r, "unknown standaloneServerPortConflict value")
+    assert_error_quality(e, names=[bad], suggests=["cancel", "reassign"],
+                         ctx="unknown standaloneServerPortConflict names the bad value and lists the accepted ones")

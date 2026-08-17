@@ -825,6 +825,9 @@
           "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
           "type": "boolean"
         },
+        "standaloneServerPortConflict": {
+          "type": "string"
+        },
         "updateBeforeLaunch": {
           "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach.",
           "type": "boolean"
@@ -3617,6 +3620,9 @@
           "description": "EDT project name (required if launchConfigurationName is omitted).",
           "type": "string"
         },
+        "standaloneServerPortConflict": {
+          "type": "string"
+        },
         "tags": {
           "items": {
             "type": "string"
@@ -4254,6 +4260,9 @@
         "projectName": {
           "type": "string"
         },
+        "standaloneServerPortConflict": {
+          "type": "string"
+        },
         "terminateRunningClients": {
           "description": "Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively.",
           "type": "boolean"
@@ -4282,6 +4291,9 @@
         },
         "project": {
           "type": "string"
+        },
+        "standaloneServerPortsReassigned": {
+          "type": "boolean"
         },
         "stateAfter": {
           "type": "string"

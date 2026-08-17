@@ -1748,14 +1748,35 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Builds the explicit, actionable "infobase is still out of sync" message
-     * returned when the IB does not reach {@link ApplicationUpdateState#UPDATED}
-     * within {@link #syncApplyTimeoutMs}. The point is to ABORT the run rather
-     * than execute it against a not-yet-applied IB (which would yield a stale
-     * green result).
+     * Builds the explicit, actionable message returned when the IB does not reach
+     * {@link ApplicationUpdateState#UPDATED} within {@link #syncApplyTimeoutMs}. The point is
+     * to ABORT the run rather than execute it against a not-yet-applied IB (which would yield
+     * a stale green result).
+     *
+     * <p>The two ways of not reaching UPDATED are told apart, because they need different
+     * actions from the caller (#433): a {@code …UPDATE_REQUIRED} state IS the out-of-sync
+     * claim, while {@code UNKNOWN} claims nothing of the sort — EDT returns it when it has no
+     * live connection to the infobase, so what the DB contains is simply not known. Reporting
+     * the second as "DB requires update; extension changes not yet applied" states a fact
+     * nobody observed and sends the caller after the wrong thing.
+     *
+     * @param finalState the last state observed (may be {@code null})
      */
-    private static String staleInfobaseError(ApplicationUpdateState finalState)
+    static String staleInfobaseError(ApplicationUpdateState finalState)
     {
+        // ONLY the UNKNOWN category is re-worded. A timed-out BEING_UPDATED (IN_PROGRESS) really
+        // is an infobase left mid-update — "out of sync" describes it correctly — so it keeps the
+        // original text; the unit test that pins that case is the guard against widening this.
+        if (classify(finalState) == SyncCategory.UNKNOWN)
+        {
+            return "Infobase state is still UNKNOWN after " + (syncApplyTimeoutMs / 1000) //$NON-NLS-1$
+                + "s (final update state: " + finalState + ") — EDT reports this when it has " //$NON-NLS-1$ //$NON-NLS-2$
+                + "no live connection to the infobase, so whether the DB matches the project " //$NON-NLS-1$
+                + "cannot be told and the run was refused rather than executed blind. Check " //$NON-NLS-1$
+                + "that the infobase is reachable and, for a standalone server, that the " //$NON-NLS-1$
+                + "server is running (get_applications reports the state it reads); then " //$NON-NLS-1$
+                + "retry."; //$NON-NLS-1$
+        }
         return "Infobase is still out of sync (DB requires update; extension changes " //$NON-NLS-1$
             + "not yet applied) after " + (syncApplyTimeoutMs / 1000) //$NON-NLS-1$
             + "s (final update state: " + finalState + ") — results would be stale, " //$NON-NLS-1$ //$NON-NLS-2$

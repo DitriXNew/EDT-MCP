@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -58,6 +59,8 @@ public class UpdateDatabaseTool implements IMcpTool
     private static final String KEY_UPDATE_TYPE = "updateType"; //$NON-NLS-1$
     /** Output key: application update state before the update. */
     private static final String KEY_STATE_BEFORE = "stateBefore"; //$NON-NLS-1$
+    /** Output key: EDT moved the standalone server to free ports to let the update through. */
+    private static final String KEY_PORTS_REASSIGNED = "standaloneServerPortsReassigned"; //$NON-NLS-1$
 
     /**
      * Cap on how many {@link Throwable#getCause()} hops {@link #describeInternalInfoHint} walks,
@@ -102,6 +105,8 @@ public class UpdateDatabaseTool implements IMcpTool
                 + "reports what would change WITHOUT mutating the infobase).") //$NON-NLS-1$
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
                 RunYaxunitTestsTool.EXTERNAL_INFOBASE_CHANGES_DESCRIPTION)
+            .stringProperty("standaloneServerPortConflict", //$NON-NLS-1$
+                StandaloneServerPortConflictPolicy.PARAMETER_DESCRIPTION)
             .booleanProperty("terminateRunningClients", //$NON-NLS-1$
                 "Before applying, terminate any 1C client THIS EDT launched on the target infobase " //$NON-NLS-1$
                 + "to free the exclusive lock (default true). false keeps a running client — the " //$NON-NLS-1$
@@ -131,6 +136,10 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty("willTerminateRunningClients", //$NON-NLS-1$
                 "On a preview: whether confirm=true would first terminate a running client " //$NON-NLS-1$
                 + "(reflects terminateRunningClients).") //$NON-NLS-1$
+            .booleanProperty(KEY_PORTS_REASSIGNED,
+                "Present and true ONLY when standaloneServerPortConflict=reassign was applied: " //$NON-NLS-1$
+                + "EDT moved the standalone server to free ports and REWROTE its configuration, " //$NON-NLS-1$
+                + "so the address its clients connect to has changed.") //$NON-NLS-1$
             .build();
     }
 
@@ -164,6 +173,16 @@ public class UpdateDatabaseTool implements IMcpTool
         {
             return ToolResult.error("Unknown externalInfobaseChanges value: '" + rawPolicy //$NON-NLS-1$
                 + "'. Accepted values: " + ExternalInfobaseChangesPolicy.acceptedValues()).toJson(); //$NON-NLS-1$
+        }
+        String rawPortPolicy =
+            JsonUtils.extractStringArgument(params, "standaloneServerPortConflict"); //$NON-NLS-1$
+        StandaloneServerPortConflictPolicy portPolicy =
+            StandaloneServerPortConflictPolicy.parse(rawPortPolicy);
+        if (portPolicy == null)
+        {
+            return ToolResult.error("Unknown standaloneServerPortConflict value: '" + rawPortPolicy //$NON-NLS-1$
+                + "'. Accepted values: " //$NON-NLS-1$
+                + StandaloneServerPortConflictPolicy.acceptedValues()).toJson();
         }
 
         boolean hasName = configName != null && !configName.isEmpty();
@@ -242,7 +261,7 @@ public class UpdateDatabaseTool implements IMcpTool
         }
 
         return updateDatabase(projectName, applicationId, fullUpdate, confirm,
-            terminateRunningClients, externalChanges);
+            terminateRunningClients, externalChanges, portPolicy);
     }
 
     /**
@@ -585,11 +604,13 @@ public class UpdateDatabaseTool implements IMcpTool
      *            infobase was changed outside EDT since the last EDT interaction
      * @return JSON string with result
      */
-    private String updateDatabase(String projectName, String applicationId,
+    private String updateDatabase(String projectName, String applicationId, // NOSONAR one resolved plan, not a bag of concerns
             boolean fullUpdate, boolean confirm,
-            boolean terminateRunningClients, ExternalInfobaseChangesPolicy externalChanges)
+            boolean terminateRunningClients, ExternalInfobaseChangesPolicy externalChanges,
+            StandaloneServerPortConflictPolicy portPolicy)
     {
         boolean terminatedClient = false;
+        boolean portsReassigned = false;
         try
         {
             ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -704,7 +725,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName))
                 {
                     LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges,
-                        infobaseName);
+                        infobaseName, portPolicy);
                     try
                     {
                         stateAfter = appManager.update(application, updateType, context, monitor);
@@ -734,7 +755,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     finally
                     {
                         LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
-                            infobaseName);
+                            infobaseName, portPolicy);
                     }
                     // Same reasoning as the catch above, for the path where the cancelled server
                     // start lets update() return a (cached, therefore meaningless) state instead
@@ -754,11 +775,15 @@ public class UpdateDatabaseTool implements IMcpTool
                         return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
                             externalChanges, watch.reason())).toJson();
                     }
+                    // Read INSIDE the window (it is deregistered on close): the update succeeded,
+                    // but only because EDT re-addressed the server, and the caller must be told —
+                    // that is a change to their stand, not to this infobase.
+                    portsReassigned = watch.portsReassigned();
                 }
             }
 
             return buildUpdatedResult(projectName, applicationId, application, updateType,
-                stateBefore, stateAfter, terminatedClient);
+                stateBefore, stateAfter, terminatedClient, portsReassigned);
         }
         catch (ApplicationException e)
         {
@@ -902,10 +927,10 @@ public class UpdateDatabaseTool implements IMcpTool
      * client was actually terminated (truthful; "swept but none / not confirmed" and opt-out are
      * indistinguishable by absence — the confirmationRequired idiom). Side-effect-free.
      */
-    private static String buildUpdatedResult(String projectName, String applicationId,
+    private static String buildUpdatedResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller
             IApplication application, ApplicationUpdateType updateType,
             ApplicationUpdateState stateBefore, ApplicationUpdateState stateAfter,
-            boolean terminatedClient)
+            boolean terminatedClient, boolean portsReassigned)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, "updated") //$NON-NLS-1$
@@ -924,15 +949,27 @@ public class UpdateDatabaseTool implements IMcpTool
         {
             result.put(KEY_TERMINATED_CLIENT, true);
         }
+        if (portsReassigned)
+        {
+            result.put(KEY_PORTS_REASSIGNED, true);
+        }
+
+        // The re-address is stated FIRST in every message it applies to: it outlives this call
+        // and changes the address clients use, so it must not be a flag the caller has to notice.
+        String reassignNote = portsReassigned
+            ? " NOTE: the standalone server's ports were busy, so EDT moved it to free ports and " //$NON-NLS-1$
+                + "rewrote its configuration (standaloneServerPortConflict=reassign) — clients " //$NON-NLS-1$
+                + "must use the new address." //$NON-NLS-1$
+            : ""; //$NON-NLS-1$
 
         // Add status message based on result
         if (stateAfter == ApplicationUpdateState.UPDATED)
         {
-            result.put(McpKeys.MESSAGE, "Database updated successfully"); //$NON-NLS-1$
+            result.put(McpKeys.MESSAGE, "Database updated successfully" + reassignNote); //$NON-NLS-1$
         }
         else if (stateAfter == ApplicationUpdateState.BEING_UPDATED)
         {
-            result.put(McpKeys.MESSAGE, "Update in progress"); //$NON-NLS-1$
+            result.put(McpKeys.MESSAGE, "Update in progress" + reassignNote); //$NON-NLS-1$
         }
         else if (stateAfter == null)
         {
@@ -945,7 +982,8 @@ public class UpdateDatabaseTool implements IMcpTool
         }
         else
         {
-            result.put(McpKeys.MESSAGE, "Update completed with state: " + stateAfter.name()); //$NON-NLS-1$
+            result.put(McpKeys.MESSAGE,
+                "Update completed with state: " + stateAfter.name() + reassignNote); //$NON-NLS-1$
         }
 
         return result.toJson();

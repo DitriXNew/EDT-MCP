@@ -117,12 +117,23 @@ already bound, EDT raises a modal titled **"Standalone server port conflict"** /
 **"Конфликт портов автономного сервера"** offering *Find free port* or *Cancel*. Nobody presses it
 in an unattended run, so the call would block until the client times out.
 
-This plugin answers it with **Cancel** and fails the call with the busy ports named. *Find free
-port* is deliberately not pressed: it makes EDT rewrite the server's `config.yaml`, which moves the
-address every client of that server connects to — not something a database update may do behind
-your back. The usual holder is an `ibsrv` process left over from an earlier EDT session; stop it
-(or stop the server in EDT's *Servers* view) and retry. To move the server instead, start it once
-from the EDT UI and answer *Find free port* there.
+`standaloneServerPortConflict` answers it for you:
 
-The same applies to `debug_launch` / `run_yaxunit_tests` against a standalone server: the launch is
-fire-and-forget, so the reason is reported by `debug_status` under `recentLaunchFailures`.
+| value | what happens | when to use |
+|---|---|---|
+| `cancel` (default) | the server does not start; the call fails and names the busy ports | you want to know about the conflict and fix it yourself — nothing on the stand is changed |
+| `reassign` | EDT picks free ports, **rewrites the server configuration** and the operation proceeds | you accept that the server changes address (its clients must follow) |
+
+The dialog's DEFAULT button is *Find free port*, so this plugin never presses it blind: with
+`cancel` it presses the labelled *Cancel*, and with `reassign` it presses *Find free port* by its
+label — a build or locale whose button labels are unknown falls back to cancelling rather than
+rewriting the configuration. A `reassign` that was actually applied is reported back:
+`standaloneServerPortsReassigned: true` plus a NOTE in the message.
+
+The usual holder of a busy port is an `ibsrv` process left over from an earlier EDT session — it
+survives EDT being killed. Stopping it (or stopping the server in EDT's *Servers* view) is
+usually preferable to re-addressing the server.
+
+The same parameter exists on `debug_launch` and `run_yaxunit_tests`, which start the server too.
+Those launches are fire-and-forget, so a refusal is reported by `debug_status` under
+`recentLaunchFailures`.

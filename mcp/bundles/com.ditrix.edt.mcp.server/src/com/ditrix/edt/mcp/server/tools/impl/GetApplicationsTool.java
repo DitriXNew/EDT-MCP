@@ -327,6 +327,14 @@ public class GetApplicationsTool implements IMcpTool
     /**
      * Returns human-readable description for update state.
      *
+     * <p>{@code UNKNOWN} is spelled out rather than echoed as "Unknown state" (#433): EDT's
+     * application delegates return it when they have no live connection to the infobase
+     * ({@code getUpdateState(equalityState, !isConnected(project, infobase))} — the disconnected
+     * branch wins before the equality state is even looked at), so the actionable reading is
+     * "not connected", not "something is wrong with the configuration". The wording stays
+     * hedged because a connected infobase whose equality state EDT does not recognise lands
+     * here too.
+     *
      * @param state the update state
      * @return description string
      */
@@ -335,7 +343,9 @@ public class GetApplicationsTool implements IMcpTool
         switch (state)
         {
             case UNKNOWN:
-                return "Unknown state"; //$NON-NLS-1$
+                return "Unknown - EDT could not read the state, typically because it is not " //$NON-NLS-1$
+                    + "connected to this infobase (for a standalone server: the server is not " //$NON-NLS-1$
+                    + "running)"; //$NON-NLS-1$
             case INCREMENTAL_UPDATE_REQUIRED:
                 return "Incremental update required"; //$NON-NLS-1$
             case FULL_UPDATE_REQUIRED:

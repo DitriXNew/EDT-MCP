@@ -128,6 +128,31 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testSchemaDeclaresTheStandaloneServerPortConflictPolicy()
+    {
+        // Without it the port-conflict refusal names a knob the caller cannot reach (#434).
+        String schema = new UpdateDatabaseTool().getInputSchema();
+        assertTrue("schema must declare the port-conflict policy", //$NON-NLS-1$
+            schema.contains("\"standaloneServerPortConflict\"")); //$NON-NLS-1$
+        assertTrue("and both of its answers must be documented in the schema", //$NON-NLS-1$
+            schema.contains("reassign") && schema.contains("cancel")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testUnknownPortConflictValueIsRejectedNamingTheValue()
+    {
+        // Parsed BEFORE any workbench access, so this is reachable headlessly - and the refusal
+        // must echo the rejected token, not just say "invalid".
+        java.util.Map<String, String> params = new java.util.HashMap<>();
+        params.put("projectName", "Any"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", "Any"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("standaloneServerPortConflict", "free-ports"); //$NON-NLS-1$ //$NON-NLS-2$
+        String json = new UpdateDatabaseTool().execute(params);
+        assertTrue("the refusal must name the rejected value", json.contains("free-ports")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and list what IS accepted", json.contains("reassign")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testOutputSchemaDeclaresConfirmPreviewFields()
     {
         // The confirm-preview adds action ('preview'/'updated') + confirmationRequired to the

@@ -710,6 +710,51 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testReassignButtonLabelsCoverBothLocales()
+    {
+        // Pressed BY LABEL, never as "the default button": a locale this set does not know must
+        // fall back to cancelling rather than rewriting the server configuration blind.
+        assertTrue("the English 'Find free port' label must be known",
+            LaunchUpdateDialogAutoConfirmer.PORT_CONFLICT_REASSIGN_BUTTONS.contains(
+                "Find free port"));
+        assertTrue("the Russian label must be known too",
+            LaunchUpdateDialogAutoConfirmer.PORT_CONFLICT_REASSIGN_BUTTONS.contains(
+                "\u041D\u0430\u0439\u0442\u0438 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0439 \u043F\u043E\u0440\u0442"));
+        assertFalse("the reassign and cancel label sets must stay disjoint",
+            LaunchUpdateDialogAutoConfirmer.PORT_CONFLICT_REASSIGN_BUTTONS.contains("Cancel"));
+    }
+
+    @Test
+    public void testWatchTellsAReassignApartFromARefusal()
+    {
+        // The two outcomes of the same modal must never be conflated: one failed the call, the
+        // other let it through but changed the stand. A caller reports them differently.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("TestConfiguration #1"))
+        {
+            assertFalse(watch.portsReassigned());
+            assertNull(watch.portReassignDetail());
+
+            LaunchUpdateDialogAutoConfirmer.recordPortReassignForTest("8429 - HTTP gate port");
+
+            assertTrue("the window must see the re-address", watch.portsReassigned());
+            assertEquals("8429 - HTTP gate port", watch.portReassignDetail());
+            assertFalse("a re-address is not a refusal — the operation proceeded",
+                watch.portConflicted());
+            assertNull(watch.portConflictDetail());
+        }
+    }
+
+    @Test
+    public void testPortConflictErrorPointsAtTheReassignKnob()
+    {
+        // The refusal must name the way out, or the caller has no route from MCP at all.
+        assertTrue("the error must name the parameter that allows the move",
+            LaunchUpdateDialogAutoConfirmer.portConflictError(null)
+                .contains("standaloneServerPortConflict='reassign'"));
+    }
+
+    @Test
     public void testPortConflictIsNotRecordedIntoAClosedWindow()
     {
         LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
