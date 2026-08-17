@@ -947,7 +947,10 @@ public class DebugLaunchTool implements IMcpTool
             Activator.logError(ERR_ASYNC_PREFIX + message, null);
             return message;
         }
-        if (!conflicts.cancelled())
+        // Consulted ONLY when this launch armed the external-changes matcher: the window also
+        // covers the port matcher (armed even with updateBeforeLaunch=false), and an
+        // unattributed cancel from a concurrent operation is not this launch's declined update.
+        if (policy == null || !conflicts.cancelled())
         {
             return null;
         }

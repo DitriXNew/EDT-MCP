@@ -343,7 +343,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             return LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
                 conflicts.portConflictReason());
         }
-        if (!conflicts.cancelled())
+        // The external-changes branch is consulted ONLY when this call armed that matcher: the
+        // window is now opened for the port matcher as well, and an unattributed cancel from a
+        // concurrent operation must not be reported as this run's declined update.
+        if (policy == null || !conflicts.cancelled())
         {
             return null;
         }
@@ -1135,9 +1138,14 @@ public class RunYaxunitTestsTool implements IMcpTool
         // happens, so a conflict cancelled here must be reported with its cause - otherwise the run
         // just fails later with a generic "no junit.xml" and the caller never learns which knob
         // would have let it through.
-        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
-            ? null
-            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
+        // Opened whenever EITHER matcher is armed. Gating it on launchPolicy alone lost the
+        // port-conflict reason exactly when updateBeforeLaunch=false: the matcher is armed (it must
+        // be, or the run hangs), the conflict is refused, and the run then failed with a generic
+        // "no report" instead of the busy ports.
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
+            launchPolicy == null && req.portConflict == null
+                ? null
+                : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
             launchInfobase, req.portConflict);
         ILaunch launch;
@@ -1583,9 +1591,12 @@ public class RunYaxunitTestsTool implements IMcpTool
             ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
             // Same as the RUN path: this is the only armed window around a standalone-server
             // application's delegate-performed update, so a cancel here is reported with its cause.
-            LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
-                ? null
-                : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
+            // Same as the RUN path: the window covers the port matcher too, which is armed even
+            // when this launch performs no DB update.
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
+                launchPolicy == null && req.portConflict == null
+                    ? null
+                    : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
             LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
                 launchInfobase, req.portConflict);
             ILaunch[] spawned = new ILaunch[1];
