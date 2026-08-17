@@ -2609,15 +2609,27 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             return named;
         }
-        // Broadcast ONLY when the event could not have been attributed at all: an unreadable
-        // dialog, one that quotes no server name (an EDT format this plugin cannot parse), or open
-        // windows that could not name their own infobase. A dialog that DOES name a server which
-        // simply is not ours matches nobody on purpose — marking every window would let an
-        // operation that completed normally report a failure caused by a start it never made
-        // (a manual server launch alongside it, say).
-        boolean attributable = !quotedSegments(detail == null ? "" : detail).isEmpty() //$NON-NLS-1$
-            && CONFLICT_WATCHES.stream().anyMatch(w -> w.infobaseName != null);
-        return attributable ? new ArrayList<>() : new ArrayList<>(CONFLICT_WATCHES);
+        // Nothing matched by name. A window that could not name its own infobase still has to hear
+        // about it — the dialog may well be its own, and losing the busy-port diagnosis there is the
+        // failure this whole change exists to remove. Windows that DID name themselves and did not
+        // match are excluded: the dialog demonstrably belongs to another server, and marking them
+        // would make an operation that completed normally report someone else's failure.
+        List<ConflictWatch> unresolved = new ArrayList<>();
+        for (ConflictWatch watch : CONFLICT_WATCHES)
+        {
+            if (watch.infobaseName == null)
+            {
+                unresolved.add(watch);
+            }
+        }
+        if (!unresolved.isEmpty())
+        {
+            return unresolved;
+        }
+        // Every window named itself and none matched: only an unreadable dialog (or one quoting no
+        // server at all) is still unattributable, and then everyone hears it rather than nobody.
+        return quotedSegments(detail == null ? "" : detail).isEmpty() //$NON-NLS-1$
+            ? new ArrayList<>(CONFLICT_WATCHES) : new ArrayList<>();
     }
 
     /**

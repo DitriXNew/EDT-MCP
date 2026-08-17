@@ -889,6 +889,25 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testUnresolvedWindowStillHearsAConflictNamedForSomeoneElse()
+    {
+        // A window that could not name its own infobase must not be starved of the diagnosis just
+        // because a concurrent window DID name itself and did not match.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch named =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("TestConfiguration #1");
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch unresolved =
+                LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest(
+                "Standalone server \"Standalone server for SomeOtherBase\" conflicts ...");
+            assertTrue("the window that could not name itself must still hear it",
+                unresolved.portConflicted());
+            assertFalse("the named window that did not match must not",
+                named.portConflicted());
+        }
+    }
+
+    @Test
     public void testUnattributablePortConflictStillReachesEveryWindow()
     {
         // With nothing to match on, silence would hide a real failure — every window gets it.
