@@ -43,6 +43,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.google.gson.JsonElement;
@@ -223,22 +224,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .booleanProperty(KEY_REVALIDATE, "Whether a post-export revalidation was requested") //$NON-NLS-1$
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
-    }
-
-    @Override
-    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
-    {
-        // A project that is already in sync exports nothing and reports objectsExported=0. That is
-        // a genuine no-op success, so there is no export of ours to confirm; waiting would only
-        // expose a healthy call to refusal by unrelated background export work. Dangling-reference
-        // cleanup DOES re-export Configuration, and it reports its own non-zero count, so the two
-        // are asked together rather than assuming the export list is the only writer.
-        boolean queued = !"0".equals(resultString(result, "objectsExported")) //$NON-NLS-1$ //$NON-NLS-2$
-            || !"0".equals(resultString(result, "danglingRemovedCount")); //$NON-NLS-1$ //$NON-NLS-2$
-        String projectName = params.get(McpKeys.PROJECT_NAME);
-        return queued && projectName != null && !projectName.isEmpty()
-            ? Collections.singletonList(projectName) : Collections.<String> emptyList();
     }
 
     /**
@@ -483,6 +470,14 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         List<String> exportFqns = selectExportFqns(fullExport, allFqns, missingBefore);
         // An empty export list (already in sync, no full export requested) is a genuine
         // no-op: nothing to write, trivially successful.
+        if (exportFqns.isEmpty())
+        {
+            // A genuine no-op: already in sync, nothing handed to the export queue. Stated, because
+            // the barrier owes a different answer to "queued nothing" than to "said nothing" - and
+            // it is safe to state this early: the dangling cleanup below may still export, and an
+            // actual record always wins over this.
+            WriteScope.recordNothingQueued();
+        }
         boolean exported = exportFqns.isEmpty() || BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
         // Step 4: re-check on disk. After a successful export the missing-before set
@@ -856,6 +851,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // registers the removed proxies. Only needed when something was removed.
         if (result.removedFromModel && result.found > 0)
         {
+            // The model changed here whatever happens next, and the re-export below is skipped when
+            // the FQN cannot be named. Stated separately so a cleanup that could not name its file
+            // is still a write in this project rather than the "queued nothing" reported above.
+            WriteScope.recordWrite(project);
             String configFqn = ((IBmObject)config).bmGetFqn();
             if (configFqn != null && !configFqn.isEmpty())
             {

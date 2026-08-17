@@ -19,6 +19,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
 /**
  * Runs work against the 1C BM (business model) inside an explicit read or write
@@ -206,6 +207,13 @@ public final class BmTransactions
      */
     public static boolean forceExportToDisk(IProject project, List<String> topObjectFqns)
     {
+        // The single place this plugin hands save tasks to the platform, and therefore the single
+        // place a write tool's own account of WHERE it wrote can be taken without the tool having to
+        // remember to give one (issue #408). Recorded before the attempt, not after a successful
+        // one: a refused submission is not evidence that this call did not write - the model change
+        // stands - and for a list submission that threw part way through it is not even evidence
+        // that nothing was queued. No-op outside a write tool's call.
+        WriteScope.recordExportSubmission(project);
         try
         {
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();

@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
@@ -125,9 +126,26 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
     }
 
+    /**
+     * Reads which projects take part in a cascade rooted at the target. A package-private SEAM: the
+     * production default is {@link ProjectStateChecker#cascadeParticipants(IProject)}, which needs a
+     * live workspace, while a unit test substitutes a fixed set so what a confirmed delete DECLARES
+     * can be observed headlessly.
+     */
+    @FunctionalInterface
+    interface CascadeParticipants
+    {
+        /**
+         * @param base the project the cascade mutates
+         * @return the other projects taking part; never {@code null}
+         */
+        List<IProject> of(IProject base);
+    }
+
     private final ConsentRequester consentRequester;
     private final CascadeSettler cascadeSettler;
     private final ExportSubmitter exportSubmitter;
+    private final CascadeParticipants cascadeParticipants;
 
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
@@ -135,7 +153,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview),
             (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
                 timeoutMs, NAME, "Nothing was deleted."), //$NON-NLS-1$
-            BmTransactions::forceExportToDisk);
+            BmTransactions::forceExportToDisk, ProjectStateChecker::cascadeParticipants);
     }
 
     /**
@@ -148,22 +166,31 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         this(consentRequester,
             (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
                 timeoutMs, NAME, "Nothing was deleted."), //$NON-NLS-1$
-            BmTransactions::forceExportToDisk);
+            BmTransactions::forceExportToDisk, ProjectStateChecker::cascadeParticipants);
     }
 
     /** Test seam for the caller-thread cascade settle. */
     DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler)
     {
-        this(consentRequester, cascadeSettler, BmTransactions::forceExportToDisk);
+        this(consentRequester, cascadeSettler, BmTransactions::forceExportToDisk,
+            ProjectStateChecker::cascadeParticipants);
     }
 
     /** Test seam for the cascade settle AND the post-refactoring export submission. */
     DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler,
         ExportSubmitter exportSubmitter)
     {
+        this(consentRequester, cascadeSettler, exportSubmitter, ProjectStateChecker::cascadeParticipants);
+    }
+
+    /** Test seam for everything above PLUS the cascade participant set the write scope declares. */
+    DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler,
+        ExportSubmitter exportSubmitter, CascadeParticipants cascadeParticipants)
+    {
         this.consentRequester = consentRequester;
         this.cascadeSettler = cascadeSettler;
         this.exportSubmitter = exportSubmitter;
+        this.cascadeParticipants = cascadeParticipants;
     }
 
     /**
@@ -305,45 +332,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "(the same count), kept for one release for wire compatibility") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable description of the result") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
-    }
-
-    @Override
-    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
-    {
-        // A preview writes nothing, so it queued no export and must not be exposed to refusal by
-        // unrelated background work.
-        if (!JsonUtils.extractBooleanArgument(params, "confirm", false)) //$NON-NLS-1$
-        {
-            return Collections.emptyList();
-        }
-        // Scope is the TARGET project only, deliberately.
-        //
-        // And in the target project the wait is normally ordered with a real export: the generic
-        // mdclass branch ASKS for the container's .mdo export itself (see submitContainerExport)
-        // before this barrier runs, so waiting here is a wait for work this call queued rather than
-        // a probe that can find the segment quiet before the refactoring has queued anything. When
-        // that request is refused the ordering is gone again - which is why the refusal is reported
-        // in the result instead of only logged.
-        //
-        // A confirmed mdclass delete does cascade: EDT's md-refactoring also cleans the references
-        // held by dependent extensions, and their .mdo files are exported too - so in that branch
-        // the honest set is larger than this. It is not added here, because the set EDT exposes
-        // (IDependentProject.getDependent, the same selection #405's pre-flight uses) is the set of
-        // models it SCANS, not the set it WRITES, and awaiting a scanned-but-untouched extension
-        // reintroduces exactly the false refusal this same review round removed from
-        // apply_quick_fix: an unrelated wedged export in that extension would fail a healthy
-        // delete. The specialized branches make it worse - form-member, form-object, XDTO-member
-        // and predefined-item deletes bypass the refactoring entirely and touch only this project.
-        //
-        // Awaiting only the target is therefore a KNOWN NARROW WAIT, and its cost is bounded and
-        // named: a cascade that also dirtied an extension can answer while that extension's export
-        // is still queued - the pre-#406 behaviour for that file, not a regression. Closing it
-        // properly needs the tool to report what it actually wrote rather than have it re-derived
-        // afterwards, which is a change to how tools describe their own writes.
-        String projectName = params.get(McpKeys.PROJECT_NAME);
-        return projectName == null || projectName.isEmpty() ? Collections.<String> emptyList()
-            : Collections.singletonList(projectName);
     }
 
     @Override
@@ -386,6 +376,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        if (!confirm)
+        {
+            // A preview writes nothing, on every branch - the flag IS the gate. Said once, here,
+            // and safe against being wrong: an actual write record always beats it.
+            WriteScope.recordNothingQueued();
+        }
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
@@ -661,6 +657,22 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         try
         {
             refactoring.perform();
+            // This project was written in, whatever the container export below manages to queue:
+            // stating it here rather than leaving it to that submission keeps the wait honest when
+            // the container could not be named at all.
+            WriteScope.recordWrite(project);
+            // The cascade also cleans the references held by dependent extensions - EDT's
+            // refactoring writes them, we do not, and it does not report which of them it touched.
+            // So they are declared as projects this call MAY have written in: awaited, so a caller
+            // that reads the disk next no longer sees the extension half-written, but never able to
+            // refuse, because a stalled queue in a project we never submitted to is not evidence
+            // about this call. That grading is what makes awaiting them safe at all - the set is
+            // "every open extension of the target", i.e. what EDT SCANS, and awaiting a
+            // scanned-but-untouched extension under the strict grade would fail a healthy delete.
+            for (IProject participant : cascadeParticipants.of(project))
+            {
+                WriteScope.recordCascade(participant);
+            }
             // Said out loud in the answer, not only in the log: when this call could not queue the
             // container's export, the barrier behind it is back to reporting only what the
             // refactoring queued on its own - which is exactly the state that let a delete answer
@@ -1400,6 +1412,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to delete form: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
+        // The form is out of the model at this point; an owner FQN we could not name only costs
+        // the submission, not the fact that this project was written in (#408).
+        WriteScope.recordWrite(project);
         boolean persisted = ownerFqn != null && !ownerFqn.isEmpty()
             && BmTransactions.forceExportToDisk(project, ownerFqn);
 

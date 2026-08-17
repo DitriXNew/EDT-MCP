@@ -48,6 +48,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -317,6 +318,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
                 + "handler (form:EventHandlerExtension) was created") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
     }
 
@@ -1887,6 +1889,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // Persist BOTH the content form's own Form.form (its FQN, generated inside the tx) and the owner
         // .mdo (which registers the new form in its <forms> and, when setAsDefault, the default-form ref).
         List<String> dirty = formObjectDirtyFqns(contentFormFqn, ownerFqn);
+        // Nothing dirty means no submission, and a skipped submission is not a call that wrote
+        // nowhere - the form was created. Stated so the scope is the project, not silence (#408).
+        WriteScope.recordWrite(project);
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
 
         // The form is NEW, so its synonym map carries exactly the locale just written (issue #298).

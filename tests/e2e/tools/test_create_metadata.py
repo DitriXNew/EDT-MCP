@@ -122,6 +122,24 @@ def test_create_top_level_catalog_appears_in_readback():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_reports_the_project_it_wrote_in():
+    """#408: the call states WHERE it wrote instead of having it inferred for it.
+
+    The export barrier used to derive its wait set from the arguments and from the response;
+    now the write itself records the project, and the same value is published. Mutation
+    thinking: a tool that stopped recording would publish nothing (member absent) and a tool
+    that published the ARGUMENT rather than the recorded write would still pass a
+    "projectName is in there" check - so this asserts the exact list."""
+    name = "E2EWriteScopeCatalog"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog." + name})
+    assert_ok(r, "create Catalog.%s" % name)
+
+    s = r.structured
+    assert s is not None, "JSON tool must return structuredContent"
+    assert s.get("writtenProjects") == [PROJECT],         "a real write must publish exactly the project it wrote in: %r" % (s.get("writtenProjects"),)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_document_with_synonym_echoes_language_code():
     name = "E2EUnifiedDoc"
     r = call("create_metadata", {

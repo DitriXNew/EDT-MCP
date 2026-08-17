@@ -170,6 +170,14 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
     if not isinstance(total, int) or total <= 0:
         raise AssertionError("totalTopObjects must be a positive int: %r" % total)
 
+    # #408: the tool STATES that it queued nothing, instead of the barrier rebuilding that
+    # boolean out of these report counters afterwards. An empty list is the finding; the member
+    # would be ABSENT if the tool could not tell, and those two must never look the same.
+    if sc.get("writtenProjects") != []:
+        raise AssertionError(
+            "an in-sync resync queued nothing and must publish an EMPTY writtenProjects: %r"
+            % (sc.get("writtenProjects"),))
+
     # Ground truth: a default run on an in-sync project writes nothing at all, so the
     # committed tree must be unchanged.
     assert_no_diff("default resync of an in-sync project must not change any tracked file")

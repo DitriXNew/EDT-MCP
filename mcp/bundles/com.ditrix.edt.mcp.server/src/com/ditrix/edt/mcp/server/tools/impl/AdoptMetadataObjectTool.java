@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -111,23 +112,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "means the write has already run - but that establishes the queue is empty, not that " //$NON-NLS-1$
                     + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
-    }
-
-    @Override
-    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
-    {
-        // "already adopted" is a SUCCESS that never called adoptAndAttach and never queued an
-        // export, so there is nothing of ours to wait for.
-        if ("alreadyAdopted".equals(resultString(result, McpKeys.ACTION))) //$NON-NLS-1$
-        {
-            return Collections.emptyList();
-        }
-        // projectName is the BASE configuration by contract, but adoption writes into the
-        // EXTENSION - so the export to wait for is the one the tool reports, not the one it was
-        // asked about.
-        String extension = resultString(result, KEY_EXTENSION_PROJECT);
-        return extension == null ? Collections.emptyList() : Collections.singletonList(extension);
     }
 
     @Override
@@ -217,6 +203,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         if (adopter.isAdopted(source, target))
         {
+            // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
+            // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
+            // not say" owe the barrier different answers.
+            WriteScope.recordNothingQueued();
             // The adopted FQN equals the source FQN (adoption is by-UUID, the Name is preserved).
             // Do NOT call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not
             // a top object and bmGetFqn() throws ("may be called on top objects only").
@@ -232,6 +222,12 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         // The service runs its own BM write task on the extension's model.
         EObject adopted = adopter.adoptAndAttach(source, target, new NullProgressMonitor());
+
+        // projectName is the BASE configuration by contract; the write lands in the EXTENSION.
+        // Stated here rather than left to the export submission below, because that submission is
+        // skipped when nothing came back dirty - and a write with no export of its own is still a
+        // write in this project, not a call that wrote nowhere.
+        WriteScope.recordWrite(target.getProject());
 
         // The adopted FQN equals the source FQN (adoption is by-UUID; the Name is preserved). Do NOT
         // call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not a top object
