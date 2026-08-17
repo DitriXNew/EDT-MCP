@@ -2602,7 +2602,19 @@ public final class LaunchUpdateDialogAutoConfirmer
                 }
             }
         }
-        return named.isEmpty() ? new ArrayList<>(CONFLICT_WATCHES) : named;
+        if (!named.isEmpty())
+        {
+            return named;
+        }
+        // Broadcast ONLY when the event could not have been attributed at all: an unreadable
+        // dialog, one that quotes no server name (an EDT format this plugin cannot parse), or open
+        // windows that could not name their own infobase. A dialog that DOES name a server which
+        // simply is not ours matches nobody on purpose — marking every window would let an
+        // operation that completed normally report a failure caused by a start it never made
+        // (a manual server launch alongside it, say).
+        boolean attributable = !quotedSegments(detail == null ? "" : detail).isEmpty() //$NON-NLS-1$
+            && CONFLICT_WATCHES.stream().anyMatch(w -> w.infobaseName != null);
+        return attributable ? new ArrayList<>() : new ArrayList<>(CONFLICT_WATCHES);
     }
 
     /**

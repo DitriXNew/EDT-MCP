@@ -874,6 +874,21 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testReadableConflictNamingAnotherServerReachesNoWindow()
+    {
+        // A manual (or otherwise untracked) start of server B must not make an armed operation on
+        // server A report a failure it never had.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch a =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("TestConfiguration #1"))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest(
+                "Standalone server \"Standalone server for SomeOtherBase\" conflicts ...");
+            assertFalse("a conflict that names another server must reach nobody",
+                a.portConflicted());
+        }
+    }
+
+    @Test
     public void testUnattributablePortConflictStillReachesEveryWindow()
     {
         // With nothing to match on, silence would hide a real failure — every window gets it.
