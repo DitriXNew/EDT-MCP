@@ -777,8 +777,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         // EDT's own message - it names the knob that would have let it through.
                         if (watch.cancelled())
                         {
-                            return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
-                                externalChanges, watch.reason())).toJson();
+                            return declinedUpdateResult(watch, externalChanges);
                         }
                         throw ex;
                     }
@@ -807,8 +806,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     // construction and is a failure whatever the state says.
                     if (watch.cancelled())
                     {
-                        return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
-                            externalChanges, watch.reason())).toJson();
+                        return declinedUpdateResult(watch, externalChanges);
                     }
                 }
             }
@@ -937,6 +935,36 @@ public class UpdateDatabaseTool implements IMcpTool
             // ports turn out to be busy. Silence here would leave the caller believing its session
             // survived a failed update (review of #435).
             result.put(KEY_TERMINATED_CLIENT, true);
+        }
+        return result.toJson();
+    }
+
+    /**
+     * Builds the failure JSON for an update the external-changes dialog declined.
+     *
+     * <p>Reads {@code watch.portsReassigned()} HERE, at construction time: an early
+     * {@code return ToolResult.error(...)} is evaluated before the enclosing {@code finally} runs,
+     * so a flag captured there could never reach this payload — and the server may already have
+     * been re-addressed before the dialog was declined.
+     *
+     * @param watch the window opened around the update
+     * @param externalChanges the policy this call ran with
+     * @return the error payload
+     */
+    private static String declinedUpdateResult(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
+        ExternalInfobaseChangesPolicy externalChanges)
+    {
+        boolean reassigned = watch.portsReassigned();
+        ToolResult result = ToolResult.error(
+            ExternalInfobaseChangesPolicy.declinedUpdateError(externalChanges, watch.reason())
+                + (reassigned
+                    ? " NOTE: EDT had already moved the standalone server to free ports and " //$NON-NLS-1$
+                        + "rewritten its configuration " //$NON-NLS-1$
+                        + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
+                    : "")); //$NON-NLS-1$
+        if (reassigned)
+        {
+            result.put(KEY_PORTS_REASSIGNED, true);
         }
         return result.toJson();
     }

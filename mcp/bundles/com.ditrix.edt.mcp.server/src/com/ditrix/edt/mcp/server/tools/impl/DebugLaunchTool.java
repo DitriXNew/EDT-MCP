@@ -961,6 +961,44 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     /**
+     * The port-conflict policy this launch may act on: the caller's choice when the launch targets a
+     * STANDALONE-SERVER application, {@code null} (matcher unarmed) otherwise.
+     *
+     * <p>A file or client-server application cannot raise that modal, and an arm held for the whole
+     * of such a launch would claim a dialog belonging to a concurrent — or manual — server start.
+     *
+     * <p>The test uses the DELEGATE-resolved id ({@code ATTR_APPLICATION_ID}, else the project's
+     * default application), NOT the synthetic {@code launch:<name>} form: a runtime-client
+     * configuration with no application binding is exactly the shape that reaches a standalone
+     * server through the project default, and gating on the synthetic id would leave the matcher
+     * unarmed in the very case it exists for.
+     *
+     * @param config the configuration being launched (may be {@code null})
+     * @param requested the policy the caller passed (may be {@code null})
+     * @return the policy to arm with, or {@code null} to leave the matcher unarmed
+     */
+    private static StandaloneServerPortConflictPolicy standaloneServerPortPolicy(
+        ILaunchConfiguration config, StandaloneServerPortConflictPolicy requested)
+    {
+        if (requested == null || config == null)
+        {
+            return null;
+        }
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String delegateAppId =
+                LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName);
+            return DebugServerTargetSupport.isServerApplicationId(delegateAppId)
+                ? requested : null;
+        }
+        catch (CoreException e) // NOSONAR an unreadable config must not arm the writing answer
+        {
+            return null;
+        }
+    }
+
+    /**
      * Stores a failure of the fire-and-forget launch so {@code debug_status} can report it, tagged
      * with the configuration and application it belongs to (a {@code debug_status} filtered by
      * application must not surface someone else's failure).
@@ -1137,8 +1175,10 @@ public class DebugLaunchTool implements IMcpTool
         // EDT's launch delegate, so this window is the ONLY one covering that update.
         String launchInfobase = launchInfobaseName(config);
         ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
+        StandaloneServerPortConflictPolicy launchPortPolicy = standaloneServerPortPolicy(config,
+            portPolicy);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, portPolicy);
+            launchPolicy, launchInfobase, launchPortPolicy);
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -1154,7 +1194,7 @@ public class DebugLaunchTool implements IMcpTool
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, portPolicy);
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy);
         }
     }
 
@@ -1208,6 +1248,8 @@ public class DebugLaunchTool implements IMcpTool
         // whose infobase name could not be resolved (a by-name config with no persisted application
         // id) is degraded to 'cancel', which still answers the modal but writes nothing.
         ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
+        StandaloneServerPortConflictPolicy launchPortPolicy = standaloneServerPortPolicy(config,
+            portPolicy);
         // This Job is where a STANDALONE-SERVER application's DB update actually happens (it is
         // deferred to EDT's launch delegate), so an external-changes dialog can be cancelled here —
         // long after debug_launch returned "launching". The window records that outcome so
@@ -1225,7 +1267,7 @@ public class DebugLaunchTool implements IMcpTool
             ? null
             : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, portPolicy);
+            launchPolicy, launchInfobase, launchPortPolicy);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
         // (#230). This launch is fire-and-forget: tool.execute() has already returned and
         // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no
@@ -1282,7 +1324,7 @@ public class DebugLaunchTool implements IMcpTool
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, portPolicy);
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy);
             if (conflicts != null)
             {
                 conflicts.close();

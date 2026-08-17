@@ -344,8 +344,9 @@ public class GetApplicationsTool implements IMcpTool
         {
             case UNKNOWN:
                 return "Unknown - EDT could not read the state, typically because it is not " //$NON-NLS-1$
-                    + "connected to this infobase (for a standalone server: the server is not " //$NON-NLS-1$
-                    + "running)"; //$NON-NLS-1$
+                    + "connected to this infobase (for a standalone server the server may not " //$NON-NLS-1$
+                    + "be running); a connected infobase whose equality state EDT does not " //$NON-NLS-1$
+                    + "recognise lands here too"; //$NON-NLS-1$
             case INCREMENTAL_UPDATE_REQUIRED:
                 return "Incremental update required"; //$NON-NLS-1$
             case FULL_UPDATE_REQUIRED:

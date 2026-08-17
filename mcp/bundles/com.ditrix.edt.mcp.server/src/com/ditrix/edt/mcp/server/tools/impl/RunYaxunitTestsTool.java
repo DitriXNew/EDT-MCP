@@ -55,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -1134,6 +1135,12 @@ public class RunYaxunitTestsTool implements IMcpTool
         // Armed even without a resolved name: the confirmer degrades such an arm to 'cancel', so
         // the modal is answered (no hang) but nothing is written on an unattributable dialog.
         ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
+        // The port matcher is armed only for a STANDALONE-SERVER target: a file or client-server
+        // application cannot raise that modal, and an arm held for the whole run would claim a
+        // dialog belonging to a concurrent (or manual) server start.
+        StandaloneServerPortConflictPolicy launchPortPolicy =
+            DebugServerTargetSupport.isServerApplicationId(applicationId)
+                ? req.portConflict : null;
         // For a STANDALONE-SERVER application this window is where the DB update actually
         // happens, so a conflict cancelled here must be reported with its cause - otherwise the run
         // just fails later with a generic "no junit.xml" and the caller never learns which knob
@@ -1143,11 +1150,11 @@ public class RunYaxunitTestsTool implements IMcpTool
         // be, or the run hangs), the conflict is refused, and the run then failed with a generic
         // "no report" instead of the busy ports.
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
-            launchPolicy == null && req.portConflict == null
+            launchPolicy == null && launchPortPolicy == null
                 ? null
                 : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
-            launchInfobase, req.portConflict);
+            launchInfobase, launchPortPolicy);
         ILaunch launch;
         try
         {
@@ -1176,7 +1183,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         finally
         {
             LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
-                launchInfobase, req.portConflict);
+                launchInfobase, launchPortPolicy);
             // Closed HERE, not after the check below: a launch() that throws must not leave the
             // window registered in the confirmer for the rest of the session.
             closeQuietly(conflicts);
@@ -1589,16 +1596,22 @@ public class RunYaxunitTestsTool implements IMcpTool
             String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
                 applicationId);
             ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
+            // The port matcher is armed only for a STANDALONE-SERVER target: a file or client-server
+            // application cannot raise that modal, and an arm held for the whole run would claim a
+            // dialog belonging to a concurrent (or manual) server start.
+            StandaloneServerPortConflictPolicy launchPortPolicy =
+                DebugServerTargetSupport.isServerApplicationId(applicationId)
+                    ? req.portConflict : null;
             // Same as the RUN path: this is the only armed window around a standalone-server
             // application's delegate-performed update, so a cancel here is reported with its cause.
             // Same as the RUN path: the window covers the port matcher too, which is armed even
             // when this launch performs no DB update.
             LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
-                launchPolicy == null && req.portConflict == null
+                launchPolicy == null && launchPortPolicy == null
                     ? null
                     : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
             LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
-                launchInfobase, req.portConflict);
+                launchInfobase, launchPortPolicy);
             ILaunch[] spawned = new ILaunch[1];
             try
             {
@@ -1626,7 +1639,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             finally
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0],
-                    launchPolicy, launchInfobase, req.portConflict);
+                    launchPolicy, launchInfobase, launchPortPolicy);
                 closeQuietly(conflicts);
             }
             String declined = declinedConflict(conflicts, launchPolicy);

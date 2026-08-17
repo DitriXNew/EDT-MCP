@@ -110,6 +110,33 @@ public final class PlatformFailures
             + (severity == null ? "" : "; status severity: " + severity) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    /**
+     * First non-blank message among {@code children}, optionally restricted to those that FAILED
+     * ({@code ERROR}/{@code CANCEL}). Two passes over the same array rather than sorting it — the
+     * array belongs to the platform.
+     *
+     * @param children the child statuses (never {@code null})
+     * @param depth the parent's recursion depth
+     * @param failingOnly {@code true} to consider only failing children
+     * @return the message, or {@code null} when none of the considered children carries one
+     */
+    private static String firstChildMessage(IStatus[] children, int depth, boolean failingOnly)
+    {
+        for (IStatus child : children)
+        {
+            if (child == null || (failingOnly && !child.matches(IStatus.ERROR | IStatus.CANCEL)))
+            {
+                continue;
+            }
+            String message = statusMessage(child, depth + 1);
+            if (message != null)
+            {
+                return message;
+            }
+        }
+        return null;
+    }
+
     /** Whether the status carries child statuses worth searching before its own headline. */
     private static boolean hasChildren(IStatus status)
     {
@@ -138,13 +165,18 @@ public final class PlatformFailures
         IStatus[] children = status.getChildren();
         if (children != null)
         {
-            for (IStatus child : children)
+            // FAILING children first: an aggregated EDT operation legitimately mixes informational
+            // or OK children with the one that failed, and a plain first-with-text rule could turn
+            // a database failure into an unrelated progress message.
+            String fromFailing = firstChildMessage(children, depth, true);
+            if (fromFailing != null)
             {
-                String fromChild = statusMessage(child, depth + 1);
-                if (fromChild != null)
-                {
-                    return fromChild;
-                }
+                return fromFailing;
+            }
+            String fromAny = firstChildMessage(children, depth, false);
+            if (fromAny != null)
+            {
+                return fromAny;
             }
         }
         String own = trimToNull(status.getMessage());

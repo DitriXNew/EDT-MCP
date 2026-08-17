@@ -64,6 +64,29 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testFailingChildBeatsAnEarlierInformationalOne()
+    {
+        // An aggregated EDT result legitimately mixes progress/OK children with the failing one;
+        // reporting the first child with text could hand back "Publishing..." for a failure.
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "Database update failed", null);
+        status.add(new Status(IStatus.INFO, PLUGIN, "Publishing configuration"));
+        status.add(new Status(IStatus.ERROR, PLUGIN, "port 8429 is already in use"));
+        assertEquals("the failing child must win over the informational one",
+            "port 8429 is already in use",
+            PlatformFailures.describe(new ApplicationException(status)));
+    }
+
+    @Test
+    public void testInformationalChildIsUsedWhenNothingFailed()
+    {
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null);
+        status.add(new Status(IStatus.INFO, PLUGIN, "Publishing configuration"));
+        assertEquals("with no failing child the informational text is all there is",
+            "Publishing configuration",
+            PlatformFailures.describe(new ApplicationException(status)));
+    }
+
+    @Test
     public void testWrapperHeadlineIsStillUsedWhenNoChildCarriesText()
     {
         MultiStatus status = new MultiStatus(PLUGIN, 0, "Database update failed", null);
