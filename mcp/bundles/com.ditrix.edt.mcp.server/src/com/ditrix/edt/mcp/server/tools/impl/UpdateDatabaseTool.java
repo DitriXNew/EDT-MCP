@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -745,8 +746,15 @@ public class UpdateDatabaseTool implements IMcpTool
                 try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
                     LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName))
                 {
+                    // The port matcher is armed ONLY for a standalone-server target: a file or
+                    // client-server application cannot raise that modal, and an arm held for the
+                    // whole of such an update would answer a dialog belonging to a concurrent (or
+                    // manual) server start.
+                    StandaloneServerPortConflictPolicy armedPortPolicy =
+                        DebugServerTargetSupport.isServerApplicationId(applicationId)
+                            ? portPolicy : null;
                     LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges,
-                        infobaseName, portPolicy);
+                        infobaseName, armedPortPolicy);
                     try
                     {
                         stateAfter = appManager.update(application, updateType, context, monitor);
@@ -781,7 +789,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     finally
                     {
                         LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
-                            infobaseName, portPolicy);
+                            infobaseName, armedPortPolicy);
                     }
                     // Same reasoning as the catch above, for the path where the cancelled server
                     // start lets update() return a (cached, therefore meaningless) state instead

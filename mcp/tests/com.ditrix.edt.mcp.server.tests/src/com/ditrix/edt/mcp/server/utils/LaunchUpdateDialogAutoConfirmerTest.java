@@ -776,6 +776,27 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testUnresolvedArmVetoesAnotherCallersReassign()
+    {
+        // Names are best-effort, so an arm that could not resolve its own infobase may be starting
+        // THIS server. Dropping it from the vote would let a caller that declined the re-address be
+        // overruled by one that asked for it.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+        assertTrue("alone, the attributed reassign arm may press",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL, null);
+        assertFalse("an unresolved arm must veto the write",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL, null);
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
     public void testArmThatCouldNotNameItsInfobaseNeverAuthorisesThePress()
     {
         // No name, no proof: the refusal is the only answer that writes nothing.

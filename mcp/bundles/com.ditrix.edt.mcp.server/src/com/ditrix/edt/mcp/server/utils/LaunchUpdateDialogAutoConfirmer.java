@@ -2397,6 +2397,17 @@ public final class LaunchUpdateDialogAutoConfirmer
     {
         synchronized (LOCK)
         {
+            // An arm that could not name its own infobase VETOES the write. The names are
+            // best-effort, so an unresolved arm may be starting this very server; dropping it
+            // from the vote would let a caller that declined the re-address be overruled by
+            // one that asked for it.
+            for (PortConflictArm arm : PORT_CONFLICT_ARMS)
+            {
+                if (arm.infobaseName == null)
+                {
+                    return false;
+                }
+            }
             List<PortConflictArm> attributed = portArmsFor(detail);
             if (attributed.isEmpty())
             {
