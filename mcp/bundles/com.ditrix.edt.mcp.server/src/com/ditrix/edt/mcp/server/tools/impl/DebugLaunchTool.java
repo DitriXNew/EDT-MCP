@@ -1208,7 +1208,12 @@ public class DebugLaunchTool implements IMcpTool
         // Only a launch that actually ARMED the conflict matcher opens a window. An Attach
         // performs no DB update and passes no policy; giving it a window would let an unattributed
         // cancel from a concurrent launch be recorded as an Attach failure.
-        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
+        // Opened for every launch that can START a server, NOT only for one that also performs
+        // a DB update (review of #435): with updateBeforeLaunch=false launchPolicy is null, yet the
+        // port-conflict matcher is armed and can refuse the launch - without a window that refusal
+        // reached nobody. "policy != null" is the non-Attach signal (the caller passes null for an
+        // Attach, which attaches to a running server and never starts one).
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
             : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,

@@ -978,7 +978,7 @@ public class UpdateDatabaseTool implements IMcpTool
             // nothing backs. get_applications re-reads the state authoritatively.
             result.put(McpKeys.MESSAGE, "The update call returned without an error but EDT " //$NON-NLS-1$
                 + "reported no resulting state; verify with get_applications (updateState) " //$NON-NLS-1$
-                + "before relying on the infobase being up to date."); //$NON-NLS-1$
+                + "before relying on the infobase being up to date." + reassignNote); //$NON-NLS-1$
         }
         else
         {

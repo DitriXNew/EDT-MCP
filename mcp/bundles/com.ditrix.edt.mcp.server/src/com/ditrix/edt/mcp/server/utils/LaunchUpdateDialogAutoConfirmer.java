@@ -422,32 +422,29 @@ public final class LaunchUpdateDialogAutoConfirmer
     private static int restructureArmCount;
 
     /**
-     * Reentrant arm count for the standalone-server port-conflict TITLE matcher
-     * ({@link #PORT_CONFLICT_TITLES}).
+     * The outstanding arms of the standalone-server port-conflict TITLE matcher
+     * ({@link #PORT_CONFLICT_TITLES}) — one entry per {@code arm}, each carrying the answer that
+     * call chose.
      *
-     * <p><b>Not independently gated, on purpose.</b> Every other matcher answers a question
+     * <p><b>A list, not two counters.</b> Two counters could drift apart: an arm taken through the
+     * six-argument overload and released through a shorter one decremented the total but not the
+     * reassign tally, leaving a phantom "reassign" that a later, unrelated caller would then have
+     * been answered with. One entry per arm cannot drift.
+     *
+     * <p><b>Armed by EVERY arm, and armed even alone.</b> Every other matcher answers a question
      * about the caller's DATA, so each has an opt-out; this one answers a question about the
-     * MACHINE ("port 8429 is taken — shall I move the server?"), and its only auto-answer is
-     * the one that writes nothing (Cancel). There is therefore no window in which an armed
-     * caller would rather hang on it, so it is armed by every {@code arm} that arms anything
-     * — including the launch paths, which reach this modal through the very same
-     * standalone-server start. Left unarmed it is a guaranteed hang: the modal is
-     * application-modal, no MCP call can clear it, and every later call queues behind it.
-     */
-    private static int portConflictArmCount;
-
-    /**
-     * How many of the outstanding port-conflict arms asked for
-     * {@link StandaloneServerPortConflictPolicy#REASSIGN}.
+     * MACHINE ("port 8429 is taken — shall I move the server?"). Left unarmed it is a guaranteed
+     * hang: the modal is application-modal, no MCP call can clear it, and every later call queues
+     * behind it.
      *
-     * <p>"Find free port" is pressed only when EVERY outstanding arm asked for it
-     * ({@code portConflictReassignArmCount == portConflictArmCount}). The dialog names the
+     * <p><b>"Find free port" needs UNANIMITY</b> ({@link #reassignRequested}). The dialog names the
      * SERVER, not the infobase, so it cannot be attributed to one caller the way the
      * external-changes modal can — and the answer REWRITES that server's configuration for
-     * everyone. Unanimity is therefore the only safe rule: a concurrent call that did not ask
-     * for a re-address must not have one performed under it.
+     * everyone, so a concurrent call that did not ask for a re-address must not have one performed
+     * under it.
      */
-    private static int portConflictReassignArmCount;
+    private static final List<StandaloneServerPortConflictPolicy> PORT_CONFLICT_ARMS =
+        new ArrayList<>();
 
     /**
      * Outstanding arms of the external-changes conflict matcher — one entry per {@code arm}
@@ -1017,13 +1014,19 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            and writes nothing; {@code REASSIGN} presses "Find free port", which makes EDT
      *            REWRITE the server configuration. {@code null} is read as the default. The
      *            reassign answer requires UNANIMITY across the outstanding arms — see
-     *            {@link #portConflictReassignArmCount}
+     *            {@link #PORT_CONFLICT_ARMS}
      */
     public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy)
     {
-        if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null)
+        // The port-conflict matcher counts as "something to arm": with all the other flags off —
+        // run_yaxunit_tests(updateBeforeLaunch=false) reaches exactly that — the old condition
+        // returned early and left the modal unanswered, i.e. the very hang this matcher exists to
+        // remove. Only a caller that explicitly wants NOTHING armed (a null port policy) still
+        // short-circuits.
+        if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null
+            && portPolicy == null)
         {
             return;
         }
@@ -1046,14 +1049,9 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount++;
             }
-            // Armed by EVERY arm (the early return above already proved this call arms
-            // something): the port-conflict modal blocks the standalone-server START that
-            // the launch paths and update_database alike depend on — see portConflictArmCount.
-            portConflictArmCount++;
-            if (portPolicy == StandaloneServerPortConflictPolicy.REASSIGN)
-            {
-                portConflictReassignArmCount++;
-            }
+            // Armed by EVERY arm — see PORT_CONFLICT_ARMS.
+            PORT_CONFLICT_ARMS.add(portPolicy == null
+                ? StandaloneServerPortConflictPolicy.DEFAULT : portPolicy);
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName),
@@ -1147,7 +1145,13 @@ public final class LaunchUpdateDialogAutoConfirmer
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy)
     {
-        if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null)
+        // The port-conflict matcher counts as "something to arm": with all the other flags off —
+        // run_yaxunit_tests(updateBeforeLaunch=false) reaches exactly that — the old condition
+        // returned early and left the modal unanswered, i.e. the very hang this matcher exists to
+        // remove. Only a caller that explicitly wants NOTHING armed (a null port policy) still
+        // short-circuits.
+        if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null
+            && portPolicy == null)
         {
             return;
         }
@@ -1166,17 +1170,9 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount--;
             }
-            // Mirrors the unconditional increment in arm(...) — same early return above, so
-            // every arm has exactly one matching disarm here.
-            if (portConflictArmCount > 0)
-            {
-                portConflictArmCount--;
-            }
-            if (portPolicy == StandaloneServerPortConflictPolicy.REASSIGN
-                && portConflictReassignArmCount > 0)
-            {
-                portConflictReassignArmCount--;
-            }
+            // Mirrors the add in arm(...) — same early return above, so every arm has exactly
+            // one matching release here.
+            releasePortConflictArm(portPolicy);
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.remove(new ConflictArm(trimToNull(infobaseName),
@@ -1243,7 +1239,7 @@ public final class LaunchUpdateDialogAutoConfirmer
                 filterDisplay = null;
             }
             boolean anyArmed = updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0
-                || portConflictArmCount > 0 || !CONFLICT_ARMS.isEmpty();
+                || !PORT_CONFLICT_ARMS.isEmpty() || !CONFLICT_ARMS.isEmpty();
             if (anyArmed && filter == null)
             {
                 toInstall = createFilterListener();
@@ -1430,7 +1426,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             // The conflict matcher is armed per policy; an empty arm list means "not armed".
             return new ArmState(updateArmCount > 0, sessionArmCount > 0, restructureArmCount > 0,
-                conflictMatcherArmed(), portConflictArmCount > 0);
+                conflictMatcherArmed(), !PORT_CONFLICT_ARMS.isEmpty());
         }
     }
 
@@ -2183,9 +2179,20 @@ public final class LaunchUpdateDialogAutoConfirmer
                 return;
             }
             String detail = summarizePortConflictText(collectDialogText(shell));
-            if (reassignRequested() && pressReassignButton(shell, detail))
+            // The question and the press are ONE atomic step: asking first and pressing after
+            // left a window in which a concurrent arm could add a CANCEL, and the stale
+            // "everyone agreed" answer would still re-address the server under it.
+            //
+            // Holding LOCK across an SWT press is safe HERE and only here: this already runs ON
+            // the UI thread (no syncExec inside — that is what the arm/disarm paths must avoid),
+            // and pressing a JFace button only sets a return code and closes the dialog. A worker
+            // thread arming meanwhile waits for the monitor for that instant.
+            synchronized (LOCK)
             {
-                return;
+                if (reassignRequested() && pressReassignButton(shell, detail))
+                {
+                    return;
+                }
             }
             notePortConflict(detail);
             Button cancel = findButtonByLabel(shell, 0, PORT_CONFLICT_CANCEL_BUTTONS);
@@ -2208,16 +2215,45 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
+     * Releases ONE port-conflict arm for the given policy.
+     *
+     * <p>Fails CLOSED when the exact policy is not present (a caller that armed through one
+     * overload and released through another): a {@code REASSIGN} entry is dropped in preference to
+     * a {@code CANCEL} one, because the wrong outcome of an imbalance must be "a caller who asked
+     * for a re-address is refused", never "a caller who did not ask gets one". Must be called with
+     * {@code LOCK} held.
+     */
+    private static void releasePortConflictArm(StandaloneServerPortConflictPolicy portPolicy)
+    {
+        StandaloneServerPortConflictPolicy effective =
+            portPolicy == null ? StandaloneServerPortConflictPolicy.DEFAULT : portPolicy;
+        if (PORT_CONFLICT_ARMS.remove(effective)
+            || PORT_CONFLICT_ARMS.remove(StandaloneServerPortConflictPolicy.REASSIGN))
+        {
+            return;
+        }
+        if (!PORT_CONFLICT_ARMS.isEmpty())
+        {
+            PORT_CONFLICT_ARMS.remove(PORT_CONFLICT_ARMS.size() - 1);
+        }
+    }
+
+    /**
      * Whether the port conflict may be answered with "Find free port": every outstanding arm
      * asked for {@link StandaloneServerPortConflictPolicy#REASSIGN}. Unanimity, because the
      * press rewrites the SERVER's configuration for every user of that server and the dialog
      * carries nothing that could attribute it to one call.
+     *
+     * <p>A caller that goes on to PRESS must hold {@code LOCK} across both the question and the
+     * press — see {@link #answerPortConflictDialog} — or a concurrent {@code arm} can turn the
+     * answer stale in between.
      */
     private static boolean reassignRequested()
     {
         synchronized (LOCK)
         {
-            return portConflictArmCount > 0 && portConflictReassignArmCount == portConflictArmCount;
+            return !PORT_CONFLICT_ARMS.isEmpty()
+                && !PORT_CONFLICT_ARMS.contains(StandaloneServerPortConflictPolicy.CANCEL);
         }
     }
 
@@ -2314,25 +2350,52 @@ public final class LaunchUpdateDialogAutoConfirmer
     {
         synchronized (LOCK)
         {
-            for (ConflictWatch watch : CONFLICT_WATCHES)
+            for (ConflictWatch watch : portConflictTargets(detail))
             {
                 watch.recordPortReassign(detail);
             }
         }
     }
 
-    /** Records an auto-cancelled port conflict into every open window (see {@link ConflictWatch}). */
+    /**
+     * The open windows a port-conflict event belongs to.
+     *
+     * <p>The modal names the SERVER ("Standalone server for <em>X</em>"), not the infobase, so it
+     * cannot be attributed the way the external-changes modal is. But EDT derives that server name
+     * FROM the infobase, so a window whose infobase the dialog text mentions is demonstrably about
+     * this server — those windows, and only those, get the event. Otherwise a concurrent operation
+     * on a DIFFERENT standalone server would be reported as failed (or as re-addressed) by an event
+     * that had nothing to do with it.
+     *
+     * <p>When nothing matches — an unreadable dialog, or a caller that could not resolve its own
+     * infobase name — the event goes to every open window: an unattributable conflict still has to
+     * explain SOMEONE's failure, and a call that did not fail never reads the flag.
+     *
+     * <p>Must be called with {@code LOCK} held; the result is a snapshot.
+     */
+    private static List<ConflictWatch> portConflictTargets(String detail)
+    {
+        List<ConflictWatch> named = new ArrayList<>();
+        if (detail != null)
+        {
+            for (ConflictWatch watch : CONFLICT_WATCHES)
+            {
+                if (watch.infobaseName != null && detail.contains(watch.infobaseName))
+                {
+                    named.add(watch);
+                }
+            }
+        }
+        return named.isEmpty() ? new ArrayList<>(CONFLICT_WATCHES) : named;
+    }
+
+    /** Records an auto-cancelled port conflict into the windows it belongs to. */
     private static void notePortConflict(String detail)
     {
         synchronized (LOCK)
         {
-            for (ConflictWatch watch : CONFLICT_WATCHES)
+            for (ConflictWatch watch : portConflictTargets(detail))
             {
-                // Recorded into EVERY open window, unlike the infobase-attributed conflict cancel:
-                // this modal names the SERVER, not the infobase, so it cannot be attributed to one
-                // caller — and a busy port is a machine-wide condition that fails every operation
-                // starting that server anyway. The detail is only ever consumed by a call that
-                // ALSO failed, and it names the server, so a report stays self-describing.
                 watch.recordPortConflict(detail);
             }
         }
@@ -2383,6 +2446,51 @@ public final class LaunchUpdateDialogAutoConfirmer
     static void recordPortReassignForTest(String detail)
     {
         notePortReassign(detail);
+    }
+
+    /**
+     * Test seam: takes one port-conflict arm exactly as {@code arm} does.
+     *
+     * <p>Needed because {@code arm}/{@code disarm} return early in a headless runtime (no SWT
+     * display), so the bookkeeping they perform — the part a mismatched overload pair once
+     * corrupted — is otherwise unreachable from a unit test.
+     *
+     * @param policy the answer this arm chose (may be {@code null} = default)
+     */
+    static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy)
+    {
+        synchronized (LOCK)
+        {
+            PORT_CONFLICT_ARMS.add(policy == null ? StandaloneServerPortConflictPolicy.DEFAULT : policy);
+        }
+    }
+
+    /**
+     * Test seam: releases one port-conflict arm exactly as {@code disarm} does.
+     *
+     * @param policy the policy the matching {@code arm} was taken with (may be {@code null})
+     */
+    static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy)
+    {
+        synchronized (LOCK)
+        {
+            releasePortConflictArm(policy);
+        }
+    }
+
+    /** Test seam: how many port-conflict arms are outstanding. */
+    static int portConflictArmsForTest()
+    {
+        synchronized (LOCK)
+        {
+            return PORT_CONFLICT_ARMS.size();
+        }
+    }
+
+    /** Test seam: the unanimity decision {@link #answerPortConflictDialog} presses on. */
+    static boolean reassignAllowedForTest()
+    {
+        return reassignRequested();
     }
 
     /**

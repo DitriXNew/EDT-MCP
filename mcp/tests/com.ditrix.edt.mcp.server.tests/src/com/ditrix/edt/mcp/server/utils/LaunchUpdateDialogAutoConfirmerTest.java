@@ -754,6 +754,109 @@ public class LaunchUpdateDialogAutoConfirmerTest
                 .contains("standaloneServerPortConflict='reassign'"));
     }
 
+    // === "Find free port" needs unanimity, and the bookkeeping must not drift (review of #435) ===
+
+    @Test
+    public void testLoneReassignArmIsAllowedAndBalancedArmsLeaveNothingBehind()
+    {
+        assertEquals("the suite must start from no outstanding arms", 0,
+            LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN);
+        assertTrue("a lone reassign arm may move the server",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN);
+        assertEquals("a matched arm/disarm pair must leave nothing behind", 0,
+            LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+        assertFalse("and with no arm at all nothing may be pressed",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+    }
+
+    @Test
+    public void testOneCancellingArmVetoesTheReassign()
+    {
+        // The press rewrites the server configuration for everyone using that server, so a
+        // concurrent call that did not ask for it must be able to veto.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN);
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL);
+        assertFalse("a single cancelling arm must veto the move",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL);
+        assertTrue("once it leaves, the remaining reassign arm is alone again",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN);
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
+    public void testMismatchedOverloadPairLeavesNoPhantomReassign()
+    {
+        // THE regression this list replaced two counters for: arming with reassign through the
+        // widest overload and releasing through a narrower one (which passes the default) must not
+        // leave a "reassign" behind for the next, unrelated caller to be answered with.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN);
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL);
+        assertEquals("the arm must be gone, not merely re-labelled", 0,
+            LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL);
+        assertFalse("a later cancelling caller must NOT inherit the earlier reassign",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL);
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
+    public void testUnbalancedDisarmCannotDriveTheArmCountNegative()
+    {
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN);
+        assertEquals("a stray disarm must be a no-op, not a negative count", 0,
+            LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+        assertFalse(LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest());
+    }
+
+    @Test
+    public void testPortConflictEventGoesOnlyToTheWindowTheDialogNames()
+    {
+        // A concurrent operation on ANOTHER standalone server must not be reported as failed by a
+        // conflict that named someone else's infobase.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch mine =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("TestConfiguration #1");
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch other =
+                LaunchUpdateDialogAutoConfirmer.beginConflictWatch("SomeOtherBase"))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest(
+                "Standalone server \"Standalone server for TestConfiguration #1\" conflicts ...");
+            assertTrue("the named window must see it", mine.portConflicted());
+            assertFalse("the unrelated window must not", other.portConflicted());
+        }
+    }
+
+    @Test
+    public void testUnattributablePortConflictStillReachesEveryWindow()
+    {
+        // With nothing to match on, silence would hide a real failure — every window gets it.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch a =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("TestConfiguration #1");
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch b =
+                LaunchUpdateDialogAutoConfirmer.beginConflictWatch("SomeOtherBase"))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest(null);
+            assertTrue(a.portConflicted());
+            assertTrue(b.portConflicted());
+        }
+    }
+
     @Test
     public void testPortConflictIsNotRecordedIntoAClosedWindow()
     {
