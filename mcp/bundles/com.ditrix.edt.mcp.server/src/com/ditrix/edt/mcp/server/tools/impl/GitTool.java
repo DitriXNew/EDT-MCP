@@ -1859,6 +1859,23 @@ public class GitTool implements IMcpTool
         {
             return null;
         }
+        // KNOWN OVER-REFUSAL, measured and deliberately still here. git resolves a remote name as
+        // configuration, then remotes/<name>, then branches/<name>, stopping at the first source
+        // that answers (remote.c, remote_get_1): a clean 'origin' in the configuration makes
+        // 'git remote get-url origin' print the configured URL while a credential in
+        // remotes/origin or branches/origin is printed by nothing, and a valid remotes/x shadows
+        // branches/x. This scan judges them all, so a stale legacy file under a name the
+        // configuration has taken over refuses commands git would have run.
+        //
+        // The obvious repair - skip a name a higher-precedence source answers - was written and
+        // withdrawn, because it turned this into the opposite defect: JGit's merged chain carries
+        // a jgit/config that native git never reads (a clean remote there would shadow a REAL
+        // legacy credential), git lower-cases the deprecated dotted [remote.X] where JGit keeps the
+        // spelling, and a name must count as answered only once its source is shown to be
+        // OPENABLE - a remotes/<name> directory does not shadow a reachable branches/<name>.
+        // Getting that right means resolving sources the way git resolves them, with source
+        // identity and answered/fell-through state, not adding a skip condition to a flat scan.
+        // Tracked separately rather than half-done here.
         for (String directory : LEGACY_REMOTE_DIRECTORIES)
         {
             File parent = new File(commonDirectory, directory);
@@ -2275,9 +2292,7 @@ public class GitTool implements IMcpTool
             shared.load();
             effective = shared;
         }
-        FileBasedConfig repositoryOnly = new FileBasedConfig(null, sharedConfigFile, repo.getFS());
-        repositoryOnly.load();
-        if (!repositoryOnly.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false))
+        if (!worktreeConfigSwitchedOn(sharedConfigFile))
         {
             return effective;
         }
@@ -2367,6 +2382,48 @@ public class GitTool implements IMcpTool
             return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + TARGET_REPAIR_TAIL;
         }
         return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + COMMON_DIR_UNREADABLE_REFUSAL_TAIL;
+    }
+
+    /**
+     * Whether the SHARED configuration file itself switches the per-worktree file on.
+     * <p>
+     * Read WITHOUT following {@code [include]}, which is what git does - and the difference is not
+     * theoretical. Measured on git 2.35.1 with the switch in an included file:
+     * {@code git config --get extensions.worktreeConfig} answers {@code true}, and
+     * {@code git remote -v} prints NOTHING from {@code config.worktree}; with the same switch
+     * written directly in {@code .git/config}, {@code remote -v} prints it. The only difference is
+     * where the switch sits, so an included one arms nothing.
+     * <p>
+     * A {@link FileBasedConfig} follows includes, so using one here armed the per-worktree file
+     * where git leaves it alone, and a stale {@code config.worktree} then took every protected
+     * command off a repository git considers clean. A plain {@link Config} parsed from the file's
+     * own text does not follow includes - {@code readIncludedConfig} is the hook
+     * {@code FileBasedConfig} overrides and the base class does not.
+     *
+     * @param sharedConfigFile the shared configuration file
+     * @return {@code true} when that FILE turns the extension on
+     * @throws IOException when it cannot be read
+     * @throws ConfigInvalidException when it cannot be parsed
+     */
+    private static boolean worktreeConfigSwitchedOn(File sharedConfigFile)
+        throws IOException, ConfigInvalidException
+    {
+        if (!sharedConfigFile.isFile())
+        {
+            return false;
+        }
+        String text = new String(Files.readAllBytes(sharedConfigFile.toPath()),
+            StandardCharsets.UTF_8);
+        // A UTF-8 BOM is accepted by git and stripped by FileBasedConfig.load(); a plain Config
+        // parsed from raw text would choke on it before the first section and turn a perfectly
+        // valid configuration into the unreadable-config refusal.
+        if (!text.isEmpty() && text.charAt(0) == '\uFEFF')
+        {
+            text = text.substring(1);
+        }
+        Config own = new Config();
+        own.fromText(text);
+        return own.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false);
     }
 
     /**

@@ -1760,6 +1760,63 @@ public class GitToolStoredRemoteTest
         assertTrue("the refusal must name the file: " + refusal, refusal.contains("multi")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testWorktreeConfigIsNotArmedFromAnINCLUDEDFile() throws Exception
+    {
+        // MEASURED on git 2.35.1, and the control is what settles it:
+        //
+        //   switch via [include]                  -> 'git config --get extensions.worktreeConfig'
+        //                                            says true, but 'git remote -v' prints NOTHING
+        //                                            from config.worktree
+        //   same switch written in .git/config    -> 'git remote -v' prints it
+        //
+        // The only difference is where the switch sits. Our reader followed includes, so it armed
+        // the per-worktree file where git leaves it alone, and a stale config.worktree then took
+        // every protected command off a repository git considers clean.
+        Repository repo = newRepository("git-worktree-switch-included"); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), "inc-ext").toPath(), //$NON-NLS-1$
+            "[extensions]\n\tworktreeConfig = true\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            "[include]\n\tpath = inc-ext\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"stale\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertNull("an INCLUDED switch arms nothing for git, so config.worktree is a file it does " //$NON-NLS-1$
+            + "not read - refusing over it breaks a repository git considers clean", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // Positive control: written DIRECTLY in the shared config, the same switch DOES arm it, so
+        // this cannot pass by the per-worktree file having stopped being read at all.
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            "[extensions]\n\tworktreeConfig = true\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        assertNotNull("control: a switch in the shared config itself still arms config.worktree", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // A UTF-8 BOM in front of that same switch must not change the answer: git accepts one and
+        // FileBasedConfig.load() strips it, so reading the raw text without stripping would turn a
+        // valid configuration into the unreadable-config refusal.
+        // The BOM is built numerically, with no escape and no raw byte: this file is compiled by
+        // Tycho, whose source encoding is not guaranteed to be UTF-8, and every attempt to write
+        // the escape through a shell layer lost it.
+        char bom = (char)0xFEFF;
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            (bom + "[extensions]\n\tworktreeConfig = true\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        String withBom = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a BOM in front of the switch is accepted by git, so it must still arm " //$NON-NLS-1$
+            + "config.worktree", withBom); //$NON-NLS-1$
+        // NOT just "some refusal": dropping the BOM strip makes the parse THROW, which produces the
+        // generic unreadable-config refusal - also non-null. An assertion that only checked for a
+        // refusal could not tell "armed correctly" from "failed to read", which is the very shape
+        // of defect this whole change is about, turning up in its own test.
+        assertTrue("...and it must be the refusal for the STALE REMOTE, not the generic " //$NON-NLS-1$
+            + "unreadable-config one - those are different outcomes and only one of them means " //$NON-NLS-1$
+            + "the switch was read: " + withBom, withBom.contains("stale")); //$NON-NLS-1$
+    }
+
     // ---- what must STAY silent: the places git does NOT read ----
     //
     // Every fixture below carries a value that WOULD be refused if it were judged. That is the
