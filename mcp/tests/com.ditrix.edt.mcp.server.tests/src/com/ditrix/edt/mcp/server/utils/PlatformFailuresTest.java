@@ -142,6 +142,38 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testFirstMessageMatchingSearchesEverywhereDescribeStops()
+    {
+        // The two are deliberately opposite: describe() returns the headline, so a recogniser
+        // that used it would never see the sentence that names the actual refusal.
+        IllegalStateException reason = new IllegalStateException("port 8429 is already in use");
+        CoreException inner = new CoreException(new Status(IStatus.ERROR, PLUGIN, "wrapper", reason));
+        ApplicationException outer =
+            new ApplicationException(new Status(IStatus.ERROR, PLUGIN, "wrapper", inner));
+        assertEquals("wrapper", PlatformFailures.describe(outer));
+        assertEquals("port 8429 is already in use",
+            PlatformFailures.firstMessageMatching(outer, m -> m.contains("8429")));
+    }
+
+    @Test
+    public void testFirstMessageMatchingFindsAChildStatus()
+    {
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "Database update failed", null);
+        status.add(new Status(IStatus.INFO, PLUGIN, "Publishing configuration"));
+        status.add(new Status(IStatus.ERROR, PLUGIN, "the module was rejected"));
+        assertEquals("the module was rejected", PlatformFailures.firstMessageMatching(
+            new ApplicationException(status), m -> m.contains("rejected")));
+    }
+
+    @Test
+    public void testFirstMessageMatchingReturnsNullWhenNothingMatches()
+    {
+        assertEquals(null, PlatformFailures.firstMessageMatching(
+            new ApplicationException("Database is locked"), m -> m.contains("port")));
+        assertEquals(null, PlatformFailures.firstMessageMatching(null, m -> true));
+    }
+
+    @Test
     public void testDescriptionIsTrimmed()
     {
         assertEquals("surrounding whitespace is not part of the reason", "boom",

@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -500,7 +501,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         };
         storeJob.setUser(false);
         storeJob.setSystem(true);
-        storeJob.schedule();
+        McpJobs.schedule(storeJob);
 
         return awaitStoreJob(storeJob, jobResult, callerAnswered, projectName, applicationId);
     }

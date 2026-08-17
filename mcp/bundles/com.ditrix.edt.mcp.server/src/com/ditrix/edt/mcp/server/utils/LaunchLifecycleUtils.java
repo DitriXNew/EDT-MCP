@@ -1564,8 +1564,9 @@ public final class LaunchLifecycleUtils
             LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
             try
             {
-                after = appManager.update(application, ApplicationUpdateType.INCREMENTAL, context,
-                    new NullProgressMonitor());
+                after = StandaloneServerStateRecovery.updateWithRecovery(appManager,
+                    application.getProject(), application, applicationId,
+                    ApplicationUpdateType.INCREMENTAL, context, new NullProgressMonitor());
             }
             catch (ApplicationException ex)
             {

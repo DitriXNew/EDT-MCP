@@ -49,6 +49,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.git.GitFailureLog;
@@ -2540,7 +2541,7 @@ public class GitTool implements IMcpTool
             }
         };
         refresh.setUser(false);
-        refresh.schedule();
+        McpJobs.schedule(refresh);
         try
         {
             // Bounded by what is LEFT of the call's own budget, so a slow refresh cannot push the

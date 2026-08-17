@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
@@ -851,7 +852,7 @@ public class DeleteInfobaseTool implements IMcpTool
         };
         deleteJob.setUser(false);
         deleteJob.setSystem(true);
-        deleteJob.schedule();
+        McpJobs.schedule(deleteJob);
 
         try
         {

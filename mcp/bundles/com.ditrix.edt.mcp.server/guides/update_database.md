@@ -138,3 +138,19 @@ The same parameter exists on `debug_launch` and `run_yaxunit_tests`, which start
 Where the refusal shows up differs: `debug_launch` is fire-and-forget, so it reports through
 `debug_status` under `recentLaunchFailures`; `run_yaxunit_tests` reports through its own named job -
 in the initial response, or from `get_job_status(jobId)`.
+
+## Standalone server stuck in STARTED (recovered automatically)
+
+EDT starts a standalone server only from the STOPPED state, and it returns the server to STOPPED
+only once it has confirmed that the `ibsrv` process is gone - a confirmation it waits a few seconds
+for. When the process takes longer to disappear, or the wait is interrupted by a cancelled
+operation, EDT keeps the server marked STARTED while the launch that owned it is already dead, and
+refuses every further start with *"Can only start server that is stopped but current server state
+is 2"*. Nothing clears that state by itself: from then on EVERY launch or update of that
+application fails with the same message.
+
+That refusal is now detected and repaired: the server is stopped through EDT's own application
+lifecycle and the operation is retried ONCE. Only the STARTED case is touched - a server that is
+STARTING or STOPPING belongs to an operation still in flight, and is reported ("retry once it
+settles") instead of being stopped underneath it. If the retry fails too, the error says so and
+names the likely reason: an `ibsrv` left over from the previous run still holding the ports.

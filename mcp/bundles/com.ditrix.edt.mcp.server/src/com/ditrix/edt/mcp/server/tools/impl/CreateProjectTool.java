@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
@@ -1880,7 +1881,7 @@ public class CreateProjectTool implements IMcpTool
     private CreateJobResult runCreateJob(Job createJob, String effectiveProjectName, String kindLabel)
     {
         createJob.setUser(false);
-        createJob.schedule();
+        McpJobs.schedule(createJob);
 
         try
         {

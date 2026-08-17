@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -748,7 +749,7 @@ public class CreateInfobaseTool implements IMcpTool
         };
         createJob.setUser(false);
         createJob.setSystem(true);
-        createJob.schedule();
+        McpJobs.schedule(createJob);
 
         String waitError = awaitCreateJob(createJob, infobaseDir);
         if (waitError != null)
@@ -1138,7 +1139,7 @@ public class CreateInfobaseTool implements IMcpTool
         };
         createJob.setUser(false);
         createJob.setSystem(true);
-        createJob.schedule();
+        McpJobs.schedule(createJob);
 
         String waitError = awaitStandaloneJob(createJob, infobaseDir, register);
         if (waitError != null)

@@ -21,6 +21,7 @@ import org.eclipse.jgit.api.CheckoutResult;
 import org.eclipse.jgit.lib.Repository;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 
 /**
  * Runs a headless EGit checkout ({@link BranchOperation}) on a bounded background
@@ -196,7 +197,7 @@ public final class GitCheckoutSupport
         };
         checkoutJob.setUser(false);
         checkoutJob.setSystem(true);
-        checkoutJob.schedule();
+        McpJobs.schedule(checkoutJob);
 
         try
         {

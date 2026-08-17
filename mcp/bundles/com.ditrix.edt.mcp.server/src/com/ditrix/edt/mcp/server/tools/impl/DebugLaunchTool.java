@@ -36,9 +36,11 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -1163,7 +1165,7 @@ public class DebugLaunchTool implements IMcpTool
                 }
             };
             job.setPriority(Job.INTERACTIVE);
-            job.schedule();
+            McpJobs.schedule(job);
             return null;
         }
         // No workbench (headless tests): launch synchronously and surface errors.
@@ -1182,7 +1184,8 @@ public class DebugLaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            config.launch(ILaunchManager.DEBUG_MODE, null);
+            StandaloneServerStateRecovery.launchWithRecovery(config, ILaunchManager.DEBUG_MODE,
+                null);
             return null;
         }
         catch (CoreException e)
@@ -1280,7 +1283,8 @@ public class DebugLaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            config.launch(ILaunchManager.DEBUG_MODE, monitor);
+            StandaloneServerStateRecovery.launchWithRecovery(config, ILaunchManager.DEBUG_MODE,
+                monitor);
             String declined = declinedConflictMessage(config, launchPolicy, conflicts);
             if (declined != null)
             {

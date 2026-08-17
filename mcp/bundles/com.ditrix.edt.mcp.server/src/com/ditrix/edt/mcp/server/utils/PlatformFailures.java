@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.function.Predicate;
+
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
 
@@ -92,6 +94,81 @@ public final class PlatformFailures
             current = current.getCause();
         }
         return describeTextless(failure);
+    }
+
+    /**
+     * The first message ANYWHERE in the failure — the exception chain and, at every hop, the
+     * {@link IStatus} tree it carries — that satisfies {@code filter}.
+     *
+     * <p>Separate from {@link #describe(Throwable)} because the two questions are opposites.
+     * {@code describe} answers "what do I show a human", and deliberately stops at the most
+     * informative message it meets. Code that must RECOGNISE one specific platform refusal has
+     * to look everywhere instead: EDT reports, for example, a refused standalone-server start as
+     * a generic "An internal error occurred during …" status whose cause — three hops down —
+     * carries the sentence that actually names the reason. Searching only the headline would
+     * never see it.
+     *
+     * @param failure the exception to search (may be {@code null})
+     * @param filter the predicate a message must satisfy (never {@code null})
+     * @return the first matching message, or {@code null} when the failure carries none
+     */
+    public static String firstMessageMatching(Throwable failure, Predicate<String> filter)
+    {
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        {
+            String own = trimToNull(current.getMessage());
+            if (own != null && filter.test(own))
+            {
+                return own;
+            }
+            String fromStatus = matchInStatus(statusOf(current), filter, 0);
+            if (fromStatus != null)
+            {
+                return fromStatus;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    /**
+     * The first matching message in a status tree: the status's own message, then its children,
+     * then the message of the exception the status carries.
+     *
+     * @param status the status to search (may be {@code null})
+     * @param filter the predicate a message must satisfy
+     * @param depth current recursion depth
+     * @return the matching message, or {@code null}
+     */
+    private static String matchInStatus(IStatus status, Predicate<String> filter, int depth)
+    {
+        if (status == null || depth > MAX_STATUS_DEPTH)
+        {
+            return null;
+        }
+        String own = trimToNull(status.getMessage());
+        if (own != null && filter.test(own))
+        {
+            return own;
+        }
+        IStatus[] children = status.getChildren();
+        if (children != null)
+        {
+            for (IStatus child : children)
+            {
+                String fromChild = matchInStatus(child, filter, depth + 1);
+                if (fromChild != null)
+                {
+                    return fromChild;
+                }
+            }
+        }
+        Throwable carried = status.getException();
+        // The carried exception's own message only: its cause chain is walked by the caller's
+        // loop, and recursing into it here could bounce between a status and its exception.
+        String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
+        return carriedMessage != null && filter.test(carriedMessage) ? carriedMessage : null;
     }
 
     /**

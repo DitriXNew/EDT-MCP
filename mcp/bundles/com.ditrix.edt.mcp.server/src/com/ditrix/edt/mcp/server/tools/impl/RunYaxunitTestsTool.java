@@ -63,9 +63,11 @@ import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.YaxunitJobCancellation;
 import com.ditrix.edt.mcp.server.utils.YaxunitReportUtils;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -1165,8 +1167,8 @@ public class RunYaxunitTestsTool implements IMcpTool
                 throw new CoreException(new Status(IStatus.CANCEL, Activator.PLUGIN_ID,
                     "The YAXUnit job was cancelled before the launch was handed to EDT.")); //$NON-NLS-1$
             }
-            launch = workingCopy.launch(ILaunchManager.RUN_MODE,
-                new NullProgressMonitor());
+            launch = StandaloneServerStateRecovery.launchWithRecovery(workingCopy,
+                ILaunchManager.RUN_MODE, new NullProgressMonitor());
         }
         catch (CoreException ex)
         {
@@ -1625,7 +1627,8 @@ public class RunYaxunitTestsTool implements IMcpTool
                         + "launch was handed to EDT. Start it again if it is still needed.") //$NON-NLS-1$
                         .toJson();
                 }
-                spawned[0] = workingCopy.launch(ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
+                spawned[0] = StandaloneServerStateRecovery.launchWithRecovery(workingCopy,
+                    ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
             }
             catch (CoreException ex)
             {
@@ -1926,7 +1929,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         prepJob.setPriority(Job.INTERACTIVE);
         try
         {
-            prepJob.schedule();
+            McpJobs.schedule(prepJob);
         }
         finally
         {

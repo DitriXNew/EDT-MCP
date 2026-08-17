@@ -216,3 +216,9 @@ initial response, or, when the run was accepted as a background job, from `get_j
 It does NOT appear in `debug_status.recentLaunchFailures` - that channel belongs to `debug_launch`.
 `reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
 changes the address its clients connect to. See the `update_database` guide for the full table.
+
+A second standalone-server failure mode is repaired without a parameter: when EDT is left holding
+the server in state STARTED although the launch that owned it has ended, it refuses every further
+start ("Can only start server that is stopped but current server state is 2"). The server is then
+stopped through EDT's own application lifecycle and the run is retried ONCE — see the
+`update_database` guide.

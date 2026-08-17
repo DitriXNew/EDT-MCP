@@ -208,7 +208,7 @@ public final class BoundedJob
             }
         };
         job.setUser(false);
-        job.schedule();
+        McpJobs.schedule(job);
 
         boolean finished;
         try

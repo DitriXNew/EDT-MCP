@@ -37,6 +37,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -757,7 +758,8 @@ public class UpdateDatabaseTool implements IMcpTool
                         infobaseName, armedPortPolicy);
                     try
                     {
-                        stateAfter = appManager.update(application, updateType, context, monitor);
+                        stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
+                            project, application, applicationId, updateType, context, monitor);
                     }
                     catch (ApplicationException ex)
                     {

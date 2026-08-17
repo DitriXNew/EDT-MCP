@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectDumpSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
@@ -542,7 +543,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         // route through EDT's "Application update" / "Restructure data" modals). Disarm in finally.
         LaunchUpdateDialogAutoConfirmer.arm(true, true, true);
         buildJob.setUser(false);
-        buildJob.schedule();
+        McpJobs.schedule(buildJob);
         try
         {
             buildJob.join(BUILD_TIMEOUT_MS, new NullProgressMonitor());
