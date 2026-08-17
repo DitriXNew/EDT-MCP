@@ -826,6 +826,7 @@
           "type": "boolean"
         },
         "standaloneServerPortConflict": {
+          "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
           "type": "string"
         },
         "updateBeforeLaunch": {
@@ -967,6 +968,7 @@
           "type": "string"
         },
         "standaloneServerPortConflict": {
+          "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
           "type": "string"
         },
         "tags": {
@@ -3624,6 +3626,7 @@
           "type": "string"
         },
         "standaloneServerPortConflict": {
+          "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
           "type": "string"
         },
         "tags": {
@@ -4264,6 +4267,7 @@
           "type": "string"
         },
         "standaloneServerPortConflict": {
+          "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
           "type": "string"
         },
         "terminateRunningClients": {

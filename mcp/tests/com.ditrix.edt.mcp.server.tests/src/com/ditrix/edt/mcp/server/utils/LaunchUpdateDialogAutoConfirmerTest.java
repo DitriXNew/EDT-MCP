@@ -890,6 +890,47 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testOverlappingInfobaseNamesDoNotCrossMatch()
+    {
+        // A dialog about "Base Copy" must not claim a window watching "Base": the unrelated
+        // operation would report a failure that was never its own (review of #435).
+        String detail = "Standalone server \"Standalone server for Base Copy\" conflicts ...";
+        assertTrue("the exact owner matches",
+            LaunchUpdateDialogAutoConfirmer.namesThisServer(detail, "Base Copy"));
+        assertFalse("a name that is only a PREFIX of the owner must not match",
+            LaunchUpdateDialogAutoConfirmer.namesThisServer(detail, "Base"));
+        assertFalse("nor an unrelated name",
+            LaunchUpdateDialogAutoConfirmer.namesThisServer(detail, "Other"));
+        assertFalse("nothing matches without a dialog text",
+            LaunchUpdateDialogAutoConfirmer.namesThisServer(null, "Base Copy"));
+    }
+
+    @Test
+    public void testServerNamedByGuillemetsIsStillAttributed()
+    {
+        // The Russian EDT quotes with guillemets; attribution must not be English-only.
+        String detail = "\u041A\u043E\u043D\u0444\u043B\u0438\u043A\u0442 \u00AB"
+            + "\u0410\u0432\u0442\u043E\u043D\u043E\u043C\u043D\u044B\u0439 \u0441\u0435\u0440"
+            + "\u0432\u0435\u0440 \u0434\u043B\u044F TestConfiguration #1\u00BB ...";
+        assertTrue(LaunchUpdateDialogAutoConfirmer.namesThisServer(detail, "TestConfiguration #1"));
+        assertFalse(LaunchUpdateDialogAutoConfirmer.namesThisServer(detail, "TestConfiguration"));
+    }
+
+    @Test
+    public void testVetoedReassignIsNotReportedAsAMissingButton()
+    {
+        // A concurrent CANCEL vetoes the move; telling that caller "unknown EDT locale, retrying
+        // will not help" would be a false diagnosis of a temporary condition.
+        String vetoed = LaunchUpdateDialogAutoConfirmer.portConflictError(null,
+            LaunchUpdateDialogAutoConfirmer.PORT_REASON_VETOED);
+        assertTrue("a veto must name the concurrent operation",
+            vetoed.contains("another operation"));
+        assertTrue("and invite a retry once it finishes", vetoed.contains("Retry once"));
+        assertFalse("it must not claim the button was unreadable",
+            vetoed.contains("could not be located"));
+    }
+
+    @Test
     public void testPortConflictIsNotRecordedIntoAClosedWindow()
     {
         LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =

@@ -1,6 +1,6 @@
 # debug_yaxunit_tests
 
-Deprecated alias for run_yaxunit_tests with debug=true. Starts a named DEBUG-mode YAXUnit job so breakpoints fire. A short start returns the launch handle; if resolution or preparation outlives timeout, Pending returns jobId for get_job_status. When the launch handle arrives, call wait_for_break. Prefer run_yaxunit_tests(debug=true) — identical shared implementation. Full parameters and examples: call get_tool_guide('debug_yaxunit_tests').
+DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; the implementation is shared. DEBUG mode, so breakpoints fire: a short start returns the launch handle and you call wait_for_break next, while Pending returns a jobId to poll with get_job_status. Parameters and examples: get_tool_guide('debug_yaxunit_tests').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -16,6 +16,7 @@ Deprecated alias for run_yaxunit_tests with debug=true. Starts a named DEBUG-mod
 | updateBeforeLaunch | — | boolean | Default true: terminate any live client and run a silent DB update first so no modal 'Update database?' dialog blocks the call; false keeps legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear. |
 | updateScope | — | string | Which projects to rebuild+update before the run: 'all' (configuration + dependent extensions, default), 'configuration', or 'extension:<ProjectName>' (comma-separate several). Forces a derived-data recompute so a freshly edited extension's .cfe is regenerated and loaded into the infobase before the run. Unknown extension names fail the call (the error lists the available names). Only applies when updateBeforeLaunch=true. |
 | externalInfobaseChanges | — | string | How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it. |
+| standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
 
 ## Guide
 # debug_yaxunit_tests (deprecated)

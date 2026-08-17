@@ -98,6 +98,14 @@ public final class InputSchemaCompactor
     /** The conflict-policy parameter shared by the launch tools and {@code update_database}. */
     private static final String KEY_EXTERNAL_CHANGES = "externalInfobaseChanges"; //$NON-NLS-1$
 
+    /**
+     * The standalone-server port-conflict policy, shared by every tool that can START that
+     * server. Same shape of risk as {@link #KEY_EXTERNAL_CHANGES}: a bare string with no enum,
+     * so the legal values ({@code cancel} / {@code reassign}), the default and the fact that
+     * {@code reassign} makes EDT REWRITE the server configuration live only in its prose.
+     */
+    private static final String KEY_PORT_CONFLICT = "standaloneServerPortConflict"; //$NON-NLS-1$
+
     /** JSON Schema {@code "type"} keyword, as a VALUE (never as a property name). */
     private static final String KEY_TYPE = "type"; //$NON-NLS-1$
 
@@ -167,7 +175,7 @@ public final class InputSchemaCompactor
         // launchConfigurationName OR projectName+applicationId - the same target-selector
         // contract the grader models, and the arms produced project-only calls without it.
         keep.put("run_yaxunit_tests", asSet("debug", "updateBeforeLaunch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            KEY_EXTERNAL_CHANGES, McpKeys.PROJECT_NAME, McpKeys.APPLICATION_ID,
+            KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT, McpKeys.PROJECT_NAME, McpKeys.APPLICATION_ID,
             "launchConfigurationName")); //$NON-NLS-1$
         // The conflict policy for an infobase changed OUTSIDE EDT. The schema declares a
         // bare string - no enum - so the legal values ('override' / 'import' / 'cancel')
@@ -176,11 +184,12 @@ public final class InputSchemaCompactor
         // restartIfRunning=true TERMINATES the live session before relaunching, on a tool
         // whose destructiveHint is false - nothing else in the always-loaded contract says so.
         keep.put("debug_launch", //$NON-NLS-1$
-            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, "restartIfRunning")); //$NON-NLS-1$ //$NON-NLS-2$
+            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT,
+                "restartIfRunning")); //$NON-NLS-1$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
-            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
+            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$
         keep.put("update_database", //$NON-NLS-1$
-            asSet("terminateRunningClients", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
+            asSet("terminateRunningClients", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$
         // includeBodies=true returns the recorded request/response JSON VERBATIM, and that
         // path is deliberately not redacted (the redactor only sees the outer tool). The
         // warning that those bodies can carry infobase and personal data is the only thing

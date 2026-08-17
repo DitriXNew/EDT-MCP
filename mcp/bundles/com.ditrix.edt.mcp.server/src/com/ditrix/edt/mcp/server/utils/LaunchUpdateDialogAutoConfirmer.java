@@ -472,6 +472,13 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static final String PORT_REASON_BUTTON_NOT_FOUND = "port-button-not-found"; //$NON-NLS-1$
 
+    /**
+     * {@link ConflictWatch#portConflictReason()} value: this call asked for {@code reassign}, but a
+     * CONCURRENT operation on the same EDT had not, and the re-address needs unanimity. Retrying
+     * once that operation finishes is the right advice — unlike a button miss, nothing is broken.
+     */
+    public static final String PORT_REASON_VETOED = "port-reassign-vetoed"; //$NON-NLS-1$
+
     /** {@link #lastConflictCancelReason()} value: the call's own policy asked to cancel. */
     public static final String CANCEL_REASON_POLICY = "policy"; //$NON-NLS-1$
 
@@ -1009,8 +1016,12 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
     {
-        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
-            StandaloneServerPortConflictPolicy.DEFAULT);
+        // The port-conflict matcher stays UNARMED for the legacy overloads: they are also used by
+        // operations that never start a standalone server (a build, an out-of-band DB update), and an
+        // arm held for the whole of one of those would answer a port dialog raised by an unrelated
+        // launch or by a human. Only a caller that can actually meet the modal opts in, by passing a
+        // policy to the six-argument overload.
+        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName, null);
     }
 
     /**
@@ -1142,8 +1153,9 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
     {
-        disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
-            StandaloneServerPortConflictPolicy.DEFAULT);
+        // Mirrors the legacy arm above: nothing was armed for the port matcher, so nothing is
+        // released here.
+        disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName, null);
     }
 
     /**
@@ -2207,15 +2219,26 @@ public final class LaunchUpdateDialogAutoConfirmer
             // the UI thread (no syncExec inside — that is what the arm/disarm paths must avoid),
             // and pressing a JFace button only sets a return code and closes the dialog. A worker
             // thread arming meanwhile waits for the monitor for that instant.
+            String refusalReason;
             synchronized (LOCK)
             {
-                if (reassignRequested() && pressReassignButton(shell, detail))
+                if (reassignRequested())
                 {
-                    return;
+                    if (pressReassignButton(shell, detail))
+                    {
+                        return;
+                    }
+                    // Only a lookup that ACTUALLY ran and failed may be reported as a button miss.
+                    refusalReason = PORT_REASON_BUTTON_NOT_FOUND;
+                }
+                else
+                {
+                    // Told apart: a caller that asked to move the server but was outvoted by a
+                    // concurrent one gets different advice from a caller whose own policy refused.
+                    refusalReason = reassignAskedFor() ? PORT_REASON_VETOED : PORT_REASON_POLICY;
                 }
             }
-            notePortConflict(detail, reassignAskedFor()
-                ? PORT_REASON_BUTTON_NOT_FOUND : PORT_REASON_POLICY);
+            notePortConflict(detail, refusalReason);
             Button cancel = findButtonByLabel(shell, 0, PORT_CONFLICT_CANCEL_BUTTONS);
             Activator.logError("Standalone server port conflict during an unattended MCP call: " //$NON-NLS-1$
                 + (detail == null ? "<the dialog carried no readable detail>" : detail) //$NON-NLS-1$
@@ -2423,6 +2446,64 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * <p>Must be called with {@code LOCK} held; the result is a snapshot.
      */
+    /**
+     * Pure decision (and test seam): does the port-conflict dialog text name the standalone server
+     * OF this infobase?
+     *
+     * <p>A plain {@code contains} cross-matches overlapping names — a dialog about {@code "Base
+     * Copy"} would also claim a window watching {@code "Base"}, and that unrelated operation would
+     * then report a failure (or a re-address) that was never its own. EDT names the server
+     * {@code "<localized prefix> <infobase>"} and QUOTES it, so the exact test is: some quoted
+     * segment either IS the infobase name or ENDS with it after a space. That holds in both shipped
+     * locales without hard-coding either prefix.
+     *
+     * @param detail the dialog text (may be {@code null})
+     * @param infobaseName the watching window's infobase (may be {@code null})
+     * @return {@code true} when the text demonstrably names this infobase's server
+     */
+    static boolean namesThisServer(String detail, String infobaseName)
+    {
+        if (detail == null || infobaseName == null || infobaseName.isEmpty())
+        {
+            return false;
+        }
+        for (String quoted : quotedSegments(detail))
+        {
+            if (quoted.equals(infobaseName) || (quoted.length() > infobaseName.length()
+                && quoted.endsWith(infobaseName)
+                && quoted.charAt(quoted.length() - infobaseName.length() - 1) == ' '))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Every quoted segment of {@code text}, for each quotation style EDT uses — the same set
+     * {@link #mentionsQuoted} tests. Never throws.
+     */
+    private static List<String> quotedSegments(String text)
+    {
+        List<String> segments = new ArrayList<>();
+        char[][] pairs = {{'"', '"'}, {'\'', '\''},
+            {'\u00AB', '\u00BB'}, {'\u201C', '\u201D'}};
+        for (char[] pair : pairs)
+        {
+            int from = 0;
+            int open = text.indexOf(pair[0], from);
+            int close = open < 0 ? -1 : text.indexOf(pair[1], open + 1);
+            while (open >= 0 && close >= 0)
+            {
+                segments.add(text.substring(open + 1, close));
+                from = close + 1;
+                open = text.indexOf(pair[0], from);
+                close = open < 0 ? -1 : text.indexOf(pair[1], open + 1);
+            }
+        }
+        return segments;
+    }
+
     private static List<ConflictWatch> portConflictTargets(String detail)
     {
         List<ConflictWatch> named = new ArrayList<>();
@@ -2430,7 +2511,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             for (ConflictWatch watch : CONFLICT_WATCHES)
             {
-                if (watch.infobaseName != null && detail.contains(watch.infobaseName))
+                if (namesThisServer(detail, watch.infobaseName))
                 {
                     named.add(watch);
                 }
@@ -2483,6 +2564,17 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static String portConflictError(String detail, String reason)
     {
+        if (PORT_REASON_VETOED.equals(reason))
+        {
+            return "the standalone server could not start because its network ports are already " //$NON-NLS-1$
+                + "in use" //$NON-NLS-1$
+                + (detail == null ? "." : ": " + detail) //$NON-NLS-1$ //$NON-NLS-2$
+                + " standaloneServerPortConflict=reassign was requested, but another operation " //$NON-NLS-1$
+                + "running on this EDT at the same time had not asked for it, and moving the server " //$NON-NLS-1$
+                + "rewrites its configuration for every user of it — so the conflict was refused " //$NON-NLS-1$
+                + "rather than resolved under that operation. Retry once it has finished, or free " //$NON-NLS-1$
+                + "the ports."; //$NON-NLS-1$
+        }
         String tail = PORT_REASON_BUTTON_NOT_FOUND.equals(reason)
             ? " standaloneServerPortConflict=reassign was requested, but EDT's 'Find free port' " //$NON-NLS-1$
                 + "button could not be located by label (an EDT build or locale this plugin does " //$NON-NLS-1$
