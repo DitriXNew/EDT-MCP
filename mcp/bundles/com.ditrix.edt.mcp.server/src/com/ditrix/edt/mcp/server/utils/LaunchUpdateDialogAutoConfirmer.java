@@ -2749,32 +2749,6 @@ public final class LaunchUpdateDialogAutoConfirmer
         return segments;
     }
 
-    /**
-     * Whether some OTHER window covering {@code infobaseName} resolved a server name and that name
-     * is what this dialog quotes.
-     *
-     * <p>This is what tells two look-alike situations apart. Two windows over the SAME server, one
-     * of whose lookups failed: the named one matches exactly, so the unnamed one is demonstrably
-     * about the same server and must hear the event too. A window over {@code Base} while
-     * {@code My Base} raises the dialog: nothing corroborates it, and the suffix alone must not be
-     * allowed to claim a foreign conflict.
-     *
-     * @param detail the dialog text
-     * @param infobaseName the unnamed window's infobase
-     * @return {@code true} when a named sibling claims this dialog
-     */
-    private static boolean corroboratedByNamedSibling(String detail, String infobaseName)
-    {
-        for (ConflictWatch other : CONFLICT_WATCHES)
-        {
-            if (other.serverName != null && Objects.equals(other.infobaseName, infobaseName)
-                && namesThisServerExactly(detail, other.serverName))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
 
     /**
      * Whether NO open window could resolve a server name at all — the older-EDT / everything-failed
@@ -2815,14 +2789,17 @@ public final class LaunchUpdateDialogAutoConfirmer
             else if (watch.infobaseName != null)
             {
                 // No server name resolved, so the infobase is all it has - and by itself that is
-                // the very test this change removed: "…for My Base" ends with " Base" too. It is
-                // trusted only when CORROBORATED, i.e. when another window for the SAME infobase
-                // did resolve a server name and that name is what this dialog quotes. Then the
-                // dialog is demonstrably about this infobase's server, and both windows - the
-                // same operation, one of whose lookups happened to fail - hear it.
-                if (corroboratedByNamedSibling(detail, watch.infobaseName)
-                    || (noWindowNamedAServer() && detail != null
-                        && namesThisServer(detail, watch.infobaseName)))
+                // the very test this change removed: "…for My Base" ends with " Base" too.
+                //
+                // It is therefore trusted ONLY when nobody could name a server at all (an older
+                // EDT, or a lookup that fails for everyone): then this matcher is the only
+                // evidence in the room, and refusing it would blind every window at once. When
+                // some other window DID resolve a name, this one stays silent — it cannot prove
+                // the dialog is its own, and recording a foreign conflict would make a call that
+                // succeeded report someone else's failure. Losing detail is the lesser harm: the
+                // launch that really failed still fails, just with less explanation.
+                if (noWindowNamedAServer() && detail != null
+                    && namesThisServer(detail, watch.infobaseName))
                 {
                     targets.add(watch);
                 }
