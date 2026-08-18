@@ -1435,8 +1435,8 @@ public class WorkmateGateway
      * @throws InterruptedException if the wait is interrupted
      * @throws ExecutionException if the tool failed
      */
-    private static Object awaitToolResult(CompletableFuture<?> future, long deadlineNanos,
-        AtomicBoolean cancelled, AtomicLong finishedAtNanos)
+    private static Object awaitToolResult(CompletableFuture<?> source, CompletableFuture<?> observed, // NOSONAR arbitration needs the source, the wait needs the stamped stage, both need the clock
+        long deadlineNanos, AtomicBoolean cancelled, AtomicLong finishedAtNanos)
         throws TimeoutException, InterruptedException, ExecutionException
     {
         while (true)
@@ -1446,14 +1446,13 @@ public class WorkmateGateway
             // given - cancelling a tool that was about to finish inside it.
             if (budgetSpent(deadlineNanos))
             {
-                // An OUTCOME that beat the clock wins, whichever kind it is. A result would
-                // otherwise be thrown away, and a genuine tool failure would be reported as
-                // "may still be running" when it demonstrably finished - both of them because
-                // this thread happened to wake up late.
-                if (future.isDone() && (!future.isCompletedExceptionally()
-                    || finishedBeforeDeadline(finishedAtNanos, deadlineNanos)))
+                // Decided on the SOURCE, never on the stamped stage: the thread completing the
+                // source can be preempted before the stamping action runs, and judging by the
+                // stage would then cancel a tool that had already finished and throw its result
+                // away.
+                if (source.isDone() && reportAsItStands(source, finishedAtNanos, deadlineNanos))
                 {
-                    return future.get();
+                    return source.get();
                 }
                 cancelled.set(true);
                 throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
@@ -1463,7 +1462,7 @@ public class WorkmateGateway
             long leftMs = Math.max(1L, remainingMillis(deadlineNanos));
             try
             {
-                return future.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
+                return observed.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
             }
             catch (TimeoutException stillRunning)
             {
@@ -1478,7 +1477,7 @@ public class WorkmateGateway
                 // Re-arbitrated against the clock, so the caller gets the timeout diagnosis and
                 // its "raise timeoutSeconds" advice instead of "the tool failed".
                 if (budgetSpent(deadlineNanos)
-                    && !finishedBeforeDeadline(finishedAtNanos, deadlineNanos))
+                    && !reportAsItStands(source, finishedAtNanos, deadlineNanos))
                 {
                     cancelled.set(true);
                     throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
@@ -1525,14 +1524,16 @@ public class WorkmateGateway
      * @param deadlineNanos when the budget expires
      * @return {@code true} when the outcome must be reported as it stands
      */
-    private static boolean finishedBeforeDeadline(AtomicLong finishedAtNanos, long deadlineNanos)
+    private static boolean reportAsItStands(CompletableFuture<?> source, AtomicLong finishedAtNanos,
+        long deadlineNanos)
     {
-        long finishedAt = finishedAtNanos.get();
-        if (finishedAt == UNDATABLE)
+        if (!source.isCompletedExceptionally())
         {
             return true;
         }
-        return finishedAt != NOT_FINISHED && finishedAt - deadlineNanos < 0;
+        long finishedAt = finishedAtNanos.get();
+        return finishedAt == UNDATABLE || finishedAt == NOT_FINISHED
+            || finishedAt - deadlineNanos < 0;
     }
 
     /**
@@ -1734,7 +1735,7 @@ public class WorkmateGateway
                 // of its own, which the pre-invoke measurement cannot include.
                 // The dependent stage is what is WAITED on; cancellation below still goes to
                 // the original future, since cancelling a derived stage would not stop the tool.
-                result = awaitToolResult(observed, deadlineNanos, cancelled, finishedAtNanos);
+                result = awaitToolResult(future, observed, deadlineNanos, cancelled, finishedAtNanos);
                 finished.set(true);
             }
             catch (TimeoutException e)
