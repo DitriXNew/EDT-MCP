@@ -2809,56 +2809,6 @@
   },
   {
     "annotations": {
-      "destructiveHint": true,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
-    "description": "Run a git command in a project's repository through the real git CLI, sent as a shell-style string. Only a whitelisted set of subcommands runs, and the write-capable ones (commit, push, checkout, stash) change the repository. DISABLED by default: enable it in Preferences -> MCP Server -> Tools; enable_toolset does not turn it on. Parameters, the whitelist and examples: get_tool_guide('git').",
-    "inputSchema": {
-      "properties": {
-        "command": {
-          "type": "string"
-        },
-        "projectName": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "projectName",
-        "command"
-      ],
-      "type": "object"
-    },
-    "name": "git",
-    "outputSchema": {
-      "properties": {
-        "command": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        },
-        "exitCode": {
-          "type": "integer"
-        },
-        "output": {
-          "type": "string"
-        },
-        "success": {
-          "type": "boolean"
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false

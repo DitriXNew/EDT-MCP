@@ -185,13 +185,17 @@ def test_exclude_rule_drops_only_the_named_rule():
     get from get_project_errors), yet it was only covered headlessly against canned JSON.
     This pins the WIRING: execute() reads it and render() applies it. Both filters are asked
     of the same live scan, so the assertion is a real comparison rather than a self-check -
-    the excluded rule must vanish from the rows while the rest of the table survives."""
-    base = call("code_review", {"projectName": PROJECT})
+    the excluded rule must vanish from the rows while the rest of the table survives.
+
+    Engine-gated like every other happy path here: _run_or_skip turns the actionable
+    "engine not installed" answer into a SKIP, which is what CI (no jar) must get."""
+    base = _run_or_skip({"projectName": PROJECT}, "unfiltered project review")
     assert_ok(base, "unfiltered project review")
     if not _rule_cells(base.text):
         raise E2ESkip("the fixture currently reports no MagicNumber finding to exclude")
 
-    filtered = call("code_review", {"projectName": PROJECT, "excludeRule": "MagicNumber"})
+    filtered = _run_or_skip({"projectName": PROJECT, "excludeRule": "MagicNumber"},
+                            "review with excludeRule=MagicNumber")
     assert_ok(filtered, "review with excludeRule=MagicNumber")
     leftover = _rule_cells(filtered.text)
     if leftover:
@@ -202,6 +206,30 @@ def test_exclude_rule_drops_only_the_named_rule():
     # or "no MagicNumber rows" would also pass for a tool that returned nothing at all.
     if not (filtered.text or "").strip():
         raise AssertionError("excludeRule emptied the whole report instead of dropping one rule")
+    assert_no_diff("a read-only review must not touch the project on disk")
+
+
+@e2e_test(tool="code_review", kind="read")
+def test_module_path_matching_is_case_insensitive_on_the_filesystem():
+    """A modulePath whose casing differs from the on-disk name must still scope correctly.
+
+    On a case-insensitive filesystem (Windows) the workspace happily resolves
+    'commonmodules/calc/module.bsl', but the engine reports the on-disk casing - so a
+    case-SENSITIVE comparison of the two filtered every finding out and answered "module is
+    clean". A false clean is the worst answer this tool can give, which is why identity is
+    decided by the filesystem (Files.isSameFile) rather than by string equality.
+
+    Needs a real filesystem, so it lives here rather than in a unit test."""
+    exact = _run_or_skip({"projectName": PROJECT, "modulePath": CALC_MODULE}, "module review, exact casing")
+    assert_ok(exact, "module review with the canonical casing")
+    assert_contains(exact.text, "MagicNumber", "the canonical casing must report the module's finding")
+
+    lowered = _run_or_skip({"projectName": PROJECT, "modulePath": CALC_MODULE.lower()},
+                           "module review, lowercased path")
+    assert_ok(lowered, "module review with a lowercased path")
+    assert_contains(lowered.text, "MagicNumber",
+                    "the same module addressed in a different case must report the same finding, "
+                    "not come back empty")
     assert_no_diff("a read-only review must not touch the project on disk")
 
 

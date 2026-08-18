@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -295,7 +297,7 @@ public class CodeReviewTool implements IMcpTool
         List<Finding> scoped = new ArrayList<>();
         for (Finding f : report.findings())
         {
-            if (targetAbsPath != null && !targetAbsPath.equals(normalize(f.path())))
+            if (targetAbsPath != null && !isSamePath(targetAbsPath, f.path()))
             {
                 continue;
             }
@@ -506,6 +508,48 @@ public class CodeReviewTool implements IMcpTool
             // fall through to the absolute path
         }
         return absPath;
+    }
+
+    /**
+     * Whether two absolute paths denote the SAME file, asking the filesystem rather than comparing
+     * text.
+     * <p>
+     * The scoped review filters the engine's findings down to the requested module by path, and a
+     * plain string compare gets that wrong on a case-insensitive filesystem (Windows): a caller may
+     * legitimately pass {@code commonmodules/calc/module.bsl} while the engine reports the on-disk
+     * casing, and every finding would then be filtered out - reporting the module CLEAN when it is
+     * not. That false clean is the worst answer this tool can give, so identity is decided by
+     * {@link Files#isSameFile} where both paths exist.
+     * <p>
+     * Falls back to a case-insensitive text compare when the files cannot be probed (one of them
+     * gone, or an IO error): still better than an exact compare, and never throws out of a review
+     * that otherwise succeeded.
+     *
+     * @param targetAbsPath the normalized path of the module the caller scoped to
+     * @param findingPath the path the engine reported for a finding (may be {@code null})
+     * @return {@code true} when both denote the same module file
+     */
+    private static boolean isSamePath(String targetAbsPath, String findingPath)
+    {
+        String normalized = normalize(findingPath);
+        if (normalized == null)
+        {
+            return false;
+        }
+        try
+        {
+            Path a = Paths.get(targetAbsPath);
+            Path b = Paths.get(normalized);
+            if (Files.exists(a) && Files.exists(b))
+            {
+                return Files.isSameFile(a, b);
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            // fall through to the textual comparison below
+        }
+        return targetAbsPath.equalsIgnoreCase(normalized);
     }
 
     private static String normalize(String path)
