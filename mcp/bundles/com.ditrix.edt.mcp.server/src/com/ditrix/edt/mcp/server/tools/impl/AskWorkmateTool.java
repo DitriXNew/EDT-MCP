@@ -639,8 +639,13 @@ public class AskWorkmateTool implements IMcpTool
 
     private static String emptyAnswerMessage()
     {
-        return "1C:Workmate returned an empty answer. Open Workmate in EDT, verify that it is " //$NON-NLS-1$
-            + "signed in and configured, then start a new ask_workmate job."; //$NON-NLS-1$
+        // "Even after" matters: the adapter no longer takes the first turn as the result - it
+        // pushes a plan-shaped or empty turn to continue in the same conversation several times
+        // (#427). Reaching this message therefore means Workmate stayed silent throughout, which
+        // points at its setup rather than at a question that needed more time.
+        return "1C:Workmate returned an empty answer, even after being asked to continue the " //$NON-NLS-1$
+            + "same conversation. Open Workmate in EDT, verify that it is signed in and " //$NON-NLS-1$
+            + "configured, then start a new ask_workmate job."; //$NON-NLS-1$
     }
 
     private static String trimToNull(String value)

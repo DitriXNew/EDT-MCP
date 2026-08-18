@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Collection;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -71,6 +72,58 @@ public class WorkmateGateway
      * answering from the model alone. It is the skill Workmate's own autopilot uses.
      */
     public static final String DEFAULT_SKILL = "custom"; //$NON-NLS-1$
+
+    /**
+     * How many times a plan-shaped answer is pushed to continue in the SAME conversation before
+     * the last one is reported as the result. Five is Workmate's own number: its {@code
+     * DevAutopilot} drives the very same facade with {@code while (autoContinue <= 5)}.
+     */
+    private static final int MAX_CONTINUATIONS = 5;
+
+    /**
+     * The nudge sent as the continuation message. It is Russian because it is addressed to
+     * Workmate's model, whose conversation runs in the IDE language — it is data for that model,
+     * not surface text. Same intent as {@code DevAutopilot}'s own continuation prompt (answer with
+     * the result, not with a plan), with one deliberate difference: it does NOT order a tool call.
+     * Measured live, "continue with tools" kept a model that wanted a documentation search — a
+     * tool this toolset does not have — announcing that search five times over. Naming the escape
+     * hatch instead ("if the tool you need is unavailable, answer from your own knowledge") is
+     * what turns the last continuation into an answer.
+     */
+    private static final String CONTINUATION_PROMPT =
+        "\u041E\u0442\u0432\u0435\u0442\u044C \u043D\u0430 \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \u0432\u043E\u043F\u0440\u043E\u0441 \u0418\u0422\u041E\u0413\u041E\u0412\u042B\u041C \u0442\u0435\u043A\u0441\u0442\u043E\u043C " //$NON-NLS-1$
+        + "\u043F\u0440\u044F\u043C\u043E \u0441\u0435\u0439\u0447\u0430\u0441. \u041D\u0435 \u043E\u043F\u0438\u0441\u044B\u0432\u0430\u0439 \u043D\u0430\u043C\u0435\u0440\u0435\u043D\u0438\u044F \u0438 \u043D\u0435 \u043F\u0438\u0448\u0438 " //$NON-NLS-1$
+        + "\u043F\u043B\u0430\u043D. \u0415\u0441\u043B\u0438 \u043D\u0443\u0436\u043D\u044B\u0439 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D, " //$NON-NLS-1$
+        + "\u043E\u0442\u0432\u0435\u0442\u044C \u0438\u0437 \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0445 \u0437\u043D\u0430\u043D\u0438\u0439."; //$NON-NLS-1$
+
+    /**
+     * Above this length an answer is taken at face value. An announcement of intent is short by
+     * nature ("I will look it up in the documentation"); a real answer that happens to contain
+     * one of the markers below is not, and must never be thrown away by a continuation.
+     */
+    private static final int PLAN_TEXT_MAX_CHARS = 400;
+
+    /**
+     * First-person announcements of intent, lowercase. A SHORT answer containing one of these is
+     * Workmate saying what it is about to do — the exact shape issue #427 reported ("For a full
+     * reference \u2026 I will use the 1C documentation search"), which the platform then never
+     * followed up on its own.
+     */
+    private static final String[] INTENT_MARKERS = {
+        "\u0432\u043E\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044E\u0441\u044C", // воспользуюсь //$NON-NLS-1$
+        "\u043F\u043E\u0438\u0449\u0443", // поищу //$NON-NLS-1$
+        "\u043D\u0430\u0439\u0434\u0443", // найду //$NON-NLS-1$
+        "\u0438\u0437\u0443\u0447\u0443", // изучу //$NON-NLS-1$
+        "\u043F\u043E\u0441\u043C\u043E\u0442\u0440\u044E", // посмотрю //$NON-NLS-1$
+        "\u043F\u0440\u043E\u0432\u0435\u0440\u044E", // проверю //$NON-NLS-1$
+        "\u0441\u043E\u0437\u0434\u0430\u043C", // создам //$NON-NLS-1$
+        "\u043D\u0430\u0447\u043D\u0443", // начну //$NON-NLS-1$
+        "\u0441\u0435\u0439\u0447\u0430\u0441 \u044F", // сейчас я //$NON-NLS-1$
+        "\u0434\u0430\u0432\u0430\u0439\u0442\u0435", // давайте //$NON-NLS-1$
+        "i will ", //$NON-NLS-1$
+        "i'll ", //$NON-NLS-1$
+        "let me " //$NON-NLS-1$
+    };
 
     /**
      * Stable id under which {@link #ensureChatSession()} registers a JShell session.
@@ -332,86 +385,81 @@ public class WorkmateGateway
                 SEND_REQUEST + "(ProjectId,String,ConversationSession,boolean,String,Boolean,Integer)", //$NON-NLS-1$
                 projectIdClass, String.class, sessionClass, boolean.class, String.class,
                 Boolean.class, Integer.class);
-            Object request = create(requestConstructor, projectId, question, null, true,
-                // chat = FALSE matches Workmate's OWN default (ConversationFacade maps a null
-                // getChat() to false), and it is NOT what decides whether Workmate works the task
-                // with its tools: with TRUE and with FALSE alike, a "raw" request came back in
-                // ~1.2 s with assistantMessages = 1 and no tool round at all.
-                //
-                // The SKILL is what decides it, measured live against Workmate 1.0.5. Under
-                // ConversationFacade's own default "raw" the cloud answers from the model alone.
-                // Under DEFAULT_SKILL the same facade runs Workmate's full tool loop: the model
-                // called JShellManual, JShellSession and JShell, reached this plugin through
-                // IEdtMcpBridge and answered from real EDT-MCP output (7 assistant messages).
-                // Not every name is accepted - "chat"/"agent"/"git-review" are refused by the
-                // cloud with "Failed to create conversation" in ~35 ms - so do not treat this as
-                // a free-form field.
-                skillName == null || skillName.isEmpty() ? DEFAULT_SKILL : skillName,
-                Boolean.FALSE, maxToolRounds);
-
             Class<?> cancellationTokenClass = requireClass(aiBundle, CANCELLATION_TOKEN);
-            AtomicBoolean cancelled = new AtomicBoolean(false);
-            Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
             Method sendAsync = requireMethod(facadeClass, "sendAsync", requestClass, //$NON-NLS-1$
                 cancellationTokenClass);
-
-            // Dispatching is irreversible in the way that matters: Workmate's tool loop can edit
-            // this configuration, and the cancellation token stops us WAITING, not the edits
-            // already made. So the job is committed first - a later "timed out, start a new job"
-            // would invite a retry that runs those edits a second time.
-            if (!progress.onTryCommit())
-            {
-                throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
-                    + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
-            }
-            Object futureValue = invoke(sendAsync, facade, request, cancellationToken);
-            if (!(futureValue instanceof CompletableFuture<?>))
-            {
-                throw GatewayException.incompatible("method '" + CONVERSATION_FACADE //$NON-NLS-1$
-                    + ".sendAsync' returned " + typeName(futureValue) //$NON-NLS-1$
-                    + " instead of CompletableFuture"); //$NON-NLS-1$
-            }
-            progress.onProgress("Sent the request to Workmate."); //$NON-NLS-1$
-
-            Object sendResult;
-            CompletableFuture<?> future = (CompletableFuture<?>) futureValue;
-            try
-            {
-                sendResult = future.get(timeoutSeconds, TimeUnit.SECONDS);
-            }
-            catch (TimeoutException e)
-            {
-                // The token ASKS Workmate to stop; it does not undo what its tools have
-                // already done. So this is a dispatched timeout, not a plain retryable one -
-                // the difference is whether the caller may safely run the same request again.
-                cancelled.set(true);
-                future.cancel(true);
-                throw GatewayException.timedOutAfterDispatch();
-            }
-            catch (InterruptedException e)
-            {
-                cancelled.set(true);
-                future.cancel(true);
-                Thread.currentThread().interrupt();
-                throw GatewayException.callFailed("the waiting thread was interrupted"); //$NON-NLS-1$
-            }
-            catch (ExecutionException e)
-            {
-                throw GatewayException.callFailed(rootCauseMessage(e));
-            }
-
-            if (sendResult == null)
-            {
-                throw GatewayException.callFailed("sendAsync completed without a result"); //$NON-NLS-1$
-            }
             Class<?> resultClass = requireClass(aiBundle, SEND_RESULT);
-            String text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
-            String reasoning = stringValue(
-                invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
-            Integer assistantMessageCount = integerValue(invoke(
-                requireMethod(resultClass, "getAssistantMessageCount"), sendResult)); //$NON-NLS-1$
+
+            // ONE facade call answers ONE assistant turn: ConversationFacade completes its future
+            // when the ask stream ends, and that stream ends on a plan ("I will look it up")
+            // exactly as it ends on a finished answer (issue #427). Workmate's own driver does not
+            // treat the first turn as the result either - DevAutopilot re-sends into the SAME
+            // conversation while the answer still looks like an announcement. So does this loop.
+            long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+            String effectiveSkill =
+                skillName == null || skillName.isEmpty() ? DEFAULT_SKILL : skillName;
+            Object session = null;
+            String message = question;
+            String answer = null;
+            String reasoning = null;
+            int assistantMessages = 0;
+            int continuations = 0;
+            while (true)
+            {
+                Object request = create(requestConstructor, projectId, message, session,
+                    session == null,
+                    // chat = FALSE matches Workmate's OWN default (ConversationFacade maps a null
+                    // getChat() to false), and it is NOT what decides whether Workmate works the
+                    // task with its tools: with TRUE and with FALSE alike, a "raw" request came
+                    // back in ~1.2 s with assistantMessages = 1 and no tool round at all.
+                    //
+                    // The SKILL is what decides it, measured live against Workmate 1.0.5. Under
+                    // ConversationFacade's own default "raw" the cloud answers from the model
+                    // alone. Under DEFAULT_SKILL the same facade runs Workmate's full tool loop:
+                    // the model called JShellManual, JShellSession and JShell, reached this plugin
+                    // through IEdtMcpBridge and answered from real EDT-MCP output (7 assistant
+                    // messages). Not every name is accepted - "chat"/"agent"/"git-review" are
+                    // refused by the cloud with "Failed to create conversation" in ~35 ms - so do
+                    // not treat this as a free-form field.
+                    effectiveSkill, Boolean.FALSE, maxToolRounds);
+
+                // Dispatching is irreversible in the way that matters: Workmate's tool loop can
+                // edit this configuration, and the cancellation token stops us WAITING, not the
+                // edits already made. So the job is committed before the FIRST send - a later
+                // "timed out, start a new job" would invite a retry that runs those edits again.
+                // The continuations need no second commit: they belong to a job already committed.
+                if (session == null && !progress.onTryCommit())
+                {
+                    throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
+                        + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
+                }
+                Turn turn = sendTurn(facade, sendAsync, request, cancellationTokenClass,
+                    resultClass, remainingSeconds(deadlineNanos),
+                    session == null ? "Sent the request to Workmate." //$NON-NLS-1$
+                        : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
+                    progress);
+                assistantMessages += turn.messages;
+                // The LAST non-blank text wins, not simply the last one: a continuation that
+                // comes back empty must not erase the answer an earlier turn already produced.
+                if (trimToNull(turn.text) != null)
+                {
+                    answer = turn.text;
+                    reasoning = turn.reasoning;
+                }
+                if (!needsContinuation(turn.text) || turn.session == null
+                    || continuations >= MAX_CONTINUATIONS || remainingSeconds(deadlineNanos) <= 0)
+                {
+                    break;
+                }
+                session = turn.session;
+                message = CONTINUATION_PROMPT;
+                continuations++;
+                progress.onProgress("Workmate answered with an intention rather than a result; " //$NON-NLS-1$
+                    + "continuing the same conversation (" + continuations + " of " //$NON-NLS-1$ //$NON-NLS-2$
+                    + MAX_CONTINUATIONS + ")."); //$NON-NLS-1$
+            }
             progress.onProgress("Received the Workmate response."); //$NON-NLS-1$
-            return new WorkmateResponse(text, reasoning, assistantMessageCount);
+            return new WorkmateResponse(answer, reasoning, Integer.valueOf(assistantMessages));
         }
         catch (GatewayException e)
         {
@@ -420,6 +468,177 @@ public class WorkmateGateway
         catch (RuntimeException | LinkageError e)
         {
             throw GatewayException.callFailed(rootCauseMessage(e));
+        }
+    }
+
+    /**
+     * Whether Workmate's answer is an announcement of what it is ABOUT to do rather than the
+     * result, and the conversation should therefore be pushed to continue.
+     *
+     * <p>Two shapes, both reported by issue #427 and both produced by the platform completing its
+     * ask stream after one assistant turn:
+     * <ul>
+     *   <li>an EMPTY answer — nothing was said at all, so there is nothing to report;</li>
+     *   <li>a SHORT answer that states an intention ("For a full reference … I will use the 1C
+     *       documentation search"). Length is what keeps this from eating real answers: a
+     *       finished answer that happens to contain such a word is not {@value
+     *       #PLAN_TEXT_MAX_CHARS} characters short.</li>
+     * </ul>
+     * Over-eagerness here costs one extra round-trip and nothing else — the continuation cannot
+     * lose an answer, because the last NON-BLANK text is what the caller receives. Under-eagerness
+     * is the bug itself.
+     *
+     * @param text Workmate's answer for this turn (may be {@code null})
+     * @return {@code true} when the conversation should be continued
+     */
+    static boolean needsContinuation(String text)
+    {
+        String trimmed = trimToNull(text);
+        if (trimmed == null)
+        {
+            return true;
+        }
+        if (trimmed.length() > PLAN_TEXT_MAX_CHARS)
+        {
+            return false;
+        }
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        for (String marker : INTENT_MARKERS)
+        {
+            if (lower.contains(marker))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Sends one prepared request and reads the assistant turn it produced.
+     *
+     * @param facade the conversation facade
+     * @param sendAsync its {@code sendAsync} method
+     * @param request the prepared {@code SendUserMessageRequest}
+     * @param cancellationTokenClass the token interface to implement for this send
+     * @param resultClass the {@code SendMessageResult} class to read the turn from
+     * @param remainingSeconds what is left of the caller's total budget
+     * @param sentMessage the progress milestone to report once the request is away
+     * @param progress milestone listener
+     * @return the turn Workmate answered with
+     * @throws GatewayException categorized runtime/compatibility failure
+     */
+    private Turn sendTurn(Object facade, Method sendAsync, Object request, // NOSONAR one reflective send needs every piece of the reflective context
+        Class<?> cancellationTokenClass, Class<?> resultClass, long remainingSeconds,
+        String sentMessage, ProgressListener progress) throws GatewayException
+    {
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
+        Object futureValue = invoke(sendAsync, facade, request, cancellationToken);
+        if (!(futureValue instanceof CompletableFuture<?>))
+        {
+            throw GatewayException.incompatible("method '" + CONVERSATION_FACADE //$NON-NLS-1$
+                + ".sendAsync' returned " + typeName(futureValue) //$NON-NLS-1$
+                + " instead of CompletableFuture"); //$NON-NLS-1$
+        }
+        progress.onProgress(sentMessage);
+
+        Object sendResult;
+        CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
+        try
+        {
+            sendResult = future.get(Math.max(1L, remainingSeconds), TimeUnit.SECONDS);
+        }
+        catch (TimeoutException e)
+        {
+            // The token ASKS Workmate to stop; it does not undo what its tools have
+            // already done. So this is a dispatched timeout, not a plain retryable one -
+            // the difference is whether the caller may safely run the same request again.
+            cancelled.set(true);
+            future.cancel(true);
+            throw GatewayException.timedOutAfterDispatch();
+        }
+        catch (InterruptedException e)
+        {
+            cancelled.set(true);
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw GatewayException.callFailed("the waiting thread was interrupted"); //$NON-NLS-1$
+        }
+        catch (ExecutionException e)
+        {
+            throw GatewayException.callFailed(rootCauseMessage(e));
+        }
+
+        if (sendResult == null)
+        {
+            throw GatewayException.callFailed("sendAsync completed without a result"); //$NON-NLS-1$
+        }
+        String text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
+        String reasoning =
+            stringValue(invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
+        Integer count = integerValue(
+            invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult)); //$NON-NLS-1$
+        return new Turn(text, reasoning, count == null ? 0 : count.intValue(),
+            sessionOf(resultClass, sendResult));
+    }
+
+    /**
+     * The conversation handle this turn belongs to, or {@code null} when the installed Workmate
+     * does not expose one. A missing handle is not a failure: it only means this turn cannot be
+     * continued, so the answer is reported as it stands rather than the whole call failing.
+     *
+     * @param resultClass the {@code SendMessageResult} class
+     * @param sendResult the result instance
+     * @return the {@code ConversationSession}, or {@code null}
+     */
+    private static Object sessionOf(Class<?> resultClass, Object sendResult)
+    {
+        try
+        {
+            return invoke(resultClass.getMethod("getSession"), sendResult); //$NON-NLS-1$
+        }
+        catch (NoSuchMethodException | SecurityException | GatewayException e) // NOSONAR absence only costs the continuation
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Seconds left of a total budget, never negative.
+     *
+     * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
+     * @return remaining whole seconds
+     */
+    private static long remainingSeconds(long deadlineNanos)
+    {
+        return Math.max(0L, TimeUnit.NANOSECONDS.toSeconds(deadlineNanos - System.nanoTime()));
+    }
+
+    /** {@code null} for a {@code null}/blank string, the trimmed value otherwise. */
+    private static String trimToNull(String value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** One assistant turn: what it said, how many messages it took, and how to continue it. */
+    private static final class Turn
+    {
+        private final String text;
+        private final String reasoning;
+        private final int messages;
+        private final Object session;
+
+        Turn(String text, String reasoning, int messages, Object session)
+        {
+            this.text = text;
+            this.reasoning = reasoning;
+            this.messages = messages;
+            this.session = session;
         }
     }
 

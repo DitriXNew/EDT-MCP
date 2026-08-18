@@ -96,9 +96,29 @@ must be enabled and `hasClientToken()` must report a configured access key.
 
 The progress journal reports only stages actually reached by the adapter:
 question accepted, plugin located, conversation facade obtained, request sent,
-and response received or failure. When Workmate exposes its assistant-message
-count, the completed result includes that value without relabelling it as a
-tool-round count.
+each continuation, and response received or failure. When Workmate exposes its
+assistant-message count, the completed result includes that value (summed over
+every turn) without relabelling it as a tool-round count.
+
+## Why a job can take several turns
+
+One call into Workmate's conversation facade answers ONE assistant turn: its
+future completes when that turn's stream ends, which happens on "I will look it
+up in the documentation" exactly as it happens on a finished answer. Reporting
+that first turn is what made `mode="answer"` return a plan - or nothing at all -
+instead of a result (#427).
+
+So a turn that is empty, or short and phrased as an announcement of intent, is
+not accepted as the answer: the same conversation is continued (up to five
+times) with an instruction to answer the original question now — and to answer
+from its own knowledge when the tool it wants is not in its toolset, which is
+what keeps a model that asked for a documentation search from announcing that
+search over and over. Continuing the conversation is exactly what Workmate's own
+autopilot does with this facade. The
+continuations are bounded by the job's `timeoutSeconds` budget, count into
+`assistantMessages`, and are visible in the progress journal. A long answer is
+always taken at face value, so a finished reference answer is never re-asked;
+the last non-empty text is what the caller receives.
 
 Workmate may contact its configured cloud service and its conversation loop may
 invoke Workmate's own tools. Review the question and selected project/skill with
