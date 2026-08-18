@@ -1298,14 +1298,14 @@ public class DebugLaunchTool implements IMcpTool
         // port-conflict matcher is armed and can refuse the launch - without a window that refusal
         // reached nobody. "policy != null" is the non-Attach signal (the caller passes null for an
         // Attach, which attaches to a running server and never starts one).
+        // Resolved ONCE, before anything uses it: the window, the arm and its release must all
+        // carry the SAME name. Read twice, a rebound configuration (or one best-effort lookup
+        // that momentarily fails) would address the window to one server and the arm to another,
+        // and the arm would never be released by the value it was taken with.
+        String launchServer = launchServerName(config);
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
-            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase,
-                launchServerName(config));
-        // Resolved ONCE and reused for the disarm: reading it again later could return a
-        // different server if the configuration was rebound meanwhile, and the arm would then
-        // never be released by the value it was taken with.
-        String launchServer = launchServerName(config);
+            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
             launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch

@@ -2326,7 +2326,10 @@ public final class LaunchUpdateDialogAutoConfirmer
                 {
                     // Told apart: a caller that asked to move the server but was outvoted by a
                     // concurrent one gets different advice from a caller whose own policy refused.
-                    refusalReason = portArmsFor(detail).isEmpty() ? PORT_REASON_NOT_ATTRIBUTED
+                    // Told apart by the SAME attribution the press uses. On the loose matcher a
+                    // dialog of "My Base" was reported as "vetoed" because an arm for "Base"
+                    // had asked for a re-address — advice about someone else's call.
+                    refusalReason = portArmsForServer(detail).isEmpty() ? PORT_REASON_NOT_ATTRIBUTED
                         : (reassignAskedFor(detail) ? PORT_REASON_VETOED : PORT_REASON_POLICY);
                 }
             }
@@ -2354,25 +2357,6 @@ public final class LaunchUpdateDialogAutoConfirmer
         }
     }
 
-    /**
-     * The outstanding arms this dialog is demonstrably about: those whose infobase the dialog text
-     * names ({@link #namesThisServer}). Must be called with {@code LOCK} held.
-     *
-     * <p>An arm that could not name its own infobase never matches: the writing answer requires
-     * PROOF that the dialog is this caller's, not the absence of proof that it is someone else's.
-     */
-    private static List<PortConflictArm> portArmsFor(String detail)
-    {
-        List<PortConflictArm> attributed = new ArrayList<>();
-        for (PortConflictArm arm : PORT_CONFLICT_ARMS)
-        {
-            if (namesThisServer(detail, arm.infobaseName))
-            {
-                attributed.add(arm);
-            }
-        }
-        return attributed;
-    }
 
     /**
      * The arms whose SERVER this dialog quotes verbatim — the attribution the WRITING answer uses.
@@ -2413,7 +2397,7 @@ public final class LaunchUpdateDialogAutoConfirmer
     {
         synchronized (LOCK)
         {
-            for (PortConflictArm arm : portArmsFor(detail))
+            for (PortConflictArm arm : portArmsForServer(detail))
             {
                 if (arm.policy == StandaloneServerPortConflictPolicy.REASSIGN)
                 {
@@ -2737,68 +2721,40 @@ public final class LaunchUpdateDialogAutoConfirmer
 
     private static List<ConflictWatch> portConflictTargets(String detail)
     {
-        // The SERVER name first, compared exactly: it is the only test that tells this window's
-        // server from another whose name merely ends the same way. A window that resolved one
-        // and does not match is demonstrably not this dialog's owner.
-        List<ConflictWatch> byServer = new ArrayList<>();
-        boolean anyServerNamed = false;
+        // Each window is judged by the BEST evidence it has, and only a window that demonstrably
+        // names a DIFFERENT server is excluded. Judging them together — "did anyone match by
+        // server?" — silenced two windows that had every right to hear the event: one covering the
+        // same server whose own lookup happened to fail, and one that could name nothing at all.
+        List<ConflictWatch> targets = new ArrayList<>();
         for (ConflictWatch watch : CONFLICT_WATCHES)
         {
             if (watch.serverName != null)
             {
-                anyServerNamed = true;
+                // Named its server: exactly this dialog's server, or not its business.
                 if (namesThisServerExactly(detail, watch.serverName))
                 {
-                    byServer.add(watch);
+                    targets.add(watch);
                 }
             }
-        }
-        if (!byServer.isEmpty())
-        {
-            return byServer;
-        }
-        // No window named the server this dialog is about. Fall back to the infobase matcher for
-        // the windows that could not name a server at all - dropping their diagnosis is the
-        // failure this accounting exists to prevent - but never for one that named a DIFFERENT
-        // server, which the exact test above has already ruled out.
-        List<ConflictWatch> named = new ArrayList<>();
-        if (detail != null)
-        {
-            for (ConflictWatch watch : CONFLICT_WATCHES)
+            else if (watch.infobaseName != null)
             {
-                if (watch.serverName == null && namesThisServer(detail, watch.infobaseName))
+                // No server name resolved: the infobase is the best evidence it has. Loose, but
+                // this window has already proved it cannot do better, and losing its diagnosis is
+                // the failure this accounting exists to prevent.
+                if (detail != null && namesThisServer(detail, watch.infobaseName))
                 {
-                    named.add(watch);
+                    targets.add(watch);
                 }
             }
-        }
-        if (!named.isEmpty())
-        {
-            return named;
-        }
-        if (anyServerNamed && detail != null)
-        {
-            // Every window that could name its server named a different one: this dialog belongs
-            // to none of them, and recording it would make a call that succeeded report someone
-            // else's port conflict.
-            return new ArrayList<>();
-        }
-        // Nothing matched by name. A window that could not name its own infobase still has to hear
-        // about it — the dialog may well be its own, and losing the busy-port diagnosis there is the
-        // failure this whole change exists to remove. Windows that DID name themselves and did not
-        // match are excluded: the dialog demonstrably belongs to another server, and marking them
-        // would make an operation that completed normally report someone else's failure.
-        List<ConflictWatch> unresolved = new ArrayList<>();
-        for (ConflictWatch watch : CONFLICT_WATCHES)
-        {
-            if (watch.infobaseName == null)
+            else
             {
-                unresolved.add(watch);
+                // Named nothing: it may well be this dialog's owner, so it always hears.
+                targets.add(watch);
             }
         }
-        if (!unresolved.isEmpty())
+        if (!targets.isEmpty())
         {
-            return unresolved;
+            return targets;
         }
         // Every window named itself and none matched: only an unreadable dialog (or one quoting no
         // server at all) is still unattributable, and then everyone hears it rather than nobody.
