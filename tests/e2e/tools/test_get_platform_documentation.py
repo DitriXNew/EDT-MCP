@@ -232,6 +232,173 @@ def test_nonexistent_type_reports_not_found_with_suggestions():
 
 
 @e2e_test(tool="get_platform_documentation", kind="read")
+def test_the_available_types_list_only_holds_names_that_resolve():
+    """Issue #355: the banner listed the FIRST 30 names the provider handed out, and on a metadata
+    platform those are exactly the ones the lookup could not resolve - so the answer to
+    'CatalogObject' said "not found" and then listed CatalogObject as available. An agent read its
+    own query back out and looped through the other spellings from the same list.
+
+    Every name the banner offers must now answer a real lookup. Asserted by taking the list apart
+    and re-querying the names in it - the only check that cannot pass by accident."""
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "NoSuchType_ZZZ_e2e"})
+    err = assert_error(r, "nonexistent type is a real is_error")
+
+    listed = [ln[2:].strip() for ln in err.splitlines() if ln.startswith("- ")]
+    assert len(listed) >= 10, "the banner must offer a usable sample, got %r" % listed[:5]
+    for name in listed[:12]:
+        probe = call("get_platform_documentation", {"projectName": PROJECT, "typeName": name})
+        assert_ok(probe, "a name the not-found banner lists must resolve: %r" % name)
+        assert_contains(probe.text, "# ",
+                        "the listed name %r must render a real doc, not a banner" % name)
+
+    # The scale is stated, not hidden behind "... (more available)". "published", not "documented":
+    # the total counts what the provider publishes, while the LISTED names are the ones re-checked
+    # one by one — the banner must not claim more than it verified.
+    assert_contains(err, "candidate names",
+                    "the banner must state how many names exist, not just show a sample")
+    assert_contains(err, "every name listed here resolves",
+                    "the banner must state the guarantee it now keeps")
+    assert_no_diff("an invalid lookup must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Metadata TYPE SETS — CatalogObject / СправочникОбъект and friends (issue #355)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# The type sets the report named, in both languages. A set is a TypeSet rather than a Type and
+# carries no members itself; the platform documents the generic type behind it, which the provider
+# names in the description's user data.
+TYPE_SETS = [
+    ("CatalogObject", "Write"),
+    ("СправочникОбъект",
+     "Write"),                                     # СправочникОбъект
+    ("CatalogRef", "GetObject"),
+    ("СправочникСсылка",
+     "GetObject"),                                 # СправочникСсылка
+    ("DocumentObject", "Write"),
+    ("EnumRef", "Metadata"),
+    ("CatalogManager", "FindByDescription"),
+]
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_metadata_type_sets_resolve_in_both_languages():
+    # Every one of these returned "Type not found" before, in BOTH languages - the exact matrix the
+    # report and its confirmation listed. Each must now render the shared API of that kind of object.
+    for type_name, member in TYPE_SETS:
+        r = call("get_platform_documentation",
+                 {"projectName": PROJECT, "typeName": type_name})
+        assert_ok(r, "type set %r must resolve" % type_name)
+        # The answer names the SET the caller asked for, so the H1 (the generic platform type, e.g.
+        # CatalogObjectCatalogName) can be connected back to the query.
+        assert_contains(r.text, "**Type set:**",
+                        "%r must be labelled with the type set it resolved through" % type_name)
+        assert_contains(r.text, "### %s" % member,
+                        "%r must render the shared member %r" % (type_name, member))
+        assert_not_contains(r.text, "Type not found",
+                            "%r must not fall through to the not-found banner" % type_name)
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_type_set_members_carry_signatures_and_the_member_filter_applies():
+    # A type set must be a first-class type here, not a special case: detailed rendering and the
+    # member filters have to work on it exactly as on ValueTable.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "CatalogObject",
+              "memberName": "Write", "memberType": "method",
+              "responseFormat": "detailed"})
+    assert_ok(r, "detailed member lookup on a type set")
+    assert_contains(r.text, "### Write", "the filtered member must render")
+    # memberType=method narrows away the properties: 'Code' is a property of every catalog object.
+    assert_not_contains(r.text, "### Code",
+                        "memberType=method must exclude the Code property of the type set")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_the_type_set_label_survives_the_default_concise_rendering():
+    # concise drops per-member bodies. The type-set line is not a body: without it the concise answer
+    # to 'CatalogObject' is headed by CatalogObjectCatalogName - a name the caller never asked for.
+    r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": "CatalogObject"})
+    assert_ok(r, "concise type set")
+    assert_contains(r.text, "**Type set:** CatalogObject",
+                    "the concise rendering must keep the type-set line")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_type_set_with_nothing_to_document_says_so_instead_of_not_found():
+    # AnyRef / ЛюбаяСсылка unions the reference sets and declares no members of its own. Reporting it
+    # as non-existent was a wrong diagnosis that sent callers looking for another spelling; the
+    # answer must name what it is and where to go instead.
+    for name in ("AnyRef",
+                 "ЛюбаяСсылка"):  # ЛюбаяСсылка
+        r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": name})
+        err = assert_error(r, "an undocumented type set is still a machine-detectable miss")
+        assert_error_quality(err, names=[name], suggests=["TYPE SET", "CatalogRef"],
+                             ctx="undocumented type set explains itself and offers a next step")
+        # ... and it must NOT be advertised as available, which is what made the old list a loop.
+        assert_not_contains(err, "\n- %s\n" % name,
+                            "a name that answers nothing must not be listed as available")
+        # There are two ways a known type set can fail, and they carry OPPOSITE advice: this one
+        # documents nothing and never will, while an unreachable target is worth retrying. Telling
+        # a caller to retry a set that has nothing to give is the same wasted loop in a new costume.
+        assert_not_contains(err, "Documentation unavailable",
+                            "a set that genuinely documents nothing must not read as unreachable")
+    assert_no_diff("an invalid lookup must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_type_set_the_help_does_not_document_falls_back_to_its_generic_type():
+    # The syntax helper files a type set under its OWN name (CatalogObject.<Catalog name>) — but not
+    # always: 'Characteristic' has no page while the generic type behind it
+    # (CharacteristicsDescription) does. Committing to the set's name unconditionally rendered the
+    # model and silently dropped every description for it.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "Characteristic",
+              "memberName": "KeyField", "responseFormat": "detailed"})
+    assert_ok(r, "detailed lookup of a type set the help does not document")
+    assert_contains(r.text, "**Type set:** Characteristic",
+                    "it is still reached through the type set")
+    # The type's own description and the member's, both from the GENERIC type's help page.
+    assert_contains(r.text, "Contains characteristics description",
+                    "the type description must fall back to the generic type's help page")
+    assert_contains(r.text, "characteristics key",
+                    "the member description must come along with the fallback")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_type_set_the_help_documents_keeps_its_own_page():
+    # The fallback must not steal the normal case: CatalogObject HAS its own help page, and its
+    # set-level prose is what a caller should get, not the generic type's.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "CatalogObject",
+              "memberName": "Write", "responseFormat": "detailed"})
+    assert_ok(r, "detailed lookup of a type set the help documents")
+    assert_contains(r.text, "catalog items",
+                    "the set's OWN documentation page must still win when it exists")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_concrete_metadata_type_is_pointed_at_its_type_set():
+    # 'CatalogObject.Currencies' is a configuration-specific type this tool does not document; the
+    # generic set is what the caller wants and the banner must say so rather than list 30 unrelated
+    # names (issue #355 confirmation).
+    bad = "CatalogObject.NoSuchCatalog_e2e"
+    r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": bad})
+    err = assert_error(r, "a qualified metadata type is a miss")
+    assert_error_quality(err, names=[bad], suggests=["CatalogObject"],
+                         ctx="a qualified name is pointed at the type set that documents it")
+    assert_contains(err, "Did you mean",
+                    "the banner must offer the closest names, not just a sample")
+    assert_no_diff("an invalid lookup must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
 def test_nonexistent_builtin_reports_not_found_with_suggestions():
     # Same shape on the builtin branch: "Built-in function not found: <name>\n\n
     # Available global methods (...)". execute() now surfaces the soft banner via
@@ -367,3 +534,35 @@ def test_a_documented_return_value_is_rendered_next_to_the_modelled_type():
                     "the documented meaning of the return must render next to it")
     assert_no_diff("a read tool must not touch the project")
 
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_misspelled_type_gets_a_did_you_mean():
+    # A transposition shares no prefix with the real name and contains nothing of it, so the
+    # substring rules alone answered the commonest kind of miss with no suggestion at all.
+    r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": "ValueTabel"})
+    err = assert_error(r, "a misspelled type is a miss")
+    assert_error_quality(err, names=["ValueTabel"], suggests=["Did you mean", "ValueTable"],
+                         ctx="a misspelling is offered the name it was reaching for")
+    assert_no_diff("an invalid lookup must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_the_builtin_not_found_list_only_holds_names_that_resolve():
+    # The builtin branch had the same defect as the type branch: it advertised the first 30 names the
+    # METHOD provider handed out, without checking any of them resolves. Same proof as for types —
+    # take the list apart and re-query it.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "NoSuchBuiltin_ZZZ_e2e", "category": "builtin"})
+    err = assert_error(r, "nonexistent builtin is a real is_error")
+    assert_contains(err, "candidate names", "the builtin banner must state the scale too")
+
+    listed = [ln[2:].strip() for ln in err.splitlines() if ln.startswith("- ")]
+    assert len(listed) >= 10, "the builtin banner must offer a usable sample, got %r" % listed[:5]
+    for name in listed[:10]:
+        probe = call("get_platform_documentation",
+                     {"projectName": PROJECT, "typeName": name, "category": "builtin"})
+        assert_ok(probe, "a name the builtin banner lists must resolve: %r" % name)
+        assert_contains(probe.text, "Built-in function",
+                        "the listed builtin %r must render a real doc, not a banner" % name)
+    assert_no_diff("an invalid lookup must not touch the project on disk")

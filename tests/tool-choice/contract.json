@@ -1,0 +1,2001 @@
+{
+ "adopt_metadata_object": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "extensionProjectName",
+   "fqn",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "fqn"
+  ],
+  "types": {
+   "extensionProjectName": "string",
+   "fqn": "string",
+   "projectName": "string"
+  }
+ },
+ "apply_quick_fix": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "checkId",
+   "index",
+   "line",
+   "modulePath",
+   "projectName",
+   "variant"
+  ],
+  "required": [
+   "projectName",
+   "checkId"
+  ],
+  "types": {
+   "checkId": "string",
+   "index": "integer",
+   "line": "integer",
+   "modulePath": "string",
+   "projectName": "string",
+   "variant": "integer"
+  }
+ },
+ "build_external_objects": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "objectName",
+   "outputDir",
+   "projectName",
+   "recordBuildTime"
+  ],
+  "required": [
+   "projectName",
+   "outputDir"
+  ],
+  "types": {
+   "objectName": "string",
+   "outputDir": "string",
+   "projectName": "string",
+   "recordBuildTime": "boolean"
+  }
+ },
+ "cancel_job": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "confirm",
+   "jobId"
+  ],
+  "required": [
+   "jobId"
+  ],
+  "types": {
+   "confirm": "boolean",
+   "jobId": "string"
+  }
+ },
+ "clean_project": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName",
+   "timeout"
+  ],
+  "required": [],
+  "types": {
+   "projectName": "string",
+   "timeout": "integer"
+  }
+ },
+ "create_git_branch": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "branch",
+   "checkout",
+   "projectName",
+   "setDefault",
+   "startPoint"
+  ],
+  "required": [
+   "projectName",
+   "branch"
+  ],
+  "types": {
+   "applicationId": "string",
+   "branch": "string",
+   "checkout": "boolean",
+   "projectName": "string",
+   "setDefault": "boolean",
+   "startPoint": "string"
+  }
+ },
+ "create_infobase": {
+  "destructive": false,
+  "enums": {
+   "access": [
+    "INFOBASE",
+    "OS"
+   ],
+   "applicationKind": [
+    "infobase",
+    "standaloneServer"
+   ],
+   "mode": [
+    "create",
+    "register"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "access",
+   "applicationKind",
+   "infobaseFile",
+   "infobaseName",
+   "mode",
+   "password",
+   "platform",
+   "projectName",
+   "setDefault",
+   "user"
+  ],
+  "required": [
+   "projectName",
+   "infobaseFile"
+  ],
+  "types": {
+   "access": "string",
+   "applicationKind": "string",
+   "infobaseFile": "string",
+   "infobaseName": "string",
+   "mode": "string",
+   "password": "string",
+   "platform": "string",
+   "projectName": "string",
+   "setDefault": "boolean",
+   "user": "string"
+  }
+ },
+ "create_launch_config": {
+  "destructive": false,
+  "enums": {
+   "clientType": [
+    "thin",
+    "thick",
+    "web"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "clientType",
+   "name",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "applicationId": "string",
+   "clientType": "string",
+   "name": "string",
+   "projectName": "string"
+  }
+ },
+ "create_metadata": {
+  "destructive": false,
+  "enums": {
+   "callType": [
+    "Before",
+    "After",
+    "Instead"
+   ],
+   "commonModuleKind": [
+    "Server",
+    "ServerCall",
+    "ClientManaged",
+    "ClientOrdinary",
+    "ClientServer",
+    "Global"
+   ],
+   "returnValuesReuse": [
+    "DontUse",
+    "DuringRequest",
+    "DuringSession"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "callType",
+   "commonModuleKind",
+   "expectedNotExists",
+   "fqn",
+   "generateContent",
+   "normalizeYo",
+   "objectFields",
+   "privileged",
+   "projectName",
+   "properties",
+   "returnValuesReuse",
+   "serverCall",
+   "setAsDefault",
+   "targetNamespace"
+  ],
+  "required": [
+   "projectName",
+   "fqn"
+  ],
+  "types": {
+   "callType": "string",
+   "commonModuleKind": "string",
+   "expectedNotExists": "boolean",
+   "fqn": "string",
+   "generateContent": "boolean",
+   "normalizeYo": "boolean",
+   "objectFields": "array<string>",
+   "privileged": "boolean",
+   "projectName": "string",
+   "properties": "array<object>",
+   "returnValuesReuse": "string",
+   "serverCall": "boolean",
+   "setAsDefault": "boolean",
+   "targetNamespace": "string"
+  }
+ },
+ "create_project": {
+  "destructive": false,
+  "enums": {
+   "projectKind": [
+    "configuration",
+    "extension",
+    "externalObjects"
+   ],
+   "purpose": [
+    "Customization",
+    "AddOn",
+    "Patch"
+   ],
+   "scriptVariant": [
+    "Russian",
+    "English"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "autoSortTopObjects",
+   "baseProjectName",
+   "comment",
+   "commonChecks",
+   "compatibilityMode",
+   "name",
+   "prefix",
+   "projectKind",
+   "projectName",
+   "purpose",
+   "scriptVariant",
+   "standardChecks",
+   "synonym",
+   "version"
+  ],
+  "required": [
+   "projectKind",
+   "name"
+  ],
+  "types": {
+   "autoSortTopObjects": "boolean",
+   "baseProjectName": "string",
+   "comment": "string",
+   "commonChecks": "boolean",
+   "compatibilityMode": "string",
+   "name": "string",
+   "prefix": "string",
+   "projectKind": "string",
+   "projectName": "string",
+   "purpose": "string",
+   "scriptVariant": "string",
+   "standardChecks": "boolean",
+   "synonym": "string",
+   "version": "string"
+  }
+ },
+ "debug_launch": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "externalInfobaseChanges",
+   "launchConfigurationName",
+   "projectName",
+   "restartIfRunning",
+   "updateBeforeLaunch"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "externalInfobaseChanges": "string",
+   "launchConfigurationName": "string",
+   "projectName": "string",
+   "restartIfRunning": "boolean",
+   "updateBeforeLaunch": "boolean"
+  }
+ },
+ "debug_status": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string"
+  }
+ },
+ "debug_yaxunit_tests": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "extensions",
+   "externalInfobaseChanges",
+   "launchConfigurationName",
+   "modules",
+   "projectName",
+   "tags",
+   "tests",
+   "timeout",
+   "updateBeforeLaunch",
+   "updateScope"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "extensions": "array<string>",
+   "externalInfobaseChanges": "string",
+   "launchConfigurationName": "string",
+   "modules": "array<string>",
+   "projectName": "string",
+   "tags": "array<string>",
+   "tests": "array<string>",
+   "timeout": "integer",
+   "updateBeforeLaunch": "boolean",
+   "updateScope": "string"
+  }
+ },
+ "delete_infobase": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "applicationId",
+   "confirm",
+   "deleteDatabaseFiles",
+   "deleteRegistration",
+   "infobaseName",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "applicationId": "string",
+   "confirm": "boolean",
+   "deleteDatabaseFiles": "boolean",
+   "deleteRegistration": "boolean",
+   "infobaseName": "string",
+   "projectName": "string"
+  }
+ },
+ "delete_launch_config": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "confirm",
+   "name"
+  ],
+  "required": [
+   "name"
+  ],
+  "types": {
+   "confirm": "boolean",
+   "name": "string"
+  }
+ },
+ "delete_metadata": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "confirm",
+   "force",
+   "fqn",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "fqn"
+  ],
+  "types": {
+   "confirm": "boolean",
+   "force": "boolean",
+   "fqn": "string",
+   "projectName": "string"
+  }
+ },
+ "delete_project": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "confirm",
+   "deleteContent",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "confirm": "boolean",
+   "deleteContent": "boolean",
+   "projectName": "string"
+  }
+ },
+ "enable_toolset": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "disable",
+   "toolsets"
+  ],
+  "required": [
+   "toolsets"
+  ],
+  "types": {
+   "disable": "boolean",
+   "toolsets": "array<string>"
+  }
+ },
+ "evaluate_expression": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "expression",
+   "frameRef"
+  ],
+  "required": [
+   "frameRef",
+   "expression"
+  ],
+  "types": {
+   "expression": "string",
+   "frameRef": "integer"
+  }
+ },
+ "export_common_picture": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "fqn",
+   "projectName",
+   "variant"
+  ],
+  "required": [
+   "projectName",
+   "fqn"
+  ],
+  "types": {
+   "fqn": "string",
+   "projectName": "string",
+   "variant": "string"
+  }
+ },
+ "export_configuration_to_xml": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "outputPath",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "outputPath"
+  ],
+  "types": {
+   "outputPath": "string",
+   "projectName": "string"
+  }
+ },
+ "find_references": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "limit",
+   "objectFqn",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "objectFqn"
+  ],
+  "types": {
+   "limit": "integer",
+   "objectFqn": "string",
+   "projectName": "string"
+  }
+ },
+ "generate_translation_strings": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "collectInterface",
+   "collectModel",
+   "collectModelType",
+   "fillUpType",
+   "projectName",
+   "providerId",
+   "storageId",
+   "targetLanguages"
+  ],
+  "required": [
+   "projectName",
+   "targetLanguages"
+  ],
+  "types": {
+   "collectInterface": "boolean",
+   "collectModel": "boolean",
+   "collectModelType": "string",
+   "fillUpType": "string",
+   "projectName": "string",
+   "providerId": "string",
+   "storageId": "string",
+   "targetLanguages": "array<string>"
+  }
+ },
+ "get_applications": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "get_check_description": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "checkId",
+   "projectName"
+  ],
+  "required": [
+   "checkId"
+  ],
+  "types": {
+   "checkId": "string",
+   "projectName": "string"
+  }
+ },
+ "get_configuration_properties": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "get_content_assist": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "column",
+   "contains",
+   "extendedDocumentation",
+   "filePath",
+   "limit",
+   "line",
+   "modulePath",
+   "offset",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "line",
+   "column"
+  ],
+  "types": {
+   "column": "integer",
+   "contains": "string",
+   "extendedDocumentation": "boolean",
+   "filePath": "string",
+   "limit": "integer",
+   "line": "integer",
+   "modulePath": "string",
+   "offset": "integer",
+   "projectName": "string"
+  }
+ },
+ "get_edt_version": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [],
+  "required": [],
+  "types": {}
+ },
+ "get_event_log": {
+  "destructive": false,
+  "enums": {
+   "order": [
+    "date_asc",
+    "date_desc"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "commentContains",
+   "event",
+   "eventContains",
+   "from",
+   "limit",
+   "logDir",
+   "metadataContains",
+   "offset",
+   "order",
+   "projectName",
+   "session",
+   "severity",
+   "to",
+   "user"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "commentContains": "string",
+   "event": "string",
+   "eventContains": "string",
+   "from": "string",
+   "limit": "integer",
+   "logDir": "string",
+   "metadataContains": "string",
+   "offset": "integer",
+   "order": "string",
+   "projectName": "string",
+   "session": "string",
+   "severity": "array<string>",
+   "to": "string",
+   "user": "array<string>"
+  }
+ },
+ "get_form_layout_snapshot": {
+  "destructive": false,
+  "enums": {
+   "mode": [
+    "compact",
+    "full"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "formPath",
+   "mode",
+   "projectName",
+   "refresh"
+  ],
+  "required": [],
+  "types": {
+   "formPath": "string",
+   "mode": "string",
+   "projectName": "string",
+   "refresh": "boolean"
+  }
+ },
+ "get_form_screenshot": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "formPath",
+   "projectName",
+   "refresh"
+  ],
+  "required": [],
+  "types": {
+   "formPath": "string",
+   "projectName": "string",
+   "refresh": "boolean"
+  }
+ },
+ "get_job_status": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "jobId",
+   "waitSeconds"
+  ],
+  "required": [
+   "jobId"
+  ],
+  "types": {
+   "jobId": "string",
+   "waitSeconds": "integer"
+  }
+ },
+ "get_markers": {
+  "destructive": false,
+  "enums": {
+   "markerKind": [
+    "bookmark",
+    "task"
+   ],
+   "priority": [
+    "high",
+    "normal",
+    "low"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "filePath",
+   "limit",
+   "markerKind",
+   "priority",
+   "projectName"
+  ],
+  "required": [],
+  "types": {
+   "filePath": "string",
+   "limit": "integer",
+   "markerKind": "string",
+   "priority": "string",
+   "projectName": "string"
+  }
+ },
+ "get_mcp_history": {
+  "destructive": false,
+  "enums": {
+   "status": [
+    "all",
+    "error",
+    "ok"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "includeBodies",
+   "includeStats",
+   "limit",
+   "minDurationMs",
+   "sinceMs",
+   "status",
+   "tool",
+   "untilMs"
+  ],
+  "required": [],
+  "types": {
+   "includeBodies": "boolean",
+   "includeStats": "boolean",
+   "limit": "integer",
+   "minDurationMs": "integer",
+   "sinceMs": "integer",
+   "status": "string",
+   "tool": "string",
+   "untilMs": "integer"
+  }
+ },
+ "get_metadata_details": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "assignable",
+   "full",
+   "language",
+   "objectFqns",
+   "projectName",
+   "roleObjectOffset"
+  ],
+  "required": [
+   "projectName",
+   "objectFqns"
+  ],
+  "types": {
+   "assignable": "boolean",
+   "full": "boolean",
+   "language": "string",
+   "objectFqns": "array<string>",
+   "projectName": "string",
+   "roleObjectOffset": "integer"
+  }
+ },
+ "get_metadata_objects": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "language",
+   "limit",
+   "metadataType",
+   "nameFilter",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "language": "string",
+   "limit": "integer",
+   "metadataType": "string",
+   "nameFilter": "string",
+   "projectName": "string"
+  }
+ },
+ "get_method_call_hierarchy": {
+  "destructive": false,
+  "enums": {
+   "direction": [
+    "callers",
+    "callees",
+    "outgoing"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "direction",
+   "extApiPrefix",
+   "limit",
+   "methodName",
+   "modulePath",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "modulePath"
+  ],
+  "types": {
+   "direction": "string",
+   "extApiPrefix": "string",
+   "limit": "integer",
+   "methodName": "string",
+   "modulePath": "string",
+   "projectName": "string"
+  }
+ },
+ "get_module_structure": {
+  "destructive": false,
+  "enums": {
+   "responseFormat": [
+    "concise",
+    "detailed"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "includeComments",
+   "includeVariables",
+   "modulePath",
+   "projectName",
+   "responseFormat"
+  ],
+  "required": [
+   "projectName",
+   "modulePath"
+  ],
+  "types": {
+   "includeComments": "boolean",
+   "includeVariables": "boolean",
+   "modulePath": "string",
+   "projectName": "string",
+   "responseFormat": "string"
+  }
+ },
+ "get_objects_by_tags": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "limit",
+   "projectName",
+   "tags"
+  ],
+  "required": [
+   "projectName",
+   "tags"
+  ],
+  "types": {
+   "limit": "integer",
+   "projectName": "string",
+   "tags": "array<string>"
+  }
+ },
+ "get_outgoing_structures": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "limit",
+   "method",
+   "modulePath",
+   "projectName",
+   "qualifier"
+  ],
+  "required": [
+   "projectName",
+   "modulePath"
+  ],
+  "types": {
+   "limit": "integer",
+   "method": "string",
+   "modulePath": "string",
+   "projectName": "string",
+   "qualifier": "string"
+  }
+ },
+ "get_platform_documentation": {
+  "destructive": false,
+  "enums": {
+   "category": [
+    "type",
+    "builtin"
+   ],
+   "language": [
+    "en",
+    "ru"
+   ],
+   "memberType": [
+    "method",
+    "property",
+    "constructor",
+    "event",
+    "all"
+   ],
+   "responseFormat": [
+    "concise",
+    "detailed"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "category",
+   "language",
+   "limit",
+   "memberName",
+   "memberType",
+   "projectName",
+   "responseFormat",
+   "typeName"
+  ],
+  "required": [
+   "typeName"
+  ],
+  "types": {
+   "category": "string",
+   "language": "string",
+   "limit": "integer",
+   "memberName": "string",
+   "memberType": "string",
+   "projectName": "string",
+   "responseFormat": "string",
+   "typeName": "string"
+  }
+ },
+ "get_problem_summary": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "get_profiling_results": {
+  "destructive": false,
+  "enums": {
+   "responseFormat": [
+    "concise",
+    "detailed"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "minFrequency",
+   "moduleFilter",
+   "responseFormat"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "minFrequency": "integer",
+   "moduleFilter": "string",
+   "responseFormat": "string"
+  }
+ },
+ "get_project_errors": {
+  "destructive": false,
+  "enums": {
+   "responseFormat": [
+    "concise",
+    "detailed"
+   ],
+   "severity": [
+    "ERRORS",
+    "BLOCKER",
+    "CRITICAL",
+    "MAJOR",
+    "MINOR",
+    "TRIVIAL",
+    "NONE"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "checkId",
+   "limit",
+   "objectFqns",
+   "objects",
+   "projectName",
+   "responseFormat",
+   "severity"
+  ],
+  "required": [],
+  "types": {
+   "checkId": "string",
+   "limit": "integer",
+   "objectFqns": "array<string>",
+   "objects": "array<string>",
+   "projectName": "string",
+   "responseFormat": "string",
+   "severity": "string"
+  }
+ },
+ "get_server_status": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [],
+  "required": [],
+  "types": {}
+ },
+ "get_subsystem_content": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "language",
+   "projectName",
+   "recursive",
+   "subsystemFqn"
+  ],
+  "required": [
+   "projectName",
+   "subsystemFqn"
+  ],
+  "types": {
+   "language": "string",
+   "projectName": "string",
+   "recursive": "boolean",
+   "subsystemFqn": "string"
+  }
+ },
+ "get_symbol_info": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "column",
+   "filePath",
+   "line",
+   "modulePath",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "line",
+   "column"
+  ],
+  "types": {
+   "column": "integer",
+   "filePath": "string",
+   "line": "integer",
+   "modulePath": "string",
+   "projectName": "string"
+  }
+ },
+ "get_tags": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "get_template_screenshot": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName",
+   "templatePath"
+  ],
+  "required": [
+   "projectName",
+   "templatePath"
+  ],
+  "types": {
+   "projectName": "string",
+   "templatePath": "string"
+  }
+ },
+ "get_tool_guide": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "toolName"
+  ],
+  "required": [
+   "toolName"
+  ],
+  "types": {
+   "toolName": "string"
+  }
+ },
+ "get_translation_project_info": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "get_variables": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "expandPath",
+   "frameIndex",
+   "frameRef",
+   "threadId"
+  ],
+  "required": [],
+  "types": {
+   "expandPath": "string",
+   "frameIndex": "integer",
+   "frameRef": "integer",
+   "threadId": "integer"
+  }
+ },
+ "go_to_definition": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "includeSource",
+   "modulePath",
+   "projectName",
+   "symbol"
+  ],
+  "required": [
+   "projectName",
+   "symbol"
+  ],
+  "types": {
+   "includeSource": "boolean",
+   "modulePath": "string",
+   "projectName": "string",
+   "symbol": "string"
+  }
+ },
+ "import_configuration_from_xml": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "importPath",
+   "projectName",
+   "projectNature",
+   "xmlVersion"
+  ],
+  "required": [
+   "importPath",
+   "projectName"
+  ],
+  "types": {
+   "importPath": "string",
+   "projectName": "string",
+   "projectNature": "string",
+   "xmlVersion": "string"
+  }
+ },
+ "list_breakpoints": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "list_common_pictures": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "language",
+   "limit",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "language": "string",
+   "limit": "integer",
+   "projectName": "string"
+  }
+ },
+ "list_configurations": {
+  "destructive": false,
+  "enums": {
+   "type": [
+    "attach",
+    "client",
+    "all"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "projectName",
+   "type"
+  ],
+  "required": [],
+  "types": {
+   "projectName": "string",
+   "type": "string"
+  }
+ },
+ "list_git_branches": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "projectName": "string"
+  }
+ },
+ "list_modules": {
+  "destructive": false,
+  "enums": {
+   "metadataType": [
+    "all",
+    "documents",
+    "catalogs",
+    "commonModules",
+    "informationRegisters",
+    "accumulationRegisters",
+    "reports",
+    "dataProcessors",
+    "exchangePlans",
+    "businessProcesses",
+    "tasks",
+    "constants",
+    "commonCommands",
+    "commonForms",
+    "webServices",
+    "httpServices"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "limit",
+   "metadataType",
+   "nameFilter",
+   "objectName",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "limit": "integer",
+   "metadataType": "string",
+   "nameFilter": "string",
+   "objectName": "string",
+   "projectName": "string"
+  }
+ },
+ "list_projects": {
+  "destructive": false,
+  "enums": {
+   "format": [
+    "md",
+    "json"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "format"
+  ],
+  "required": [],
+  "types": {
+   "format": "string"
+  }
+ },
+ "list_subsystems": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "language",
+   "limit",
+   "nameFilter",
+   "projectName",
+   "recursive"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "language": "string",
+   "limit": "integer",
+   "nameFilter": "string",
+   "projectName": "string",
+   "recursive": "boolean"
+  }
+ },
+ "list_toolsets": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [],
+  "required": [],
+  "types": {}
+ },
+ "modify_metadata": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "content",
+   "dcs",
+   "fqn",
+   "normalizeYo",
+   "projectName",
+   "properties",
+   "rights",
+   "roleProperties",
+   "template",
+   "templates"
+  ],
+  "required": [
+   "projectName",
+   "fqn"
+  ],
+  "types": {
+   "content": "array<object>",
+   "dcs": "object",
+   "fqn": "string",
+   "normalizeYo": "boolean",
+   "projectName": "string",
+   "properties": "array<object>",
+   "rights": "array<object>",
+   "roleProperties": "object",
+   "template": "object",
+   "templates": "array<object>"
+  }
+ },
+ "read_method_source": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "methodName",
+   "modulePath",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "modulePath",
+   "methodName"
+  ],
+  "types": {
+   "methodName": "string",
+   "modulePath": "string",
+   "projectName": "string"
+  }
+ },
+ "read_module_source": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "endLine",
+   "modulePath",
+   "projectName",
+   "startLine"
+  ],
+  "required": [
+   "projectName",
+   "modulePath"
+  ],
+  "types": {
+   "endLine": "integer",
+   "modulePath": "string",
+   "projectName": "string",
+   "startLine": "integer"
+  }
+ },
+ "remove_breakpoint": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "breakpointId",
+   "lineNumber",
+   "module",
+   "modulePath",
+   "projectName"
+  ],
+  "required": [],
+  "types": {
+   "breakpointId": "integer",
+   "lineNumber": "integer",
+   "module": "string",
+   "modulePath": "string",
+   "projectName": "string"
+  }
+ },
+ "rename_metadata_object": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "confirm",
+   "disableIndices",
+   "expectedHash",
+   "maxResults",
+   "newName",
+   "objectFqn",
+   "projectName",
+   "timeout"
+  ],
+  "required": [
+   "projectName",
+   "objectFqn",
+   "newName"
+  ],
+  "types": {
+   "confirm": "boolean",
+   "disableIndices": "string",
+   "expectedHash": "string",
+   "maxResults": "integer",
+   "newName": "string",
+   "objectFqn": "string",
+   "projectName": "string",
+   "timeout": "integer"
+  }
+ },
+ "resume": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "threadId"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "threadId": "integer"
+  }
+ },
+ "resync_to_disk": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "cleanDanglingReferences",
+   "fullExport",
+   "overwriteDiskEdits",
+   "projectName",
+   "revalidate"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "cleanDanglingReferences": "boolean",
+   "fullExport": "boolean",
+   "overwriteDiskEdits": "boolean",
+   "projectName": "string",
+   "revalidate": "boolean"
+  }
+ },
+ "revalidate_objects": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "objects",
+   "projectName"
+  ],
+  "required": [
+   "projectName"
+  ],
+  "types": {
+   "objects": "array<string>",
+   "projectName": "string"
+  }
+ },
+ "run_yaxunit_tests": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "debug",
+   "extensions",
+   "externalInfobaseChanges",
+   "launchConfigurationName",
+   "modules",
+   "projectName",
+   "tags",
+   "tests",
+   "timeout",
+   "updateBeforeLaunch",
+   "updateScope"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "debug": "boolean",
+   "extensions": "array<string>",
+   "externalInfobaseChanges": "string",
+   "launchConfigurationName": "string",
+   "modules": "array<string>",
+   "projectName": "string",
+   "tags": "array<string>",
+   "tests": "array<string>",
+   "timeout": "integer",
+   "updateBeforeLaunch": "boolean",
+   "updateScope": "string"
+  }
+ },
+ "search_in_code": {
+  "destructive": false,
+  "enums": {
+   "outputMode": [
+    "full",
+    "count",
+    "files"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "caseSensitive",
+   "contextLines",
+   "fileMask",
+   "isRegex",
+   "limit",
+   "maxResults",
+   "metadataType",
+   "outputMode",
+   "projectName",
+   "query"
+  ],
+  "required": [
+   "projectName",
+   "query"
+  ],
+  "types": {
+   "caseSensitive": "boolean",
+   "contextLines": "integer",
+   "fileMask": "string",
+   "isRegex": "boolean",
+   "limit": "integer",
+   "maxResults": "integer",
+   "metadataType": "string",
+   "outputMode": "string",
+   "projectName": "string",
+   "query": "string"
+  }
+ },
+ "set_branch_infobase": {
+  "destructive": false,
+  "enums": {
+   "action": [
+    "attach",
+    "detach"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "action",
+   "applicationId",
+   "branch",
+   "projectName",
+   "setDefault"
+  ],
+  "required": [
+   "projectName",
+   "branch",
+   "applicationId"
+  ],
+  "types": {
+   "action": "string",
+   "applicationId": "string",
+   "branch": "string",
+   "projectName": "string",
+   "setDefault": "boolean"
+  }
+ },
+ "set_breakpoint": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "lineNumber",
+   "module",
+   "modulePath",
+   "projectName"
+  ],
+  "required": [
+   "lineNumber"
+  ],
+  "types": {
+   "lineNumber": "integer",
+   "module": "string",
+   "modulePath": "string",
+   "projectName": "string"
+  }
+ },
+ "set_infobase_credentials": {
+  "destructive": false,
+  "enums": {
+   "access": [
+    "INFOBASE",
+    "OS"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "access",
+   "applicationId",
+   "launchConfigurationName",
+   "password",
+   "projectName",
+   "user"
+  ],
+  "required": [],
+  "types": {
+   "access": "string",
+   "applicationId": "string",
+   "launchConfigurationName": "string",
+   "password": "string",
+   "projectName": "string",
+   "user": "string"
+  }
+ },
+ "set_variable": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "frameIndex",
+   "frameRef",
+   "threadId",
+   "value",
+   "variableName"
+  ],
+  "required": [
+   "variableName",
+   "value"
+  ],
+  "types": {
+   "frameIndex": "integer",
+   "frameRef": "integer",
+   "threadId": "integer",
+   "value": "string",
+   "variableName": "string"
+  }
+ },
+ "start_profiling": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId"
+  ],
+  "required": [
+   "applicationId"
+  ],
+  "types": {
+   "applicationId": "string"
+  }
+ },
+ "step": {
+  "destructive": false,
+  "enums": {
+   "kind": [
+    "over",
+    "into",
+    "out"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "kind",
+   "threadId",
+   "timeout"
+  ],
+  "required": [
+   "threadId",
+   "kind"
+  ],
+  "types": {
+   "kind": "string",
+   "threadId": "integer",
+   "timeout": "integer"
+  }
+ },
+ "stop_profiling": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId"
+  ],
+  "required": [
+   "applicationId"
+  ],
+  "types": {
+   "applicationId": "string"
+  }
+ },
+ "switch_git_branch": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "branch",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "branch"
+  ],
+  "types": {
+   "branch": "string",
+   "projectName": "string"
+  }
+ },
+ "terminate_launch": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "all",
+   "applicationId",
+   "confirm",
+   "force",
+   "includeAttach",
+   "launchConfigurationName",
+   "projectName",
+   "timeout",
+   "timeoutSeconds"
+  ],
+  "required": [],
+  "types": {
+   "all": "boolean",
+   "applicationId": "string",
+   "confirm": "boolean",
+   "force": "boolean",
+   "includeAttach": "boolean",
+   "launchConfigurationName": "string",
+   "projectName": "string",
+   "timeout": "integer",
+   "timeoutSeconds": "integer"
+  }
+ },
+ "translate_configuration": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "projectName",
+   "targetLanguages"
+  ],
+  "required": [
+   "projectName",
+   "targetLanguages"
+  ],
+  "types": {
+   "projectName": "string",
+   "targetLanguages": "array<string>"
+  }
+ },
+ "update_database": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "applicationId",
+   "confirm",
+   "externalInfobaseChanges",
+   "fullUpdate",
+   "launchConfigurationName",
+   "projectName",
+   "terminateRunningClients"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "confirm": "boolean",
+   "externalInfobaseChanges": "string",
+   "fullUpdate": "boolean",
+   "launchConfigurationName": "string",
+   "projectName": "string",
+   "terminateRunningClients": "boolean"
+  }
+ },
+ "validate_query": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "dcsMode",
+   "projectName",
+   "queryText"
+  ],
+  "required": [
+   "projectName",
+   "queryText"
+  ],
+  "types": {
+   "dcsMode": "boolean",
+   "projectName": "string",
+   "queryText": "string"
+  }
+ },
+ "validate_xdto_package": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "fqn",
+   "limit",
+   "projectName"
+  ],
+  "required": [
+   "projectName",
+   "fqn"
+  ],
+  "types": {
+   "fqn": "string",
+   "limit": "integer",
+   "projectName": "string"
+  }
+ },
+ "wait_for_break": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "applicationId",
+   "timeout"
+  ],
+  "required": [],
+  "types": {
+   "applicationId": "string",
+   "timeout": "integer"
+  }
+ },
+ "write_module_source": {
+  "destructive": false,
+  "enums": {
+   "mode": [
+    "searchReplace",
+    "replace",
+    "append"
+   ],
+   "moduleType": [
+    "ObjectModule",
+    "ManagerModule",
+    "FormModule",
+    "CommandModule",
+    "RecordSetModule",
+    "Module"
+   ]
+  },
+  "has_confirm": false,
+  "params": [
+   "commandName",
+   "expectedHash",
+   "expectedSource",
+   "formName",
+   "mode",
+   "modulePath",
+   "moduleType",
+   "objectName",
+   "oldSource",
+   "overwrite",
+   "projectName",
+   "skipSyntaxCheck",
+   "source"
+  ],
+  "required": [
+   "projectName",
+   "source"
+  ],
+  "types": {
+   "commandName": "string",
+   "expectedHash": "string",
+   "expectedSource": "string",
+   "formName": "string",
+   "mode": "string",
+   "modulePath": "string",
+   "moduleType": "string",
+   "objectName": "string",
+   "oldSource": "string",
+   "overwrite": "boolean",
+   "projectName": "string",
+   "skipSyntaxCheck": "boolean",
+   "source": "string"
+  }
+ }
+}

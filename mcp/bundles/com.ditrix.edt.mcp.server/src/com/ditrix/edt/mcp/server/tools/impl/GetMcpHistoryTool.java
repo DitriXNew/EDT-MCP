@@ -175,15 +175,8 @@ public class GetMcpHistoryTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Return the recorded MCP call history (this server's in-memory ring of " //$NON-NLS-1$
-            + "request/response exchanges) so you can introspect your OWN traffic: which tools you " //$NON-NLS-1$
-            + "called, how long they took, which failed, and what has been filling your context. " //$NON-NLS-1$
-            + "Read-only (a snapshot; never mutates anything). Filters (AND): tool (substring over " //$NON-NLS-1$
-            + "the tool name / method), status (all|error|ok), minDurationMs, sinceMs/untilMs " //$NON-NLS-1$
-            + "(half-open epoch-ms window); newest first, capped by limit. Records are metadata only " //$NON-NLS-1$
-            + "by default; set includeBodies for the raw payloads (may carry infobase data), or " //$NON-NLS-1$
-            + "includeStats for the aggregated per-tool context-usage totals. Full parameters and " //$NON-NLS-1$
-            + "examples: call get_tool_guide('get_mcp_history')."; //$NON-NLS-1$
+        return "Diagnose MCP tool calls by reviewing recent requests, failures, timings, and context usage. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('get_mcp_history')."; //$NON-NLS-1$
     }
 
     @Override

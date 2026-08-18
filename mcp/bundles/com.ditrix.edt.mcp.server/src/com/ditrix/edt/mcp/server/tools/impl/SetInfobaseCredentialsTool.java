@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -121,16 +122,10 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Store infobase connection credentials (user/password) so update_database and " //$NON-NLS-1$
-            + "debug_launch can authenticate the update agent on an infobase that has a user list " //$NON-NLS-1$
-            + "(issue #194) — also for a standalone-server application wrapping an already-" //$NON-NLS-1$
-            + "registered infobase (issue #275). Selects an EXISTING infobase user (does not " //$NON-NLS-1$
-            + "create users); an empty password is valid (demo bases). Target by " //$NON-NLS-1$
-            + "launchConfigurationName (preferred) or projectName + applicationId (from " //$NON-NLS-1$
-            + "get_applications). With launchConfigurationName the launched 1C CLIENT is " //$NON-NLS-1$
-            + "configured too so it stops asking for a password (issue #359); with projectName + " //$NON-NLS-1$
-            + "applicationId only the agent is - check clientConfigured in the result. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
+        return "STORE infobase credentials (user/password) in EDT settings so update_database and " //$NON-NLS-1$
+            + "debug_launch can authenticate. The secret PERSISTS beyond this call, and addressing a " //$NON-NLS-1$
+            + "launch configuration also rewrites that configuration's client authentication. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
 
     @Override
@@ -506,7 +501,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         };
         storeJob.setUser(false);
         storeJob.setSystem(true);
-        storeJob.schedule();
+        McpJobs.schedule(storeJob);
 
         return awaitStoreJob(storeJob, jobResult, callerAnswered, projectName, applicationId);
     }

@@ -14,8 +14,11 @@ list_configurations(projectName="TestConfiguration")
 {"success":true,"count":1,"configurations":[
   {"name":"TestConfiguration Thin Client",
    "type":"com._1c.g5.v8.dt.launching.core.RuntimeClient",
-   "attach":false,"project":"TestConfiguration","running":false}]}
+   "attach":false,
+   "applicationId":"3f6c0b1e-9d28-49db-9273-2903d2ab859a",
+   "project":"TestConfiguration","running":false}]}
 ```
+`applicationId` is present for every EDT config: the configuration's real id when it has a readable application binding, otherwise a SYNTHETIC one minted from the name (`launch:<name>`, or `attach:<name>` for Attach configs). The synthetic forms exist for debug tracking — they are not application ids and `update_database`/`get_applications` cannot resolve them. Note `getApplicationIdFor` reads the attribute leniently, so an UNREADABLE binding also surfaces as the synthetic form.
 
 **Gotchas.**
 - The `name` field is what is passed as `launchConfigurationName` to `debug_launch`/`run_yaxunit_tests`/`debug_yaxunit_tests`.

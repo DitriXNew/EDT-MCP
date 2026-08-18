@@ -50,9 +50,8 @@ public class GetApplicationsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get list of applications (infobases) for a project. " + //$NON-NLS-1$
-               "Returns application ID, name, type, and update state. " + //$NON-NLS-1$
-               "Application ID is required for update_database and debug_launch tools."; //$NON-NLS-1$
+        return "Discover infobases connected to an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_applications')."; //$NON-NLS-1$
     }
     
     @Override
@@ -328,6 +327,14 @@ public class GetApplicationsTool implements IMcpTool
     /**
      * Returns human-readable description for update state.
      *
+     * <p>{@code UNKNOWN} is spelled out rather than echoed as "Unknown state" (#433): EDT's
+     * application delegates return it when they have no live connection to the infobase
+     * ({@code getUpdateState(equalityState, !isConnected(project, infobase))} — the disconnected
+     * branch wins before the equality state is even looked at), so the actionable reading is
+     * "not connected", not "something is wrong with the configuration". The wording stays
+     * hedged because a connected infobase whose equality state EDT does not recognise lands
+     * here too.
+     *
      * @param state the update state
      * @return description string
      */
@@ -336,7 +343,10 @@ public class GetApplicationsTool implements IMcpTool
         switch (state)
         {
             case UNKNOWN:
-                return "Unknown state"; //$NON-NLS-1$
+                return "Unknown - EDT could not read the state, typically because it is not " //$NON-NLS-1$
+                    + "connected to this infobase (for a standalone server the server may not " //$NON-NLS-1$
+                    + "be running); a connected infobase whose equality state EDT does not " //$NON-NLS-1$
+                    + "recognise lands here too"; //$NON-NLS-1$
             case INCREMENTAL_UPDATE_REQUIRED:
                 return "Incremental update required"; //$NON-NLS-1$
             case FULL_UPDATE_REQUIRED:

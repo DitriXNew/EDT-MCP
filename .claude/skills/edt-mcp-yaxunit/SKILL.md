@@ -82,17 +82,18 @@ Unconditional: `ЮТест.Упал("why")`, `ЮТест.Пропустить("r
 
 ## Running through MCP
 
-- **`run_yaxunit_tests`** — starts a run, polls up to `timeout` seconds, returns a JUnit-Markdown report (plus `report.md`/`junit.xml` on disk). Filters (arrays, AND): `extensions`, `modules`, `tests` (format `Module.Method`). With no filter — default `filter.extensions=["tests"]`.
-- **`debug_yaxunit_tests`** — runs in debug mode (breakpoints fire); then `wait_for_break` → `get_variables` / `evaluate_expression` / `step` / `resume`. Pin to one test (`tests=["Module.Method"]`) for predictability.
+- **`run_yaxunit_tests`** — starts a run, polls up to `timeout` seconds, returns a JUnit-Markdown report (plus `report.md`/`junit.xml` on disk). Filters (arrays; families AND-combined, values within a family OR-ed): `extensions`, `modules`, `tests` (format `Module.Method`), `tags`. With no filter — default `filter.extensions=["tests"]`. `tags` selects by the YAXUnit tags declared with `ЮТТесты.Тег(...)` — module-, suite- or test-level, case-insensitive, no exclusion syntax.
+- **`debug_yaxunit_tests`** — deprecated alias for `run_yaxunit_tests(debug=true)`. It uses the same named-job path: a short start returns the launch handle; otherwise Pending returns `jobId` for `get_job_status`. When the handle arrives, call `wait_for_break` → `get_variables` / `evaluate_expression` / `step` / `resume`. Pin to one test (`tests=["Module.Method"]`) for predictability.
 
 ### Repo gotchas
 
-- **A "TestConfiguration Thin Client" config without the `applicationId` attribute** → `updateBeforeLaunch=true` fails `Pre-launch preparation failed: Application not found`. **Fix:** first run `update_database(projectName="TestConfiguration", applicationId=<from get_applications>, confirm=true)` manually, then `run_yaxunit_tests(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=false)`.
+- **A "TestConfiguration Thin Client" config without the `applicationId` attribute** — both `run_yaxunit_tests` and `update_database` now derive the target from the project instead of failing (`Pre-launch preparation failed: Application not found`): the launch tools fall back to the project's default application, `update_database` only to its SINGLE application, refusing when the project has several. **If it is refused:** run `update_database(projectName="TestConfiguration", applicationId=<from get_applications>, confirm=true)` explicitly, then `run_yaxunit_tests(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=false)`.
 - **`update_database` is confirm-preview** → the first call returns a preview, then `confirm=true` is required (this is a destructive infobase operation, IRREVERSIBLE — only on explicit request).
 - **The extension must be deployed into the infobase** (`update_database`) before a run; after changing a test module on disk → `clean_project(projectName="TestConfiguration.tests")` (refresh from disk) → `update_database` (deploy) → `run_yaxunit_tests`.
 - **The EDT extension project is named `<base>.<extName>`** (e.g. `TestConfiguration.tests`) — use this name in `clean_project`/`get_project_errors`/`get_module_structure`. But `filter.extensions` takes the *extension configuration* name (`tests`).
 - **Expected EDT warnings** (NOT errors, the run is unaffected): `Variable 'ЮТест'/'ЮТТесты' is not defined` — the engine isn't in the EDT workspace, it resolves at runtime from the loaded `.cfe`; `common-module-type` — a BSP-style opinion about a server module's context flags, inapplicable to test modules.
-- The MCP client call timeout may be shorter than the server-side polling — set a small `timeout` (≈30) and on `Pending` re-call with the same arguments (the tool re-attaches by run-key, doesn't spawn a second run).
+- The MCP client call timeout may be shorter than the run — set a small `timeout` (≈30). On `Pending`, keep the returned `jobId` and poll `get_job_status`; do not reconstruct the start arguments to address a known run. A repeated start is only a live duplicate guard, not the polling interface.
+- To stop a live run, preview with `cancel_job(jobId=...)` first. Confirmed YAXUnit cancellation kills the client but does **not** roll back the infobase; the report is partial or absent. A committed non-YAXUnit job without an owner-declared cancellation capability remains `alreadyCommitted`.
 
 ## Example in the repo
 

@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.runtime.ILog;
@@ -32,6 +34,7 @@ import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.jgit.storage.file.FileBasedConfig;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.eclipse.jgit.util.FS;
 import org.eclipse.jgit.util.SystemReader;
 import org.junit.After;
@@ -39,6 +42,7 @@ import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
+import com.ditrix.edt.mcp.server.utils.git.GitCommonDirectory;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -155,6 +159,12 @@ public class GitToolStoredRemoteTest
     /** Temporary directories created by a test, deleted in {@link #closeAndDeleteRepositories()}. */
     private final List<File> temporaries = new ArrayList<>();
 
+    /**
+     * Linked worktrees opened by {@link #linkedWorktreeOf} - owned by the caller (they come from
+     * {@code discoverFromDirectory}, not from EGit's cache), so they are closed here.
+     */
+    private final List<Repository> linkedRepositories = new ArrayList<>();
+
     @After
     public void closeAndDeleteRepositories()
     {
@@ -170,6 +180,18 @@ public class GitToolStoredRemoteTest
             }
         }
         opened.clear();
+        for (Repository linked : linkedRepositories)
+        {
+            try
+            {
+                linked.close();
+            }
+            catch (RuntimeException e) // NOSONAR cleanup must never mask the failure under test
+            {
+                // Nothing to do: the directory is deleted below either way.
+            }
+        }
+        linkedRepositories.clear();
         for (File directory : temporaries)
         {
             deleteRecursively(directory);
@@ -1019,9 +1041,17 @@ public class GitToolStoredRemoteTest
                 refusal.contains(entry));
             assertRefusalIsActionable(refusal);
             // A legacy file is not configuration at all, so the remedy is to delete it - 'git remote
-            // remove' does not know it exists.
+            // remove' does not know it exists. The remedy has to say WHICH file without handing out
+            // a path that does not exist: in a linked worktree '.git' is a FILE and these
+            // directories live in the shared repository, so 'rev-parse --git-path' is what names
+            // them in every layout. Both halves are pinned, because dropping either one leaves the
+            // caller in the retry loop this text exists to prevent.
             assertTrue("a legacy file must be cleared by deleting it: " + refusal, //$NON-NLS-1$
-                refusal.contains(".git/remotes/<name>")); //$NON-NLS-1$
+                refusal.contains("Delete the file itself")); //$NON-NLS-1$
+            assertTrue("...and the remedy must locate it in EVERY layout, so it points at " //$NON-NLS-1$
+                + "'rev-parse --git-path' rather than at a bare '.git/...' path that a linked " //$NON-NLS-1$
+                + "worktree does not have: " + refusal, //$NON-NLS-1$
+                refusal.contains("git rev-parse --git-path " + directory)); //$NON-NLS-1$
             assertRefusalLeaksNothing(refusal);
         }
     }
@@ -1493,6 +1523,810 @@ public class GitToolStoredRemoteTest
         }
     }
 
+    // ==================== a LINKED worktree: the shared repository is what git reads ====================
+
+    // Inside a linked worktree ('git worktree add') git reads its configuration and both legacy
+    // remote directories from the SHARED repository the worktree was added to, never from the
+    // worktree's own git directory - measured on git 2.35.1, one probe at a time:
+    //
+    //   $GIT_COMMON_DIR/remotes/legacy  -> 'git remote get-url legacy' prints it, credential and all
+    //   $GIT_DIR/remotes/wtonly         -> 'error: No such remote' - IGNORED
+    //   --git-path config / remotes / branches   -> all resolve into the shared directory
+    //   --git-path config.worktree               -> stays in the worktree's own git directory
+    //
+    // JGit 6.8 knows none of it: 'commondir' appears nowhere in its sources and FileRepository reads
+    // '<git dir>/config', which does not exist there - so this check used to enumerate no remotes at
+    // all and approve because it had found nothing, which is indistinguishable from having looked.
+    //
+    // Both halves of that blindness - the configuration and the legacy files - are closed together
+    // here, because they had one cause. The fixtures below are built BY HAND rather than by shelling
+    // out to 'git worktree add': it keeps these unit tests free of a git executable, and the layout
+    // is the one measured above.
+
+    @Test
+    public void testARemoteInTheSHAREDConfigIsJudgedFromALinkedWorktree() throws Exception
+    {
+        // The heart of it: every remote of every ordinary clone lives in the shared config, so a
+        // check that cannot see that file sees nothing whatsoever in a linked worktree.
+        Repository shared = newRepository("git-stored-linked-shared"); //$NON-NLS-1$
+        storeRemoteUrls(shared, ORIGIN, URL_KEY, poisonedUrl(SPACE));
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("git reads the SHARED config in a linked worktree and 'remote -v' prints " //$NON-NLS-1$
+            + "this remote there - it must be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the remote: " + refusal, refusal.contains(ORIGIN)); //$NON-NLS-1$
+        assertRefusalIsActionable(refusal);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testALegacyFileInTheSHAREDDirectoryIsJudgedFromALinkedWorktree() throws Exception
+    {
+        // The other half. 'remotes/' and 'branches/' are listed in git's own set of paths that live
+        // in the common directory, so a linked worktree reads exactly the main worktree's files.
+        for (String directory : List.of("remotes", "branches")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Repository shared = newRepository("git-stored-linked-legacy-" + directory); //$NON-NLS-1$
+            File legacy = new File(shared.getDirectory(), directory);
+            assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+                legacy.mkdirs() || legacy.isDirectory());
+            // A branches/ file is a bare URL, a remotes/ file a 'URL: ' line - two formats, and the
+            // check reads each on its own terms.
+            String content = "remotes".equals(directory) //$NON-NLS-1$
+                ? "URL: " + poisonedUrl(SPACE) + "\n" //$NON-NLS-1$ //$NON-NLS-2$
+                : poisonedUrl(SPACE) + "\n"; //$NON-NLS-1$
+            Files.write(new File(legacy, "shared-legacy").toPath(), //$NON-NLS-1$
+                content.getBytes(StandardCharsets.UTF_8));
+            Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+            String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+            assertNotNull("'git remote get-url' inside a linked worktree prints the SHARED " //$NON-NLS-1$
+                + directory + "/<name> verbatim - it must be judged", refusal); //$NON-NLS-1$
+            assertTrue("the refusal must name the file: " + refusal, //$NON-NLS-1$
+                refusal.contains("shared-legacy")); //$NON-NLS-1$
+            assertRefusalLeaksNothing(refusal);
+        }
+    }
+
+    @Test
+    public void testTheWorktreeConfigIsSwitchedOnByTheSHAREDConfigInALinkedWorktree() throws Exception
+    {
+        // The switch and the file it switches on live in DIFFERENT places here:
+        // 'extensions.worktreeConfig' in the shared config, 'config.worktree' beside the worktree's
+        // own HEAD. Measured - that pair makes 'remote -v' print the remote from the linked worktree
+        // and NOT from the main one. Reading the switch from '<git dir>/config' would find nothing
+        // and silently turn this whole layer off, which is the failure mode that looks like success.
+        Repository shared = newRepository("git-stored-linked-wtconfig"); //$NON-NLS-1$
+        // repositoryformatversion 0 on purpose: the default every ordinary repository carries, and
+        // git was measured to honour the extension at that version all the same.
+        Files.write(new File(shared.getDirectory(), CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 0\n[extensions]\n\tworktreeConfig = true\n") //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"wtonly\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("the switch lives in the SHARED config and the file beside the worktree - " //$NON-NLS-1$
+            + "git reads both, so this remote must be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the remote: " + refusal, refusal.contains("wtonly")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testAnEditBehindJGitsCacheIsSeenInTheSHAREDConfigToo() throws Exception
+    {
+        // The same case as testAConfigEditedBehindJGitsCacheIsStillJudged, on the shared file: the
+        // layer added for a linked worktree must be built FRESH on every call. Cache it once and
+        // this goes green for ever while 'remote -v' prints the credential written afterwards.
+        Repository shared = newRepository("git-stored-linked-fresh"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        File sharedConfig = new File(shared.getDirectory(), CONFIG_FILE);
+        Files.write(sharedConfig.toPath(),
+            configText("https://" + HOST + "/team/repo.git").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("fixture: the clean state must not be refused, or the edit below proves nothing", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+
+        Files.write(sharedConfig.toPath(),
+            configText(poisonedUrl(SPACE)).getBytes(StandardCharsets.UTF_8));
+
+        assertNotNull("the shared config is re-read on every call - a credential written after the " //$NON-NLS-1$
+            + "first one must still be refused", GitTool.storedRemoteRefusal(linked, List.of(PUSH))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATerminatorOnlyPointerStillGetsItsConfigurationJudged() throws Exception
+    {
+        // The finding behind this, stated plainly: refusing a terminator-only commondir looked like
+        // caution and was a blind spot wearing a refusal's clothes. git resolves such a pointer to
+        // the worktree's own git directory and reads the configuration THERE - so a poisoned remote
+        // sitting in it was printed by 'remote -v' while this tool declined every remote command
+        // without ever opening the file.
+        //
+        // Now the pointer resolves the way git resolves it, and the config it lands on is judged.
+        Repository shared = newRepository("git-terminator-only-config"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), "commondir").toPath(), //$NON-NLS-1$
+            "\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        // The admin directory becomes the shared one, so ITS config is what git reads.
+        Files.write(new File(linked.getDirectory(), CONFIG_FILE).toPath(),
+            ("[remote \"admin-only\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("git reads this configuration - 'remote -v' prints the remote from it - so " //$NON-NLS-1$
+            + "it must be judged, not declined past", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the remote: " + refusal, //$NON-NLS-1$
+            refusal.contains("admin-only")); //$NON-NLS-1$
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testOnlyTheFirstRecordOfABranchesFileIsJudged() throws Exception
+    {
+        // MEASURED on git 2.35.1: a branches/ file holds ONE record, and git reads only that one.
+        // With a second line carrying a credential, 'git remote get-url' printed
+        // 'https://example.com/first.git' and 'git remote show -n' the same - the second line
+        // appeared nowhere in either.
+        //
+        // So judging the tail refuses every remote, push, fetch and pull of a repository over text
+        // no command can reach. Stale junk after the record is exactly the sort of thing an old
+        // repository carries, and a false refusal breaks what worked while a miss leaves it as it
+        // was - the asymmetry this whole check is built on.
+        Repository shared = newRepository("git-branches-first-record"); //$NON-NLS-1$
+        File legacy = new File(shared.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "two").toPath(), //$NON-NLS-1$
+            ("https://" + HOST + "/first.git#main\n" + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+        // Positive control: that same poisoned value on the FIRST line IS refused, so a green
+        // result below cannot be the predicate failing to recognise it.
+        Repository control = newRepository("git-branches-first-record-control"); //$NON-NLS-1$
+        File controlLegacy = new File(control.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the control legacy directory must exist", //$NON-NLS-1$
+            controlLegacy.mkdirs() || controlLegacy.isDirectory());
+        Files.write(new File(controlLegacy, "two").toPath(), //$NON-NLS-1$
+            (poisonedUrl(SPACE) + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        assertNotNull("control: on the FIRST line this value is refused", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(control, List.of(PUSH)));
+
+        assertNull("git reads only the first record of a branches/ file, so a credential in the " //$NON-NLS-1$
+            + "tail is text no command can print - refusing over it would break a working " //$NON-NLS-1$
+            + "repository", GitTool.storedRemoteRefusal(shared, List.of(PUSH))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABranchesRecordIsTRIMMEDBeforeItIsJudged() throws Exception
+    {
+        // MEASURED on git 2.35.1, one shape at a time:
+        //   branches/b holding a single TAB   -> 'No such remote' (trimmed to nothing, ignored)
+        //   '   <url>' / '<url>   ' / '<url>\t' / '<url>\r\r' -> the URL, clean
+        // So padding around the record is not content, and judging it refused a repository over
+        // bytes no command prints. A lone tab was the sharpest case: git ignores the file entirely
+        // and we called the tab an unmaskable control character.
+        Repository repo = newRepository("git-branches-trimmed"); //$NON-NLS-1$
+        File legacy = new File(repo.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "padded").toPath(), //$NON-NLS-1$
+            "\t\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        assertNull("a record that trims to nothing is a file git ignores - refusing over its " //$NON-NLS-1$
+            + "padding breaks a working repository", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // And padding around a HEALTHY url must not turn it into a refusal either.
+        Files.write(new File(legacy, "padded").toPath(), //$NON-NLS-1$
+            ("  https://" + HOST + "/team/repo.git  \n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("nor may padding around a healthy URL", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // Positive control: the trimming must not swallow the thing this check exists for.
+        Files.write(new File(legacy, "padded").toPath(), //$NON-NLS-1$
+            ("  " + poisonedUrl(SPACE) + "  \n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("a poisoned URL is still refused with padding around it - otherwise this " //$NON-NLS-1$
+            + "trimming would be a way past the check", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testEveryLineOfARemotesFileIsStillJudged() throws Exception
+    {
+        // The other half of the branches/ change, and nothing pinned it: a remotes/ file's
+        // URL:/Push:/Pull: lines are ALL live, so limiting that format to one record the way
+        // branches/ is limited would be a real miss. An accidental single limit for both
+        // directories would otherwise have passed every existing test.
+        Repository repo = newRepository("git-remotes-all-lines"); //$NON-NLS-1$
+        File legacy = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "multi").toPath(), //$NON-NLS-1$
+            ("URL: https://" + HOST + "/clean.git\nPush: " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a remotes/ file's later lines are live - 'git remote get-url' prints what " //$NON-NLS-1$
+            + "stands on them - so a credential on the SECOND line must still be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the file: " + refusal, refusal.contains("multi")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testWorktreeConfigIsNotArmedFromAnINCLUDEDFile() throws Exception
+    {
+        // MEASURED on git 2.35.1, and the control is what settles it:
+        //
+        //   switch via [include]                  -> 'git config --get extensions.worktreeConfig'
+        //                                            says true, but 'git remote -v' prints NOTHING
+        //                                            from config.worktree
+        //   same switch written in .git/config    -> 'git remote -v' prints it
+        //
+        // The only difference is where the switch sits. Our reader followed includes, so it armed
+        // the per-worktree file where git leaves it alone, and a stale config.worktree then took
+        // every protected command off a repository git considers clean.
+        Repository repo = newRepository("git-worktree-switch-included"); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), "inc-ext").toPath(), //$NON-NLS-1$
+            "[extensions]\n\tworktreeConfig = true\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            "[include]\n\tpath = inc-ext\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"stale\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertNull("an INCLUDED switch arms nothing for git, so config.worktree is a file it does " //$NON-NLS-1$
+            + "not read - refusing over it breaks a repository git considers clean", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // Positive control: written DIRECTLY in the shared config, the same switch DOES arm it, so
+        // this cannot pass by the per-worktree file having stopped being read at all.
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            "[extensions]\n\tworktreeConfig = true\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        assertNotNull("control: a switch in the shared config itself still arms config.worktree", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // A UTF-8 BOM in front of that same switch must not change the answer: git accepts one and
+        // FileBasedConfig.load() strips it, so reading the raw text without stripping would turn a
+        // valid configuration into the unreadable-config refusal.
+        // The BOM is built numerically, with no escape and no raw byte: this file is compiled by
+        // Tycho, whose source encoding is not guaranteed to be UTF-8, and every attempt to write
+        // the escape through a shell layer lost it.
+        char bom = (char)0xFEFF;
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            (bom + "[extensions]\n\tworktreeConfig = true\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        String withBom = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a BOM in front of the switch is accepted by git, so it must still arm " //$NON-NLS-1$
+            + "config.worktree", withBom); //$NON-NLS-1$
+        // NOT just "some refusal": dropping the BOM strip makes the parse THROW, which produces the
+        // generic unreadable-config refusal - also non-null. An assertion that only checked for a
+        // refusal could not tell "armed correctly" from "failed to read", which is the very shape
+        // of defect this whole change is about, turning up in its own test.
+        assertTrue("...and it must be the refusal for the STALE REMOTE, not the generic " //$NON-NLS-1$
+            + "unreadable-config one - those are different outcomes and only one of them means " //$NON-NLS-1$
+            + "the switch was read: " + withBom, withBom.contains("stale")); //$NON-NLS-1$
+    }
+
+    // ---- what must STAY silent: the places git does NOT read ----
+    //
+    // Every fixture below carries a value that WOULD be refused if it were judged. That is the
+    // whole point: a green result then means "this source was not read", not "there was nothing
+    // there". A clean fixture would go green with or without the fix and prove neither.
+
+    @Test
+    public void testAPoisonedConfigInTheWORKTREEsOwnGitDirIsNotJudged() throws Exception
+    {
+        // git ignores '<git dir>/config' in a linked worktree - it reads the shared one instead.
+        // JGit reads it all the same, so it arrives as the top link of the chain, and the chain does
+        // not merge the way one file does: getSubsections UNIONS every link and getStringList
+        // CONCATENATES them, so an entry here could be neither hidden nor shadowed. Refusing over a
+        // file git never opens is the expensive mistake - it takes a healthy repository off the air.
+        Repository shared = newRepository("git-stored-linked-ignored-config"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), CONFIG_FILE).toPath(),
+            ("[remote \"ignored-by-git\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+        // Positive control: the very same bytes in the SHARED config ARE refused, so a green result
+        // below cannot be the predicate failing to recognise this value.
+        Repository control = newRepository("git-stored-linked-ignored-control"); //$NON-NLS-1$
+        Files.write(new File(control.getDirectory(), CONFIG_FILE).toPath(),
+            ("[remote \"ignored-by-git\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+        assertNotNull("control: this exact entry must be refused when git WOULD read it", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linkedWorktreeOf(control, "wt"), List.of(PUSH))); //$NON-NLS-1$
+
+        assertNull("git does not read '<git dir>/config' in a linked worktree, so refusing over " //$NON-NLS-1$
+            + "it would block a repository git is perfectly happy with", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAPoisonedLegacyFileInTheWORKTREEsOwnGitDirIsNotJudged() throws Exception
+    {
+        // Measured: the same file in the worktree's own git directory answers 'No such remote'.
+        // git's repository-layout says it outright - when a common directory is set, the worktree's
+        // own 'remotes' and 'branches' are ignored and the shared ones used instead.
+        Repository shared = newRepository("git-stored-linked-ignored-legacy"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        File legacy = new File(linked.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", legacy.mkdirs()); //$NON-NLS-1$
+        Files.write(new File(legacy, "ignored-by-git").toPath(), //$NON-NLS-1$
+            ("URL: " + poisonedUrl(SPACE) + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control: the identical file in the SHARED directory IS refused (asserted by
+        // testALegacyFileInTheSHAREDDirectoryIsJudgedFromALinkedWorktree), so this value is one the
+        // predicate does recognise.
+
+        assertNull("git ignores the worktree's own legacy files - judging them would invent a " //$NON-NLS-1$
+            + "refusal over a file no command can reach", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAHealthyLegacyFileInTheSHAREDDirectoryIsNotRefused() throws Exception
+    {
+        // The #358 regression, replayed on the path that can finally reach the file: stripping the
+        // 'URL:' key demanded a ': ' and this perfectly ordinary line kept its key, whose colon then
+        // read as the password marker in front of the '@'. That refused EVERY remote command of a
+        // healthy repository. It could not fire in a linked worktree before, because the file was
+        // invisible there; it can now, so it is pinned here as well.
+        Repository shared = newRepository("git-stored-linked-healthy-legacy"); //$NON-NLS-1$
+        File legacy = new File(shared.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "ssh").toPath(), //$NON-NLS-1$
+            "URL:git@github.com:acme/repo.git\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+        assertNull("an ordinary ssh remote in a legacy file must pass - refusing it would block " //$NON-NLS-1$
+            + "every remote command of a healthy repository", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAHealthyLinkedWorktreeIsNotRefused() throws Exception
+    {
+        // Green with or without the fix, and recorded as such: this is a regression guard, not
+        // evidence that anything was read.
+        Repository shared = newRepository("git-stored-linked-healthy"); //$NON-NLS-1$
+        storeRemoteUrls(shared, ORIGIN, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+        assertNull("nothing about a healthy linked worktree may be refused", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    // ---- what the check may not do to a repository it does not own ----
+
+    @Test
+    public void testTheCheckLeavesTheSharedRepositoryObjectUntouched() throws Exception
+    {
+        // The Repository is EGit's cached, reference-counted instance, handed to list_git_branches
+        // and the branch tools as well - GitRepositoryResolver borrows it and never closes it. A
+        // check has no business changing what they read, so the layers built here are private to the
+        // call: splice the shared config into repo.getConfig() to "save a read" and this goes red.
+        Repository shared = newRepository("git-stored-linked-no-mutation"); //$NON-NLS-1$
+        storeRemoteUrls(shared, ORIGIN, URL_KEY, poisonedUrl(SPACE));
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        StoredConfig before = linked.getConfig();
+        Config beforeBase = before.getBaseConfig();
+        // The identity assertions below are cheap and are NOT what carries this test - JGit keeps
+        // the same config object and the same base reference on its own. What carries it is the
+        // pair of CONTENT assertions: the shared config declares a remote, JGit cannot see it here,
+        // and it must still be unable to see it afterwards.
+        assertTrue("fixture: JGit must see no remote here, or the assertion below is vacuous", //$NON-NLS-1$
+            before.getSubsections(REMOTE_SECTION).isEmpty());
+        Set<String> beforeSections = new TreeSet<>(before.getSections());
+
+        assertNotNull("fixture: the shared remote must be refused, so the check really ran", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+
+        assertTrue("the repository's own configuration object must be the same one", //$NON-NLS-1$
+            before == linked.getConfig());
+        assertTrue("...and its base chain must be the same one", //$NON-NLS-1$
+            beforeBase == linked.getConfig().getBaseConfig());
+        assertTrue("...and it must still be unable to see the shared remote: the check builds a " //$NON-NLS-1$
+            + "private view, it does not enrich shared state", //$NON-NLS-1$
+            linked.getConfig().getSubsections(REMOTE_SECTION).isEmpty());
+        assertEquals("...and no section of any kind may have appeared in it either - 'remote' is " //$NON-NLS-1$
+            + "the one this check reads, but enriching the shared object with ANY of the shared " //$NON-NLS-1$
+            + "file's content is the thing being ruled out", //$NON-NLS-1$
+            beforeSections, new TreeSet<>(linked.getConfig().getSections()));
+    }
+
+    // ---- the chain the shared layer is built ON ----
+
+    @Test
+    public void testTheInheritedConfigurationSurvivesTheSharedLayer() throws Exception
+    {
+        // Nothing built out of FILES can catch this: a fixture cannot plant a remote in the
+        // machine's ~/.gitconfig, so a mutation that passes 'null' as the shared layer's base -
+        // dropping the user and system configuration, and only inside a linked worktree - stays
+        // green through every test above. Driven through the seam instead, with a chain of its own.
+        Repository shared = newRepository("git-stored-linked-inherited"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Config system = new Config();
+        system.setString(REMOTE_SECTION, "inherited-remote", URL_KEY, //$NON-NLS-1$
+            "https://" + HOST + "/inherited.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Stands in for the link JGit puts on top of the inherited chain.
+        Config repositoryLayer = new Config(system);
+
+        Config effective = GitTool.effectiveConfig(linked, repositoryLayer,
+            GitCommonDirectory.of(linked.getDirectory()));
+
+        assertTrue("a remote inherited from the user or system configuration is read by git in a " //$NON-NLS-1$
+            + "linked worktree exactly as anywhere else - adding the shared layer may not cost it", //$NON-NLS-1$
+            effective.getSubsections(REMOTE_SECTION).contains("inherited-remote")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheIgnoredRepositoryLayerIsDroppedOnlyWhenItIsIdentified() throws Exception
+    {
+        // Two branches, and the second is the one that matters. Dropping a link BLINDLY would, on a
+        // repository whose configuration is not shaped the way JGit 6.8 shapes it, throw away the
+        // USER configuration and stop judging remotes inherited from it - the very blindness this
+        // change removes. So the link comes off only when it can be named, by the same expression
+        // FileRepository built it from; anything else keeps the whole chain.
+        Repository shared = newRepository("git-stored-linked-drop"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        GitCommonDirectory common =
+            GitCommonDirectory.of(linked.getDirectory());
+        assertTrue("fixture: this must be recognised as a linked worktree", common.linked()); //$NON-NLS-1$
+        Config inherited = new Config();
+
+        StoredConfig ignoredFile = new FileBasedConfig(inherited,
+            linked.getFS().resolve(linked.getDirectory(), CONFIG_FILE), linked.getFS());
+        assertTrue("the link git ignores here is identified and taken out", //$NON-NLS-1$
+            inherited == GitTool.inheritedChain(linked, ignoredFile, common));
+
+        StoredConfig someOtherFile = new FileBasedConfig(inherited,
+            new File(linked.getDirectory(), "config.worktree"), linked.getFS()); //$NON-NLS-1$
+        assertTrue("an unrecognised shape keeps its whole chain - guessing there would drop the " //$NON-NLS-1$
+            + "inherited configuration instead", //$NON-NLS-1$
+            someOtherFile == GitTool.inheritedChain(linked, someOtherFile, common));
+    }
+
+    @Test
+    public void testAnOrdinaryCloneKeepsItsWholeChain() throws Exception
+    {
+        // The negative control for the branch above: outside a linked worktree the repository's own
+        // config is exactly what git reads, and taking it out would blind the check on every
+        // ordinary clone - which is every repository this tool normally meets.
+        Repository repo = newRepository("git-stored-ordinary-chain"); //$NON-NLS-1$
+        GitCommonDirectory common =
+            GitCommonDirectory.of(repo.getDirectory());
+        assertFalse("fixture: an ordinary clone is not a linked worktree", common.linked()); //$NON-NLS-1$
+
+        StoredConfig config = repo.getConfig();
+
+        assertTrue("an ordinary clone's chain is handed on untouched", //$NON-NLS-1$
+            config == GitTool.inheritedChain(repo, config, common));
+    }
+
+    // ---- a commondir that cannot be resolved ----
+
+    @Test
+    public void testAnUnresolvableCommonDirIsRefusedAndNamesItsOwnRepair() throws Exception
+    {
+        // Fail closed: that one file says where the whole shared repository is, so without it the
+        // effective set of remotes cannot be established. For THIS fault - a pointer naming a
+        // directory that does not exist - git dies too ('fatal: not a git repository', measured),
+        // so the refusal cannot take a working repository off the air.
+        //
+        // What the refusal must NOT say is 'git worktree repair'. Measured on git 2.35.1: pointed
+        // at exactly this worktree it left the file byte for byte unchanged and reported
+        // 'repair: .git file broken' about an intact .git file. An assertion that merely looked for
+        // that phrase would pass on the old, wrong advice AND on the warning that replaced it -
+        // which is what the previous version of this test did.
+        Repository shared = newRepository("git-stored-linked-broken-commondir"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), "commondir").toPath(), //$NON-NLS-1$
+            "../nowhere-at-all\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("a commondir that resolves to nothing must be refused, not run blind", //$NON-NLS-1$
+            refusal);
+        assertTrue("the refusal must name the file at fault: " + refusal, //$NON-NLS-1$
+            refusal.contains("commondir")); //$NON-NLS-1$
+        // The fixture points at nothing, and this tool cannot tell "the pointer is wrong" from
+        // "the pointer is right and the target is gone" - a dangling link resolves to nothing just
+        // as a wrong path does. So the repair must name BOTH, or an operator with a vanished share
+        // is sent to edit a file that is correct.
+        assertTrue("the repair must offer the pointer as one possibility: " + refusal, //$NON-NLS-1$
+            refusal.contains("may name the wrong place")); //$NON-NLS-1$
+        assertTrue("...and the missing target as the other: " + refusal, //$NON-NLS-1$
+            refusal.contains("what it names may be gone")); //$NON-NLS-1$
+        assertTrue("...telling them to look at the target FIRST, since it needs no edit: " //$NON-NLS-1$
+            + refusal, refusal.contains("Look at the target first")); //$NON-NLS-1$
+        assertFalse("...and it must not demand ONE LINE, which this code does not require: only " //$NON-NLS-1$
+            + "TRAILING terminators are stripped, so a path with a newline inside it resolves - " //$NON-NLS-1$
+            + "and on POSIX that is a legal filename: " + refusal, //$NON-NLS-1$
+            refusal.contains("exactly one line")); //$NON-NLS-1$
+        assertTrue("...and it must warn AGAINST the command that does not fix this, or an " //$NON-NLS-1$
+            + "operator follows the obvious one and gets the same refusal back: " + refusal, //$NON-NLS-1$
+            refusal.contains("Do NOT reach for 'git worktree repair'"));
+        assertFalse("...and it must not quote what the file said: " + refusal, //$NON-NLS-1$
+            refusal.contains("nowhere-at-all")); //$NON-NLS-1$
+        assertRefusalLeaksNothing(refusal);
+
+        // It must name THE fault this pointer hit - and only it. The earlier version pasted in every
+        // ours() reason and left the operator to work out which line was theirs; an assertion over
+        // that aggregate passed no matter which fault the fixture actually produced, which is a
+        // predicate that cannot fail for the reason it exists.
+        GitCommonDirectory.Fault expected = GitCommonDirectory.Fault.NOT_A_DIRECTORY;
+        assertTrue("the refusal must name the fault this pointer actually hit: " + refusal, //$NON-NLS-1$
+            refusal.contains(expected.reason()));
+        assertTrue("...and say that THIS TOOL refused, without claiming what git would do: " //$NON-NLS-1$
+            + refusal, refusal.contains("This tool refused rather than run blind")); //$NON-NLS-1$
+        for (GitCommonDirectory.Fault other : GitCommonDirectory.Fault.values())
+        {
+            if (other != expected && !other.reason().equals(expected.reason()))
+            {
+                assertFalse(other + ": no OTHER fault may be named - an operator reading a list of " //$NON-NLS-1$
+                    + "five has to work out which line is about their repository: " + refusal, //$NON-NLS-1$
+                    refusal.contains(other.reason()));
+            }
+        }
+    }
+
+    @Test
+    public void testTheUnclassifiedFailureClaimsNothingItHasNotEstablished()
+    {
+        // This branch fires when resolving the layout threw something GitCommonDirectory does not
+        // classify - and that can happen BEFORE anything is known, including whether this is a
+        // linked worktree at all (the throw can come from the very call that would have told us).
+        // It used to borrow the head written for the classified case, which asserts both that this
+        // IS a linked worktree and that its commondir pointer is the thing at fault. Two claims
+        // from a branch that established neither.
+        String refusal = GitTool.commonDirRefusal(null);
+
+        assertFalse("it may not assert this is a linked worktree - that is what could not be " //$NON-NLS-1$
+            + "established: " + refusal, refusal.contains("linked git worktree")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The word may appear - the repair sentence says "IF this worktree has a 'commondir'
+        // file" - and that is fine, because it asserts nothing. What must not appear is the head's
+        // flat statement that there IS one and that it is the thing at fault.
+        assertFalse("nor ASSERT that a 'commondir' pointer exists and is at fault: " + refusal, //$NON-NLS-1$
+            refusal.contains("the 'commondir' file in its git directory")); //$NON-NLS-1$
+        assertTrue("...though naming the file conditionally in the repair is fine: " + refusal, //$NON-NLS-1$
+            refusal.contains("If this worktree has a 'commondir' file")); //$NON-NLS-1$
+        assertFalse("nor name a fault, since none was identified: " + refusal, //$NON-NLS-1$
+            refusal.contains("The fault:")); //$NON-NLS-1$
+        assertTrue("it must still say the operation was refused rather than run: " + refusal, //$NON-NLS-1$
+            refusal.contains("refused")); //$NON-NLS-1$
+        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
+        {
+            assertFalse(fault + ": no fault's words may appear either: " + refusal, //$NON-NLS-1$
+                refusal.contains(fault.reason()));
+        }
+    }
+
+    @Test
+    public void testAnUNCONFIRMEDFaultDoesNotBorrowTheCommondirHeadEither()
+    {
+        // The null branch was fixed first, but it was only half the hole: a fault can be CLASSIFIED
+        // and still have established nothing, because the failure came from the very look that
+        // would have told us whether a commondir exists. LAYOUT_UNREADABLE is that case, and it
+        // must get the same neutral head as the unclassified one.
+        //
+        // Without this, confirmed() could be ignored entirely and every test stayed green - which is
+        // how the mutation run found it.
+        String refusal = GitTool.commonDirRefusal(GitCommonDirectory.Fault.LAYOUT_UNREADABLE);
+
+        assertFalse("an unconfirmed fault may not assert there IS a commondir at fault: " + refusal, //$NON-NLS-1$
+            refusal.contains("the 'commondir' file in its git directory")); //$NON-NLS-1$
+        assertFalse("nor that this is a linked worktree: " + refusal, //$NON-NLS-1$
+            refusal.contains("This is a linked git worktree")); //$NON-NLS-1$
+        assertTrue("it must still name the fault it did reach: " + refusal, //$NON-NLS-1$
+            refusal.contains(GitCommonDirectory.Fault.LAYOUT_UNREADABLE.reason()));
+        assertTrue("...and claim nothing about git, as no refusal does any more: " + refusal, //$NON-NLS-1$
+            refusal.contains("is not something it determines")); //$NON-NLS-1$
+
+        // The contrast that makes it a real assertion: a CONFIRMED fault does get the head.
+        String confirmed = GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY);
+        assertTrue("a confirmed fault DOES speak of the commondir - otherwise the head would be " //$NON-NLS-1$
+            + "dead code and this test would pass on a version that never used it: " + confirmed, //$NON-NLS-1$
+            confirmed.contains("the 'commondir' file in its git directory")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRepairAdviceFitsTheFaultRatherThanAlwaysNamingTheFile()
+    {
+        // TARGET_UNREADABLE means the pointer may be flawless and what it NAMES could not be
+        // examined - a denied directory, say. Telling the operator to repair the file would send
+        // them to edit something already correct, which is the retry loop every other refusal in
+        // this tool is held away from.
+        String target = GitTool.commonDirRefusal(GitCommonDirectory.Fault.TARGET_UNREADABLE);
+
+        assertTrue("it must point at what the pointer NAMES: " + target, //$NON-NLS-1$
+            target.contains("what it POINTS AT is what could not be examined")); //$NON-NLS-1$
+        assertFalse("...and must not order the file repaired: " + target, //$NON-NLS-1$
+            target.contains("repair that file itself")); //$NON-NLS-1$
+
+        // The contrast: a fault that IS about the file still gets the file's repair.
+        String pointer = GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY);
+        assertTrue("a fault about the file itself keeps the file's repair: " + pointer, //$NON-NLS-1$
+            pointer.contains("repair that file itself")); //$NON-NLS-1$
+
+        // And a layout failure has no pointer to send anyone to at all.
+        String layout = GitTool.commonDirRefusal(GitCommonDirectory.Fault.LAYOUT_UNREADABLE);
+        assertTrue("a layout failure sends the operator to the git directory: " + layout, //$NON-NLS-1$
+            layout.contains("Check the git directory of this project")); //$NON-NLS-1$
+        assertFalse("...and not to a file it never established exists: " + layout, //$NON-NLS-1$
+            layout.contains("repair that file itself")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePermanentLogDoesNotAssertWhatTheRefusalStoppedAsserting()
+    {
+        // The response was corrected not to claim a linked worktree it had not established. The EDT
+        // log is permanent and outlives the response, so leaving the old claim there would be the
+        // worse half of the same mistake.
+        String unconfirmed =
+            GitTool.commonDirFailureLog(GitCommonDirectory.Fault.LAYOUT_UNREADABLE, null);
+        assertFalse("an unconfirmed fault may not be logged as a commondir resolution: " //$NON-NLS-1$
+            + unconfirmed, unconfirmed.contains("commondir")); //$NON-NLS-1$
+
+        String unclassified = GitTool.commonDirFailureLog(null, null);
+        assertFalse("nor may an unclassified one: " + unclassified, //$NON-NLS-1$
+            unclassified.contains("commondir")); //$NON-NLS-1$
+
+        String confirmed = GitTool.commonDirFailureLog(GitCommonDirectory.Fault.EMPTY, null);
+        assertTrue("a CONFIRMED fault still says what it really was, or the head would be dead " //$NON-NLS-1$
+            + "code: " + confirmed, confirmed.contains("commondir")); //$NON-NLS-1$
+    }
+
+    // One @Test per rendered shape, deliberately, and not four assertions in one method: JUnit
+    // stops a method at its first failing assertion, so a single method would prove only that the
+    // FIRST pin is load-bearing. Split, a phrase added to the common part of the message reddens
+    // all four - which is the demonstration that each shape is pinned, not just the one that runs
+    // first.
+
+    @Test
+    public void testTheUnclassifiedRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_UNCLASSIFIED, GitTool.commonDirRefusal(null));
+    }
+
+    @Test
+    public void testTheUnconfirmedRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_UNCONFIRMED,
+            GitTool.commonDirRefusal(GitCommonDirectory.Fault.LAYOUT_UNREADABLE));
+    }
+
+    @Test
+    public void testTheTargetUnreadableRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_TARGET,
+            GitTool.commonDirRefusal(GitCommonDirectory.Fault.TARGET_UNREADABLE));
+    }
+
+    @Test
+    public void testTheMissingTargetRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_MISSING_TARGET,
+            GitTool.commonDirRefusal(GitCommonDirectory.Fault.NOT_A_DIRECTORY));
+    }
+
+    @Test
+    public void testTheOrdinaryRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_ORDINARY, GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY));
+    }
+
+    @Test
+    public void testEveryOtherFaultTakesTheOrdinaryShape()
+    {
+        // THE ratchet for "no refusal names a side", in its final form, and the form matters.
+        //
+        // First attempt: a blacklist of phrases. A reviewer showed it could not see a NEW phrase.
+        // Second attempt: a relation - two faults sharing a repair tail must differ only in their
+        // own words. A reviewer showed it could not see a sentence added to the COMMON part, which
+        // lands on both sides of the equality and cancels out.
+        //
+        // Both looked at a RELATION between outputs instead of at the output. A literal cannot be
+        // fooled that way: any sentence added anywhere, to the shared part or to one branch, moves
+        // the text and fails here. It costs a mechanical update whenever the wording changes on
+        // purpose, and that cost is the point - the wording of a refusal is a contract, and this is
+        // the only shape of check that has caught every attempt to slip something into it.
+        // Every other fault takes the ordinary shape, so they are pinned by substitution rather
+        // than by a literal each: what varies is exactly the fault's own words and nothing else.
+        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
+        {
+            if (fault == GitCommonDirectory.Fault.LAYOUT_UNREADABLE
+                || fault == GitCommonDirectory.Fault.TARGET_UNREADABLE
+                || fault == GitCommonDirectory.Fault.NOT_A_DIRECTORY)
+            {
+                continue; // each of these has a repair of its own, pinned separately
+            }
+            assertEquals(fault + " must take the ordinary shape, differing only in its reason", //$NON-NLS-1$
+                PIN_ORDINARY.replace(GitCommonDirectory.Fault.EMPTY.reason(), fault.reason()),
+                GitTool.commonDirRefusal(fault));
+        }
+    }
+
+    private static final String PIN_UNCLASSIFIED =
+        "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
+            + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. Check the repository in a terminal. The failure is of a kind this tool does not " //$NON-NLS-1$
+            + "classify. If this worktree has a 'commondir' file, repair that file itself: it must be a " //$NON-NLS-1$
+            + "regular file whose contents are the path to the shared repository, with any trailing " //$NON-NLS-1$
+            + "line terminators ignored - not necessarily a single line, since a path may legitimately " //$NON-NLS-1$
+            + "contain one on some filesystems. That path may be absolute; when it is relative it is " //$NON-NLS-1$
+            + "resolved against the directory the file sits in, which is what 'git worktree add' writes " //$NON-NLS-1$
+            + "('../..'). A working absolute spelling does not need to be made relative. Do NOT reach " //$NON-NLS-1$
+            + "for 'git worktree repair' - measured on git 2.35.1, it does not touch this file at all, " //$NON-NLS-1$
+            + "and reports the unrelated '.git file broken' while leaving the fault exactly where it " //$NON-NLS-1$
+            + "was. This tool logs only the failure's exception types."; //$NON-NLS-1$
+
+    private static final String PIN_UNCONFIRMED =
+        "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
+            + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. Check the repository in a terminal. The fault: the git directory's layout could " //$NON-NLS-1$
+            + "not be read. This tool refused rather than run blind; whether native git can use this " //$NON-NLS-1$
+            + "repository is not something it determines - check that in a terminal. Check the git " //$NON-NLS-1$
+            + "directory of this project in a terminal: whether it exists, whether it can be read, and " //$NON-NLS-1$
+            + "whether its path is one this platform accepts. This tool logs only the failure's " //$NON-NLS-1$
+            + "exception types."; //$NON-NLS-1$
+
+    private static final String PIN_TARGET =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
+            + "pointer to the shared repository holding the configuration and the remotes - could not " //$NON-NLS-1$
+            + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
+            + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
+            + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. The fault: what it names could not be looked at. This tool refused rather than " //$NON-NLS-1$
+            + "run blind; whether native git can use this repository is not something it determines - " //$NON-NLS-1$
+            + "check that in a terminal. The 'commondir' file itself may be perfectly good: what it " //$NON-NLS-1$
+            + "POINTS AT is what could not be examined. Check that directory in a terminal - that it " //$NON-NLS-1$
+            + "exists, and that this user may read it - before editing the pointer, which may need no " //$NON-NLS-1$
+            + "change at all. This tool logs only the failure's exception types."; //$NON-NLS-1$
+
+    private static final String PIN_MISSING_TARGET =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
+            + "pointer to the shared repository holding the configuration and the remotes - could not " //$NON-NLS-1$
+            + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
+            + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
+            + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. The fault: what it names is not a directory. This tool refused rather than run " //$NON-NLS-1$
+            + "blind; whether native git can use this repository is not something it determines - check " //$NON-NLS-1$
+            + "that in a terminal. Two things can put you here and this tool cannot tell them apart, so " //$NON-NLS-1$
+            + "check both: the 'commondir' file may name the wrong place - it holds the path to the " //$NON-NLS-1$
+            + "shared repository, absolute or relative to the directory the file sits in ('../..' is " //$NON-NLS-1$
+            + "what 'git worktree add' writes) - or it may be right and what it names may be gone, " //$NON-NLS-1$
+            + "which a dangling link or an unmounted share will do. Look at the target first; it needs " //$NON-NLS-1$
+            + "no edit if it is simply missing. Do NOT reach for 'git worktree repair' - measured on " //$NON-NLS-1$
+            + "git 2.35.1, it does not touch this file at all. This tool logs only the failure's " //$NON-NLS-1$
+            + "exception types."; //$NON-NLS-1$
+
+    private static final String PIN_ORDINARY =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
+            + "pointer to the shared repository holding the configuration and the remotes - could not " //$NON-NLS-1$
+            + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
+            + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
+            + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. The fault: it is empty. This tool refused rather than run blind; whether native " //$NON-NLS-1$
+            + "git can use this repository is not something it determines - check that in a terminal. " //$NON-NLS-1$
+            + "If this worktree has a 'commondir' file, repair that file itself: it must be a regular " //$NON-NLS-1$
+            + "file whose contents are the path to the shared repository, with any trailing line " //$NON-NLS-1$
+            + "terminators ignored - not necessarily a single line, since a path may legitimately " //$NON-NLS-1$
+            + "contain one on some filesystems. That path may be absolute; when it is relative it is " //$NON-NLS-1$
+            + "resolved against the directory the file sits in, which is what 'git worktree add' writes " //$NON-NLS-1$
+            + "('../..'). A working absolute spelling does not need to be made relative. Do NOT reach " //$NON-NLS-1$
+            + "for 'git worktree repair' - measured on git 2.35.1, it does not touch this file at all, " //$NON-NLS-1$
+            + "and reports the unrelated '.git file broken' while leaving the fault exactly where it " //$NON-NLS-1$
+            + "was. This tool logs only the failure's exception types."; //$NON-NLS-1$
+
     // ==================== the pre-flight execute() actually runs ====================
 
     @Test
@@ -1813,6 +2647,76 @@ public class GitToolStoredRemoteTest
     private static String hex(char c)
     {
         return String.format("U+%04X", (int)c); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds a LINKED worktree of {@code shared} and opens it the way this plug-in opens one, then
+     * PROVES the fixture is what it claims to be.
+     * <p>
+     * Built by hand rather than by shelling out to {@code git worktree add}: no git executable is
+     * needed, so this stays a unit test on every platform, and the four files written below are the
+     * ones a real {@code git worktree add} was measured to produce - {@code commondir} holding
+     * {@code ../..}, {@code gitdir} pointing back at the worktree's {@code .git} file, a private
+     * {@code HEAD}, and the {@code .git} FILE that sends everything to the admin directory.
+     * <p>
+     * Two traps this method exists to close, both of which would leave a green test proving nothing:
+     * <ul>
+     * <li>{@link org.eclipse.jgit.storage.file.FileRepositoryBuilder#findGitDir} SWALLOWS a
+     * {@code .git} pointer it cannot use and keeps walking UP. A worktree placed inside the shared
+     * repository's own tree would therefore quietly open the SHARED repository, and every assertion
+     * about the linked one would be about the wrong object. The directory is created OUTSIDE it, and
+     * the resolved git directory is asserted afterwards;</li>
+     * <li>{@code build()} succeeding proves nothing on its own - {@code mustExist} is false by
+     * default, so it happily returns a repository for a pointer to a directory that does not exist.
+     * The check is on {@code getDirectory()}, not on the absence of an exception.</li>
+     * </ul>
+     * The returned repository is BARE as far as JGit is concerned - it derives a work tree from the
+     * configuration it reads from the wrong place - which is exactly why the tool cannot open one of
+     * these yet, and is beside the point for a check that never asks for a work tree.
+     *
+     * @param shared the repository the worktree is added to
+     * @param name the worktree's name
+     * @return the linked worktree, opened as this plug-in opens a repository
+     * @throws Exception when the fixture cannot be built or does not come out as intended
+     */
+    private Repository linkedWorktreeOf(Repository shared, String name) throws Exception
+    {
+        File adminDir = new File(new File(shared.getDirectory(), "worktrees"), name); //$NON-NLS-1$
+        assertTrue("fixture: the worktree admin directory must be created", adminDir.mkdirs()); //$NON-NLS-1$
+        // OUTSIDE the shared work tree, or findGitDir walks up into the shared repository.
+        File worktreeDir = Files.createTempDirectory("git-linked-" + name).toFile(); //$NON-NLS-1$
+        temporaries.add(worktreeDir);
+        File pointer = new File(worktreeDir, ".git"); //$NON-NLS-1$
+        Files.write(pointer.toPath(),
+            ("gitdir: " + adminDir.getAbsolutePath() + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(adminDir, "commondir").toPath(), //$NON-NLS-1$
+            "../..\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(adminDir, "gitdir").toPath(), //$NON-NLS-1$
+            (pointer.getAbsolutePath() + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(adminDir, "HEAD").toPath(), //$NON-NLS-1$
+            ("ref: refs/heads/" + name + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        // objects/ and refs/ make the admin directory REPOSITORY-LIKE, which matters for one case
+        // and was missing for all of them: when the pointer resolves back here (a commondir that is
+        // nothing but a line terminator), native git can only carry on if this looks like a
+        // repository. Without them a fixture cannot produce the outcome it would be cited for -
+        // exactly the false proof that made an earlier measurement wrong.
+        assertTrue("fixture: the admin directory must look like a repository", //$NON-NLS-1$
+            new File(adminDir, "objects").mkdirs() && new File(adminDir, "refs").mkdirs()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The same JGit call GitRepositoryResolver's discovery fallback makes, so the object
+        // under test is the one a real request would be handed.
+        FileRepositoryBuilder builder = new FileRepositoryBuilder().findGitDir(worktreeDir);
+        assertNotNull("fixture: the linked worktree must be discoverable", builder.getGitDir()); //$NON-NLS-1$
+        Repository linked = builder.build();
+        linkedRepositories.add(linked);
+        assertEquals("fixture: it must resolve to the WORKTREE's admin directory - findGitDir " //$NON-NLS-1$
+            + "swallows an unusable pointer and keeps walking up, and opening the shared " //$NON-NLS-1$
+            + "repository instead would make every assertion here vacuous", //$NON-NLS-1$
+            adminDir.getCanonicalFile(), linked.getDirectory().getCanonicalFile());
+        assertFalse("fixture: and the two must be different directories, or there is nothing " //$NON-NLS-1$
+            + "'shared' about the one under test", //$NON-NLS-1$
+            adminDir.getCanonicalFile().equals(shared.getDirectory().getCanonicalFile()));
+        return linked;
     }
 
     /** Recursively deletes a temporary directory tree (best-effort test cleanup). */

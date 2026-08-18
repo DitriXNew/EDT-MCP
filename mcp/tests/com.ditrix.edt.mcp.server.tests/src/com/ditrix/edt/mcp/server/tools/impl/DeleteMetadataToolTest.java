@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -15,6 +16,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
@@ -23,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
@@ -37,10 +41,15 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
+import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -52,8 +61,72 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  * the Eclipse/EDT runtime. The execute() path (refactoring preview / perform) needs a live workbench
  * and BM model, so it is covered by the E2E suite.
  */
+import java.util.Collection;
+
+import java.util.HashMap;
+
+import java.util.Collections;
+
 public class DeleteMetadataToolTest
 {
+    @Test
+    public void testMdClassDeleteRefusesNullModelBeforeCallingEdtRefactoring()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        IBmModelManager modelManager = mock(IBmModelManager.class);
+        when(modelManager.getModel(project)).thenReturn(null);
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        MdObject object = mock(MdObject.class);
+        BmModelResolver.Resolution resolution = BmModelResolver.resolve(project, modelManager);
+
+        String json = new DeleteMetadataTool().prepareMdClassDelete(project, "CommonModule.Calc", //$NON-NLS-1$
+            object, "Configuration", true, false, refactoringService, resolution); //$NON-NLS-1$
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("BM model is not available for project 'TestConfiguration'. Nothing was " //$NON-NLS-1$
+            + "deleted. This is a transient window while EDT reopens the project's storage; " //$NON-NLS-1$
+            + "list_projects does not expose BM-model registration and will still report the " //$NON-NLS-1$
+            + "project as ready. Wait a few seconds, then retry delete_metadata.", //$NON-NLS-1$
+            result.get("error").getAsString()); //$NON-NLS-1$
+        verify(refactoringService, never()).createMdObjectDeleteRefactoring(
+            org.mockito.ArgumentMatchers.anyCollection());
+    }
+
+    @Test
+    public void testMdClassDeleteSettlesBeforeCallingEdtRefactoring()
+    {
+        String settleError = "BM model is not available for project 'DependentConfiguration'. " //$NON-NLS-1$
+            + "Nothing was deleted. This is a transient window while EDT reopens the project's " //$NON-NLS-1$
+            + "storage; list_projects does not expose BM-model registration and will still report " //$NON-NLS-1$
+            + "the project as ready. Wait a few seconds, then retry delete_metadata."; //$NON-NLS-1$
+        String[] settledProject = {null};
+        long[] settledTimeout = {0L};
+        DeleteMetadataTool.CascadeSettler settler = (projectName, timeoutMs) ->
+        {
+            settledProject[0] = projectName;
+            settledTimeout[0] = timeoutMs;
+            return settleError;
+        };
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("fqn", "CommonModule.Calc"); //$NON-NLS-1$ //$NON-NLS-2$
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW, settler);
+
+        String json = tool.execute(params);
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(settleError, result.get("error").getAsString()); //$NON-NLS-1$
+        assertEquals("TestConfiguration", settledProject[0]); //$NON-NLS-1$
+        assertEquals(60_000L, settledTimeout[0]);
+        verify(refactoringService, never()).createMdObjectDeleteRefactoring(
+            org.mockito.ArgumentMatchers.anyCollection());
+    }
+
     @Test
     public void testNameConstant()
     {
@@ -403,7 +476,15 @@ public class DeleteMetadataToolTest
     @Test
     public void testDescriptionSeparatesTheBranchesWithoutAReferenceCascade()
     {
-        String desc = new DeleteMetadataTool().getDescription().toLowerCase();
+        // The clause moved to the guide with the description cut (issue #363); the bounded
+        // single-sentence check follows it there unchanged.
+        // The clause moved to the guide with the description cut (issue #363). The guide names
+        // these kinds in several per-kind sections too, so the bounded single-sentence check is
+        // anchored to the section that states the shared rule, not to the whole document.
+        String guideText = new DeleteMetadataTool().getGuide().toLowerCase();
+        int section = guideText.indexOf("## members removed from their own container"); //$NON-NLS-1$
+        assertTrue("the guide must carry the shared no-cascade section", section >= 0); //$NON-NLS-1$
+        String desc = guideText.substring(section);
         // All three of them, named in the SAME sentence as the no-block statement: an old universal
         // description with a disclaimer appended somewhere else must not pass this.
         int start = desc.indexOf("an owned form object"); //$NON-NLS-1$
@@ -426,7 +507,7 @@ public class DeleteMetadataToolTest
         // ... and must NOT overstate it: an owned form delete does clear the owner's default-form
         // settings, so "no cleanup at all" would be its own inaccuracy.
         assertTrue("the description must still credit the owner-local cleanup", //$NON-NLS-1$
-            desc.contains("owner's own pointers")); //$NON-NLS-1$
+            new DeleteMetadataTool().getGuide().contains("owner's own pointers")); //$NON-NLS-1$
     }
 
     /**
@@ -607,8 +688,8 @@ public class DeleteMetadataToolTest
     {
         String desc = new DeleteMetadataTool().getDescription();
         assertTrue("description should mention the XDTO package member FQN shape", //$NON-NLS-1$
-            desc.contains("XDTOPackage")); //$NON-NLS-1$
-        assertTrue("description should mention the ObjectType member kind", desc.contains("ObjectType")); //$NON-NLS-1$ //$NON-NLS-2$
+            new DeleteMetadataTool().getGuide().contains("XDTOPackage")); //$NON-NLS-1$
+        assertTrue("description should mention the ObjectType member kind", new DeleteMetadataTool().getGuide().contains("ObjectType")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ---- the predefined-item FQN is recognized by the delete dispatch (issue #293) -----------------
@@ -636,7 +717,7 @@ public class DeleteMetadataToolTest
     public void testDescriptionMentionsPredefinedItems()
     {
         String desc = new DeleteMetadataTool().getDescription();
-        assertTrue("description should mention predefined items", desc.contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should mention predefined items", new DeleteMetadataTool().getGuide().contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ===== predefined-item incoming-reference check helpers (issue #293 rework + fix-round) ===========
@@ -1496,5 +1577,333 @@ public class DeleteMetadataToolTest
         }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
             columnRef(), false, previewWithDescendants(3), new RecordingWrite());
         assertEquals("the prompt counts the member plus its contained elements", 4, seen[0]); //$NON-NLS-1$
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // The generic delete SUBMITS its container export, and submits it after performing (#408)
+    //
+    // The export barrier only WAITS, so it is ordered with an export only when the same call put
+    // that export in the queue. These pin the SUBMIT half: that it happens at all, that it happens
+    // AFTER the refactoring performed (a submission before the delete would export the pre-delete
+    // model - the same stale file, written confidently), and that it does NOT happen on the paths
+    // that mutate nothing.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /** Records what the tool did, in the order it did it, and can refuse or throw on demand. */
+    private static final class ExportOrderRecorder
+    {
+        private final List<String> calls = new ArrayList<>();
+        private boolean accepted = true;
+        private RuntimeException submitFailure;
+
+        DeleteMetadataTool.ExportSubmitter submitter()
+        {
+            return (project, fqn) -> {
+                calls.add("submit " + project.getName() + " " + fqn); //$NON-NLS-1$ //$NON-NLS-2$
+                if (submitFailure != null)
+                {
+                    throw submitFailure;
+                }
+                return accepted;
+            };
+        }
+    }
+
+    /**
+     * Builds the generic mdclass delete with a refactoring that only records that it ran.
+     *
+     * @param recorder the order recorder both seams write into
+     * @param decision what the consent gate answers
+     * @param performFailure an exception the refactoring throws instead of performing, or
+     *     {@code null} to succeed
+     * @return the prepared arguments, ready for {@link DeleteMetadataTool#prepareMdClassDelete}
+     */
+    private static GenericDeleteFixture genericDelete(ExportOrderRecorder recorder,
+        DestructiveConsentGate.ConsentDecision decision, RuntimeException performFailure)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        IBmModelManager modelManager = mock(IBmModelManager.class);
+        when(modelManager.getModel(project))
+            .thenReturn(mock(com._1c.g5.v8.bm.integration.IBmModel.class));
+        IRefactoring refactoring = mock(IRefactoring.class);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            recorder.calls.add("perform"); //$NON-NLS-1$
+            if (performFailure != null)
+            {
+                throw performFailure;
+            }
+            return null;
+        }).when(refactoring).perform();
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        when(refactoringService.createMdObjectDeleteRefactoring(
+            org.mockito.ArgumentMatchers.anyCollection())).thenReturn(refactoring);
+
+        GenericDeleteFixture fixture = new GenericDeleteFixture();
+        fixture.project = project;
+        fixture.refactoringService = refactoringService;
+        fixture.resolution = BmModelResolver.resolve(project, modelManager);
+        fixture.tool = new DeleteMetadataTool((name, preview) -> decision,
+            (projectName, timeoutMs) -> null, recorder.submitter(),
+            base -> fixture.participants);
+        return fixture;
+    }
+
+    /** The pieces {@link DeleteMetadataTool#prepareMdClassDelete} needs. */
+    private static final class GenericDeleteFixture
+    {
+        DeleteMetadataTool tool;
+        IProject project;
+        IMdRefactoringService refactoringService;
+        BmModelResolver.Resolution resolution;
+        List<IProject> participants = new ArrayList<>();
+
+        String run(String containerFqn, boolean confirm)
+        {
+            return tool.prepareMdClassDelete(project, "CommonModule.Calc", mock(MdObject.class), //$NON-NLS-1$
+                containerFqn, confirm, false, refactoringService, resolution);
+        }
+    }
+
+    @Test
+    public void testAConfirmedDeleteDeclaresTheTargetItWroteAndTheExtensionsTheCascadeReaches()
+    {
+        // #408: the barrier used to re-derive the wait from the `confirm` ARGUMENT, which says the
+        // caller authorized a destructive path - not that anything was written, and not where. Now
+        // the call states it, and states the two kinds apart.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("TestConfiguration.tests"); //$NON-NLS-1$
+        fixture.participants.add(extension);
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () -> fixture.run("Configuration", true)); //$NON-NLS-1$
+
+        assertEquals("the target is a project this call WROTE in", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), scope.writtenProjects()); //$NON-NLS-1$
+        // Not written, awaited: EDT's refactoring cleans the references held by dependent
+        // extensions and reports nothing about which of them it touched, and the set we can name is
+        // "every open extension of the target" - what EDT SCANS. Declaring these as WRITTEN would
+        // let an unrelated wedged export in an untouched extension refuse a healthy delete, which
+        // is exactly why the earlier attempt to widen this wait was rejected.
+        assertEquals("the cascade participants are awaited, not claimed as written", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration.tests"), scope.cascadeProjects()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testADeleteStillDeclaresTheTargetWhenItsContainerExportCannotBeQueued()
+    {
+        // The gap the container submission alone leaves: when the container cannot be named, no
+        // export is submitted, so nothing is recorded at the choke point - and the delete has
+        // still happened. Without the explicit statement the call would fall back to "said
+        // nothing", and a cascade declaration would make it look declared while dropping the
+        // target from the strict wait entirely.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () -> fixture.run("", true)); //$NON-NLS-1$
+
+        assertTrue("no container FQN means no submission at all: " + recorder.calls, //$NON-NLS-1$
+            recorder.calls.stream().noneMatch(call -> call.startsWith("submit"))); //$NON-NLS-1$
+        assertEquals("the delete happened, so the project it happened in must still be declared", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), scope.writtenProjects()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARefusedDeleteDeclaresNoWriteAtAll()
+    {
+        // Consent REJECT: nothing ran, so there is nothing to declare - and in particular the
+        // participants must not be declared off the back of an authorization that never happened.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.REJECT, null);
+        IProject extension = mock(IProject.class);
+        fixture.participants.add(extension);
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () -> fixture.run("Configuration", true)); //$NON-NLS-1$
+
+        assertTrue("a refused delete wrote nowhere", scope.writtenProjects().isEmpty()); //$NON-NLS-1$
+        assertTrue("and reached no cascade", scope.cascadeProjects().isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmedGenericDeleteQueuesTheContainerExportAfterPerforming()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        String json = fixture.run("Configuration", true); //$NON-NLS-1$
+
+        assertTrue("the delete itself must still succeed", //$NON-NLS-1$
+            JsonParser.parseString(json).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        // The ORDER is the point, not merely that both happened: an export queued before the
+        // refactoring would serialize the model that still holds the object, so the barrier would
+        // then wait for - and confirm - a file that is still wrong.
+        assertEquals("the container's export is queued, and queued after the refactoring performed", //$NON-NLS-1$
+            java.util.Arrays.asList("perform", "submit TestConfiguration Configuration"), //$NON-NLS-1$ //$NON-NLS-2$
+            recorder.calls);
+    }
+
+    @Test
+    public void testPreviewQueuesNoExport()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        fixture.run("Configuration", false); //$NON-NLS-1$
+
+        assertTrue("a preview changes nothing, so it must queue no export either: " + recorder.calls, //$NON-NLS-1$
+            recorder.calls.isEmpty());
+    }
+
+    @Test
+    public void testRefusedConsentQueuesNoExport()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.REJECT, null);
+
+        fixture.run("Configuration", true); //$NON-NLS-1$
+
+        assertTrue("a refused delete performs nothing and must queue nothing: " + recorder.calls, //$NON-NLS-1$
+            recorder.calls.isEmpty());
+    }
+
+    @Test
+    public void testFailedRefactoringQueuesNoExport()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture = genericDelete(recorder,
+            DestructiveConsentGate.ConsentDecision.ALLOW, new IllegalStateException("boom")); //$NON-NLS-1$
+
+        String json = fixture.run("Configuration", true); //$NON-NLS-1$
+
+        assertFalse("a refactoring that threw must not report success", //$NON-NLS-1$
+            JsonParser.parseString(json).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("a delete that threw leaves the model state uncertain; queueing an export of " //$NON-NLS-1$
+            + "it would publish that uncertainty to disk", //$NON-NLS-1$
+            Collections.singletonList("perform"), recorder.calls); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnnameableContainerQueuesNothingAndStillSucceeds()
+    {
+        // Degrade to the pre-#408 behaviour rather than guess a FQN: the delete happened, and the
+        // barrier is simply back to reporting only what the refactoring queued on its own.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        String json = fixture.run(null, true);
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertTrue("an unnameable container must not fail a delete that already happened", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("perform"), recorder.calls); //$NON-NLS-1$
+        assertTrue("a delete that queued no export must SAY so - otherwise the caller reads the " //$NON-NLS-1$
+            + "disk on the strength of a guarantee this call did not give: " //$NON-NLS-1$
+            + result.get("message").getAsString(), //$NON-NLS-1$
+            result.get("message").getAsString().contains("could not be queued by this call")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testASuccessfulSubmissionSaysNothingAboutLag()
+    {
+        // The negative half of the clause above: it must not become boilerplate that appears on
+        // every delete, or it stops carrying information.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        String message = JsonParser.parseString(fixture.run("Configuration", true)) //$NON-NLS-1$
+            .getAsJsonObject().get("message").getAsString(); //$NON-NLS-1$
+
+        assertEquals("Delete refactoring completed successfully.", message); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARefusedSubmissionIsReportedButKeepsTheDeleteSuccessful()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        recorder.accepted = false;
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        JsonObject result =
+            JsonParser.parseString(fixture.run("Configuration", true)).getAsJsonObject(); //$NON-NLS-1$
+
+        assertTrue("the model change happened; refusing it now would be the worse lie", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("the caller must be told the files may lag: " + result.get("message"), //$NON-NLS-1$ //$NON-NLS-2$
+            result.get("message").getAsString().contains("could not be queued by this call")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAThrowingSubmissionDoesNotTurnADoneDeleteIntoAFailure()
+    {
+        // The delete ALREADY happened when the submission runs, so an exception on the way to
+        // queueing an export says nothing about it. Reporting "delete failed - the final state is
+        // uncertain" would send the caller looking for an object that is genuinely gone.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        recorder.submitFailure = new IllegalStateException("no synchronization manager"); //$NON-NLS-1$
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+
+        JsonObject result =
+            JsonParser.parseString(fixture.run("Configuration", true)).getAsJsonObject(); //$NON-NLS-1$
+
+        assertTrue("a throwing export submission must not be reported as a failed delete", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("but it must still be reported as an export that did not happen: " //$NON-NLS-1$
+            + result.get("message"), //$NON-NLS-1$
+            result.get("message").getAsString().contains("could not be queued by this call")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testContainerExportFqnNamesTheConfigurationForATopObject()
+    {
+        // MetadataNodeResolver hands a top object's delete the Configuration as its owner, and the
+        // Configuration's own .mdo is the file that registers the object.
+        IBmObject config = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(config.bmIsTop()).thenReturn(true);
+        when(config.bmGetFqn()).thenReturn("Configuration"); //$NON-NLS-1$
+
+        assertEquals("Configuration", DeleteMetadataTool.containerExportFqn((EObject)config)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testContainerExportFqnClimbsANestedOwnerToItsTopObject()
+    {
+        // A member of a member (a WebService operation's parameter) has a non-top owner, and the
+        // file to rewrite is the TOP object's, not the owner's - it has none of its own.
+        IBmObject top = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(top.bmIsTop()).thenReturn(true);
+        when(top.bmGetFqn()).thenReturn("WebService.Exchange"); //$NON-NLS-1$
+        IBmObject operation = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(operation.bmIsTop()).thenReturn(false);
+        when(((EObject)operation).eContainer()).thenReturn((EObject)top);
+
+        assertEquals("WebService.Exchange", //$NON-NLS-1$
+            DeleteMetadataTool.containerExportFqn((EObject)operation));
+    }
+
+    @Test
+    public void testContainerExportFqnIsNullWhenNothingCanBeNamed()
+    {
+        assertNull("no container at all names no file", DeleteMetadataTool.containerExportFqn(null)); //$NON-NLS-1$
+        assertNull("a container outside BM has no .mdo of its own to queue", //$NON-NLS-1$
+            DeleteMetadataTool.containerExportFqn(mock(EObject.class)));
+        IBmObject orphan = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(orphan.bmIsTop()).thenReturn(false);
+        when(((EObject)orphan).eContainer()).thenReturn(null);
+        assertNull("a container chain with no top object names no file", //$NON-NLS-1$
+            DeleteMetadataTool.containerExportFqn((EObject)orphan));
     }
 }

@@ -51,7 +51,8 @@ public class GetConfigurationPropertiesTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.)"; //$NON-NLS-1$
+        return "Inspect the identity and compatibility settings of a 1C configuration. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('get_configuration_properties')."; //$NON-NLS-1$
     }
     
     @Override

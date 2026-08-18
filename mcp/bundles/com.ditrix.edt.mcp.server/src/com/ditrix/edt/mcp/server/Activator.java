@@ -6,8 +6,14 @@
 
 package com.ditrix.edt.mcp.server;
 
+import java.util.Dictionary;
+import java.util.Hashtable;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceRegistration;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.core.event.IEventBroker;
@@ -22,6 +28,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -30,10 +37,15 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
 import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
+import com.ditrix.edt.mcp.server.bridge.EdtMcpBridge;
+import com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge;
 import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
+import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
 /**
@@ -50,6 +62,9 @@ public class Activator extends AbstractUIPlugin
 
     /** MCP Server instance */
     private McpServer mcpServer;
+
+    /** In-process bridge exposed to sibling OSGi bundles by string service name. */
+    private ServiceRegistration<?> bridgeRegistration;
 
     /**
      * EDT platform service access (OSGi service trackers + their getters).
@@ -71,31 +86,80 @@ public class Activator extends AbstractUIPlugin
         plugin = this; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         mcpServer = new McpServer();
 
+        boolean headless = isHeadless();
+        if (!headless)
+        {
+            // Register tools before publishing the bridge, so the service is never visible
+            // with an empty catalogue at STARTUP. A later restart of the server re-runs
+            // registerTools(), and that is safe for readers on its own: the registrar hands
+            // the finished catalogue over in one step (McpToolRegistry.replaceAll), so a call
+            // arriving mid-restart - through the bridge or through HTTP, both read the same
+            // singleton - sees either the whole old catalogue or the whole new one.
+            mcpServer.registerTools();
+        }
+
         // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
         // This prevents background platform startup races that can fail the test process.
-        if (isHeadless())
+        if (headless)
         {
+            // The bridge is still published here: the headless test application has no EDT
+            // services to wait for, and the bridge's own contract is what those tests exercise.
+            publishBridge(context);
             logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
             return;
         }
 
-        // Register tools eagerly so descriptions are available in the preferences UI
-        // even if the MCP server has not been started yet.
-        mcpServer.registerTools();
-
         // Initialize service trackers
         services.init(context);
 
+        // AFTER the trackers, never before: the bridge advertises the whole catalogue, and a
+        // consumer that reacts to the service appearing - an OSGi listener, a sibling bundle -
+        // would otherwise call tools whose EDT services (IBmModelManager, ICheckScheduler) are
+        // still null and get transient "service unavailable" failures. Visibility of the
+        // service has to mean the tools it advertises are usable.
+        publishBridge(context);
+
         // Run startup orchestration (group service + UI integrations) in the
         // same order as before.
-        orchestrator.start(isHeadless());
+        orchestrator.start(headless);
 
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
+    }
+
+    /**
+     * Publishes the stable in-process bridge.
+     * <p>
+     * Registered under three names: the interface's STRING name (for consumers that resolve it
+     * reflectively) plus the JDK function types, so a consumer that cannot see the bridge
+     * package - an AI assistant running a JShell snippet, for instance - still gets a typed
+     * handle. The service property tells those JDK-typed lookups apart from any other
+     * BiFunction/Supplier service in the runtime.
+     *
+     * @param context the bundle context to register in
+     */
+    private void publishBridge(BundleContext context)
+    {
+        Dictionary<String, Object> bridgeProperties = new Hashtable<>();
+        bridgeProperties.put(IEdtMcpBridge.SERVICE_PROPERTY, IEdtMcpBridge.SERVICE_PROPERTY_VALUE);
+        bridgeRegistration = context.registerService(
+            new String[] { IEdtMcpBridge.class.getName(), BiFunction.class.getName(),
+                Supplier.class.getName() },
+            new EdtMcpBridge(), bridgeProperties);
     }
 
     @Override
     public void stop(BundleContext context) throws Exception
     {
+        if (bridgeRegistration != null)
+        {
+            bridgeRegistration.unregister();
+            bridgeRegistration = null;
+        }
+
+        // Cancel Workmate conversations and stop their non-UI worker/deadline threads
+        // before the bundle's services and class loader are torn down.
+        BackgroundJobs.shutdownShared();
+
         if (mcpServer != null && mcpServer.isRunning())
         {
             mcpServer.stop();
@@ -197,7 +261,29 @@ public class Activator extends AbstractUIPlugin
     {
         return services.getCheckRepository();
     }
-    
+
+    /**
+     * Returns the IFixManager service that applies EDT's official quick-fixes for a
+     * validation marker. Used by apply_quick_fix.
+     *
+     * @return fix manager or null if not available
+     */
+    public IFixManager getFixManager()
+    {
+        return services.getFixManager();
+    }
+
+    /**
+     * Returns the IFixRepository service used to test whether a check has a registered
+     * quick-fix. Used by get_project_errors and apply_quick_fix.
+     *
+     * @return fix repository or null if not available
+     */
+    public IFixRepository getFixRepository()
+    {
+        return services.getFixRepository();
+    }
+
     /**
      * Returns the IBmModelManager service for BM model operations.
      * 
@@ -294,6 +380,17 @@ public class Activator extends AbstractUIPlugin
     public IMdRefactoringService getMdRefactoringService()
     {
         return services.getMdRefactoringService();
+    }
+
+    /**
+     * Returns the IFormRefactoringService for FORM-element rename/delete refactoring - the twin of
+     * {@link #getMdRefactoringService()} for elements that live on a form's content model.
+     *
+     * @return form refactoring service or null if not available
+     */
+    public IFormRefactoringService getFormRefactoringService()
+    {
+        return services.getFormRefactoringService();
     }
 
     /**

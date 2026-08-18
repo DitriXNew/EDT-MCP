@@ -40,10 +40,11 @@ public class GetFormScreenshotTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the form " + //$NON-NLS-1$
-            "automatically or omit it to shoot the active editor. Requires EDT launched with " + //$NON-NLS-1$
-            "-DnativeFormBufferedLayoutRender=true, else the image is blank (missing flag, not a bad " + //$NON-NLS-1$
-            "call). Full parameters and examples: call get_tool_guide('get_form_screenshot')."; //$NON-NLS-1$
+        return "Visually inspect an EDT form as rendered by the designer. Requires EDT launched " //$NON-NLS-1$
+            + "with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back " //$NON-NLS-1$
+            + "BLANK instead of failing, so an empty screenshot means the flag is missing, not " //$NON-NLS-1$
+            + "that the call was wrong. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_form_screenshot')."; //$NON-NLS-1$
     }
 
     @Override

@@ -84,24 +84,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get detailed properties of one or more 1C metadata objects (basic info by default, " + //$NON-NLS-1$
-               "or every reflected section with 'full: true'). Use it after get_metadata_objects to " + //$NON-NLS-1$
-               "inspect a known object's attributes/forms/commands; in full mode each section is " + //$NON-NLS-1$
-               "capped so request fewer FQNs to keep the response small. A FORM FQN " + //$NON-NLS-1$
-               "('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE " + //$NON-NLS-1$
-               "(items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's " + //$NON-NLS-1$
-               "ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role " + //$NON-NLS-1$
-               "properties ('full: true' shows every object, otherwise only the non-default rows, the " + //$NON-NLS-1$
-               "first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). " + //$NON-NLS-1$
-               "In the default (non-full) view a ScheduledJob or CommonModule also renders a " + //$NON-NLS-1$
-               "type-specific Properties table (e.g. methodName/schedule/use for a job; " + //$NON-NLS-1$
-               "server/serverCall/global/returnValuesReuse for a module), and an InformationRegister's " + //$NON-NLS-1$
-               "Dimensions additionally show their Indexing. A Catalog / ChartOfCharacteristicTypes / " + //$NON-NLS-1$
-               "ChartOfAccounts / ChartOfCalculationTypes also renders its 'Predefined items' table " + //$NON-NLS-1$
-               "(in both basic and full mode); a single predefined item FQN " + //$NON-NLS-1$
-               "('<Owner>.X.Predefined.ItemName') renders that one item's properties. " + //$NON-NLS-1$
-               "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
+        return "Inspect the properties and structure of a metadata object or member. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
 
     @Override

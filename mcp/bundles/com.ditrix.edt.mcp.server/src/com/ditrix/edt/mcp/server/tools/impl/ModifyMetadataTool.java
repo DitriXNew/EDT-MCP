@@ -68,6 +68,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -286,77 +287,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Set properties of a metadata node (object or member, including a FORM member - item / " //$NON-NLS-1$
-            + "attribute / command) addressed by a 1C full-name FQN, as " //$NON-NLS-1$
-            + "properties=[{name, value, language?}]. Each property is validated (it must be " //$NON-NLS-1$
-            + "assignable, and an enum value must be one of the allowed literals) with an actionable " //$NON-NLS-1$
-            + "error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for " //$NON-NLS-1$
-            + "the form's command bar, or the form name for the form root) and/or 'position' " //$NON-NLS-1$
-            + "('first'/'last'/'before:<name>'/'after:<name>'/index) " //$NON-NLS-1$
-            + "properties. REBIND a form event handler's procedure with a 'procedure' property on a " //$NON-NLS-1$
-            + "Handler FQN, or re-point a Button at a different form command with a 'command' property. " //$NON-NLS-1$
-            + "Set a StyleItem's value with a 'value' property: a Color " //$NON-NLS-1$
-            + "{value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font " //$NON-NLS-1$
-            + "{value:{font:{faceName:'Arial',height:12,bold:true}}}. " //$NON-NLS-1$
-            + "Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' " //$NON-NLS-1$
-            + "property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this " //$NON-NLS-1$
-            + "turns the attribute into a DynamicList and lets EDT auto-fill the available fields from " //$NON-NLS-1$
-            + "the query (no manual XML; output a column with create_metadata Field dataPath " //$NON-NLS-1$
-            + "'List.<field>'). " //$NON-NLS-1$
-            + "For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' " //$NON-NLS-1$
-            + "(per-object right VALUES + optional per-field RLS restriction conditions), 'templates' " //$NON-NLS-1$
-            + "(RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role " //$NON-NLS-1$
-            + "booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. " //$NON-NLS-1$
-            + "Edit a structured membership LIST with 'content' instead of 'properties', dispatched by " //$NON-NLS-1$
-            + "the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's " //$NON-NLS-1$
-            + "content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a " //$NON-NLS-1$
-            + "DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content " //$NON-NLS-1$
-            + "objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). " //$NON-NLS-1$
-            + "'content'=[{op?:'add'|'remove' " //$NON-NLS-1$
-            + "(default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or " //$NON-NLS-1$
-            + "removes one by its metadata FQN; a CommonAttribute entry takes 'use' " //$NON-NLS-1$
-            + "('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and " //$NON-NLS-1$
-            + "a Catalog owner / Document register record / Subsystem content object is a plain " //$NON-NLS-1$
-            + "reference (no flag). " //$NON-NLS-1$
-            + "AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' " //$NON-NLS-1$
-            + "payload instead of 'properties' on a template FQN (a common template " //$NON-NLS-1$
-            + "'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): " //$NON-NLS-1$
-            + "'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, " //$NON-NLS-1$
-            + "wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, " //$NON-NLS-1$
-            + "toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the " //$NON-NLS-1$
-            + "cells (text or a print-time parameter) with formatting, merged ranges, named areas and " //$NON-NLS-1$
-            + "column / row sizes into the template's spreadsheet content; render the result with " //$NON-NLS-1$
-            + "get_template_screenshot. " //$NON-NLS-1$
-            + "AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of " //$NON-NLS-1$
-            + "'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], " //$NON-NLS-1$
-            + "dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, " //$NON-NLS-1$
-            + "dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the " //$NON-NLS-1$
-            + "report's main schema (query data sets + fields + schema parameters), creating the DCS if " //$NON-NLS-1$
-            + "the report has none. " //$NON-NLS-1$
-            + "Edit an XDTO package MEMBER through 'properties' on its own FQN " //$NON-NLS-1$
-            + "('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or " //$NON-NLS-1$
-            + "'...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / " //$NON-NLS-1$
-            + "'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD " //$NON-NLS-1$
-            + "type name, the EXACT name of an ObjectType already in the same package, or " //$NON-NLS-1$
-            + "{nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties " //$NON-NLS-1$
-            + "only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' " //$NON-NLS-1$
-            + "(string). " //$NON-NLS-1$
-            + "Set a PREDEFINED item's properties with 'properties' on its own FQN " //$NON-NLS-1$
-            + "('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, " //$NON-NLS-1$
-            + "ChartOfAccounts or ChartOfCalculationTypes): description / code on every owner, " //$NON-NLS-1$
-            + "isFolder on a Catalog / ChartOfCharacteristicTypes only (folder->item with existing " //$NON-NLS-1$
-            + "children is refused), plus owner-specific properties - " //$NON-NLS-1$
-            + "'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; a " //$NON-NLS-1$
-            + "JSON null clears it) on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' " //$NON-NLS-1$
-            + "/ 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
-            + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see " //$NON-NLS-1$
-            + "the guide for which apply to each owner) - the documented set, no assignable-schema " //$NON-NLS-1$
-            + "round-trip needed. 'parent' is CREATE-time only: moving an item to a different folder " //$NON-NLS-1$
-            + "(or an account under a different parent account) is refused here - delete and " //$NON-NLS-1$
-            + "re-create it with the new 'parent'. " //$NON-NLS-1$
-            + "For other nodes, discover assignable properties + allowed values with " //$NON-NLS-1$
-            + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
+        return "Set properties of any metadata node (object or member, including form items, attributes, " //$NON-NLS-1$
+            + "commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata')."; //$NON-NLS-1$
     }
 
     @Override
@@ -483,13 +415,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "{cells, merges, areas, columnWidths, rowHeights}") //$NON-NLS-1$
             .objectProperty(KEY_DCS, "For a DCS (Report Data Composition Schema) content change: the " //$NON-NLS-1$
                 + "applied counts object {dataSources, dataSets, fields, parameters}") //$NON-NLS-1$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue to drain before answering, so a success normally means the write has "
+                    + "already run - but that establishes the queue is empty, not that the bytes are "
+                    + "correct (a platform-side write failure is logged inside EDT), and the wait is "
+                    + "skipped where the export state cannot be observed") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
             .stringProperty("destination", //$NON-NLS-1$
                 "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
                 + "\"group 'Main' at index 1\"") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
     }
 
@@ -2257,6 +2195,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             exportFqns.add(contentFqn);
         }
+        // The settings were written whether or not an FQN could be collected to export (#408).
+        WriteScope.recordWrite(ctx.project);
         boolean persisted =
             !exportFqns.isEmpty() && BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         return buildDcsResult(normFqn, result, persisted, localeUnused);
@@ -3850,6 +3790,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
                     applied.add(hc.change.featureName());
+                    if (syncExtInfoAfter(hc, formModel, member))
+                    {
+                        applied.add("extInfo"); //$NON-NLS-1$
+                    }
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -4252,8 +4196,47 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Rejects a form-member modify that UNSAFELY combines a classifier {@code type} change (a group's /
-     * field's / decoration's {@code type} decides which concrete {@code <extInfo>} EClass applies) with a
+     * Re-pairs a form member's nested {@code <extInfo>} with the classifier the change just set, in the
+     * SAME transaction, so the member is never persisted half-built (issue #369). Two classifiers do
+     * this, and only these two:
+     * <ul>
+     * <li>a form ATTRIBUTE's {@code valueType} - a {@code ValueList} needs a {@code ValueListExtInfo},
+     * a {@code SpreadsheetDocument} a {@code SpreadsheetDocumentExtInfo}, ... ({@link
+     * FormElementWriter#syncAttributeExtInfo});</li>
+     * <li>a form ITEM's {@code type} - a {@code Picture} decoration needs a
+     * {@code PictureDecorationExtInfo}, a {@code CheckBoxField} a {@code CheckBoxFieldExtInfo}, ...
+     * ({@link FormElementWriter#syncItemExtInfo}).</li>
+     * </ul>
+     * A change that lands ON the extInfo is never a classifier change (it is a property INSIDE the
+     * holder), and {@link #formTypeExtInfoComboError} has already refused mixing the two in one call.
+     * Both syncs no-op for a member with no {@code extInfo} feature (an attribute COLUMN, a Button).
+     *
+     * @param hc the change that was just applied
+     * @param formModel the editable content form
+     * @param member the form member the change landed on
+     * @return {@code true} when an extInfo is now attached (so the caller can report it as applied)
+     */
+    private static boolean syncExtInfoAfter(HolderChange hc, EObject formModel, EObject member)
+    {
+        if (hc.onExtInfo)
+        {
+            return false;
+        }
+        if (hc.change.isTypeChange())
+        {
+            return FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
+        }
+        if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
+        {
+            return FormElementWriter.syncItemExtInfo(formModel, member) != null;
+        }
+        return false;
+    }
+
+    /**
+     * Rejects a form-member modify that UNSAFELY combines a classifier change - a group's / field's /
+     * decoration's {@code type}, or an ATTRIBUTE's {@code valueType}, each of which decides which
+     * concrete {@code <extInfo>} EClass applies - with a
      * property that lives on that nested {@code <extInfo>}, in the SAME call. The extInfo props are
      * classified / validated against the PRE-change type's extInfo EClass (in {@link #resolveFormHolder}),
      * so applying both in one transaction is order-dependent and unsafe:
@@ -4261,14 +4244,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * <li>{@code type} first &rarr; {@link FormElementWriter#ensureExtInfo} creates the NEW type's extInfo
      * EClass and the extInfo {@code eSet} throws {@link IllegalArgumentException} on a feature the new
      * EClass lacks (surfaced as an opaque "Failed to modify form member");</li>
-     * <li>the extInfo prop first &rarr; a stale-typed extInfo is force-exported onto a now-differently
-     * typed element (a silent inconsistency EDT serialization rejects).</li>
+     * <li>the extInfo prop first &rarr; the re-pairing replaces the holder it was just written to, so the
+     * property is DISCARDED while still being reported as applied (and, before the re-pairing existed, a
+     * stale-typed extInfo was force-exported onto a now-differently typed element - a silent
+     * inconsistency EDT serialization rejects).</li>
      * </ul>
      * The {@code type} change must be a SEPARATE call so the extInfo is re-resolved against the new type.
      * Detection is fully reflective (the direct-vs-extInfo routing from {@link #resolveFormHolder} plus the
-     * normalized property name) - a form attribute's {@code type} is normalized to {@code valueType} and so
-     * never counts here, and an mdclass object has no extInfo so this is a no-op. Package-visible so it is
-     * unit-testable headlessly. Returns a ready JSON error to reject, or {@code null} when the batch is safe.
+     * normalized property name); an mdclass object has no extInfo so this is a no-op there.
+     * Package-visible so it is unit-testable headlessly. Returns a ready JSON error to reject, or
+     * {@code null} when the batch is safe.
      */
     static String formTypeExtInfoComboError(EObject member, List<JsonObject> properties)
     {
@@ -4285,18 +4270,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 hasExtInfoChange = true;
             }
-            else if ("type".equalsIgnoreCase(name)) //$NON-NLS-1$
+            else if ("type".equalsIgnoreCase(name) || PROP_VALUE_TYPE.equalsIgnoreCase(name)) //$NON-NLS-1$
             {
+                // BOTH spellings, because a form ATTRIBUTE has no `type` feature: normalizeFormProperty
+                // has already rewritten its `type` to `valueType` by the time this reads the name, and a
+                // guard that only knew the enum spelling let the attribute case straight through
+                // (issue #369 review). A value type decides the ext-info exactly as an item's enum does.
                 hasDirectTypeChange = true;
             }
         }
         if (hasDirectTypeChange && hasExtInfoChange)
         {
-            return ToolResult.error("Changing a form group's 'type' cannot be combined with a layout " //$NON-NLS-1$
-                + "property that lives on its <extInfo> (e.g. 'group' / 'united' / 'showLeftMargin' / " //$NON-NLS-1$
-                + "'throughAlign' / 'currentRowUse' / 'representation') in the same call, because the " //$NON-NLS-1$
-                + "'type' decides which extInfo applies. Change the 'type' first, then set the layout " //$NON-NLS-1$
-                + "properties in a separate call.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("Changing a form member's 'type' cannot be combined with a " //$NON-NLS-1$
+                + "property that lives on its <extInfo> in the same call, because the 'type' decides " //$NON-NLS-1$
+                + "which extInfo applies: on an ITEM that is a layout property (e.g. 'group' / " //$NON-NLS-1$
+                + "'united' / 'showLeftMargin' / 'throughAlign' / 'currentRowUse' / 'representation'), " //$NON-NLS-1$
+                + "on an ATTRIBUTE a type-specific one (e.g. a ValueList's 'itemValueType'). Change " //$NON-NLS-1$
+                + "the 'type' first, then set the extInfo properties in a separate call.").toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -5426,6 +5416,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareManyReference(ctx.config, name, prop, info, out);
             case STYLE_VALUE:
                 return prepareStyleValue(name, prop, target, info, out);
+            case ADJUSTABLE_BOOLEAN:
+                return prepareAdjustableBoolean(name, value, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -5521,6 +5513,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'. Use true or false.").toJson(); //$NON-NLS-1$
         }
         out.add(PreparedChange.scalar(info.feature, b));
+        return null;
+    }
+
+    /**
+     * Validates an {@code ADJUSTABLE_BOOLEAN} property value and, on success, appends the prepared
+     * change to {@code out}. The wire value is a plain boolean and addresses the nested {@code common}
+     * flag; the sibling {@code for} overrides are preserved by the applier (issue #382).
+     *
+     * @param name the property name (for the error text)
+     * @param value the raw wire value
+     * @param info the introspected property
+     * @param out the prepared-change sink
+     * @return a JSON error on a non-boolean value, or {@code null} on success
+     */
+    private static String prepareAdjustableBoolean(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        Boolean b = parseBoolean(value);
+        if (b == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid boolean for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use true or false.").toJson(); //$NON-NLS-1$
+        }
+        out.add(PreparedChange.adjustableBoolean(info.feature, b.booleanValue()));
         return null;
     }
 
@@ -5898,7 +5914,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
-        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE }
+        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE, ADJUSTABLE_BOOLEAN }
 
         private final EStructuralFeature feature;
         private final Kind kind;
@@ -5933,6 +5949,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange scalar(EStructuralFeature feature, Object value)
         {
             return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null, false);
+        }
+
+        /**
+         * An {@code ADJUSTABLE_BOOLEAN} change: the boolean addresses the CONTAINED object's
+         * {@code common} flag, so the applier must NOT {@code eSet} the feature itself - that would
+         * replace the contained object and silently discard its {@code for} overrides (issue #382).
+         */
+        static PreparedChange adjustableBoolean(EStructuralFeature feature, boolean common)
+        {
+            return new PreparedChange(feature, Kind.ADJUSTABLE_BOOLEAN, Boolean.valueOf(common),
+                null, null, null, null, false);
         }
 
         /**
@@ -6048,6 +6075,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     target.eSet(feature, scalarValue);
                     return;
                 }
+                case ADJUSTABLE_BOOLEAN:
+                    // Reuse the contained object and rewrite only `common`, so the sibling `for`
+                    // overrides survive; create one only when the slot is genuinely empty. A plain
+                    // eSet here would replace the object and lose them (issue #382).
+                    if (!FormElementWriter.setAdjustableBooleanFeature(target, feature.getName(),
+                        Boolean.TRUE.equals(scalarValue)))
+                    {
+                        throw new IllegalStateException("Cannot set '" + feature.getName() //$NON-NLS-1$
+                            + "': its AdjustableBoolean type cannot be instantiated"); //$NON-NLS-1$
+                    }
+                    return;
                 case SCALAR:
                 default:
                     target.eSet(feature, scalarValue);

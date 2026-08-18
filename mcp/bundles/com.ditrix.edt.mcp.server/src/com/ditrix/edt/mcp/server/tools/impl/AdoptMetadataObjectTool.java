@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -28,10 +30,12 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.google.gson.JsonObject;
 
 /**
  * Adopts a base-configuration metadata object — or one of its members
@@ -72,12 +76,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Adopt a base-configuration metadata object or member " //$NON-NLS-1$
-            + "(object / form / attribute / tabular section / ...) into a configuration EXTENSION so the " //$NON-NLS-1$
-            + "extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. " //$NON-NLS-1$
-            + "Addressed by the base object FQN; pass extensionProjectName when more than one extension " //$NON-NLS-1$
-            + "extends the configuration. Adopting BSL code/methods is NOT covered. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('adopt_metadata_object')."; //$NON-NLS-1$
+        return "Add a base-configuration object or member to an extension for customization. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('adopt_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override
@@ -106,7 +106,13 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "FQN of the adopted object in the extension") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_EXTENSION_PROJECT, "The extension the object was adopted into") //$NON-NLS-1$
             .stringProperty(KEY_OBJECT_BELONGING, "ADOPTED (the object is now an adopted copy)") //$NON-NLS-1$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk", false) //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue of the EXTENSION project to drain before answering, so a success normally " //$NON-NLS-1$
+                    + "means the write has already run - but that establishes the queue is empty, not that " //$NON-NLS-1$
+                    + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
+                    + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
     }
 
@@ -197,6 +203,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         if (adopter.isAdopted(source, target))
         {
+            // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
+            // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
+            // not say" owe the barrier different answers.
+            WriteScope.recordNothingQueued();
             // The adopted FQN equals the source FQN (adoption is by-UUID, the Name is preserved).
             // Do NOT call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not
             // a top object and bmGetFqn() throws ("may be called on top objects only").
@@ -212,6 +222,12 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         // The service runs its own BM write task on the extension's model.
         EObject adopted = adopter.adoptAndAttach(source, target, new NullProgressMonitor());
+
+        // projectName is the BASE configuration by contract; the write lands in the EXTENSION.
+        // Stated here rather than left to the export submission below, because that submission is
+        // skipped when nothing came back dirty - and a write with no export of its own is still a
+        // write in this project, not a call that wrote nowhere.
+        WriteScope.recordWrite(target.getProject());
 
         // The adopted FQN equals the source FQN (adoption is by-UUID; the Name is preserved). Do NOT
         // call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not a top object

@@ -19,48 +19,56 @@ import java.util.Map;
 public enum ToolGroup
 {
     CORE("core", "Core / Project", //$NON-NLS-1$ //$NON-NLS-2$
-        "Essential project, configuration, and XML export/import tools", //$NON-NLS-1$
-        "get_edt_version", "list_projects", "get_configuration_properties", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "Essential server, project, configuration, history, and XML export/import tools", //$NON-NLS-1$
+        "get_edt_version", "get_server_status", "get_tool_guide", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "list_toolsets", "enable_toolset", "list_projects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "get_configuration_properties", //$NON-NLS-1$
         "clean_project", "revalidate_objects", "resync_to_disk", "get_check_description", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "export_configuration_to_xml", "import_configuration_from_xml", //$NON-NLS-1$ //$NON-NLS-2$
-        "delete_project", "create_project"), //$NON-NLS-1$ //$NON-NLS-2$
+        "delete_project", "create_project", "get_event_log", "get_mcp_history"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     PROBLEMS("problems", "Errors & Problems", //$NON-NLS-1$ //$NON-NLS-2$
-        "Error reporting, workspace markers (bookmarks, tasks), and code-metric review", //$NON-NLS-1$
-        "get_problem_summary", "get_project_errors", "get_markers", "code_review"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "Error reporting, validation, workspace markers (bookmarks, tasks), and code-metric review", //$NON-NLS-1$
+        "get_problem_summary", "get_project_errors", "get_markers", "apply_quick_fix", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "validate_xdto_package", "code_review"), //$NON-NLS-1$ //$NON-NLS-2$
 
     CODE_INTELLIGENCE("codeIntelligence", "Code Intelligence", //$NON-NLS-1$ //$NON-NLS-2$
-        "Content assist, documentation, metadata browsing, and references", //$NON-NLS-1$
+        "Content assist, documentation, metadata and common-picture browsing, and references", //$NON-NLS-1$
         "get_content_assist", "get_platform_documentation", "get_metadata_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "get_metadata_details", "list_subsystems", "get_subsystem_content", "find_references"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "get_metadata_details", "list_subsystems", "get_subsystem_content", "find_references", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "list_common_pictures", "export_common_picture"), //$NON-NLS-1$ //$NON-NLS-2$
 
     TAGS("tags", "Tags", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata tag management", //$NON-NLS-1$
         "get_tags", "get_objects_by_tags"), //$NON-NLS-1$ //$NON-NLS-2$
 
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
-        "Application management, database update, launch, termination, and testing", //$NON-NLS-1$
+        "Application and infobase management, external-object builds, launch, testing, " //$NON-NLS-1$
+            + "background jobs, and Workmate", //$NON-NLS-1$
         "get_applications", "list_configurations", "create_launch_config", "delete_launch_config", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "create_infobase", "delete_infobase", "update_database", "debug_launch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "terminate_launch", "run_yaxunit_tests"), //$NON-NLS-1$ //$NON-NLS-2$
+        "terminate_launch", "run_yaxunit_tests", "ask_workmate", "get_job_status", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "cancel_job", "build_external_objects", "set_infobase_credentials"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     DEBUG("debug", "Debugging", //$NON-NLS-1$ //$NON-NLS-2$
         "Breakpoints, stepping, variables, expression evaluation, and profiling", //$NON-NLS-1$
         "set_breakpoint", "remove_breakpoint", "list_breakpoints", "wait_for_break", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "get_variables", "set_variable", "step", "resume", "evaluate_expression", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-        "debug_yaxunit_tests", "debug_status", "start_profiling", "get_profiling_results"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "debug_yaxunit_tests", "debug_status", "start_profiling", "stop_profiling", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "get_profiling_results"), //$NON-NLS-1$
 
     BSL_CODE("bslCode", "BSL Code", //$NON-NLS-1$ //$NON-NLS-2$
         "Module source reading/writing, structure, search, call hierarchy, navigation, and forms", //$NON-NLS-1$
         "read_module_source", "write_module_source", "get_module_structure", "list_modules", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "search_in_code", "read_method_source", "get_method_call_hierarchy", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "go_to_definition", "get_symbol_info", "get_form_layout_snapshot", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "get_outgoing_structures", "go_to_definition", "get_symbol_info", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "get_form_layout_snapshot", //$NON-NLS-1$
         "get_form_screenshot", "get_template_screenshot", "validate_query"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
-        "Metadata create, rename, delete and property management (objects, members and form members)", //$NON-NLS-1$
+        "Metadata create, rename, adopt, delete, and property management", //$NON-NLS-1$
         "rename_metadata_object", "delete_metadata", "create_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        "modify_metadata"), //$NON-NLS-1$
+        "modify_metadata", "adopt_metadata_object"), //$NON-NLS-1$ //$NON-NLS-2$
 
     TRANSLATION("translation", "Translation (LanguageTool)", //$NON-NLS-1$ //$NON-NLS-2$
         "LanguageTool: translation strings generation, configuration sync, project info", //$NON-NLS-1$

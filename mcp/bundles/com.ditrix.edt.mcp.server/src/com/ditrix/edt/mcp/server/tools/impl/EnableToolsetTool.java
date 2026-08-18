@@ -45,11 +45,8 @@ public class EnableToolsetTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Reveal (or hide) tool groups for progressive disclosure. Pass toolsets=[ids] from " //$NON-NLS-1$
-            + "list_toolsets to reveal them, then RE-REQUEST tools/list to see the newly revealed tools. " //$NON-NLS-1$
-            + "Set disable=true to hide. The 'core' toolset is always visible and cannot be toggled. " //$NON-NLS-1$
-            + "When progressive disclosure is off, all tools are already listed and this has no effect " //$NON-NLS-1$
-            + "until you enable it in EDT Preferences → MCP Server."; //$NON-NLS-1$
+        return "Make additional MCP tool groups visible or hide them. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('enable_toolset')."; //$NON-NLS-1$
     }
 
     @Override

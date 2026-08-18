@@ -145,6 +145,15 @@ def test_replace_over_existing_without_precondition_is_rejected_and_no_write():
     # expectedSource — must be rejected by the lost-update guard and leave disk intact.
     # (The guard itself is owned by write-replace-mode-precondition; here we prove the
     # tool actually enforces it and steers the caller to the right next step.)
+    #
+    # The guard only applies to an EXISTING module (creating a new one is unconditional), so
+    # "the module is there" is this test's premise, not an assumption. Prove it first: when
+    # EDT's view of the file is stale — the fixture is restored by git, behind the workbench's
+    # back — the tool legitimately treats the write as a CREATE and succeeds, and the bare
+    # assertion below would report that as "the guard is broken", which is the wrong bug.
+    existing = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_ok(existing, "the blind-replace guard needs the module to exist first (%s)" % MODULE)
+
     r = call("write_module_source", {
         "projectName": PROJECT, "modulePath": MODULE,
         "mode": "replace", "source": "// blind overwrite attempt\n",
@@ -298,3 +307,54 @@ def test_searchreplace_with_matching_expectedhash_succeeds():
     })
     assert_ok(r, "searchReplace with a matching expectedHash must be accepted")
     assert_diff_contains("Значение = 7;", "the hash-guarded searchReplace must persist to disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Built-in BSL syntax check (#397 / #109) — the gate must let the legal single-line
+# block through while still blocking a genuine imbalance. Both directions matter:
+# a false positive makes a whole module unwritable, a false negative writes broken
+# BSL. Asserted over the wire because the gate's verdict is what the caller sees.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_SINGLE_LINE_IF = (
+    "Процедура Расш_ПередЗаписью(Отказ) Экспорт\n"
+    "\tЕсли Отказ Тогда Возврат; КонецЕсли;\n"
+    "\tЗначение = 1;\n"
+    "КонецПроцедуры\n"
+)
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_single_line_if_is_not_blocked_by_the_syntax_check():
+    # The one-line Если ... Тогда ... КонецЕсли; is a whole block. It used to be
+    # counted as unclosed, which then mismatched КонецПроцедуры and blocked the write.
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "source": _SINGLE_LINE_IF, "overwrite": True,
+    })
+    assert_ok(r, "a single-line Если must pass the built-in syntax check")
+    assert_diff_contains("Если Отказ Тогда Возврат; КонецЕсли;",
+                         "the module carrying a single-line block must reach disk")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_genuinely_unbalanced_module_is_still_blocked():
+    # The gate must not have become a no-op: the second Если below is never closed,
+    # even though the first one is a valid single-line block.
+    broken = (
+        "Процедура Тест(Отказ) Экспорт\n"
+        "\tЕсли Отказ Тогда Возврат; КонецЕсли;\n"
+        "\tЕсли Истина Тогда\n"
+        "\t\tЗначение = 1;\n"
+        "КонецПроцедуры\n"
+    )
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "source": broken, "overwrite": True,
+    })
+    err = assert_error(r, "an unclosed Если must still block the write")
+    # Actionable means it points at the offending block AND at the way out, not merely
+    # that it is non-empty: name the unclosed construct and the override flag.
+    assert_error_quality(err, names=["Если/If"], suggests=["skipSyntaxCheck"],
+                         ctx="the block-balance error names the block and the override")
+    assert_no_diff("a blocked write must not touch the project on disk")

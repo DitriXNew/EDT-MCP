@@ -84,7 +84,8 @@ from harness import (
     assert_error_quality,
     assert_no_diff,
     e2e_test,
-    wait_for_project_ready,
+    reset_model,
+    settle_or_fail,
     PROJECT,
     PROJECT_DIR,
 )
@@ -143,7 +144,7 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
     objectsExported==totalTopObjects; a tool that wrongly flagged a VALID reference as
     dangling would report danglingFound>0. The no-op envelope plus a clean working tree
     pins all of it."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT})
     assert_ok(r, "resync_to_disk on the in-sync fixture")
 
@@ -169,6 +170,14 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
     if not isinstance(total, int) or total <= 0:
         raise AssertionError("totalTopObjects must be a positive int: %r" % total)
 
+    # #408: the tool STATES that it queued nothing, instead of the barrier rebuilding that
+    # boolean out of these report counters afterwards. An empty list is the finding; the member
+    # would be ABSENT if the tool could not tell, and those two must never look the same.
+    if sc.get("writtenProjects") != []:
+        raise AssertionError(
+            "an in-sync resync queued nothing and must publish an EMPTY writtenProjects: %r"
+            % (sc.get("writtenProjects"),))
+
     # Ground truth: a default run on an in-sync project writes nothing at all, so the
     # committed tree must be unchanged.
     assert_no_diff("default resync of an in-sync project must not change any tracked file")
@@ -188,7 +197,7 @@ def test_full_export_reexports_every_top_object():
     Mutation thinking: a fullExport that silently stayed on the subset path would
     report objectsExported==0 here; an export that produced different bytes for an
     unchanged model would fail assert_no_diff."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True, "overwriteDiskEdits": True})
     assert_ok(r, "resync_to_disk fullExport=true overwriteDiskEdits=true")
 
@@ -220,7 +229,14 @@ def test_report_only_is_the_default():
 
     Mutation thinking: a regression back to default-true would echo true here and (on
     a project that DID have dangling entries) silently rewrite Configuration.mdo."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    # PRECONDITION, not politeness: this test asserts the tree is untouched, and resync's job
+    # is to write the MODEL out to disk. So "no change" only means "the tool wrote nothing" if
+    # the model already matches the committed disk. A prior write-metadata test whose model
+    # residue outlived its cleanup would be exported by this very call - a real export of a
+    # stale model, reported here as a mysterious dirty tree far from its cause. Waiting for
+    # 'ready' does not establish that; only the model reset does.
+    reset_model()
+    settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT})
     assert_ok(r, "resync_to_disk with all-default parameters")
 
@@ -252,7 +268,7 @@ def test_clean_dangling_true_is_echoed_and_safe_on_clean_fixture():
     Mutation thinking: a tool that ignored the flag would echo false; one that
     'removed' valid references on a clean project would report danglingRemovedCount>0
     and fail assert_no_diff."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT, "cleanDanglingReferences": True})
     assert_ok(r, "resync_to_disk cleanDanglingReferences=true")
 
@@ -274,7 +290,7 @@ def test_revalidate_flag_is_echoed():
 
     Mutation thinking: a tool that dropped the echo (or hardwired the flag) would
     return a missing/true value for a default call."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT})
     sc = _success_envelope(r, "default resync (revalidate echo)")
     if sc.get("revalidate") is not False:
@@ -307,7 +323,7 @@ def test_repair_restores_a_deleted_mdo_from_the_model():
     model afterwards, so the seeded catalog never leaks into the next test."""
     name = "E2EResyncRepair"
     fqn = "Catalog." + name
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    settle_or_fail("this resync")
 
     r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
     assert_ok(r, "seed: create %s" % fqn)
@@ -317,7 +333,7 @@ def test_repair_restores_a_deleted_mdo_from_the_model():
     if not _poll(lambda: os.path.isfile(mdo_abs)):
         raise AssertionError("setup failed: %s was never written by create_metadata" % mdo_abs)
     # Let the create's derived-data recompute settle so the resync sees a stable model.
-    wait_for_project_ready()
+    settle_or_fail("this seed's resync")
 
     os.remove(mdo_abs)
     if os.path.exists(mdo_abs):
@@ -400,7 +416,7 @@ def test_full_export_without_confirm_is_rejected():
     (on a project with on-disk edits) silently clobber them; the error must name
     overwriteDiskEdits so the caller knows how to confirm, and assert_no_diff pins that the
     rejected call wrote nothing."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    settle_or_fail("this resync")
     r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True})
     e = assert_error(r, "fullExport=true without overwriteDiskEdits")
     assert_error_quality(e, names=["overwriteDiskEdits"], suggests=["overwriteDiskEdits"],

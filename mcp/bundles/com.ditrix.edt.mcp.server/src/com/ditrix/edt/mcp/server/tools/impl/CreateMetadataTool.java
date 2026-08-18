@@ -48,6 +48,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -160,19 +161,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Create a metadata node addressed by a 1C full-name FQN: a top-level object " //$NON-NLS-1$
-            + "(Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, " //$NON-NLS-1$
-            + "InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind " //$NON-NLS-1$
-            + "is inferred from the FQN; type and kind tokens may be English or Russian. Also creates " //$NON-NLS-1$
-            + "an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), " //$NON-NLS-1$
-            + "'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or " //$NON-NLS-1$
-            + "'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an " //$NON-NLS-1$
-            + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates " //$NON-NLS-1$
-            + "a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, " //$NON-NLS-1$
-            + "ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with " //$NON-NLS-1$
-            + "owner-specific 'properties'). Also creates a NESTED SUBSYSTEM at any depth " //$NON-NLS-1$
-            + "('Subsystem.Sales.Subsystem.Orders'); the parent subsystem must already exist. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_metadata')."; //$NON-NLS-1$
+        return "Add a new metadata object or member to a configuration. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
     @Override
@@ -287,7 +277,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue to drain before answering, so a success normally means the write has "
+                    + "already run - but that establishes the queue is empty, not that the bytes are "
+                    + "correct (a platform-side write failure is logged inside EDT), and the wait is "
+                    + "skipped where the export state cannot be observed") //$NON-NLS-1$
             .stringArrayProperty(KEY_APPLIED,
                 "Names of the optional attributes actually applied (XDTO package member create only)") //$NON-NLS-1$
             .stringProperty(KEY_SYNONYM, "Display name written, when a synonym property was provided") //$NON-NLS-1$
@@ -323,6 +318,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
                 + "handler (form:EventHandlerExtension) was created") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
     }
 
@@ -1893,6 +1889,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // Persist BOTH the content form's own Form.form (its FQN, generated inside the tx) and the owner
         // .mdo (which registers the new form in its <forms> and, when setAsDefault, the default-form ref).
         List<String> dirty = formObjectDirtyFqns(contentFormFqn, ownerFqn);
+        // Nothing dirty means no submission, and a skipped submission is not a call that wrote
+        // nowhere - the form was created. Stated so the scope is the project, not silence (#408).
+        WriteScope.recordWrite(project);
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
 
         // The form is NEW, so its synonym map carries exactly the locale just written (issue #298).

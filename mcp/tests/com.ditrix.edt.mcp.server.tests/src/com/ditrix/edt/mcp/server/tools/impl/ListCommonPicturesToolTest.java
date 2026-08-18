@@ -76,7 +76,7 @@ public class ListCommonPicturesToolTest
         assertTrue("description must steer to the on-demand guide", //$NON-NLS-1$
             desc.contains("get_tool_guide('list_common_pictures')")); //$NON-NLS-1$
         assertTrue("description must point at export_common_picture for image bytes", //$NON-NLS-1$
-            desc.contains("export_common_picture")); //$NON-NLS-1$
+            new ListCommonPicturesTool().getGuide().contains("export_common_picture")); //$NON-NLS-1$
     }
 
     // ==================== Metadata: input schema ====================

@@ -130,9 +130,11 @@ public enum ToolPreset
     }
 
     /**
-     * Builds the Code Review preset: disable apps, debug, refactoring,
-     * write_module_source, and the state-mutating workspace export/import tools
-     * (which sit in CORE alongside read-only project tools).
+     * Builds the Code Review preset: disable apps (including external-object builds and credential
+     * writes), debug, refactoring (including adoption into an extension), translation,
+     * write_module_source, apply_quick_fix, and the state-mutating workspace export/import tools.
+     * {@code export_common_picture} remains enabled: despite its name, it is a pure model read that
+     * returns the selected PNG as base64 and never writes a file.
      */
     private static Set<String> buildCodeReviewDisabled()
     {
@@ -144,14 +146,17 @@ public enum ToolPreset
         disabled.add("write_module_source"); //$NON-NLS-1$
         disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
         disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
+        disabled.add("apply_quick_fix"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 
     /**
-     * Builds the Analysis Only preset: disable apps, debug, the entire BSL
-     * Code group (both read and write tools — analysis is metadata- and
-     * error-level only), refactoring, the state-mutating workspace
-     * export/import tools, and the LanguageTool translation tools.
+     * Builds the Analysis Only preset: disable apps (including external-object builds and credential
+     * writes), debug, the entire BSL Code group (both read and write tools — analysis is metadata-
+     * and error-level only), refactoring (including adoption into an extension), apply_quick_fix,
+     * the state-mutating workspace export/import tools, and the LanguageTool translation tools.
+     * {@code export_common_picture} remains enabled because it only reads model content and returns
+     * base64; it does not export to the filesystem.
      */
     private static Set<String> buildAnalysisOnlyDisabled()
     {
@@ -163,6 +168,7 @@ public enum ToolPreset
         disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
         disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
         disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
+        disabled.add("apply_quick_fix"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 }

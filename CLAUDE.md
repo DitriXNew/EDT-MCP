@@ -57,9 +57,10 @@ The `edt-mcp-*` skills carry the "how to do it right"; each one's description sa
 
 1. **Is there already a shared helper?** `grep` under `utils/` (`MetadataTypeUtils`, `MetadataNodeResolver`, `ProjectContext`, `BmTransactions`, `JsonUtils`, `Pagination`, `MarkdownUtils`). Don't write the 47th copy.
 2. **What's the canonical parameter/error/output?** → `edt-mcp-tool-conventions`.
-3. **Is this bilingual?** → `edt-mcp-bilingual`.
-4. **God-class / cascade / mirror feature?** → the "think twice" section above.
-5. **A new tool?** → `edt-mcp-new-tool`.
+3. **Writing or cutting a tool's description / parameter prose?** → `edt-mcp-tool-descriptions`. Every sentence in `tools/list` is paid on every request; the capability index can go, the protocol clause cannot, and "move it to the guide" deletes the behaviour rather than relocating it. A/B it through `tests/tool-choice/` before shipping.
+4. **Is this bilingual?** → `edt-mcp-bilingual`.
+5. **God-class / cascade / mirror feature?** → the "think twice" section above.
+6. **A new tool?** → `edt-mcp-new-tool`.
 
 ---
 
@@ -87,6 +88,10 @@ Each tier proves a different layer. A green lower tier does NOT prove the higher
 - **No drive-by "tidy everything" edits.** The refactor proceeds one topic at a time.
 - **Destructive actions** (metadata rename/delete, `update_database`, `delete_project`) — only on an explicit request.
 - **Commits are local by default** — don't push autonomously; on the default branch, branch first. Review every commit before making it.
+- **Validating a PR = answering its comments, not just its code.** Every review comment and review thread gets a REPLY saying what was done (or why it was declined) — silence reads as "ignored". A thread whose point is actually fixed in the branch is then RESOLVED; a thread you disagreed with, deferred, or only partly addressed stays OPEN with the reason stated, so the author decides. Never resolve a thread you did not act on, and never resolve one by pushing a commit without replying. `gh pr view <n> --json reviews,comments` and `gh api .../pulls/<n>/comments` list them. The two single-comment endpoints are MIRRORED, and each 404s in the other's form: **reply** → `repos/<o>/<r>/pulls/<n>/comments/<id>/replies`, **read one** → `repos/<o>/<r>/pulls/comments/<id>` (no `<n>`). A thread is resolved through `gh api graphql` (`resolveReviewThread`), which needs the thread id from a `reviewThreads` query — `gh pr` alone cannot resolve.
+- **Ask the PR reviewer for a review, aimed, in ONE SENTENCE.** After opening a PR and after each round of fixes, comment `@codex review` plus a single sentence naming the riskiest spot to attack — no essays, no lists, no recap of what you already verified. A blind "please review" spends the pass on style; a long brief buries the aim. One pointed sentence has repeatedly found real defects here, including a fix that silently disabled itself. Then answer and resolve every comment per the rule above, and re-trigger after the fixes.
+- **A reviewer finding is a lead, not a verdict — check its work.** Its findings have been right about real bugs AND wrong about a "limitation" that the platform grammar disproved. Reproduce every claim against the code or EDT's sources before acting on it, and say in the reply what you checked; never fix on the reviewer's word alone, and never dismiss on your own. Wrong findings get a reasoned decline, not a silent one.
+- **An open PR of yours must be SUBSCRIBED to.** As soon as you open or push to one, start a background watch on it and keep it running: report new review comments, new PR comments, and each CI verdict as they land, instead of polling by hand or discovering them a turn later. Unsubscribe on exactly two events — the PR is MERGED/CLOSED, or the user asks you to stop. A watch left unarmed is how a reviewer's finding sits unanswered.
 
 ---
 

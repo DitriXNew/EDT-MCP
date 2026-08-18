@@ -70,12 +70,24 @@ public class ToolPresetTest
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
         assertTrue("Should disable write_module_source", disabled.contains("write_module_source"));
         assertTrue("Should disable rename_metadata_object", disabled.contains("rename_metadata_object"));
+        assertTrue("Should disable adopt_metadata_object", //$NON-NLS-1$
+            disabled.contains("adopt_metadata_object")); //$NON-NLS-1$
+        assertTrue("Should disable build_external_objects", //$NON-NLS-1$
+            disabled.contains("build_external_objects")); //$NON-NLS-1$
+        assertTrue("Should disable set_infobase_credentials", //$NON-NLS-1$
+            disabled.contains("set_infobase_credentials")); //$NON-NLS-1$
+        assertTrue("Should disable destructive cancel_job", //$NON-NLS-1$
+            disabled.contains("cancel_job")); //$NON-NLS-1$
+        assertTrue("Should disable get_job_status with its disabled job owners", //$NON-NLS-1$
+            disabled.contains("get_job_status")); //$NON-NLS-1$
 
         // Should NOT disable core, problems, code intelligence, tags
         assertFalse("Should not disable get_edt_version", disabled.contains("get_edt_version"));
         assertFalse("Should not disable get_project_errors", disabled.contains("get_project_errors"));
         assertFalse("Should not disable get_metadata_objects", disabled.contains("get_metadata_objects"));
         assertFalse("Should not disable get_tags", disabled.contains("get_tags"));
+        assertFalse("Should not disable the read-only export_common_picture", //$NON-NLS-1$
+            disabled.contains("export_common_picture")); //$NON-NLS-1$
     }
 
     // === CODE_REVIEW preset ===
@@ -94,6 +106,18 @@ public class ToolPresetTest
         // Should disable refactoring and debug
         assertTrue("Should disable rename_metadata_object", disabled.contains("rename_metadata_object"));
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
+        assertTrue("Should disable adopt_metadata_object", //$NON-NLS-1$
+            disabled.contains("adopt_metadata_object")); //$NON-NLS-1$
+        assertTrue("Should disable build_external_objects", //$NON-NLS-1$
+            disabled.contains("build_external_objects")); //$NON-NLS-1$
+        assertTrue("Should disable set_infobase_credentials", //$NON-NLS-1$
+            disabled.contains("set_infobase_credentials")); //$NON-NLS-1$
+        assertTrue("Should disable destructive cancel_job", //$NON-NLS-1$
+            disabled.contains("cancel_job")); //$NON-NLS-1$
+        assertTrue("Should disable get_job_status with its disabled job owners", //$NON-NLS-1$
+            disabled.contains("get_job_status")); //$NON-NLS-1$
+        assertFalse("Should not disable the read-only export_common_picture", //$NON-NLS-1$
+            disabled.contains("export_common_picture")); //$NON-NLS-1$
     }
 
     // === DEVELOPMENT preset ===
@@ -107,6 +131,8 @@ public class ToolPresetTest
         // Should disable debug tools
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
         assertTrue("Should disable resume", disabled.contains("resume"));
+        assertTrue("Should disable stop_profiling", //$NON-NLS-1$
+            disabled.contains("stop_profiling")); //$NON-NLS-1$
 
         // Should NOT disable BSL code or refactoring
         assertFalse("Should not disable write_module_source", disabled.contains("write_module_source"));
@@ -119,6 +145,26 @@ public class ToolPresetTest
     public void testCustomPresetHasNullDisabledTools()
     {
         assertNull("CUSTOM preset should have null disabled tools", ToolPreset.CUSTOM.getDisabledTools());
+    }
+
+    /**
+     * apply_quick_fix mutates BSL source (it's the headless "Quick Fix" action), even though it sits
+     * in the PROBLEMS group alongside read-only tools like get_project_errors. Both read-only-ish
+     * presets must disable it explicitly, or picking them would still leave source mutation callable.
+     */
+    @Test
+    public void testAnalysisOnlyAndCodeReviewDisableApplyQuickFix()
+    {
+        assertTrue("ANALYSIS_ONLY should disable apply_quick_fix",
+            ToolPreset.ANALYSIS_ONLY.getDisabledTools().contains("apply_quick_fix"));
+        assertTrue("CODE_REVIEW should disable apply_quick_fix",
+            ToolPreset.CODE_REVIEW.getDisabledTools().contains("apply_quick_fix"));
+
+        // Sibling read-only tools in the same PROBLEMS group must stay enabled.
+        assertFalse("ANALYSIS_ONLY should not disable get_project_errors",
+            ToolPreset.ANALYSIS_ONLY.getDisabledTools().contains("get_project_errors"));
+        assertFalse("CODE_REVIEW should not disable get_project_errors",
+            ToolPreset.CODE_REVIEW.getDisabledTools().contains("get_project_errors"));
     }
 
     // === Preset matching ===

@@ -31,7 +31,7 @@ Lists EDT launch configurations — runtime client, Attach (RemoteRuntime / Loca
 - `name` — the configuration name; this is the value to pass as `launchConfigurationName` downstream.
 - `type` — the launch-config type id.
 - `attach` — boolean, true for Attach configs.
-- `applicationId` — real applicationId, or a synthetic `attach:<name>` for Attach configs (present only when known).
+- `applicationId` — the configuration's real applicationId when it has one; otherwise a synthetic launch identifier minted from the configuration name (`attach:<name>` for Attach configs, `launch:<name>` for any other 1C/EDT config). The synthetic form appears when the application binding is absent — or could not be read — and exists so a session stays addressable for debug tracking; it is **not** an application id and `update_database` / `get_applications` cannot resolve it. To act on such a configuration, pass its `name` as `launchConfigurationName` to a tool that accepts that configuration type (`update_database` takes runtime-client configs only), or take a real id from `get_applications`. If that tool then reports the configuration *could not be read*, one of its attributes is unreadable rather than absent — repair or recreate the configuration in EDT.
 - `project`, `infobaseAlias`, `debugServerUrl` — present only when the config defines them.
 - `running` — boolean; when true, `mode` (debug/run) is added, and `suspended` is true when a thread is paused on a breakpoint.
 

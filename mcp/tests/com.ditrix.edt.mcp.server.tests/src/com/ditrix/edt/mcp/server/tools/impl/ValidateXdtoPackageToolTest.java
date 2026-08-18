@@ -99,7 +99,7 @@ public class ValidateXdtoPackageToolTest
         // It is documented as a thin wrapper - the description should say so.
         String desc = new ValidateXdtoPackageTool().getDescription();
         assertTrue("description should reference get_project_errors (the reuse point)", //$NON-NLS-1$
-            desc.contains("get_project_errors")); //$NON-NLS-1$
+            new ValidateXdtoPackageTool().getGuide().contains("get_project_errors")); //$NON-NLS-1$
     }
 
     // ==================== Metadata: input schema ====================

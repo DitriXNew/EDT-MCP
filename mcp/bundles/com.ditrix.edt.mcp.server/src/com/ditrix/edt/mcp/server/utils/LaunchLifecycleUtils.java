@@ -8,9 +8,9 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,11 +20,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
@@ -43,6 +45,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
+import com.ditrix.edt.mcp.server.utils.PreLaunchChangeTracker.PrepareSnapshot;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -100,8 +103,26 @@ public final class LaunchLifecycleUtils
     private static final long INFLIGHT_EXPIRY_MS = 10 * 60 * 1000L; // 10 min
 
     /**
-     * Live state of a background pre-launch preparation job keyed by the same
-     * {@code project\u0000applicationId} string as {@link #KEY_LOCKS}.
+     * Phase label published while the prep is sweeping live / stale launches of the target
+     * application.
+     *
+     * <p>The three labels are the ONLY values {@link #prepareForFreshLaunch} publishes, and it
+     * publishes each one as it ENTERS that stage. That direction matters: a label written after
+     * a stage finished names work that is already over, which is exactly what a caller reading
+     * "what is it doing right now?" must not be told.
+     */
+    public static final String PHASE_TERMINATE = "terminate"; //$NON-NLS-1$
+
+    /** Phase label published while the prep is force-recomputing the scoped projects. */
+    public static final String PHASE_RECOMPUTE = "recompute"; //$NON-NLS-1$
+
+    /** Phase label published while the prep is updating the infobase. */
+    public static final String PHASE_DB_UPDATE = "db-update"; //$NON-NLS-1$
+
+    /**
+     * Live state of a background pre-launch preparation job, keyed by everything that decides
+     * what the preparation DOES (see {@link #PREP_INFLIGHT}), of which the project and
+     * application part is the same string as {@link #KEY_LOCKS}.
      *
      * <p>A tool thread that starts the prep job sets {@code startedAtMs} and adds
      * this entry to {@link #PREP_INFLIGHT}. The background job updates
@@ -116,8 +137,16 @@ public final class LaunchLifecycleUtils
      */
     public static final class PrepInFlight
     {
-        /** Human-readable phase label set by the background job. */
-        public volatile String phase = "recompute"; //$NON-NLS-1$
+        /**
+         * Human-readable phase label, published by {@link #prepareForFreshLaunch} as it
+         * ENTERS each stage (see {@link #PHASE_TERMINATE} / {@link #PHASE_RECOMPUTE} /
+         * {@link #PHASE_DB_UPDATE}).
+         *
+         * <p>The initial value is the first stage the prep enters, so a reader that wins
+         * the race with the job's own first publish still names a phase the prep is
+         * genuinely in — never one it has not reached.
+         */
+        public volatile String phase = PHASE_TERMINATE;
         /** Wall-clock time the job started (used to compute elapsed seconds). */
         public final long startedAtMs;
         /** Set to {@code true} by the background job when preparation completed. */
@@ -137,9 +166,74 @@ public final class LaunchLifecycleUtils
          */
         public final AtomicBoolean started = new AtomicBoolean(false);
 
+        /**
+         * The job carrying this preparation, once it has been handed over; {@code null} until
+         * then. Read only through {@link #isCarrierAlive()} — its liveness is what tells a
+         * waiting entry apart from an abandoned one.
+         */
+        private volatile Job carrier;
+
         public PrepInFlight(long startedAtMs)
         {
             this.startedAtMs = startedAtMs;
+        }
+
+        /**
+         * Hands over the job that carries this preparation, so the entry can observe whether the
+         * work is still going to happen.
+         *
+         * <p>Called from a {@code finally} around {@code schedule()}: a schedule that THREW must
+         * still hand the job over, because that entry is exactly the kind nothing will ever
+         * complete, and it has to be replaceable.
+         *
+         * @param scheduledJob the job that was (or was meant to be) scheduled
+         */
+        public void trackScheduledJob(Job scheduledJob)
+        {
+            this.carrier = scheduledJob;
+        }
+
+        /**
+         * Whether this entry has been told which job carries it.
+         *
+         * <p>Observability for the hand-over itself, which is otherwise invisible: an entry
+         * whose job always completes behaves identically with and without it, so only the
+         * abandoned case — the one that made entries immortal — depends on it. Something has to
+         * be able to assert the hand-over happened at all, or deleting it would go unnoticed.
+         *
+         * @return {@code true} once {@link #trackScheduledJob(Job)} has been called
+         */
+        public boolean hasTrackedCarrier()
+        {
+            return carrier != null;
+        }
+
+        /**
+         * Whether the work behind this entry is still going to happen.
+         *
+         * <p>A job that is queued, sleeping or running is alive. A job that has left the
+         * scheduler is not — whether it ran to completion, was cancelled before it started, or
+         * never got scheduled at all.
+         */
+        private boolean isCarrierAlive()
+        {
+            Job job = carrier;
+            if (job == null)
+            {
+                // Not handed over yet: either nobody has scheduled it (the creating thread is
+                // about to) or we are inside the window between schedule() and the hand-over.
+                // Both mean the work is about to run — unless the body already finished, in
+                // which case the entry is a completed one and ages out below.
+                //
+                // This is the ONE state the carrier cannot report on, so it is the one place a
+                // clock is still needed: the hand-over follows the scheduling CAS within
+                // microseconds, so an entry that STILL has no carrier a whole expiry window
+                // later never got one — the thread that claimed the scheduling died before it
+                // could build the job. Without this bound that entry would be immortal exactly
+                // like the cancelled-while-queued one, just by a rarer route.
+                return !done && System.currentTimeMillis() - startedAtMs <= INFLIGHT_EXPIRY_MS;
+            }
+            return job.getState() != Job.NONE;
         }
 
         /** Elapsed whole seconds since the job started. */
@@ -148,16 +242,46 @@ public final class LaunchLifecycleUtils
             return (System.currentTimeMillis() - startedAtMs) / 1000L;
         }
 
-        /** {@code true} when the entry is older than {@link #INFLIGHT_EXPIRY_MS}. */
+        /**
+         * {@code true} when this entry may be discarded and replaced by a fresh preparation.
+         *
+         * <p>ONE rule: an entry is replaceable once <b>nothing more will come of waiting on
+         * it</b>. Whether that is so is read off the carrying job, not guessed from the clock:
+         * <ul>
+         *   <li>the job is queued, sleeping or running — the work is in flight, so waiting is
+         *       the correct answer and replacing it would only stack a second preparation
+         *       behind the per-infobase monitor the first one holds (#357);</li>
+         *   <li>the job has left the scheduler without completing — cancelled while it was
+         *       still queued, or never scheduled because {@code schedule()} threw — so the
+         *       entry will NEVER complete and is replaceable at once;</li>
+         *   <li>the job has left the scheduler having completed — the result is worth keeping
+         *       for {@link #INFLIGHT_EXPIRY_MS} so a returning caller can still collect it,
+         *       and after that the entry ages out.</li>
+         * </ul>
+         *
+         * <p>Age alone was wrong because it evicted honest long-running preparations. Requiring
+         * {@code done} was wrong the other way: a job cancelled before it ran has neither
+         * {@code done} nor a live carrier, so it fell between the two and became IMMORTAL —
+         * every later call for that project and application saw "already started", scheduled no
+         * replacement, and returned Pending forever. The carrier's own state is the single
+         * signal that separates all three cases.
+         */
         public boolean isExpired()
         {
-            return System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
+            if (isCarrierAlive())
+            {
+                return false;
+            }
+            return !done || System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
         }
     }
 
     /**
-     * In-flight preparation map. Keyed by {@code project\u0000applicationId}
-     * (the same string as {@link #KEY_LOCKS}).
+     * In-flight preparation map. Keyed by everything that decides WHAT a preparation does:
+     * {@link #prepKeyFor(String, String)} (the same NUL-joined project+application string as
+     * {@link #KEY_LOCKS}), the external-changes policy, and the canonical update scope. That key
+     * is built by {@code RunYaxunitTestsTool.PrepRequest.prepKey()} FROM the request the
+     * preparation consumes, so it cannot describe a preparation other than the one it guards.
      *
      * <p>Entries are created via {@link ConcurrentMap#computeIfAbsent}; the
      * thread that wins the {@link PrepInFlight#started} CAS schedules the
@@ -592,7 +716,16 @@ public final class LaunchLifecycleUtils
             {
                 continue;
             }
-            forceRecompute(project);
+            if (!forceRecompute(project))
+            {
+                // The recompute did not run (no EDT service, or it threw and was
+                // swallowed above). Keep the project dirty so the preparation
+                // cannot certify content that was never regenerated: markPrepared's
+                // conditional remove then fails and the marker is erased.
+                PreLaunchChangeTracker.markDirty(project.getName());
+                Activator.logInfo("Pre-launch: recompute did not run for " //$NON-NLS-1$
+                    + project.getName() + " - it stays dirty for the next launch"); //$NON-NLS-1$
+            }
         }
 
         // Phase 2: drain the workspace-wide build job families once. This is not
@@ -619,46 +752,57 @@ public final class LaunchLifecycleUtils
      * {@link RuntimeException} is logged and swallowed — a recompute failure must
      * never abort the launch hot path.
      *
+     * <p>It must, however, never be MISTAKEN FOR A DONE recompute: the caller marks
+     * a project whose recompute did not run as dirty again, so the preparation
+     * cannot record this content state as prepared and the next launch retries.
+     * Without that, a swallowed failure plus a lagging {@code UPDATED} would store a
+     * "prepared" marker for sources that were never regenerated, and every later
+     * launch — in this session and in every future one — would ship the stale
+     * {@code .cfe}.
+     *
      * @param project an open project (callers guard {@code null}/closed projects)
+     * @return {@code true} when {@code recomputeAll()} was actually issued
      */
-    private static void forceRecompute(IProject project)
+    private static boolean forceRecompute(IProject project)
     {
         try
         {
             if (Activator.getDefault() == null)
             {
-                return;
+                return false;
             }
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
             if (dtProjectManager == null)
             {
-                return;
+                return false;
             }
             IDtProject dtProject = dtProjectManager.getDtProject(project);
             if (dtProject == null)
             {
-                return;
+                return false;
             }
             IDerivedDataManagerProvider ddProvider =
                 Activator.getDefault().getDerivedDataManagerProvider();
             if (ddProvider == null)
             {
-                return;
+                return false;
             }
             IDerivedDataManager ddManager = ddProvider.get(dtProject);
             if (ddManager == null)
             {
-                return;
+                return false;
             }
             Activator.logInfo("Pre-launch: forcing derived-data recompute for project: " //$NON-NLS-1$
                 + project.getName());
             ddManager.recomputeAll();
+            return true;
         }
         catch (RuntimeException e)
         {
             // A recompute failure must never abort the launch — log and move on.
             Activator.logError("Error forcing derived-data recompute for " //$NON-NLS-1$
                 + project.getName(), e);
+            return false;
         }
     }
 
@@ -672,19 +816,22 @@ public final class LaunchLifecycleUtils
      * <p>This is the fix for the performance regression: on a large configuration,
      * unconditional {@code recomputeAll()} for every project on every
      * {@code run_yaxunit_tests} call costs 2–8 minutes. After a successful prepare,
-     * projects are marked clean — no recompute until a file change is detected.
-     * The stale-{@code .cfe} safety guarantee is preserved: a project is dirty on
-     * the first call after plugin start, and again whenever the workspace listener
-     * observes a non-derived file change in that project.
+     * the content state that was prepared is recorded ON THE PROJECT — so no
+     * recompute happens until the sources actually differ from it, not merely until
+     * the plugin is restarted. The stale-{@code .cfe} safety guarantee is preserved:
+     * a project is dirty whenever its content differs from the prepared state (or
+     * none was ever recorded), and whenever the workspace listener observes a
+     * non-derived file change in it.
      *
      * <h3>Ordering-race fix</h3>
-     * <p>The dirty snapshot ({@link PreLaunchChangeTracker#snapshotDirty}) is taken
-     * BEFORE the recompute begins and returned to the caller. The caller passes it to
-     * {@link PreLaunchChangeTracker#markPrepared(Collection, Map)} only on success
-     * paths, so a file change that arrives DURING the recompute increments the
-     * generation counter in {@link PreLaunchChangeTracker#DIRTY} to a value higher
+     * <p>The snapshot ({@link PreLaunchChangeTracker#snapshot}) is taken BEFORE the
+     * recompute begins and returned to the caller. The caller passes it to
+     * {@link PreLaunchChangeTracker#markPrepared(Collection, PrepareSnapshot)} only
+     * on success paths, so a file change that arrives DURING the recompute increments
+     * the generation counter in {@code PreLaunchChangeTracker} to a value higher
      * than the snapshot; the subsequent conditional remove in {@code markPrepared}
-     * fails and the project remains dirty for the next launch.
+     * fails, the project remains dirty for the next launch, and the unfinished
+     * content state is not recorded as prepared.
      *
      * <p>This method does NOT call {@code markPrepared} itself — that is the
      * caller's ({@link #prepareForFreshLaunch}) responsibility, and only on the
@@ -692,9 +839,9 @@ public final class LaunchLifecycleUtils
      *
      * <p>Sequence:
      * <ol>
-     *   <li>Take the dirty snapshot (generation-keyed) BEFORE scheduling any
-     *       recompute.</li>
-     *   <li>Partition scope: dirty (per {@link PreLaunchChangeTracker#isDirty}) vs.
+     *   <li>Take the snapshot (dirty verdict + content fingerprint + generation)
+     *       BEFORE scheduling any recompute.</li>
+     *   <li>Partition scope: dirty (per {@link PrepareSnapshot#isDirty}) vs.
      *       clean.</li>
      *   <li>Dirty projects: {@link #recomputeAndSettle(Collection)} — full
      *       forced recompute + workspace build drain + per-project derived-data
@@ -714,17 +861,17 @@ public final class LaunchLifecycleUtils
      *
      * @param projects scope after {@link #resolveUpdateScope} has been applied
      *            (may be {@code null} or empty — returns empty snapshot)
-     * @return the dirty snapshot taken before the recompute; pass it to
-     *         {@link PreLaunchChangeTracker#markPrepared(Collection, Map)} on the
-     *         success path (the caller, not this method, is responsible for that
-     *         call so {@code markPrepared} is only invoked on genuine successes)
+     * @return the snapshot taken before the recompute; pass it to
+     *         {@link PreLaunchChangeTracker#markPrepared(Collection, PrepareSnapshot)}
+     *         on the success path (the caller, not this method, is responsible for
+     *         that call so {@code markPrepared} is only invoked on genuine successes)
      */
-    public static Map<String, Long> recomputeAndSettleIfDirty(Collection<IProject> projects)
+    public static PrepareSnapshot recomputeAndSettleIfDirty(Collection<IProject> projects)
     {
         // Take the snapshot BEFORE the recompute so any change arriving during
         // the recompute stores a HIGHER generation in DIRTY; markPrepared's
         // conditional remove will then leave that entry in place.
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(projects);
+        PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(projects);
 
         if (projects == null || projects.isEmpty())
         {
@@ -739,7 +886,7 @@ public final class LaunchLifecycleUtils
             {
                 continue;
             }
-            if (PreLaunchChangeTracker.isDirty(project))
+            if (snapshot.isDirty(project))
             {
                 dirty.add(project);
             }
@@ -775,8 +922,73 @@ public final class LaunchLifecycleUtils
         // NOTE: markPrepared is intentionally NOT called here. The caller
         // (prepareForFreshLaunch) calls PreLaunchChangeTracker.markPrepared(all, snapshot)
         // only on the success paths so that a failed or aborted prepare never
-        // marks projects as clean.
+        // records its content state as prepared.
         return snapshot;
+    }
+
+    /**
+     * Canonical form of an {@code updateScope} value: for scopes that pass
+     * {@link #validateUpdateScope}, sharing this string means asking {@link #resolveUpdateScope}
+     * for the same preparation. The converse does not hold — two scopes can mean the same
+     * preparation and still canonicalise apart; the accepted cases are listed below.
+     *
+     * <p>Exists so a reuse key can carry the scope without splitting requests that mean the same
+     * thing. The scope has a real grammar — {@code null}, {@code ""}, {@code "all"} and
+     * {@code " ALL "} are one value; {@code "A"} is {@code "extension:A"}; {@code "A,B"} is
+     * {@code "B, A"} — so a raw string in a key would be a FALSE MISS: two identical requests
+     * would each start their own run. It lives here, next to the resolver and the validator, and
+     * is built on the SAME {@link #parseRequestedExtensionNames} grammar, so the key asks the
+     * question of the same function the behaviour asks it of instead of re-deriving the answer.
+     *
+     * <p>The four output spaces are disjoint by construction ({@code "all"},
+     * {@code "configuration"}, {@code "extension:<names>"} with a non-empty suffix, and
+     * {@code "raw:<value>"}), so no two differently-behaving scopes can canonicalise together:
+     * <ul>
+     *   <li>{@code null} / blank / {@code all} (case-insensitive) → {@code "all"};</li>
+     *   <li>{@code configuration} (case-insensitive) → {@code "configuration"};</li>
+     *   <li>a token list that yields at least one requested name → {@code "extension:"} plus the
+     *       SORTED, de-duplicated names. Sorted because {@link #resolveUpdateScope} tests
+     *       MEMBERSHIP in that set and takes its ordering from the project list, not from the
+     *       scope string; names are compared case-SENSITIVELY there, so they are not lowercased
+     *       here either;</li>
+     *   <li>a token list that yields no name → {@code "raw:"} plus the trimmed input. That branch
+     *       always fails {@link #validateUpdateScope}, and the error quotes the caller's own
+     *       string, so scopes that are unusable for DIFFERENT reasons ({@code "extension:"} and
+     *       {@code ","}) stay apart instead of one caller receiving the other's message. Two
+     *       unusable scopes differing only in surrounding whitespace, or two unknown names in a
+     *       different order, still share a key and therefore share one failure: the message then
+     *       quotes whichever arrived first. That is error TEXT on input that can never launch,
+     *       not a run served to the wrong caller.</li>
+     * </ul>
+     *
+     * <p>Deliberately topology-INDEPENDENT: it does not ask the workspace which extension projects
+     * exist. That leaves two accepted false misses — {@code "all"} versus {@code "configuration"}
+     * for a configuration with no dependent extensions, and {@code "all"} versus a list naming
+     * every extension — each costing one extra run and never a wrong report. The alternative,
+     * resolving the scope against the live project graph at key time, would make the key change
+     * under the caller's feet between a Pending and its retry.
+     *
+     * @param updateScope the raw {@code updateScope} parameter value (may be {@code null})
+     * @return the canonical form; never {@code null}
+     */
+    public static String canonicalUpdateScope(String updateScope)
+    {
+        String scope = updateScope != null ? updateScope.trim() : ""; //$NON-NLS-1$
+        if (scope.isEmpty() || "all".equalsIgnoreCase(scope)) //$NON-NLS-1$
+        {
+            return "all"; //$NON-NLS-1$
+        }
+        if ("configuration".equalsIgnoreCase(scope)) //$NON-NLS-1$
+        {
+            return "configuration"; //$NON-NLS-1$
+        }
+        List<String> names = new ArrayList<>(parseRequestedExtensionNames(scope));
+        if (names.isEmpty())
+        {
+            return "raw:" + scope; //$NON-NLS-1$
+        }
+        Collections.sort(names);
+        return "extension:" + String.join(",", names); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -1270,7 +1482,9 @@ public final class LaunchLifecycleUtils
         catch (ApplicationException e)
         {
             Activator.logError("Error during pre-launch DB update", e); //$NON-NLS-1$
-            return Optional.of("Database update failed: " + e.getMessage()); //$NON-NLS-1$
+            // PlatformFailures, not getMessage(): EDT wraps IStatus failures, so the exception's
+            // own message is routinely empty or generic while the reason sits in the status tree.
+            return Optional.of("Database update failed: " + PlatformFailures.describe(e)); //$NON-NLS-1$
         }
     }
 
@@ -1350,11 +1564,21 @@ public final class LaunchLifecycleUtils
             LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
             try
             {
-                after = appManager.update(application, ApplicationUpdateType.INCREMENTAL, context,
-                    new NullProgressMonitor());
+                after = StandaloneServerStateRecovery.updateWithRecovery(appManager,
+                    application.getProject(), application, applicationId,
+                    ApplicationUpdateType.INCREMENTAL, context, new NullProgressMonitor());
             }
             catch (ApplicationException ex)
             {
+                // A standalone-server target starts its server as part of the publish; when its
+                // ports are taken the auto-confirmer cancels EDT's port-conflict modal and the
+                // platform reports only a bare cancellation. Report what the dialog said instead.
+                if (watch.portConflicted())
+                {
+                    return Optional.of("Pre-launch database update failed: " //$NON-NLS-1$
+                        + LaunchUpdateDialogAutoConfirmer.portConflictError(
+                            watch.portConflictDetail(), watch.portConflictReason()));
+                }
                 // The cancel can ABORT the update instead of letting it return a state. The reason
                 // is in the window, and it beats the generic "Database update failed" the outer
                 // handler would produce - it names the knob that would have let it through.
@@ -1368,6 +1592,14 @@ public final class LaunchLifecycleUtils
             finally
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+            }
+            // Same as the catch above, for the path where the cancelled server start lets update()
+            // return a (cached, therefore meaningless) state rather than throwing.
+            if (watch.portConflicted())
+            {
+                return Optional.of("Pre-launch database update failed: " //$NON-NLS-1$
+                    + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
+                        watch.portConflictReason()));
             }
             Optional<String> declined = declinedByCancelledConflict(policy, watch);
             if (declined.isPresent())
@@ -1437,15 +1669,6 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Returns the application's display name — the string EDT interpolates into its
-     * "Infobase \"<name>\" configuration was changed…" conflict modal — or {@code null} when
-     * it cannot be read. Fully guarded: a name is only an attribution HINT, never a
-     * precondition of the update itself.
-     *
-     * @param application the application being updated (may be {@code null})
-     * @return the name, or {@code null}
-     */
-    /**
      * Resolves the name EDT interpolates into its "Infobase \"<name>\" configuration was
      * changed…" conflict modal: the bound {@link com._1c.g5.v8.dt.platform.services.model
      * .InfobaseReference}'s name, since an application's own (localized) name can differ from
@@ -1476,6 +1699,15 @@ public final class LaunchLifecycleUtils
         return safeApplicationName(application);
     }
 
+    /**
+     * Returns the application's display name — the string EDT interpolates into its
+     * "Infobase \"<name>\" configuration was changed…" conflict modal — or {@code null} when
+     * it cannot be read. Fully guarded: a name is only an attribution HINT, never a
+     * precondition of the update itself.
+     *
+     * @param application the application being updated (may be {@code null})
+     * @return the name, or {@code null}
+     */
     private static String safeApplicationName(IApplication application)
     {
         if (application == null)
@@ -1518,14 +1750,35 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Builds the explicit, actionable "infobase is still out of sync" message
-     * returned when the IB does not reach {@link ApplicationUpdateState#UPDATED}
-     * within {@link #syncApplyTimeoutMs}. The point is to ABORT the run rather
-     * than execute it against a not-yet-applied IB (which would yield a stale
-     * green result).
+     * Builds the explicit, actionable message returned when the IB does not reach
+     * {@link ApplicationUpdateState#UPDATED} within {@link #syncApplyTimeoutMs}. The point is
+     * to ABORT the run rather than execute it against a not-yet-applied IB (which would yield
+     * a stale green result).
+     *
+     * <p>The two ways of not reaching UPDATED are told apart, because they need different
+     * actions from the caller (#433): a {@code …UPDATE_REQUIRED} state IS the out-of-sync
+     * claim, while {@code UNKNOWN} claims nothing of the sort — EDT returns it when it has no
+     * live connection to the infobase, so what the DB contains is simply not known. Reporting
+     * the second as "DB requires update; extension changes not yet applied" states a fact
+     * nobody observed and sends the caller after the wrong thing.
+     *
+     * @param finalState the last state observed (may be {@code null})
      */
-    private static String staleInfobaseError(ApplicationUpdateState finalState)
+    static String staleInfobaseError(ApplicationUpdateState finalState)
     {
+        // ONLY the UNKNOWN category is re-worded. A timed-out BEING_UPDATED (IN_PROGRESS) really
+        // is an infobase left mid-update — "out of sync" describes it correctly — so it keeps the
+        // original text; the unit test that pins that case is the guard against widening this.
+        if (classify(finalState) == SyncCategory.UNKNOWN)
+        {
+            return "Infobase state is still UNKNOWN after " + (syncApplyTimeoutMs / 1000) //$NON-NLS-1$
+                + "s (final update state: " + finalState + ") — EDT reports this when it has " //$NON-NLS-1$ //$NON-NLS-2$
+                + "no live connection to the infobase, so whether the DB matches the project " //$NON-NLS-1$
+                + "cannot be told and the run was refused rather than executed blind. Check " //$NON-NLS-1$
+                + "that the infobase is reachable and, for a standalone server, that the " //$NON-NLS-1$
+                + "server is running (get_applications reports the state it reads); then " //$NON-NLS-1$
+                + "retry."; //$NON-NLS-1$
+        }
         return "Infobase is still out of sync (DB requires update; extension changes " //$NON-NLS-1$
             + "not yet applied) after " + (syncApplyTimeoutMs / 1000) //$NON-NLS-1$
             + "s (final update state: " + finalState + ") — results would be stale, " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1881,6 +2134,39 @@ public final class LaunchLifecycleUtils
             IProject project, String applicationId, IApplicationManager appManager,
             int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy)
     {
+        return prepareForFreshLaunch(launchManager, project, applicationId, appManager,
+            terminateTimeoutSeconds, updateScope, policy, phase -> {
+                // No sink: the caller does not report progress.
+            });
+    }
+
+    /**
+     * Same contract as
+     * {@link #prepareForFreshLaunch(ILaunchManager, IProject, String, IApplicationManager, int, String, ExternalInfobaseChangesPolicy)},
+     * additionally publishing the stage it is entering to {@code phaseSink}.
+     *
+     * <p>The prep runs for minutes on a real configuration while the caller can only hold the
+     * MCP transport open for seconds, so "what is it doing right now?" is the one piece of
+     * information a polling caller can act on. The sink is therefore called on ENTRY to each
+     * stage ({@link #PHASE_TERMINATE} → {@link #PHASE_RECOMPUTE} → {@link #PHASE_DB_UPDATE}),
+     * never after one completes: a label published on exit describes work that is already
+     * finished and would have the reader waiting on the wrong thing.
+     *
+     * @param launchManager the debug-platform launch manager
+     * @param project the launch (configuration) project
+     * @param applicationId the application the launch targets
+     * @param appManager the EDT application manager
+     * @param terminateTimeoutSeconds how long to wait for each swept launch to die
+     * @param updateScope the caller's update scope (see {@link #resolveUpdateScope})
+     * @param policy how to answer the external-changes conflict modal (may be {@code null})
+     * @param phaseSink receives the label of each stage as it is entered; never {@code null}
+     * @return the prep result
+     */
+    public static PreLaunchResult prepareForFreshLaunch(ILaunchManager launchManager, // NOSONAR pass-through signature; the sink is the 8th value, not a new concern
+            IProject project, String applicationId, IApplicationManager appManager,
+            int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
+            Consumer<String> phaseSink)
+    {
         if (launchManager == null)
         {
             return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
@@ -1912,6 +2198,7 @@ public final class LaunchLifecycleUtils
             // permanently block future auto-chains.
             OWNED_LAUNCHES.removeIf(ILaunch::isTerminated);
 
+            phaseSink.accept(PHASE_TERMINATE);
             TerminationOutcome outcome = new TerminationOutcome();
             terminateMatchingLiveLaunches(launchManager, project, applicationId,
                 terminateTimeoutSeconds, outcome);
@@ -1927,7 +2214,7 @@ public final class LaunchLifecycleUtils
             }
 
             return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope, policy,
-                outcome.terminated);
+                outcome.terminated, phaseSink);
         }
     }
 
@@ -2058,10 +2345,11 @@ public final class LaunchLifecycleUtils
      * the inline tail produced.
      *
      * @param terminated the swept-launch count accumulated by the terminate passes
+     * @param phaseSink receives the label of each stage as it is entered
      */
-    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId,
+    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId, // NOSONAR pass-through signature; the sink is the 7th value, not a new concern
             IApplicationManager appManager, String updateScope, ExternalInfobaseChangesPolicy policy,
-            int terminated)
+            int terminated, Consumer<String> phaseSink)
     {
         // Selectively force a derived-data recompute of projects that have
         // had file changes since the last successful prepare (dirty projects).
@@ -2078,8 +2366,9 @@ public final class LaunchLifecycleUtils
         // markPrepared on the success paths — a change arriving DURING the
         // recompute bumps the generation counter; the conditional remove in
         // markPrepared then fails and the project stays dirty (stale-.cfe fix).
+        phaseSink.accept(PHASE_RECOMPUTE);
         List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
-        Map<String, Long> dirtySnapshot = recomputeAndSettleIfDirty(scopeProjects);
+        PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects);
 
         // A STANDALONE-SERVER application (literal
         // "ServerApplication." id prefix) must NOT be DB-updated out-of-band
@@ -2102,25 +2391,32 @@ public final class LaunchLifecycleUtils
             Activator.logInfo("Pre-launch auto-chain: server application: deferring DB update " //$NON-NLS-1$
                 + "to the launch delegate's coordinated path (auto-confirmed): applicationId=" //$NON-NLS-1$
                 + applicationId);
-            // Success path: mark all scope projects as prepared with the
-            // generation-keyed snapshot so the next call skips the recompute
-            // when nothing changed (and keeps dirty flag on a change-during-recompute).
-            PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
+            // Success path: record the prepared content state of all scope projects
+            // so the next call skips the recompute when nothing changed (and keeps
+            // the dirty flag on a change-during-recompute).
+            PreLaunchChangeTracker.markPrepared(scopeProjects, prepareSnapshot);
             return new PreLaunchResult(true, terminated, null);
         }
 
-        // settleAfterPossibleRecompute=true: we JUST forced a recompute, so a cached
-        // UPDATED may lag the freshly regenerated .cfe — wait out the settle window
-        // before trusting "no update needed". The settle is kept
+        // settleAfterPossibleRecompute=true: we may JUST have forced a recompute, so a
+        // cached UPDATED may lag the freshly regenerated .cfe — wait out the settle
+        // window before trusting "no update needed". The settle is kept
         // UNCONDITIONALLY: the lagging UPDATE_STATE_CHANGED push this window
         // exists for arrives AFTER the recompute drain (it is emitted by the
         // applications-layer infobase-sync checker, which the drained build /
         // derived-data job families do NOT cover), so no during-drain probe can
-        // prove it will not come. The plain debug_launch path passes false
-        // (immediate return on UPDATED) to avoid that ~5s cost.
+        // prove it will not come. Note that "this call recomputed nothing" does NOT
+        // make the cached flag trustworthy either: the recompute may have been done
+        // seconds ago by the preparation of ANOTHER application of the same project
+        // (the per-(project, applicationId) lock does not serialise those), and this
+        // application's cached UPDATED can still be lagging that regeneration. The
+        // window costs ~5s; skipping it can cost a silently green run against a
+        // stale infobase. The plain debug_launch path passes false because it never
+        // recomputes at all.
         // The blocking-modal arming lives in performUpdateAndAwaitApplied - the single point
         // where the update is actually issued - so every caller of the pre-launch update is
         // covered, not just this one; see the comment there.
+        phaseSink.accept(PHASE_DB_UPDATE);
         Optional<String> updateErr =
             updateApplicationIfNeeded(project, applicationId, appManager, true, policy);
         if (updateErr.isPresent())
@@ -2128,8 +2424,8 @@ public final class LaunchLifecycleUtils
             // Error path: do NOT mark prepared — the next call must recompute.
             return new PreLaunchResult(false, terminated, updateErr.get());
         }
-        // Success path: mark prepared with the generation-keyed snapshot.
-        PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
+        // Success path: record the prepared content state of the scope.
+        PreLaunchChangeTracker.markPrepared(scopeProjects, prepareSnapshot);
         return new PreLaunchResult(true, terminated, null);
     }
 

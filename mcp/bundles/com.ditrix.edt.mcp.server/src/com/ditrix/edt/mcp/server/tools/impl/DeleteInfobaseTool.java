@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
@@ -102,14 +103,9 @@ public class DeleteInfobaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Remove a FILE infobase association from a configuration project OR delete a standalone " //$NON-NLS-1$
-            + "(autonomous) server application. Destructive: guarded by a confirm-preview - call without " //$NON-NLS-1$
-            + "confirm to preview what would be removed (no change), then confirm=true to delete. For a " //$NON-NLS-1$
-            + "file infobase: dissociates it and (deleteRegistration, default true) deregisters it from " //$NON-NLS-1$
-            + "the EDT infobases list. For a standalone server (applicationKind=standaloneServer): stops " //$NON-NLS-1$
-            + "it and removes the WST server and its server config folder. By default the infobase " //$NON-NLS-1$
-            + "DATABASE FILES on disk are KEPT (both kinds); pass deleteDatabaseFiles=true to also delete " //$NON-NLS-1$
-            + "the database directory. The inverse of create_infobase. Full parameters and examples: call " //$NON-NLS-1$
+        return "Remove a project's infobase or its standalone-server registration, optionally deleting the " //$NON-NLS-1$
+            + "database files. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to " //$NON-NLS-1$
+            + "preview, then again with confirm=true to apply. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('delete_infobase')."; //$NON-NLS-1$
     }
 
@@ -856,7 +852,7 @@ public class DeleteInfobaseTool implements IMcpTool
         };
         deleteJob.setUser(false);
         deleteJob.setSystem(true);
-        deleteJob.schedule();
+        McpJobs.schedule(deleteJob);
 
         try
         {

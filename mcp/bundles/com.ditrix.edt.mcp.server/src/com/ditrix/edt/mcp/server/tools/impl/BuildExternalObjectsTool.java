@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectDumpSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
@@ -144,12 +145,11 @@ public class BuildExternalObjectsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Build (compile to disk) the external data processors/reports of an EDT external-object " //$NON-NLS-1$
-            + "project to .epf/.erf files. Build ONE object with objectName, or ALL of them when " //$NON-NLS-1$
-            + "objectName is omitted. Requires an associated infobase + a resolvable 1C runtime " //$NON-NLS-1$
-            + "(like update_database): if missing, set it up with create_infobase / " //$NON-NLS-1$
-            + "set_infobase_credentials. Full parameters and examples: " //$NON-NLS-1$
-            + "call get_tool_guide('build_external_objects')."; //$NON-NLS-1$
+        return "Compile external 1C data processors and reports into deployable files. NOT self-contained: " //$NON-NLS-1$
+            + "the project needs an associated infobase AND a resolvable 1C runtime - without either the " //$NON-NLS-1$
+            + "call fails with a setup error, not a compile error (see create_infobase / " //$NON-NLS-1$
+            + "set_infobase_credentials). Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('build_external_objects')."; //$NON-NLS-1$
     }
 
     @Override
@@ -543,7 +543,7 @@ public class BuildExternalObjectsTool implements IMcpTool
         // route through EDT's "Application update" / "Restructure data" modals). Disarm in finally.
         LaunchUpdateDialogAutoConfirmer.arm(true, true, true);
         buildJob.setUser(false);
-        buildJob.schedule();
+        McpJobs.schedule(buildJob);
         try
         {
             buildJob.join(BUILD_TIMEOUT_MS, new NullProgressMonitor());

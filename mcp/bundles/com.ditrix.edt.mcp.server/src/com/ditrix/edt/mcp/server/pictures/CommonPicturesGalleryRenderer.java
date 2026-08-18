@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommonPictureContentReader;
 import com.ditrix.edt.mcp.server.utils.CommonPictureContentReader.PictureVariantInfo;
 import com.ditrix.edt.mcp.server.utils.CommonPictureContentReader.PngResult;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
@@ -117,7 +118,7 @@ public final class CommonPicturesGalleryRenderer
             }
         };
         job.setUser(true);
-        job.schedule();
+        McpJobs.schedule(job);
     }
 
     /**

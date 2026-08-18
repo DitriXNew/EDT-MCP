@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
@@ -178,13 +179,8 @@ public class CreateProjectTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Create a NEW 1C project in the EDT workspace. " //$NON-NLS-1$
-            + "projectKind selects the kind: 'configuration' (standalone), " //$NON-NLS-1$
-            + "'extension' (bound to a base configuration), or " //$NON-NLS-1$
-            + "'externalObjects' (external data processors/reports). " //$NON-NLS-1$
-            + "The name must not already exist as a project. " //$NON-NLS-1$
-            + "standardChecks/commonChecks are applied only when com.e1c.v8codestyle is installed. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_project')."; //$NON-NLS-1$
+        return "Start a new EDT configuration, extension, or external-objects project. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('create_project')."; //$NON-NLS-1$
     }
 
     @Override
@@ -1885,7 +1881,7 @@ public class CreateProjectTool implements IMcpTool
     private CreateJobResult runCreateJob(Job createJob, String effectiveProjectName, String kindLabel)
     {
         createJob.setUser(false);
-        createJob.schedule();
+        McpJobs.schedule(createJob);
 
         try
         {

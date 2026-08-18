@@ -67,7 +67,7 @@ public class CreateProjectToolTest
     {
         String desc = new CreateProjectTool().getDescription();
         assertTrue("description must mention v8codestyle optionality", //$NON-NLS-1$
-            desc.contains("com.e1c.v8codestyle")); //$NON-NLS-1$
+            new CreateProjectTool().getGuide().contains("com.e1c.v8codestyle")); //$NON-NLS-1$
     }
 
     @Test

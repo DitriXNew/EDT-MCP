@@ -41,12 +41,14 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.IApplicationType;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -54,6 +56,11 @@ import com.google.gson.JsonObject;
 /**
  * Creates a new FILE infobase (1C:Enterprise database) and binds it to a configuration
  * project so it appears as an application in {@code get_applications}.
+ *
+ * <p>The two steps below are two separate FACTS, and the second one is not implied by the first:
+ * {@code associate} returning without an exception does not mean the project has the application.
+ * The tool therefore reads the applications back and reports what that read-back established —
+ * bound, measured absent (an error that still says the database exists), or unverified (issue #412).
  *
  * <p>The operation decomposes into two distinct steps:
  * <ol>
@@ -96,6 +103,19 @@ public class CreateInfobaseTool implements IMcpTool
 
     /** Output key: applications bound to the project after creation. */
     private static final String KEY_APPLICATIONS = "applications"; //$NON-NLS-1$
+
+    /**
+     * Output key: whether the infobase actually surfaced as an application of the project, as
+     * ESTABLISHED by the post-association read-back (issue #412). Omitted when the read-back itself
+     * could not be completed — a failed read does not establish absence.
+     */
+    private static final String KEY_BOUND_TO_PROJECT = "boundToProject"; //$NON-NLS-1$
+
+    /** {@code action} value (and message verb) for mode='create'. */
+    private static final String ACTION_CREATED = "created"; //$NON-NLS-1$
+
+    /** {@code action} value (and message verb) for mode='register'. */
+    private static final String ACTION_REGISTERED = "registered"; //$NON-NLS-1$
 
     /** Output key: the application update state. */
     private static final String KEY_UPDATE_STATE = "updateState"; //$NON-NLS-1$
@@ -183,19 +203,10 @@ public class CreateInfobaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Create a new FILE infobase (1C database) OR register an existing one, and bind it to " //$NON-NLS-1$
-            + "a configuration project so it appears in get_applications. mode='create' (default) " //$NON-NLS-1$
-            + "makes a new database (requires a registered 1C platform runtime); mode='register' " //$NON-NLS-1$
-            + "adds an already-existing infobase at the given path without launching the platform. " //$NON-NLS-1$
-            + "applicationKind='infobase' (default) makes a plain file infobase; " //$NON-NLS-1$
-            + "applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING " //$NON-NLS-1$
-            + "file infobase with) an autonomous (standalone) server that also exposes a web URL for " //$NON-NLS-1$
-            + "HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
-            + "platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job " //$NON-NLS-1$
-            + "(up to 120 s). user/password/access store connection credentials for " //$NON-NLS-1$
-            + "applicationKind='infobase', and for applicationKind='standaloneServer' with " //$NON-NLS-1$
-            + "mode='register' — rejected for a newly created standalone server " //$NON-NLS-1$
-            + "(mode='create'). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
+        return "Prepare an infobase for an EDT project by creating a database or registering an existing " //$NON-NLS-1$
+            + "one. Passing user/password/access STORES those credentials in EDT's infobase settings - " //$NON-NLS-1$
+            + "the secret PERSISTS beyond this call and is reused by later connections. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
 
     @Override
@@ -212,9 +223,7 @@ public class CreateInfobaseTool implements IMcpTool
                 + "server instead of creating a new one.", //$NON-NLS-1$
                 "create", "register") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_INFOBASE_FILE,
-                "Absolute path to the infobase directory (required). For mode='create' the directory " //$NON-NLS-1$
-                + "is created if absent and the 1Cv8.1CD files are written into it; for mode='register' " //$NON-NLS-1$
-                + "it must already contain an existing file infobase.", //$NON-NLS-1$
+                "Absolute path to the infobase directory. FILE infobases only - server/web are rejected.", //$NON-NLS-1$
                 true)
             .stringProperty(KEY_INFOBASE_NAME,
                 "Display name for the new infobase. If omitted, a name is auto-generated by EDT.") //$NON-NLS-1$
@@ -269,11 +278,25 @@ public class CreateInfobaseTool implements IMcpTool
                 "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing. " //$NON-NLS-1$
                 + "Best-effort: absent if EDT could not resolve the URL (the server is still created).") //$NON-NLS-1$
             .integerProperty("port", //$NON-NLS-1$
-                "applicationKind='standaloneServer' only: the ACTUAL web port the server was " //$NON-NLS-1$
-                + "published on (parsed from webUrl; EDT auto-allocates it). Absent if webUrl could " //$NON-NLS-1$
-                + "not be resolved.") //$NON-NLS-1$
+                "applicationKind='standaloneServer' only: the ACTUAL web port EDT allocated, parsed " //$NON-NLS-1$
+                + "from the resolved webUrl (the endpoint is read from EDT's configuration, not " //$NON-NLS-1$
+                + "probed). Absent if webUrl could not be resolved.") //$NON-NLS-1$
             .objectArrayProperty(KEY_APPLICATIONS,
-                "Applications bound to the project after creation (same shape as get_applications).") //$NON-NLS-1$
+                "Applications bound to the project after creation (same shape as get_applications). " //$NON-NLS-1$
+                + "Lists the applications the read-back could read; an application whose properties " //$NON-NLS-1$
+                + "could not be read is left out, and - unless the new application was already " //$NON-NLS-1$
+                + "matched - makes boundToProject absent. The key itself is omitted when the " //$NON-NLS-1$
+                + "applications could not be listed at all.") //$NON-NLS-1$
+            .booleanProperty(KEY_BOUND_TO_PROJECT,
+                "Whether the infobase actually appeared as an application of the project, as " //$NON-NLS-1$
+                + "ESTABLISHED by the read-back that follows the association. true = the application " //$NON-NLS-1$
+                + "is there (applicationId is echoed whenever the platform gave it one). false = the " //$NON-NLS-1$
+                + "read-back completed and the " //$NON-NLS-1$
+                + "application is NOT there, so the call is reported as an error - the database " //$NON-NLS-1$
+                + "itself still exists (see 'action' and 'infobaseFile'). ABSENT = the applications " //$NON-NLS-1$
+                + "could not be compared (the read failed, the call was interrupted before the poll " //$NON-NLS-1$
+                + "budget was spent, or an application's identity was unreadable), so the binding " //$NON-NLS-1$
+                + "is unverified: call get_applications to confirm it.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "ID of the newly created application (for chaining into update_database).") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
@@ -479,8 +502,11 @@ public class CreateInfobaseTool implements IMcpTool
         }
     }
 
-    /** The infobase connection credentials (#194); any field may be {@code null}/empty when not supplied. */
-    private static final class Credentials
+    /**
+     * The infobase connection credentials (#194); any field may be {@code null}/empty when not
+     * supplied. Package-visible so the unit tests can drive the result builders.
+     */
+    static final class Credentials
     {
         final String user;
         final String password;
@@ -543,23 +569,22 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         // --- 7. Associate with the project ---
-        String associateError = associateInfobase(assocManager, project, ibRef, infobaseDir, projectName);
+        String associateError =
+            associateInfobase(assocManager, project, ibRef, infobaseDir, projectName, register);
         if (associateError != null)
         {
             return associateError;
         }
 
-        // --- 8. Optionally set as default ---
-        String setDefaultNote = setDefault ? applySetDefault(appManager, project, ibRef) : null;
-
-        // --- 8.5 Optionally store infobase connection credentials (#194) ---
+        // --- 8. Optionally store infobase connection credentials (#194) ---
         String credNote = storeCredentialsIfRequested(ibRef, credentials, register);
 
-        // --- 9. Read back and return ---
+        // --- 9. Read back, apply setDefault to what the read-back FOUND, and return ---
+        // setDefault is applied AFTER the read-back on purpose (issue #412): it used to run its own
+        // one-shot lookup BEFORE the bounded re-poll, so it could report "could not be set as default"
+        // for an application the re-poll then found. One observation feeds one report.
         ResultContext rc = new ResultContext(projectName, infobaseDir, infobaseName, appManager, project);
-        String note = (setDefaultNote != null ? setDefaultNote : "") //$NON-NLS-1$
-            + (credNote != null ? credNote : ""); //$NON-NLS-1$
-        return buildSuccessResult(rc, ibRef, note.isEmpty() ? null : note, register);
+        return buildSuccessResult(rc, ibRef, setDefault, register, credNote);
     }
 
     /**
@@ -567,7 +592,8 @@ public class CreateInfobaseTool implements IMcpTool
      * supplied any of {@code user}/{@code password}/{@code access} (#194), returning a note to append
      * to the result message — a success note, a non-fatal WARNING when the store failed, or
      * {@code null} when no credentials were requested. Credential storage never fails the
-     * infobase creation itself (the base is already created and bound).
+     * infobase creation itself (the base is already created; whether it is BOUND is established
+     * later, by the read-back).
      *
      * @param ibRef the new infobase reference (the access-settings key)
      * @param credentials the requested connection credentials (any field may be {@code null}/empty)
@@ -582,8 +608,8 @@ public class CreateInfobaseTool implements IMcpTool
         {
             return null;
         }
-        String error = InfobaseAccessSupport.storeCredentials(ibRef, credentials.user, credentials.password,
-            InfobaseAccessSupport.parseAccess(credentials.access));
+        String error = storeSafely(() -> InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
+            credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)));
         if (error != null)
         {
             return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
@@ -598,6 +624,32 @@ public class CreateInfobaseTool implements IMcpTool
                 + "only after a matching infobase user is added."; //$NON-NLS-1$
         return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
             + "' (change them later with set_infobase_credentials)." + userNote; //$NON-NLS-1$
+    }
+
+    /**
+     * Runs a credentials store and turns any exception into the message it is supposed to produce.
+     *
+     * <p>Both credential helpers promise that storing credentials never fails the creation or the
+     * registration itself — the database is already there, and a rejected password must not undo it.
+     * That promise cannot rest on the store never throwing: reading a stale application, or the
+     * secure storage refusing, would otherwise turn a completed creation into an internal tool error.
+     * Here it is structural (and logged, so a real failure stays visible).
+     *
+     * @param store the store call, returning its own error text or {@code null} on success
+     * @return the error text to report, or {@code null} when the credentials were stored
+     */
+    private static String storeSafely(java.util.function.Supplier<String> store)
+    {
+        try
+        {
+            return store.get();
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: storing the connection credentials failed", e); //$NON-NLS-1$
+            String reason = e.getMessage();
+            return (reason != null && !reason.trim().isEmpty()) ? reason : e.getClass().getSimpleName();
+        }
     }
 
     /**
@@ -697,7 +749,7 @@ public class CreateInfobaseTool implements IMcpTool
         };
         createJob.setUser(false);
         createJob.setSystem(true);
-        createJob.schedule();
+        McpJobs.schedule(createJob);
 
         String waitError = awaitCreateJob(createJob, infobaseDir);
         if (waitError != null)
@@ -752,9 +804,14 @@ public class CreateInfobaseTool implements IMcpTool
      * Associates the infobase with the project (step 7): the {@code associate} side effect stays inline
      * here at the SAME sequence point. Returns a ready error tool-result JSON on the SAME failure case
      * the inline code produced, else {@code null}.
+     *
+     * <p>A {@code null} return means only that {@code associate} did not throw — NOT that the project
+     * now has the application. Whether the binding materialized is established later, by the read-back
+     * in {@link #buildSuccessResult} (issue #412), so neither the log line nor the return value claims
+     * more than that here.
      */
     private static String associateInfobase(IInfobaseAssociationManager assocManager, IProject project,
-            InfobaseReference ibRef, Path infobaseDir, String projectName)
+            InfobaseReference ibRef, Path infobaseDir, String projectName, boolean register)
     {
         try
         {
@@ -763,40 +820,47 @@ public class CreateInfobaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("create_infobase: association failed for project " + projectName, e); //$NON-NLS-1$
-            return ToolResult.error("Infobase was created at '" + infobaseDir //$NON-NLS-1$
-                + "' but could not be associated with project '" + projectName //$NON-NLS-1$
+            return ToolResult.error("Infobase at '" + infobaseDir //$NON-NLS-1$
+                + "' was " + (register ? ACTION_REGISTERED : ACTION_CREATED) //$NON-NLS-1$
+                + " but could not be associated with project '" + projectName //$NON-NLS-1$
                 + "': " + e.getMessage() //$NON-NLS-1$
-                + ". Use delete_infobase to clean up if needed.").toJson(); //$NON-NLS-1$
+                + ". The database itself is intact - do not create it again.").toJson(); //$NON-NLS-1$
         }
-        Activator.logInfo("create_infobase: associated with project " + projectName); //$NON-NLS-1$
+        Activator.logInfo("create_infobase: associate() returned without error for project " //$NON-NLS-1$
+            + projectName + " (the binding is verified by the read-back)"); //$NON-NLS-1$
         return null;
     }
 
     /**
-     * Optionally sets the new infobase as the project's default application (step 8): the
-     * {@code setDefaultApplication} side effect stays inline here at the SAME sequence point. Non-fatal —
-     * returns the SAME nullable {@code setDefaultNote} the inline code produced ({@code null} when the
-     * default was set or the failure was swallowed; a note when the new app was not found yet).
+     * Optionally sets the new infobase as the project's default application, using the application the
+     * read-back actually FOUND (issue #412) instead of a second, earlier lookup of its own. Non-fatal:
+     * returns a note to append to the message, or {@code null} when the default was set.
+     *
+     * <p>Every note here is about {@code setDefault} ONLY. The reason there is no application to set —
+     * and whether that is even established — is reported by the caller, not blamed on this flag.
      */
     private static String applySetDefault(IApplicationManager appManager, IProject project,
-            InfobaseReference ibRef)
+            ApplicationReadBack readBack)
     {
+        if (readBack.app == null)
+        {
+            Activator.logInfo("create_infobase: setDefault not applied - no application to set (" //$NON-NLS-1$
+                + readBack.outcome + ")"); //$NON-NLS-1$
+            return readBack.outcome == BindingOutcome.NOT_BOUND
+                ? " setDefault was not applied: the project has no application for this infobase." //$NON-NLS-1$
+                : " setDefault was not applied: the new application could not be read back - check " //$NON-NLS-1$
+                    + "get_applications and set it manually."; //$NON-NLS-1$
+        }
         try
         {
-            IApplication newApp = findNewApplication(appManager, project, ibRef);
-            if (newApp == null)
-            {
-                Activator.logError("create_infobase: setDefault skipped — new app not found yet", //$NON-NLS-1$
-                    null);
-                return "; the new infobase was created but could not be set as " //$NON-NLS-1$
-                    + "default yet - set it manually or retry"; //$NON-NLS-1$
-            }
-            appManager.setDefaultApplication(project, newApp);
+            appManager.setDefaultApplication(project, readBack.app);
         }
         catch (Exception e)
         {
-            // Non-fatal: the infobase was created and associated; only the default-setting failed.
+            // Non-fatal: the infobase was created and is bound; only the default-setting failed. Say so
+            // instead of swallowing it — the failure was established, and the caller asked for it.
             Activator.logError("create_infobase: setDefault failed", e); //$NON-NLS-1$
+            return " setDefault failed: " + e.getMessage() + " - set it manually or retry."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
     }
@@ -1075,7 +1139,7 @@ public class CreateInfobaseTool implements IMcpTool
         };
         createJob.setUser(false);
         createJob.setSystem(true);
-        createJob.schedule();
+        McpJobs.schedule(createJob);
 
         String waitError = awaitStandaloneJob(createJob, infobaseDir, register);
         if (waitError != null)
@@ -1786,13 +1850,6 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
-     * Builds the "no standalone-server runtime registered" error message. Behaviour-identical to the
-     * former inline string concatenation, including the optional {@code for version '...'} fragment.
-     *
-     * @param platform the requested platform version mask (may be {@code null}/empty)
-     * @return the error message
-     */
-    /**
      * Returns the given string, or the empty string when it is {@code null}. Behaviour-identical to the
      * former inline {@code platform != null ? platform : ""}.
      *
@@ -1804,6 +1861,13 @@ public class CreateInfobaseTool implements IMcpTool
         return value != null ? value : ""; //$NON-NLS-1$
     }
 
+    /**
+     * Builds the "no standalone-server runtime registered" error message. Behaviour-identical to the
+     * former inline string concatenation, including the optional {@code for version '...'} fragment.
+     *
+     * @param platform the requested platform version mask (may be {@code null}/empty)
+     * @return the error message
+     */
     private static String noRuntimeError(String platform)
     {
         return "No standalone-server runtime registered" //$NON-NLS-1$
@@ -1898,64 +1962,87 @@ public class CreateInfobaseTool implements IMcpTool
 
     /**
      * Reads back the applications for the project, finds the new {@code wst-server} application, and
-     * builds the success JSON for the standalone-server path. Uses the same short bounded re-poll as
-     * the file path to absorb the provision-delegate listener race.
+     * builds the result for the standalone-server path. Uses the same short bounded re-poll as the
+     * file path to absorb the provision-delegate listener race, and the same three-way report
+     * (issue #412): bound, measured absent (an ERROR that keeps the payload and the endpoint), or
+     * unverified. Package-visible so the unit tests can drive all three outcomes.
      */
-    private static String buildStandaloneServerResult(ResultContext rc, int actualPort, String webUrl,
+    static String buildStandaloneServerResult(ResultContext rc, int actualPort, String webUrl,
             boolean setDefault, boolean register, Credentials credentials)
     {
         // Read back the applications (bounded re-poll) and locate the just-created wst-server.
-        ServerReadBack readBack =
-            pollForNewServerApplication(rc.appManager, rc.project, rc.infobaseName);
-        JsonArray appsArray = readBack.appsArray;
-        String newAppId = readBack.newAppId;
-        IApplication newApp = readBack.newApp;
+        ApplicationReadBack readBack = pollForNewApplication(rc.appManager, rc.project,
+            app -> isMatchingNewServerApp(app, rc.infobaseName));
 
         // Optionally set the new standalone server as the project's default application. A wst-server
         // application is an ordinary IApplication, so the same setDefaultApplication API the file path
-        // uses works here too. Non-fatal: the server is already created and bound.
-        String setDefaultNote = null;
-        if (setDefault)
-        {
-            if (newApp != null)
-            {
-                try
-                {
-                    rc.appManager.setDefaultApplication(rc.project, newApp);
-                }
-                catch (Exception e)
-                {
-                    Activator.logError("create_infobase: setDefault failed", e); //$NON-NLS-1$
-                    setDefaultNote = "; the server was created but could not be set as default - " //$NON-NLS-1$
-                        + "set it manually or retry"; //$NON-NLS-1$
-                }
-            }
-            else
-            {
-                setDefaultNote = "; the server was created but could not be set as default yet " //$NON-NLS-1$
-                    + "(the application was not visible yet) - set it manually or retry"; //$NON-NLS-1$
-                Activator.logError("create_infobase: setDefault skipped — new server app not found yet", //$NON-NLS-1$
-                    null);
-            }
-        }
+        // uses works here too. Non-fatal: the server itself is already created.
+        String setDefaultNote = setDefault ? applySetDefault(rc.appManager, rc.project, readBack) : null;
 
         // Optionally store infobase connection credentials (issue #275): standaloneServer +
         // mode='register' ONLY — execute() already rejects credentials with mode='create'. Targets
         // the READ-BACK wst-server IApplication (not the FILE ibRef built earlier for the create
         // call) — InfobaseAccessSupport.storeCredentials(IApplication, ...) adapts IT to the
         // InfobaseReference that EDT's own launch path (ServerApplicationBehaviourDelegate) resolves.
-        String credNote = register ? storeStandaloneCredentialsIfRequested(newApp, credentials) : null;
+        String credNote = register ? storeStandaloneCredentialsIfRequested(readBack.app, credentials) : null;
+
+        String note = concatNotes(setDefaultNote, credNote);
+        String verb = register ? ACTION_REGISTERED : ACTION_CREATED;
+        String subject = standaloneServerSubject(rc.infobaseName, rc.infobaseDir, register);
+
+        // Same three-way report as the file path (issue #412): the standalone server surfaces through
+        // the SAME provision-delegate listener, so it has the same "requested, never appeared" state.
+        if (readBack.outcome == BindingOutcome.NOT_BOUND)
+        {
+            ToolResult error = notBoundResult(rc, verb, readBack, subject,
+                notBoundMessage(subject, rc.projectName, register) + note)
+                    .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER);
+            putStandaloneEndpoint(error, actualPort, webUrl);
+            return error.toJson();
+        }
 
         ToolResult result = ToolResult.success()
-            .put(McpKeys.ACTION, register ? "registered" : "created") //$NON-NLS-1$ //$NON-NLS-2$
+            .put(McpKeys.ACTION, verb)
             .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER)
             .put(McpKeys.PROJECT, rc.projectName)
             .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
-            .put(KEY_INFOBASE_NAME, rc.infobaseName)
-            .put(KEY_APPLICATIONS, appsArray);
+            .put(KEY_INFOBASE_NAME, rc.infobaseName);
+        putApplications(result, readBack);
 
-        // Report the ACTUAL auto-allocated port only when we could resolve it from the web URL; // NOSONAR explanatory comment, not commented-out code
-        // never echo the requested/hint port (EDT ignores it for a FILE-backed standalone server).
+        putStandaloneEndpoint(result, actualPort, webUrl);
+        String newAppId = readBack.appId();
+        if (newAppId != null)
+        {
+            result.put(McpKeys.APPLICATION_ID, newAppId);
+        }
+
+        String message;
+        if (readBack.outcome == BindingOutcome.BOUND)
+        {
+            result.put(KEY_BOUND_TO_PROJECT, true);
+            message = buildStandaloneServerMessage(rc.projectName, subject, actualPort, webUrl,
+                note.isEmpty() ? null : note, register);
+        }
+        else
+        {
+            // UNVERIFIED: boundToProject is deliberately ABSENT — we did not establish either answer.
+            message = unverifiedMessage(standaloneServerSubjectWithEndpoint(subject, actualPort, webUrl),
+                rc.projectName, readBack.unverifiedReason) + note;
+        }
+        result.put(McpKeys.MESSAGE, message);
+
+        return result.toJson();
+    }
+
+    /**
+     * Adds the standalone server's endpoint to a result: the ACTUAL auto-allocated port (only when it
+     * could be resolved from the web URL — the requested/hint port is never echoed, EDT ignores it for
+     * a FILE-backed standalone server) and the web URL itself. Also carried on the not-bound error, so
+     * a caller keeps the endpoint of a server that was registered but has no project application.
+     * Resolved, not probed: the URL is what EDT configured, not proof that anything answers on it.
+     */
+    private static void putStandaloneEndpoint(ToolResult result, int actualPort, String webUrl)
+    {
         if (actualPort > 0)
         {
             result.put("port", actualPort); //$NON-NLS-1$
@@ -1964,31 +2051,40 @@ public class CreateInfobaseTool implements IMcpTool
         {
             result.put("webUrl", webUrl); //$NON-NLS-1$
         }
-        if (newAppId != null)
+    }
+
+    /**
+     * Whether the application is the JUST-created standalone server, identified by the wst-server type
+     * plus an exact name match against the new infobase — NOT merely the first wst-server app, which
+     * could be a pre-existing standalone server already bound to this project. Read-only.
+     */
+    private static MatchResult isMatchingNewServerApp(IApplication app, String infobaseName)
+    {
+        MatchResult byType = matchesApplicationType(app, StandaloneServerSupport.WST_SERVER_APP_TYPE);
+        if (byType != MatchResult.MATCH)
         {
-            result.put(McpKeys.APPLICATION_ID, newAppId);
+            return byType; // A readable, different type is a real miss; an unreadable one is not.
         }
-
-        String combinedNote = (setDefaultNote != null ? setDefaultNote : "") //$NON-NLS-1$
-            + (credNote != null ? credNote : ""); //$NON-NLS-1$
-        result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(rc.projectName, rc.infobaseDir,
-            rc.infobaseName, actualPort, webUrl, combinedNote.isEmpty() ? null : combinedNote, register));
-
-        return result.toJson();
+        String name = app.getName();
+        if (name == null)
+        {
+            return MatchResult.UNDECIDABLE; // The other half of this identity could not be read.
+        }
+        return infobaseName.equals(name) ? MatchResult.MATCH : MatchResult.NO_MATCH;
     }
 
     /**
      * Stores infobase connection credentials against the READ-BACK wst-server application (issue
      * #275) when the caller supplied any of {@code user}/{@code password}/{@code access}, returning
      * a note to append to the result message — a success note, a non-fatal WARNING when the store
-     * failed (or the application was not visible yet within the read-back poll budget), or
+     * failed (or the read-back produced no application to store them against), or
      * {@code null} when no credentials were requested. Credential storage never fails the
-     * standalone-server registration itself (the server is already registered and bound). Mirrors
+     * standalone-server registration itself (the server itself is already registered). Mirrors
      * {@link #storeCredentialsIfRequested(InfobaseReference, Credentials, boolean)}, the plain
      * file-infobase equivalent.
      *
-     * @param application the read-back wst-server application ({@code null} if not found within the
-     *            poll budget)
+     * @param application the read-back wst-server application ({@code null} when the read-back
+     *            produced none — measured absent, unreadable or interrupted)
      * @param credentials the requested connection credentials (any field may be {@code null}/empty)
      * @return a message note, or {@code null} when no credentials were requested
      */
@@ -2001,100 +2097,20 @@ public class CreateInfobaseTool implements IMcpTool
         }
         if (application == null)
         {
+            // Why it was not available (measured absent, unreadable, interrupted) is the read-back's
+            // story, told by the message this note is appended to — do not restate it as a fact here.
             return " WARNING: connection credentials were NOT stored: the new standalone-server " //$NON-NLS-1$
-                + "application was not visible yet within the read-back poll budget - retry with " //$NON-NLS-1$
-                + "set_infobase_credentials once it appears in get_applications."; //$NON-NLS-1$
+                + "application was not available from the read-back - check get_applications and " //$NON-NLS-1$
+                + "store them with set_infobase_credentials."; //$NON-NLS-1$
         }
-        String error = InfobaseAccessSupport.storeCredentials(application, credentials.user, credentials.password,
-            InfobaseAccessSupport.parseAccess(credentials.access));
+        String error = storeSafely(() -> InfobaseAccessSupport.storeCredentials(application,
+            credentials.user, credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)));
         if (error != null)
         {
             return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
         }
         return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
             + "' (change them later with set_infobase_credentials)."; //$NON-NLS-1$
-    }
-
-    /**
-     * Reads back the project's applications with the same short bounded re-poll the file path uses
-     * (to absorb the provision-delegate listener race) and locates the JUST-created standalone server
-     * — a {@code wst-server} application whose name matches {@code infobaseName} (NOT merely the first
-     * wst-server, which could be a pre-existing one). Read-only: it only reads applications and builds
-     * the {@code appsArray} echo. Returns a {@link ServerReadBack} carrying the JSON array plus the new
-     * application id/handle ({@code null} when not found within the poll budget).
-     */
-    private static ServerReadBack pollForNewServerApplication(IApplicationManager appManager,
-            IProject project, String infobaseName)
-    {
-        JsonArray appsArray = new JsonArray();
-        IApplication[] newAppHolder = new IApplication[1];
-
-        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
-        {
-            appsArray = new JsonArray();
-            newAppHolder[0] = null;
-
-            if (!readBackServerApplications(appManager, project, infobaseName, appsArray, newAppHolder))
-            {
-                break; // Read failed (logged) — stop re-polling.
-            }
-
-            if (newAppHolder[0] != null)
-            {
-                break; // Found the new server — no need to re-poll.
-            }
-
-            if (poll < READ_BACK_MAX_POLLS - 1 && !sleepBetweenPolls())
-            {
-                break; // Interrupted — stop re-polling.
-            }
-        }
-
-        IApplication newApp = newAppHolder[0];
-        String newAppId = newApp != null ? newApp.getId() : null;
-        return new ServerReadBack(appsArray, newAppId, newApp);
-    }
-
-    /**
-     * Reads the project's applications once, populating {@code appsArray} with one JSON object per
-     * application (same shape as {@code get_applications}) and storing the JUST-created standalone
-     * server — a {@code wst-server} application whose name matches {@code infobaseName} (NOT merely the
-     * first wst-server, which could be a pre-existing one) — in {@code newAppHolder[0]} (left
-     * {@code null} when not yet visible). Read-only.
-     *
-     * @return {@code true} if the read completed (whether or not the new server was found),
-     *         {@code false} if reading the applications failed (already logged) so the caller stops
-     *         re-polling
-     */
-    private static boolean readBackServerApplications(IApplicationManager appManager, IProject project,
-            String infobaseName, JsonArray appsArray, IApplication[] newAppHolder)
-    {
-        try
-        {
-            List<IApplication> applications = appManager.getApplications(project);
-            if (applications != null)
-            {
-                for (IApplication app : applications)
-                {
-                    appsArray.add(toApplicationJson(appManager, app));
-                    // Identify the JUST-created standalone server by its name (a wst-server app whose
-                    // name matches the new infobase) — NOT merely the first wst-server app, which could
-                    // be a pre-existing standalone server already bound to this project.
-                    String typeId = app.getType() != null ? app.getType().getId() : null;
-                    if (newAppHolder[0] == null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
-                        && infobaseName.equals(app.getName()))
-                    {
-                        newAppHolder[0] = app;
-                    }
-                }
-            }
-            return true;
-        }
-        catch (ApplicationException e)
-        {
-            Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
-            return false;
-        }
     }
 
     /**
@@ -2116,46 +2132,50 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
-     * Builds the human-readable status message for the standalone-server success result (read-only
-     * string assembly). For mode='create' it says the server CREATED a new infobase; for mode='register'
-     * it says the server was REGISTERED over the EXISTING infobase (no new database was written).
-     * Appends {@code setDefaultNote} when non-null.
+     * What happened to the DATABASE on the standalone-server path, without any claim about the project
+     * binding: for mode='create' the server CREATED a new infobase, for mode='register' it was
+     * REGISTERED over the EXISTING one (no new database was written). The binding clause is added by
+     * the caller only when the read-back established it (issue #412).
      */
-    private static String buildStandaloneServerMessage(String projectName, Path infobaseDir,
-            String infobaseName, int actualPort, String webUrl, String setDefaultNote, boolean register)
+    private static String standaloneServerSubject(String infobaseName, Path infobaseDir, boolean register)
     {
-        String lead = register
+        return register
             ? "Registered a standalone server over the existing infobase '" + infobaseName //$NON-NLS-1$
-                + "' at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
-                + "' and bound it to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + "' at '" + infobaseDir.toAbsolutePath() + "'" //$NON-NLS-1$ //$NON-NLS-2$
             : "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
-                + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
-                + "' and bound to project '" + projectName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+                + "' created at '" + infobaseDir.toAbsolutePath() + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The same subject plus the resolved endpoint, so the unverified-binding wording still reports the
+     * ACTUAL auto-allocated web port and URL (the registration happened even when the project binding
+     * could not be read back). The endpoint is the one EDT resolved, not one this tool probed.
+     */
+    private static String standaloneServerSubjectWithEndpoint(String subject, int actualPort, String webUrl)
+    {
+        return subject
+            + (actualPort > 0 ? " (web port " + actualPort + ")" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + (webUrl != null ? ", web URL " + webUrl : ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Builds the human-readable status message for the standalone-server result when the read-back
+     * ESTABLISHED the binding (read-only string assembly). Appends {@code note} (the setDefault and
+     * credentials notes, already joined) when non-null.
+     */
+    private static String buildStandaloneServerMessage(String projectName, String subject,
+            int actualPort, String webUrl, String note, boolean register)
+    {
+        String lead = subject
+            + (register ? " and bound it to project '" : " and bound to project '") //$NON-NLS-1$ //$NON-NLS-2$
+            + projectName + "'"; //$NON-NLS-1$
         return lead
             + (actualPort > 0 ? " (web port " + actualPort + ")" : "") + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + (webUrl != null ? " Web URL for HTTP testing: " + webUrl + "." : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " To load the configuration, use the coordinated launch flow (debug_launch or " //$NON-NLS-1$
             + "run_yaxunit_tests with updateBeforeLaunch=true) rather than a bare update_database, " //$NON-NLS-1$
             + "which would start the server in RUN mode." //$NON-NLS-1$
-            + (setDefaultNote != null ? setDefaultNote : ""); //$NON-NLS-1$
-    }
-
-    /**
-     * Holder for the standalone-server read-back: the {@code applications} JSON echo plus the
-     * just-created server's id/handle ({@code null} when it was not found within the poll budget).
-     */
-    private static final class ServerReadBack
-    {
-        final JsonArray appsArray;
-        final String newAppId;
-        final IApplication newApp;
-
-        ServerReadBack(JsonArray appsArray, String newAppId, IApplication newApp)
-        {
-            this.appsArray = appsArray;
-            this.newAppId = newAppId;
-            this.newApp = newApp;
-        }
+            + (note != null ? note : ""); //$NON-NLS-1$
     }
 
     /**
@@ -2163,9 +2183,9 @@ public class CreateInfobaseTool implements IMcpTool
      * builders ({@link #buildSuccessResult} and {@link #buildStandaloneServerResult}): the project
      * name/handle, the infobase directory and display name, and the {@link IApplicationManager} used
      * for the application read-back. Keeps those builders under the parameter-count threshold without
-     * changing what they compute.
+     * changing what they compute. Package-visible so the unit tests can drive the result builders.
      */
-    private static final class ResultContext
+    static final class ResultContext
     {
         final String projectName;
         final Path infobaseDir;
@@ -2270,25 +2290,6 @@ public class CreateInfobaseTool implements IMcpTool
         }
     }
 
-    /**
-     * Finds the newly created infobase application by matching the infobase reference.
-     * Best-effort: returns {@code null} if not found.
-     */
-    private static IApplication findNewApplication(IApplicationManager appManager,
-            IProject project, InfobaseReference ibRef)
-    {
-        try
-        {
-            Optional<IApplication> found =
-                appManager.findApplicationByInfobaseAndProject(ibRef, project);
-            return found.orElse(null);
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-
     /** Maximum re-poll attempts for the provision-delegate listener race after associate(). */
     private static final int READ_BACK_MAX_POLLS = 5;
 
@@ -2296,124 +2297,508 @@ public class CreateInfobaseTool implements IMcpTool
     private static final long READ_BACK_POLL_DELAY_MS = 300;
 
     /**
-     * Reads back the applications for the project and builds the success JSON.
-     * Uses a short bounded re-poll to handle the provision-delegate listener race
-     * that can cause the new application to not yet appear immediately after associate().
-     *
-     * @param setDefaultNote optional note appended to the message when setDefault could not be
-     *        completed (null = no note)
+     * What the post-association read-back ESTABLISHED about the binding (issue #412). The tool used to
+     * collapse all three into one unconditional success that claimed the infobase was "bound to
+     * project" even when its own read-back had just shown it was not.
      */
-    private static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef,
-            String setDefaultNote, boolean register)
+    private enum BindingOutcome
     {
-        JsonArray appsArray = new JsonArray();
-        String newAppId = null;
+        /** The new application was read back: the infobase IS an application of the project. */
+        BOUND,
+        /**
+         * The poll budget was spent and the LAST read compared every application without finding
+         * this one: absence is MEASURED, not assumed. (Only the last read has to be fully
+         * comparable — each read is a whole snapshot, so an earlier one that could not identify
+         * something is superseded, not carried forward.)
+         */
+        NOT_BOUND,
+        /**
+         * Nothing was established: the read-back failed, or was cut short before the budget was
+         * spent, or it listed an application whose identity could not be compared with the new
+         * infobase. None of those is evidence of a missing application. (A positive match already
+         * made is not undone by any of them — it is evidence in its own right, and wins.)
+         */
+        UNVERIFIED
+    }
 
-        // Short bounded re-poll: the provision-delegate listener fires asynchronously after
-        // associate(), so the new IInfobaseApplication may not be visible on the first read.
-        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
+    /**
+     * What comparing ONE application against the new infobase produced. A comparison that could not be
+     * made is deliberately NOT folded into {@link #NO_MATCH}: since the read-back now decides whether
+     * the call succeeds, "I could not tell" must not be reported as "it is not there" (issue #412).
+     */
+    private enum MatchResult
+    {
+        /** This application IS the one that was just created/registered. */
+        MATCH,
+        /**
+         * This application is decidably a different one.
+         *
+         * <p><strong>The rule for every matcher:</strong> {@code NO_MATCH} is an ASSERTION — both
+         * sides were read and they differ. Anything that is not an established difference (an
+         * absent or unreadable type, name or infobase reference, or a failure while reading one)
+         * is {@link #UNDECIDABLE}. This is what keeps a refusal ({@code boundToProject:false})
+         * reachable only from a comparison that actually happened; the mechanism enforces it —
+         * {@link #matchesApplicationType} is the only type test, and
+         * {@link CreateInfobaseTool#readOneApplication} is the only place an application is read.
+         */
+        NO_MATCH,
+        /** The comparison could not be made (missing/unreadable identity), so nothing was established. */
+        UNDECIDABLE
+    }
+
+    /** Identifies the JUST-created application among the project's applications (tri-state). */
+    private interface ApplicationMatcher
+    {
+        MatchResult match(IApplication app);
+    }
+
+    /**
+     * The ONLY type test in the read-back, shared by both matchers so neither can regress on its own:
+     * a type that is present and different is an established {@link MatchResult#NO_MATCH}, while a
+     * type that cannot be read at all is {@link MatchResult#UNDECIDABLE} — "I could not see what this
+     * is" is not "this is not it".
+     */
+    private static MatchResult matchesApplicationType(IApplication app, String expectedTypeId)
+    {
+        IApplicationType type = app.getType();
+        if (type == null)
         {
-            appsArray = new JsonArray();
-            newAppId = null;
-            String[] newAppIdHolder = new String[1];
+            return MatchResult.UNDECIDABLE;
+        }
+        // Read the id ONCE: comparing a second read would let a value that arrived null decide
+        // "different", which is the very substitution this gate exists to prevent.
+        String typeId = type.getId();
+        if (typeId == null)
+        {
+            return MatchResult.UNDECIDABLE;
+        }
+        return expectedTypeId.equals(typeId) ? MatchResult.MATCH : MatchResult.NO_MATCH;
+    }
 
-            if (!readBackApplications(rc.appManager, rc.project, ibRef, appsArray, newAppIdHolder))
-            {
-                break; // Read failed (logged) — stop re-polling.
-            }
-            newAppId = newAppIdHolder[0];
+    /**
+     * Outcome of the bounded application read-back: the {@code applications} echo (the LAST snapshot a
+     * read actually produced — {@code null} when no read produced one), the matched new application
+     * ({@code null} unless {@link BindingOutcome#BOUND}), and what that read-back established.
+     */
+    private static final class ApplicationReadBack
+    {
+        final JsonArray appsArray;
+        final IApplication app;
+        final BindingOutcome outcome;
+        /** Why nothing was established; {@code null} unless {@link BindingOutcome#UNVERIFIED}. */
+        final String unverifiedReason;
+        /** The matched application's id AS ECHOED; {@code null} when it had none. */
+        private final String appId;
 
-            if (newAppId != null)
-            {
-                break; // Found the new application — no need to re-poll.
-            }
-
-            if (poll < READ_BACK_MAX_POLLS - 1 && !sleepBetweenPolls())
-            {
-                break; // Interrupted — stop re-polling.
-            }
+        ApplicationReadBack(JsonArray appsArray, IApplication app, String appId, BindingOutcome outcome,
+                String unverifiedReason)
+        {
+            this.appsArray = appsArray;
+            this.app = app;
+            this.appId = appId;
+            this.outcome = outcome;
+            this.unverifiedReason = unverifiedReason;
         }
 
-        String verb = register ? "registered" : "created"; //$NON-NLS-1$ //$NON-NLS-2$
+        /**
+         * The matched application's id, or {@code null} when nothing matched OR the platform gave the
+         * application no id. A matched application with a {@code null} id is still {@link
+         * BindingOutcome#BOUND}: the binding is established by the MATCH, not by the id.
+         *
+         * <p>It is the id that was ECHOED in {@code applications}, captured during the same guarded
+         * read — never re-read afterwards, so the result cannot report "no id" beside an echo that
+         * shows one (nor fail while trying).
+         */
+        String appId()
+        {
+            return appId;
+        }
+    }
+
+    /**
+     * Reads back the applications for the project and builds the result for the file-infobase path.
+     * Uses a short bounded re-poll to absorb the provision-delegate listener race that can keep the
+     * new application invisible immediately after associate().
+     *
+     * <p>The report follows what the read-back ESTABLISHED (issue #412), instead of claiming the
+     * infobase is "bound to project" unconditionally:
+     * <ul>
+     *   <li>{@link BindingOutcome#BOUND} — success, {@code boundToProject:true}, and
+     *       {@code applicationId} whenever the platform gave the application one;</li>
+     *   <li>{@link BindingOutcome#NOT_BOUND} — an ERROR carrying {@code boundToProject:false} and the
+     *       full payload (what happened to the database, where it is, its name), because the database
+     *       exists and the caller must not be told otherwise;</li>
+     *   <li>{@link BindingOutcome#UNVERIFIED} — success WITHOUT {@code boundToProject}: a read that
+     *       failed, a poll cut short by an interrupt, or an application whose identity could not be
+     *       compared does not establish absence, and a false refusal costs more than a missing
+     *       claim.</li>
+     * </ul>
+     *
+     * <p>Package-visible so the unit tests can drive all three outcomes through a stubbed
+     * {@link IApplicationManager}.
+     *
+     * @param setDefault whether the caller asked for the new application to become the project default
+     * @param credNote optional credentials note to append to the message ({@code null} = none)
+     */
+    static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
+            boolean register, String credNote)
+    {
+        ApplicationReadBack readBack = pollForNewApplication(rc.appManager, rc.project,
+            app -> isMatchingNewInfobaseApp(app, ibRef));
+
+        String setDefaultNote = setDefault ? applySetDefault(rc.appManager, rc.project, readBack) : null;
+        String note = concatNotes(setDefaultNote, credNote);
+        String verb = register ? ACTION_REGISTERED : ACTION_CREATED;
+        String subject = "Infobase '" + rc.infobaseName + "' " + verb + " at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + rc.infobaseDir.toAbsolutePath() + "'"; //$NON-NLS-1$
+
+        if (readBack.outcome == BindingOutcome.NOT_BOUND)
+        {
+            return notBoundResult(rc, verb, readBack, subject,
+                notBoundMessage(subject, rc.projectName, register) + note).toJson();
+        }
+
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, verb)
             .put(McpKeys.PROJECT, rc.projectName)
             .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
-            .put(KEY_INFOBASE_NAME, rc.infobaseName)
-            .put(KEY_APPLICATIONS, appsArray);
+            .put(KEY_INFOBASE_NAME, rc.infobaseName);
+        putApplications(result, readBack);
 
+        String newAppId = readBack.appId();
         if (newAppId != null)
         {
             result.put(McpKeys.APPLICATION_ID, newAppId);
         }
 
-        String message = "Infobase '" + rc.infobaseName //$NON-NLS-1$
-            + "' " + verb + " at '" + rc.infobaseDir.toAbsolutePath() //$NON-NLS-1$ //$NON-NLS-2$
-            + "' and bound to project '" + rc.projectName //$NON-NLS-1$
-            + "'. Use update_database to push the configuration into the infobase." //$NON-NLS-1$
-            + (setDefaultNote != null ? setDefaultNote : ""); //$NON-NLS-1$
-        result.put(McpKeys.MESSAGE, message);
+        String message;
+        if (readBack.outcome == BindingOutcome.BOUND)
+        {
+            result.put(KEY_BOUND_TO_PROJECT, true);
+            // The chaining advice needs an applicationId to chain WITH. It is present in every case
+            // the platform gives the application an id (so this text is unchanged for real callers),
+            // but a bound application without one cannot be handed to update_database yet.
+            message = subject + " and bound to project '" + rc.projectName //$NON-NLS-1$
+                + (newAppId != null
+                    ? "'. Use update_database to push the configuration into the infobase." //$NON-NLS-1$
+                    : "'. The read-back reported no id for the application - look it up with " //$NON-NLS-1$
+                        + "get_applications before update_database."); //$NON-NLS-1$
+        }
+        else
+        {
+            // UNVERIFIED: boundToProject is deliberately ABSENT — we did not establish either answer.
+            message = unverifiedMessage(subject, rc.projectName, readBack.unverifiedReason);
+        }
+        result.put(McpKeys.MESSAGE, message + note);
 
         return result.toJson();
     }
 
     /**
-     * Reads the project's applications once, populating {@code appsArray} with one JSON object per
-     * application and storing the matched new-infobase application id in {@code newAppIdHolder[0]}
-     * (left {@code null} when not yet visible). Read-only.
+     * Runs the bounded read-back and classifies what it established (issue #412). The loop is the
+     * original one — same budget, same early exits — but its exits are now told apart: a match is
+     * {@link BindingOutcome#BOUND}, a spent budget whose LAST read compared every application
+     * without a match is {@link BindingOutcome#NOT_BOUND}, and a failed or interrupted read is
+     * {@link BindingOutcome#UNVERIFIED} (it did not measure the full budget, so absence is not
+     * established) — with the reason carried along, because a failed read and an interrupted poll
+     * are different stories.
      *
-     * @return {@code true} if the read completed (whether or not the new application was found),
-     *         {@code false} if reading the applications failed (already logged) so the caller stops
-     *         re-polling
+     * @param matcher identifies the JUST-created application among the project's applications
+     */
+    private static ApplicationReadBack pollForNewApplication(IApplicationManager appManager,
+            IProject project, ApplicationMatcher matcher)
+    {
+        // Set when SOME application could not be compared with the new infobase: the reads then
+        // listed applications we could not identify, so "none of them is ours" was never established.
+        boolean[] undecidable = new boolean[1];
+        // The echo is the LAST snapshot a read actually produced, and stays null while there is
+        // none: a failed read must not be reported as an empty list of applications — that would
+        // re-encode "could not look" as "looked and found nothing", the very confusion this fixes.
+        JsonArray appsArray = null;
+        IApplication[] newAppHolder = new IApplication[1];
+        String[] newAppIdHolder = new String[1];
+        boolean readCompleted = false;
+        boolean cutShort = false;
+
+        // Short bounded re-poll: the provision-delegate listener fires asynchronously after
+        // associate(), so the new application may not be visible on the first read.
+        for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
+        {
+            JsonArray attempt = new JsonArray();
+            newAppHolder[0] = null;
+            newAppIdHolder[0] = null;
+
+            undecidable[0] = false;
+            readCompleted = readBackApplications(appManager, project, matcher, attempt, newAppHolder,
+                newAppIdHolder, undecidable);
+            if (readCompleted || newAppHolder[0] != null)
+            {
+                // Keep the snapshot the answer actually came from. A listing that failed AFTER
+                // identifying our application still identified it - the match is positive evidence,
+                // unaffected by the later failure - and its echo must be the one reported, or the
+                // result would name an application that is missing from its own evidence.
+                appsArray = attempt;
+            }
+            if (!readCompleted)
+            {
+                break; // Read failed (logged) — stop re-polling; absence is NOT established.
+            }
+            if (newAppHolder[0] != null)
+            {
+                break; // Found the new application — no need to re-poll.
+            }
+            if (poll < READ_BACK_MAX_POLLS - 1 && !sleepBetweenPolls())
+            {
+                cutShort = true; // Interrupted — the budget was not spent, so absence is NOT established.
+                break;
+            }
+        }
+
+        if (newAppHolder[0] != null)
+        {
+            return new ApplicationReadBack(appsArray, newAppHolder[0], newAppIdHolder[0],
+                BindingOutcome.BOUND, null);
+        }
+        if (!readCompleted)
+        {
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
+                "the application read-back could not be completed - the failure is in the EDT " //$NON-NLS-1$
+                    + "error log"); //$NON-NLS-1$
+        }
+        if (cutShort)
+        {
+            // Interrupted: the reads that DID run saw no application, but the budget that absorbs the
+            // listener race was not spent — and nothing failed, so there is no log entry to point at.
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
+                "the read-back was interrupted before its budget was spent"); //$NON-NLS-1$
+        }
+        if (undecidable[0])
+        {
+            // The last read listed an application that could not be compared with the new infobase,
+            // so it was never established that none of them is ours.
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
+                "one of the project's applications could not be compared with the new infobase " //$NON-NLS-1$
+                    + "(an identity could not be read)"); //$NON-NLS-1$
+        }
+        return new ApplicationReadBack(appsArray, null, null, BindingOutcome.NOT_BOUND, null);
+    }
+
+    /**
+     * Builds the ERROR result for {@link BindingOutcome#NOT_BOUND}: the infobase exists but the project
+     * has no application for it. The payload is deliberately kept (issue #412) — {@code action} says
+     * what happened to the DATABASE, {@code infobaseFile}/{@code infobaseName} say which one, and
+     * {@code applications} is the evidence — so that "this failed" can never be read as "nothing
+     * happened".
+     *
+     * @param subject what happened to the database, for the log line
+     * @param errorText the full error text (the not-bound wording plus any setDefault/credentials
+     *            notes); it is carried as {@code error}, which is also what the client shows as text —
+     *            no second {@code message} copy to drift from it
+     */
+    private static ToolResult notBoundResult(ResultContext rc, String verb,
+            ApplicationReadBack readBack, String subject, String errorText)
+    {
+        Activator.logError("create_infobase: " + subject //$NON-NLS-1$
+            + " but no application appeared for project " + rc.projectName //$NON-NLS-1$
+            + " within the read-back budget", null); //$NON-NLS-1$
+        ToolResult result = ToolResult.error(errorText)
+            .put(McpKeys.ACTION, verb)
+            .put(McpKeys.PROJECT, rc.projectName)
+            .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
+            .put(KEY_INFOBASE_NAME, rc.infobaseName)
+            .put(KEY_BOUND_TO_PROJECT, false);
+        putApplications(result, readBack);
+        return result;
+    }
+
+    /**
+     * Echoes the applications the read-back saw — and OMITS the key entirely when no read produced a
+     * snapshot at all. An empty array would say "the project has no applications", which is a claim
+     * a failed read never made.
+     */
+    private static void putApplications(ToolResult result, ApplicationReadBack readBack)
+    {
+        if (readBack.appsArray != null)
+        {
+            result.put(KEY_APPLICATIONS, readBack.appsArray);
+        }
+    }
+
+    /**
+     * The {@link BindingOutcome#NOT_BOUND} wording: both facts (the database is there, the application
+     * is not), what it blocks, and what to do next. It does NOT offer {@code delete_infobase} as the
+     * cure — that tool resolves its target only among the project's applications, so it cannot address
+     * an infobase that has none.
+     */
+    private static String notBoundMessage(String subject, String projectName, boolean register)
+    {
+        return subject + ", but it did NOT appear as an application of project '" + projectName //$NON-NLS-1$
+            + "': the association was requested and raised no error, yet the project's applications " //$NON-NLS-1$
+            + "were read back " + READ_BACK_MAX_POLLS + " times over " //$NON-NLS-1$ //$NON-NLS-2$
+            + (READ_BACK_MAX_POLLS - 1) * READ_BACK_POLL_DELAY_MS
+            + " ms, and the last read compared every one of them without finding it. " //$NON-NLS-1$
+            + (register
+                ? "The existing database is untouched. " //$NON-NLS-1$
+                : "The database files were created and are intact - do NOT create them again. ") //$NON-NLS-1$
+            + "Nothing can target this infobase until its application appears: update_database / " //$NON-NLS-1$
+            + "create_launch_config / debug_launch address an application by applicationId, and " //$NON-NLS-1$
+            + "this infobase has none. Call " //$NON-NLS-1$
+            + "get_applications('" + projectName //$NON-NLS-1$
+            + "') to re-check (applications surface asynchronously); if it stays absent, check the " //$NON-NLS-1$
+            + "EDT error log - the registration completed, but the project's application provider " //$NON-NLS-1$
+            + "did not surface it."; //$NON-NLS-1$
+    }
+
+    /**
+     * The {@link BindingOutcome#UNVERIFIED} wording: the binding was neither confirmed nor refuted. It
+     * claims nothing about the application, states the actual reason the read-back settled nothing
+     * (a failed read and an interrupted poll are different, and only one of them leaves a log entry),
+     * and names the one call that settles it.
+     */
+    private static String unverifiedMessage(String subject, String projectName, String reason)
+    {
+        return subject + ". The association with project '" + projectName //$NON-NLS-1$
+            + "' was requested and raised no error, but " + reason //$NON-NLS-1$
+            + ", so the binding is UNVERIFIED - this call did not establish whether the application " //$NON-NLS-1$
+            + "is there. Call get_applications('" + projectName //$NON-NLS-1$
+            + "') to confirm it before chaining into update_database / create_launch_config / " //$NON-NLS-1$
+            + "debug_launch."; //$NON-NLS-1$
+    }
+
+    /** Joins the two optional message notes, either of which may be {@code null}. */
+    private static String concatNotes(String first, String second)
+    {
+        return (first != null ? first : "") + (second != null ? second : ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Reads the project's applications once, populating {@code appsArray} with one JSON object per
+     * application THAT COULD BE READ (same shape as {@code get_applications}; an application that
+     * cannot be rendered is left out of the echo and makes the read undecidable) and storing the first
+     * application the {@code matcher} accepts in {@code newAppHolder[0]}, with its echoed id in
+     * {@code newAppIdHolder[0]} (both left {@code null} when not yet visible). Read-only.
+     *
+     * @return {@code true} if the read produced a snapshot to inspect (whether or not the new
+     *         application was in it), {@code false} if reading the applications failed or produced no
+     *         snapshot at all (already logged) so the caller stops re-polling and reports UNVERIFIED
      */
     private static boolean readBackApplications(IApplicationManager appManager, IProject project,
-            InfobaseReference ibRef, JsonArray appsArray, String[] newAppIdHolder)
+            ApplicationMatcher matcher, JsonArray appsArray, IApplication[] newAppHolder,
+            String[] newAppIdHolder, boolean[] undecidable)
     {
         try
         {
             List<IApplication> applications = appManager.getApplications(project);
-            if (applications != null)
+            if (applications == null)
             {
-                for (IApplication app : applications)
+                // No snapshot at all is not the same as an empty one: it establishes nothing, so it
+                // must not be counted as a read that MEASURED the application to be absent.
+                Activator.logError("create_infobase: application read-back returned no list", null); //$NON-NLS-1$
+                return false;
+            }
+            for (IApplication app : applications)
+            {
+                if (!readOneApplication(appManager, app, matcher, appsArray, newAppHolder,
+                    newAppIdHolder))
                 {
-                    JsonObject appObj = new JsonObject();
-                    appObj.addProperty("id", app.getId()); //$NON-NLS-1$
-                    appObj.addProperty("name", app.getName()); //$NON-NLS-1$
-                    if (app.getType() != null)
-                    {
-                        appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
-                    }
-                    addUpdateState(appObj, appManager, app);
-                    // Identify the newly created application by matching the infobase reference.
-                    if (newAppIdHolder[0] == null && isMatchingNewInfobaseApp(app, ibRef))
-                    {
-                        newAppIdHolder[0] = app.getId();
-                    }
-                    appsArray.add(appObj);
+                    undecidable[0] = true;
                 }
             }
             return true;
         }
-        catch (ApplicationException e)
+        catch (Exception e)
         {
+            // Failing to obtain the snapshot AT ALL (the manager's own ApplicationException, or any
+            // other failure of the listing itself) means this read established nothing. Logged, then
+            // reported as UNVERIFIED rather than escaping as an internal tool failure or passing for
+            // a completed read. A single unreadable application does NOT come through here - it is
+            // confined by readOneApplication, which keeps the rest of the snapshot.
             Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
             return false;
         }
     }
 
     /**
-     * Whether the application is the newly created FILE infobase application, identified by type and
-     * a connection-string match against {@code ibRef}. Read-only.
+     * Reads EVERYTHING about ONE application — its echo entry and its identity — in a single guarded
+     * place, so that an application which cannot be read costs exactly that application: it is
+     * reported as undecidable and the read moves on to the rest of the snapshot. This is the whole
+     * mechanism behind the rule on {@link MatchResult#NO_MATCH}: there is no second place where a
+     * failed read of an application could be mistaken for a decided one, and no path on which such a
+     * failure escapes as an internal tool error. The failure is logged, so a real defect stays
+     * visible instead of being swallowed.
+     *
+     * @return {@code false} when this application could not be read or could not be compared, so the
+     *         caller marks the read undecidable — which decides the outcome only when no match was
+     *         established
      */
-    private static boolean isMatchingNewInfobaseApp(IApplication app, InfobaseReference ibRef)
+    private static boolean readOneApplication(IApplicationManager appManager, IApplication app,
+            ApplicationMatcher matcher, JsonArray appsArray, IApplication[] newAppHolder,
+            String[] newAppIdHolder)
     {
-        if (!(app instanceof IInfobaseApplication)
-            || !INFOBASE_APP_TYPE.equals(app.getType() != null ? app.getType().getId() : null))
+        try
         {
+            JsonObject rendered = toApplicationJson(appManager, app);
+            appsArray.add(rendered);
+            if (newAppHolder[0] != null)
+            {
+                return true; // Already found; the rest is echo only, and decides nothing.
+            }
+            // Identify the newly created application (by infobase reference for a file infobase,
+            // by type + name for a standalone server).
+            MatchResult match = matcher.match(app);
+            if (match == MatchResult.MATCH)
+            {
+                newAppHolder[0] = app;
+                newAppIdHolder[0] = renderedId(rendered);
+            }
+            return match != MatchResult.UNDECIDABLE;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: could not read one of the project's applications " //$NON-NLS-1$
+                + "while looking for the new infobase", e); //$NON-NLS-1$
             return false;
         }
-        IInfobaseApplication ibApp = (IInfobaseApplication) app;
-        return ibApp.getInfobase() != null && matchesRef(ibApp.getInfobase(), ibRef);
+    }
+
+    /**
+     * The id from an application's ALREADY-RENDERED echo entry ({@code null} when it has none), so the
+     * reported {@code applicationId} and the {@code applications} echo can never disagree.
+     */
+    private static String renderedId(JsonObject rendered)
+    {
+        return rendered.has("id") && !rendered.get("id").isJsonNull() //$NON-NLS-1$ //$NON-NLS-2$
+            ? rendered.get("id").getAsString() //$NON-NLS-1$
+            : null;
+    }
+
+    /**
+     * Whether the application is the newly created FILE infobase application, identified by type and
+     * a connection-string match against {@code ibRef}. Read-only.
+     *
+     * <p>A different type is a decidable {@link MatchResult#NO_MATCH}; an infobase application whose
+     * identity cannot be read is {@link MatchResult#UNDECIDABLE}, so an unreadable connection string
+     * cannot masquerade as "this is not the one" and turn into a refusal (issue #412).
+     */
+    private static MatchResult isMatchingNewInfobaseApp(IApplication app, InfobaseReference ibRef)
+    {
+        MatchResult byType = matchesApplicationType(app, INFOBASE_APP_TYPE);
+        if (byType != MatchResult.MATCH)
+        {
+            return byType; // A readable, different type is a real miss; an unreadable one is not.
+        }
+        if (!(app instanceof IInfobaseApplication))
+        {
+            // It claims to BE an infobase application but does not expose one, so its infobase
+            // identity cannot be read - which is not the same as being a different infobase.
+            return MatchResult.UNDECIDABLE;
+        }
+        InfobaseReference appRef = ((IInfobaseApplication)app).getInfobase();
+        if (appRef == null)
+        {
+            return MatchResult.UNDECIDABLE;
+        }
+        return matchesRef(appRef, ibRef);
     }
 
     /**
@@ -2437,24 +2822,32 @@ public class CreateInfobaseTool implements IMcpTool
 
     /**
      * Checks whether two infobase references point to the same FILE infobase by
-     * comparing their connection-string file path. Best-effort: returns false on any
-     * failure so a match-miss only skips the applicationId echo.
+     * comparing their connection-string file path. A miss is what makes the read-back report
+     * NOT_BOUND (it no longer merely skips the applicationId echo), so a comparison that could not be
+     * made - an absent or unreadable connection string, or a failure while reading one - returns
+     * {@link MatchResult#UNDECIDABLE} rather than a confident "different".
      */
-    private static boolean matchesRef(InfobaseReference a, InfobaseReference b)
+    private static MatchResult matchesRef(InfobaseReference a, InfobaseReference b)
     {
         try
         {
             if (a.getConnectionString() == null || b.getConnectionString() == null)
             {
-                return false;
+                return MatchResult.UNDECIDABLE;
             }
             String ca = a.getConnectionString().asConnectionString();
             String cb = b.getConnectionString().asConnectionString();
-            return ca != null && ca.equalsIgnoreCase(cb);
+            if (ca == null || cb == null)
+            {
+                return MatchResult.UNDECIDABLE;
+            }
+            return ca.equalsIgnoreCase(cb) ? MatchResult.MATCH : MatchResult.NO_MATCH;
         }
         catch (Exception e)
         {
-            return false;
+            Activator.logError("create_infobase: could not compare an application's infobase " //$NON-NLS-1$
+                + "reference with the new one", e); //$NON-NLS-1$
+            return MatchResult.UNDECIDABLE;
         }
     }
 }

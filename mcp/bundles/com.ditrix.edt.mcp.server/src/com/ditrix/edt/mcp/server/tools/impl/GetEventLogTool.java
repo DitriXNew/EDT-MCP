@@ -162,14 +162,13 @@ public class GetEventLogTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Read a 1C infobase event log WITHOUT a running 1C session by " //$NON-NLS-1$
-            + "parsing the raw log files (legacy text ver 2.0: a 1Cv8.lgf dictionary + dated *.lgp " //$NON-NLS-1$
-            + "partitions). High diagnostic value: errors, user actions, posting, authentication. Locate " //$NON-NLS-1$
-            + "the log by projectName (+ optional applicationId from get_applications for a FILE " //$NON-NLS-1$
-            + "infobase), or pass logDir directly for an offline copy or a SERVER-mode infobase. Filters: " //$NON-NLS-1$
-            + "from/to period, user, event, eventContains, severity, commentContains, metadataContains, " //$NON-NLS-1$
-            + "session; paginated (limit/offset/order). Returns infobase PII (user names, data " //$NON-NLS-1$
-            + "presentations). Full parameters and examples: call get_tool_guide('get_event_log')."; //$NON-NLS-1$
+        return "Investigate infobase activity and errors through its event log. Reads the LEGACY text " //$NON-NLS-1$
+            + "format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLite .lgd log is " //$NON-NLS-1$
+            + "rejected, so switch the log format in 1C or use another source. A SERVER (client/server) " //$NON-NLS-1$
+            + "infobase is NOT resolvable from projectName/applicationId - its cluster srvinfo path is " //$NON-NLS-1$
+            + "not model-derivable, so pass an absolute logDir instead. Returns PII and live " //$NON-NLS-1$
+            + "infobase data - user names, session data and business-record references. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('get_event_log')."; //$NON-NLS-1$
     }
 
     @Override

@@ -67,3 +67,30 @@ The modal's own default button is **Import**, which would rewrite the project so
 plugin never presses it blind: if the labelled button for the selected policy cannot be found (an
 unshipped locale, a reworded button) the dialog is cancelled and the update reports the failure
 instead of writing anything.
+
+## Standalone server: busy ports
+
+Launching an application served by a 1C STANDALONE SERVER starts that server first. If one of its
+ports (HTTP gate / debug server / SSH gate) is already bound — most often by an `ibsrv` left over
+from an earlier EDT session — EDT raises the modal **"Standalone server port conflict"** /
+**"Конфликт портов автономного сервера"** and waits for a human.
+
+`standaloneServerPortConflict` answers it: `cancel` (default) refuses, so the launch fails and the
+reason — with the busy ports named — appears in `debug_status` under `recentLaunchFailures`;
+`reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
+changes the address its clients connect to. See the `update_database` guide for the full table.
+
+## Standalone server stuck in STARTED (recovered automatically)
+
+EDT starts a standalone server only from the STOPPED state, and it returns the server to STOPPED
+only once it has confirmed the `ibsrv` process is gone — a confirmation it waits a few seconds for.
+When the process takes longer to disappear, or the wait is interrupted by a cancelled operation,
+EDT keeps the server marked STARTED while the launch that owned it is already dead, and then
+refuses every further start with *"Can only start server that is stopped but current server state
+is 2"*. Nothing clears that by itself: from then on every launch of that application fails the same
+way, and the failure reaches you through `debug_status` (`recentLaunchFailures`).
+
+The refusal is detected and repaired: the server is stopped through EDT's own application lifecycle
+and the launch is retried ONCE. Only STARTED is touched — a STARTING/STOPPING server belongs to an
+operation still in flight and is reported rather than stopped. See the `update_database` guide for
+the full description.

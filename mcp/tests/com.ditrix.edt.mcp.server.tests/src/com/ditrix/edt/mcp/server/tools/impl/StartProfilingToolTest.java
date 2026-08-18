@@ -74,7 +74,7 @@ public class StartProfilingToolTest
     public void testDescriptionMentionsStop()
     {
         // start_profiling must point the client at the deterministic stop tool.
-        assertTrue(new StartProfilingTool().getDescription().contains("stop_profiling")); //$NON-NLS-1$
+        assertTrue(new StartProfilingTool().getGuide().contains("stop_profiling")); //$NON-NLS-1$
     }
 
     @Test

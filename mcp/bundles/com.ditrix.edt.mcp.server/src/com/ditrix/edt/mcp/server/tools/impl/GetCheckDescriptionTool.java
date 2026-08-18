@@ -47,12 +47,8 @@ public class GetCheckDescriptionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get detailed description of an EDT check by its ID. " + //$NON-NLS-1$
-               "Returns markdown content with check explanation, examples, and how to fix. " + //$NON-NLS-1$
-               "Accepts the symbolic check id OR the short UID code shown by get_project_errors " + //$NON-NLS-1$
-               "(pass projectName so the UID can be resolved). " + //$NON-NLS-1$
-               "Requires a configured check-descriptions folder (MCP preferences); " + //$NON-NLS-1$
-               "without it the tool returns a configuration error."; //$NON-NLS-1$
+        return "Understand an EDT validation rule and how to fix its diagnostic. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_check_description')."; //$NON-NLS-1$
     }
 
     @Override

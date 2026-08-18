@@ -33,8 +33,9 @@
 
 - Top-level: `Catalog.Products`, `Document.SalesOrder`, `CommonModule.MyModule`, `Subsystem.Sales`, и т. п. Русские имена типов тоже принимаются (`Справочник.Товары`).
 - Вложенные дочерние объекты (только для rename/delete): `Catalog.Products.Attribute.Weight`, `Document.SalesOrder.TabularSection.Goods`, `InformationRegister.Prices.Dimension.Product`, `AccumulationRegister.Stock.Resource.Quantity`.
+- ЭЛЕМЕНТЫ управляемой формы (`rename_metadata_object` и `delete_metadata`): `Catalog.Products.Form.ItemForm.Field.Price`, `CommonForm.Settings.Group.Main`, колонка коллекционного реквизита формы `...Form.ItemForm.Attribute.Rows.Column.Price`. Kind = `Attribute` / `Command` / `Field` / `Button` / `Group` / `Decoration` / `Table`; токен вида двуязычный, в единственном или множественном числе.
 
-**Поддерживаемые child-типы** в FQN для rename/delete: `Attribute`, `TabularSection`, `Dimension`, `Resource` (и их русские формы единственного/множественного числа: `Реквизит`, `ТабличнаяЧасть`, `Измерение`, `Ресурс`). Другие виды (Forms, Commands, Templates, EnumValues, AccountingFlags и т. п.) этими инструментами **не правятся** — для них либо ручная XML-правка, либо отдельные инструменты.
+**Child-типы у инструментов разные.** `rename_metadata_object` понимает членов mdclass только четырёх видов — `Attribute`, `TabularSection`, `Dimension`, `Resource` (и их русские формы единственного/множественного числа `Реквизит`, `ТабличнаяЧасть`, `Измерение`, `Ресурс`) — и отдельно ЭЛЕМЕНТЫ управляемой формы из списка выше. Всё остальное переименовать этим инструментом **нельзя**: саму форму как объект (`Catalog.X.Form.ItemForm`), обработчик события формы (`...Form.F.Handler.OnOpen` — имя события задано платформой), команды, макеты, признаки учёта. У `delete_metadata` набор **шире** — любой узел, который адресует `create_metadata` (реквизит / табличная часть / измерение / ресурс / значение перечисления / команда / макет / перерасчёт / специфичный для типа потомок), плюс подчинённая форма как объект, член формы и член XDTO-пакета — сверяйся с его собственным гайдом, а не с этим списком.
 
 ## `find_references` — только top-level
 

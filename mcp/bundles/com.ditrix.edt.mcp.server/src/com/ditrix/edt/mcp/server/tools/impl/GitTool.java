@@ -49,9 +49,11 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.git.GitFailureLog;
+import com.ditrix.edt.mcp.server.utils.git.GitCommonDirectory;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
 /**
@@ -197,16 +199,6 @@ public class GitTool implements IMcpTool
     private static final String SCHEME_SEPARATOR = "://"; //$NON-NLS-1$
 
     /**
-     * The short options that consume the REST of their cluster as a value, PER SUBCOMMAND - the same
-     * letter differs: {@code -c} takes a commit for {@code commit} but is the value-less
-     * {@code --cached} for {@code ls-files} and {@code blame}, and {@code -n} is a line count for
-     * {@code tag} but {@code --no-stat} for {@code merge}. A cluster scan stops at one of these,
-     * because everything after it is that option's value rather than another flag.
-     * <p>
-     * Only the subcommands whose clusters are scanned appear here; an unlisted one stops at nothing,
-     * which errs toward refusing a cluster rather than letting a file/strategy option through.
-     */
-    /**
      * The short options that take a FILE for the subcommands whose operands are scanned:
      * {@code diff -O<order-file>}, {@code blame -S<revs-file>}, {@code commit}/{@code tag}/
      * {@code merge -F<message-file>}, {@code ls-files -X<exclude-file>}. Their separated spellings
@@ -222,6 +214,16 @@ public class GitTool implements IMcpTool
         "merge", "F", //$NON-NLS-1$ //$NON-NLS-2$
         "ls-files", "X"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * The short options that consume the REST of their cluster as a value, PER SUBCOMMAND - the same
+     * letter differs: {@code -c} takes a commit for {@code commit} but is the value-less
+     * {@code --cached} for {@code ls-files} and {@code blame}, and {@code -n} is a line count for
+     * {@code tag} but {@code --no-stat} for {@code merge}. A cluster scan stops at one of these,
+     * because everything after it is that option's value rather than another flag.
+     * <p>
+     * Only the subcommands whose clusters are scanned appear here; an unlisted one stops at nothing,
+     * which errs toward refusing a cluster rather than letting a file/strategy option through.
+     */
     private static final Map<String, String> VALUE_TAKING_SHORT_OPTIONS = Map.of(
         "diff", "SGlU", //$NON-NLS-1$ //$NON-NLS-2$
         "log", "SGLnU", //$NON-NLS-1$ //$NON-NLS-2$
@@ -249,11 +251,6 @@ public class GitTool implements IMcpTool
     private static final long DRAIN_JOIN_MILLIS = 1000;
 
     /**
-     * Subcommands whose {@code -F} is the short spelling of {@code --file} (read the message from a
-     * file). Scoped, because {@code -F} means {@code --fixed-strings} for {@code log}, which is
-     * legitimate.
-     */
-    /**
      * Subcommands whose {@code -s} is the short spelling of {@code --strategy} (a PROGRAM name).
      * NOT {@code cherry-pick} / {@code revert}: there {@code -s} is {@code --signoff}, which is
      * harmless - their {@code --strategy} is blocked by the long-option list like everywhere else.
@@ -261,6 +258,11 @@ public class GitTool implements IMcpTool
     private static final Set<String> STRATEGY_SUBCOMMANDS =
         Set.of("merge", "pull"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * Subcommands whose {@code -F} is the short spelling of {@code --file} (read the message from a
+     * file). Scoped, because {@code -F} means {@code --fixed-strings} for {@code log}, which is
+     * legitimate.
+     */
     private static final Set<String> MESSAGE_FILE_SUBCOMMANDS =
         Set.of("commit", "tag", "merge"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
@@ -317,9 +319,11 @@ public class GitTool implements IMcpTool
     private static final String REMOTE_GROUP_SECTION = "remotes"; //$NON-NLS-1$
 
     /**
-     * git's LEGACY per-remote files, relative to the git directory. Not configuration:
-     * {@code remotes/<name>} carries {@code URL:} lines, {@code branches/<name>} a bare URL, and
-     * {@code git remote get-url} prints either verbatim while JGit's config knows nothing of them.
+     * git's LEGACY per-remote files, relative to the COMMON directory - not to the git directory,
+     * which is a different place in a linked worktree and which git ignores there (see
+     * {@link GitCommonDirectory}). Not configuration: {@code remotes/<name>} carries {@code URL:}
+     * lines, {@code branches/<name>} a bare URL, and {@code git remote get-url} prints either
+     * verbatim while JGit's config knows nothing of them.
      */
     private static final String LEGACY_REMOTES_DIRECTORY = "remotes"; //$NON-NLS-1$
 
@@ -349,7 +353,10 @@ public class GitTool implements IMcpTool
         /** A {@code remotes.<group>} key - a plain config key, not a remote. */
         GROUP,
 
-        /** {@code $GIT_DIR/remotes/<name>} or {@code $GIT_DIR/branches/<name>} - not config at all. */
+        /**
+         * {@code $GIT_COMMON_DIR/remotes/<name>} or {@code $GIT_COMMON_DIR/branches/<name>} - not
+         * config at all, and shared with every worktree of the repository.
+         */
         LEGACY_FILE
     }
 
@@ -410,6 +417,112 @@ public class GitTool implements IMcpTool
         + "quote the offending configuration, credentials included."; //$NON-NLS-1$
 
     /**
+     * Refusal for a repository whose {@code commondir} pointer cannot be resolved: the check FAILS
+     * CLOSED, because that one file is what says where the whole shared repository lives - its
+     * configuration and its legacy remote files alike - and none of it can be inspected without it.
+     * <p>
+     * Its own text rather than {@link #CONFIG_UNREADABLE_REFUSAL}: the file at fault is not a
+     * configuration file, so pointing the caller at the config chain would send them to repair
+     * something that is not broken. It names no literal path - a {@code commondir} file does not
+     * guarantee the {@code .git/worktrees/<name>} layout that {@code git worktree add} happens to
+     * produce - and quotes no content.
+     * <p>
+     * It names no side, and that is the correction this text exists to record. Which of these
+     * conditions kills native git was measured to depend on the PLATFORM - the same
+     * {@code commondir} that stops git on Windows is an ordinary relative path on POSIX - so a
+     * refusal naming a side was wrong on half the machines whatever it said. It names the fault and
+     * leaves git to the terminal. It used to carry a list of the conditions as well, and that list
+     * was stale within one round of adding a refusal, which is why nothing enumerates any more.
+     * <p>
+     * The repair it names is the FILE, not a command, and that too is measured rather than assumed:
+     * {@code git worktree repair} does NOT rewrite {@code commondir}. Run against a worktree whose
+     * pointer names a directory that does not exist, it left the file byte for byte as it was and
+     * reported {@code repair: .git file broken} - about a {@code .git} file that was perfectly
+     * intact. Advising it would have sent an operator to fix the wrong thing and back into the
+     * retry loop this refusal exists to prevent, which is the standard {@link #repairClause} holds
+     * every other refusal in this tool to.
+     */
+    private static final String COMMON_DIR_UNREADABLE_REFUSAL_HEAD =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the pointer " //$NON-NLS-1$
+        + "to the shared repository holding the configuration and the remotes - could not be " //$NON-NLS-1$
+        + "resolved to a directory. Without it this tool cannot read the shared configuration, and " //$NON-NLS-1$
+        + "cannot even tell whether the per-worktree one is switched on, so the effective set of " //$NON-NLS-1$
+        + "remotes cannot be established at all and the operation is refused instead of run blind. "; //$NON-NLS-1$
+
+    /**
+     * The head for a refusal that established NOTHING - not that this is a linked worktree, not
+     * that it has a {@code commondir}. Used when the fault is unclassified, and when it is
+     * {@link GitCommonDirectory.Fault#confirmed()} {@code == false}.
+     */
+    /**
+     * The repair for a failure at the LAYOUT level - the git directory itself could not be read, so
+     * there is no pointer to send anyone to.
+     */
+    private static final String LAYOUT_REPAIR_TAIL =
+        "Check the git directory of this project in a terminal: whether it exists, whether it can " //$NON-NLS-1$
+        + "be read, and whether its path is one this platform accepts. This tool logs only the " //$NON-NLS-1$
+        + "failure's exception types."; //$NON-NLS-1$
+
+    /**
+     * The repair when the POINTER is fine and what it names is not reachable - a different fault
+     * and a different fix, which is why it is not the tail below.
+     */
+    private static final String TARGET_REPAIR_TAIL =
+        "The 'commondir' file itself may be perfectly good: what it POINTS AT is what could not be " //$NON-NLS-1$
+        + "examined. Check that directory in a terminal - that it exists, and that this user may " //$NON-NLS-1$
+        + "read it - before editing the pointer, which may need no change at all. This tool logs " //$NON-NLS-1$
+        + "only the failure's exception types."; //$NON-NLS-1$
+
+    /**
+     * The repair when what the pointer NAMES is not there. Two causes, and this text names both
+     * because the fault cannot tell them apart: the pointer may be wrong, or the pointer may be
+     * right and its target gone - a dangling symbolic link, an unmounted share. Advising only the
+     * first would send an operator to edit a file that is correct.
+     */
+    private static final String MISSING_TARGET_REPAIR_TAIL =
+        "Two things can put you here and this tool cannot tell them apart, so check both: the " //$NON-NLS-1$
+        + "'commondir' file may name the wrong place - it holds the path to the shared repository, " //$NON-NLS-1$
+        + "absolute or relative to the directory the file sits in ('../..' is what " //$NON-NLS-1$
+        + "'git worktree add' writes) - or it may be right and what it names may be gone, which a " //$NON-NLS-1$
+        + "dangling link or an unmounted share will do. Look at the target first; it needs no edit " //$NON-NLS-1$
+        + "if it is simply missing. Do NOT reach for 'git worktree repair' - measured on git " //$NON-NLS-1$
+        + "2.35.1, it does not touch this file at all. This tool logs only the failure's exception " //$NON-NLS-1$
+        + "types."; //$NON-NLS-1$
+
+    private static final String UNEXAMINED_REPOSITORY_REFUSAL_HEAD =
+        "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
+        + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
+        + "blind. Check the repository in a terminal. "; //$NON-NLS-1$
+
+    /**
+     * The tail of that refusal: the repair, which is the same whichever fault fired.
+     * <p>
+     * NORMATIVE, not descriptive. It used to say the file "holds one line", which the refusal for
+     * an EMPTY pointer then contradicted in its own second sentence; what it means is what the
+     * repaired file must look like.
+     * <p>
+     * And it must not demand more than this code does. "Exactly one line" was such a demand:
+     * {@link GitCommonDirectory} strips only TRAILING line terminators, so a path with a newline
+     * INSIDE it survives and resolves - and on a POSIX filesystem a newline is a legal character in
+     * a filename, so that is a real path, resolved the same way git resolves it. An operator who
+     * followed the old advice on such a repository would have replaced a pointer that was merely
+     * unreachable with one that was permanently wrong. The advice now describes what is actually
+     * read: the path, with any trailing terminators ignored.
+     */
+    private static final String COMMON_DIR_UNREADABLE_REFUSAL_TAIL =
+        "If this worktree has a 'commondir' file, repair that file itself: it must be a regular " //$NON-NLS-1$
+        + "file whose contents are the path to the shared repository, with any trailing line " //$NON-NLS-1$
+        + "terminators ignored - not necessarily a single line, since a path may legitimately " //$NON-NLS-1$
+        + "contain one on some filesystems. " //$NON-NLS-1$
+        + "That path may be absolute; when it is relative it is resolved against the " //$NON-NLS-1$
+        + "directory the file sits in, which is what 'git worktree add' writes ('../..'). A working " //$NON-NLS-1$
+        + "absolute spelling does not need to be made relative. " //$NON-NLS-1$
+        + "Do NOT reach for 'git worktree repair' - measured on git 2.35.1, it " //$NON-NLS-1$
+        + "does not touch this file at all, and reports the unrelated '.git file broken' while " //$NON-NLS-1$
+        + "leaving the fault exactly where it was. This tool logs only the failure's exception " //$NON-NLS-1$
+        + "types."; //$NON-NLS-1$
+
+    /**
      * Subcommands that rewrite the WORKING TREE, after which the Eclipse workspace must be refreshed
      * so the model sees the new file state (the branch-switch path refreshes for the same reason).
      */
@@ -454,12 +567,10 @@ public class GitTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run a git command in a project's repository - the non-UI equivalent of typing it in a " //$NON-NLS-1$
-            + "terminal. Send it as a shell-style string (e.g. 'status', 'diff HEAD~1', 'commit -m " //$NON-NLS-1$
-            + "\"message\"', 'push origin main', 'pull origin main'); it is parsed and only a safe whitelist " //$NON-NLS-1$
-            + "of subcommands is executed via the real git CLI (auth/config are the machine's - ssh-agent / " //$NON-NLS-1$
-            + "credential helper / ~/.gitconfig - exactly like your terminal). DISABLED by default: enable it " //$NON-NLS-1$
-            + "in Preferences -> MCP Server -> Tools first. Full parameters, the whitelist and examples: " //$NON-NLS-1$
+        return "Run a git command in a project's repository through the real git CLI, sent as a shell-style " //$NON-NLS-1$
+            + "string. Only a whitelisted set of subcommands runs, and the write-capable ones (commit, push, " //$NON-NLS-1$
+            + "checkout, stash) change the repository. DISABLED by default: enable it in Preferences -> MCP " //$NON-NLS-1$
+            + "Server -> Tools; enable_toolset does not turn it on. Parameters, the whitelist and examples: " //$NON-NLS-1$
             + "get_tool_guide('git')."; //$NON-NLS-1$
     }
 
@@ -819,15 +930,6 @@ public class GitTool implements IMcpTool
         argv.addAll(tokens);
         return argv;
     }
-
-    /**
-     * @return {@code true} when {@code token} is a blocked long flag - by exact name, its
-     *         {@code --flag=value} form, OR an <b>abbreviation</b> of one. Git resolves any unambiguous
-     *         prefix of a long option (so {@code --upload-pa} means {@code --upload-pack}); we therefore
-     *         reject any {@code --<opt>} whose {@code <opt>} is a prefix of a blocked flag's name. Only
-     *         {@code --} long options are inspected (the dangerous global {@code -c}/{@code -C} shorts are
-     *         already rejected by the rule that the first token must be a bare subcommand).
-     */
 
     /**
      * Whether {@code token} IS a URL carrying userinfo, or carries one as an option VALUE
@@ -1561,8 +1663,14 @@ public class GitTool implements IMcpTool
      * <ul>
      * <li>READ: {@code remote.<name>.url} and {@code .pushurl} (both multi-valued), the subsection
      * NAME, the members of a remote GROUP ({@code [remotes] <group> = ...}), and git's legacy
-     * {@code $GIT_DIR/remotes/*} / {@code $GIT_DIR/branches/*} files - measured: each of those is
-     * printed verbatim by a command in {@link #REMOTE_SUBCOMMANDS}.</li>
+     * {@code $GIT_COMMON_DIR/remotes/*} / {@code $GIT_COMMON_DIR/branches/*} files - measured: each
+     * of those is printed verbatim by a command in {@link #REMOTE_SUBCOMMANDS}.</li>
+     * <li>READ, and from the place git reads it rather than the place JGit does: inside a LINKED
+     * worktree the configuration and both legacy directories live in the SHARED repository, which
+     * JGit 6.8 cannot even name ({@link GitCommonDirectory}). Every source above is taken from
+     * there, and the {@code <git dir>/config} JGit does read - which git ignores in a linked
+     * worktree - is taken back out ({@link #inheritedChain}), so this check judges neither less nor
+     * more than the command it is guarding.</li>
      * <li>NOT read: {@code remote.pushDefault} and {@code branch.<name>.remote} /
      * {@code .pushRemote}. They can hold a URL, but the only place git puts one is a transport
      * error, and there it strips the userinfo itself ({@code fatal: unable to access
@@ -1581,7 +1689,17 @@ public class GitTool implements IMcpTool
      * output redaction, not by this refusal.
      * <p>
      * Fails CLOSED: when the configuration cannot be read at all the command is refused with
-     * {@link #CONFIG_UNREADABLE_REFUSAL}, whose text embeds no configuration content.
+     * {@link #CONFIG_UNREADABLE_REFUSAL}, and when a linked worktree's {@code commondir} pointer
+     * cannot be resolved with {@link #commonDirRefusal}. Neither text embeds any file
+     * content.
+     * <p>
+     * A limit worth stating, because it is not one this check can close: opening a linked worktree
+     * as a JGit repository yields a BARE one (JGit derives the work tree from a configuration it
+     * reads from the wrong place), and {@link #execute} needs a work tree before it gets here. So
+     * on the versions this plug-in ships against, a linked worktree fails earlier with its own
+     * error rather than reaching this check. The check is written for what git prints, not for what
+     * the current opener happens to reach: the day a repository there opens with a work tree - a
+     * newer JGit knows the common directory - the blindness would otherwise have shipped with it.
      *
      * @param repo the repository the command would run in (may be {@code null})
      * @param argv the command, with or without its leading {@code git} token (may be {@code null})
@@ -1608,11 +1726,34 @@ public class GitTool implements IMcpTool
         {
             return null;
         }
+        GitCommonDirectory common;
+        try
+        {
+            common = GitCommonDirectory.of(repo.getDirectory());
+        }
+        catch (GitCommonDirectory.FaultException e)
+        {
+            // Its own refusal, not CONFIG_UNREADABLE_REFUSAL: the file at fault is not a
+            // configuration file and the repair is a different one. It names THE fault this pointer
+            // hit rather than every fault that exists - the exception carries it, so there is no
+            // reason to hand back a list and make the operator work out which line applies to them.
+            // That is also what keeps the guides honest: they can promise the refusal identifies the
+            // fault because it does.
+            Activator.logError(commonDirFailureLog(e.fault(), e), null);
+            return commonDirRefusal(e.fault());
+        }
+        // NOSONAR fail closed: a commondir we cannot resolve hides the whole shared repository
+        catch (RuntimeException e)
+        {
+            Activator.logError(commonDirFailureLog(null, e), null);
+            return commonDirRefusal(null);
+        }
         try
         {
             StoredConfig config = repo.getConfig();
-            reloadFromDisk(config);
-            Config effective = withWorktreeConfig(repo, config);
+            Config inherited = inheritedChain(repo, config, common);
+            reloadFromDisk(inherited);
+            Config effective = effectiveConfig(repo, inherited, common);
             for (String remote : effective.getSubsections(REMOTE_SECTION))
             {
                 StoredRemoteFlaw flaw = remoteEntryFlaw(effective, REMOTE_SECTION, remote, remote);
@@ -1656,7 +1797,7 @@ public class GitTool implements IMcpTool
                     }
                 }
             }
-            String legacy = legacyRemoteRefusal(repo);
+            String legacy = legacyRemoteRefusal(common.directory());
             if (legacy != null)
             {
                 return legacy;
@@ -1676,38 +1817,69 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Judges git's LEGACY per-remote files, {@code $GIT_DIR/remotes/*} and
-     * {@code $GIT_DIR/branches/*}, which hold a URL and are not configuration at all.
+     * Judges git's LEGACY per-remote files, {@code $GIT_COMMON_DIR/remotes/*} and
+     * {@code $GIT_COMMON_DIR/branches/*}, which hold a URL and are not configuration at all.
+     * <p>
+     * The COMMON directory, not the git directory, and the distinction is not pedantry: in a linked
+     * worktree those two are different places, and git reads only the first. Measured on git 2.35.1
+     * from inside such a worktree - a legacy file in the SHARED directory is printed by
+     * {@code git remote get-url} verbatim, credential and all, while the same file in the worktree's
+     * own git directory answers {@code No such remote}. Reading both would therefore refuse a
+     * repository over a file git never looks at, which is the more expensive mistake of the two
+     * (see {@link GitCommonDirectory}).
      * <p>
      * They are still live: {@code git remote get-url <name>} and {@code git remote show -n} print
      * what stands in them, verbatim - measured, credential and all - and JGit's configuration never
-     * mentions them. Judged line by line, and only as much of the format is honoured as it takes to
-     * find the value: a {@code remotes/} file carries {@code URL:} / {@code Push:} / {@code Pull:}
+     * mentions them. A {@code remotes/} file is judged line by line; a {@code branches/} file holds
+     * ONE record and only that one is judged, trimmed at both ends, because that is all git reads
+     * from it (measured - a credential on a second line is printed by nothing). Only as much of
+     * each format is honoured as it takes to find the value: a {@code remotes/} file carries {@code URL:} / {@code Push:} / {@code Pull:}
      * lines, a {@code branches/} file a bare URL. The key prefix HAS to come off - it ends in a
      * colon, and a colon in front of an {@code @} is exactly what marks a password, so judging the
-     * raw line would refuse every legacy file ever written. The prefix is only recognised when a
-     * SPACE follows the colon, so a bare {@code https://...} line keeps its scheme and is judged as
-     * the URL it is rather than as plain text.
+     * raw line would refuse every legacy file ever written. The prefix is recognised by the KEY,
+     * anchored at the start of the line and case-sensitively, with any run of indent after the
+     * colon - or none at all: {@code URL:git@github.com:acme/repo.git} is an ordinary, healthy line
+     * and demanding a space after the colon left the key on it, whose colon then read as the
+     * password marker in front of the {@code @} and refused a working repository. A bare
+     * {@code https://...} line matches no key ({@code https:} is not one of the three), so it keeps
+     * its scheme and is judged as the URL it is rather than as plain text.
      * <p>
      * Bounded on both sides: at most {@value #MAX_LEGACY_REMOTE_FILES} files per directory and
      * {@value #MAX_LEGACY_REMOTE_BYTES} bytes each, because both are untrusted content in a
      * repository that may have been produced by someone else. Anything larger is refused rather
      * than read - it cannot be shown to be safe, and no genuine file of either kind is that big.
      *
-     * @param repo the repository the command would run in
+     * @param commonDirectory where the SHARED part of the repository lives
+     *            ({@link GitCommonDirectory#directory()}); may be {@code null}
      * @return the refusal message, or {@code null} when these files hold nothing un-printable
      * @throws IOException when a file cannot be read
      */
-    private static String legacyRemoteRefusal(Repository repo) throws IOException
+    private static String legacyRemoteRefusal(File commonDirectory) throws IOException
     {
-        File gitDir = repo.getDirectory();
-        if (gitDir == null)
+        if (commonDirectory == null)
         {
             return null;
         }
+        // KNOWN OVER-REFUSAL, measured and deliberately still here. git resolves a remote name as
+        // configuration, then remotes/<name>, then branches/<name>, stopping at the first source
+        // that answers (remote.c, remote_get_1): a clean 'origin' in the configuration makes
+        // 'git remote get-url origin' print the configured URL while a credential in
+        // remotes/origin or branches/origin is printed by nothing, and a valid remotes/x shadows
+        // branches/x. This scan judges them all, so a stale legacy file under a name the
+        // configuration has taken over refuses commands git would have run.
+        //
+        // The obvious repair - skip a name a higher-precedence source answers - was written and
+        // withdrawn, because it turned this into the opposite defect: JGit's merged chain carries
+        // a jgit/config that native git never reads (a clean remote there would shadow a REAL
+        // legacy credential), git lower-cases the deprecated dotted [remote.X] where JGit keeps the
+        // spelling, and a name must count as answered only once its source is shown to be
+        // OPENABLE - a remotes/<name> directory does not shadow a reachable branches/<name>.
+        // Getting that right means resolving sources the way git resolves them, with source
+        // identity and answered/fell-through state, not adding a skip condition to a flat scan.
+        // Tracked separately rather than half-done here.
         for (String directory : LEGACY_REMOTE_DIRECTORIES)
         {
-            File parent = new File(gitDir, directory);
+            File parent = new File(commonDirectory, directory);
             if (!parent.isDirectory())
             {
                 continue;
@@ -1761,8 +1933,18 @@ public class GitTool implements IMcpTool
                 StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, RemoteSource.LEGACY_FILE);
         }
         String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-        for (String line : content.split("\n")) //$NON-NLS-1$
+        // A branches/ file holds ONE record, and git reads only that one - measured: with a second
+        // line carrying a credential, 'git remote get-url' and 'git remote show -n' both print the
+        // first URL and the second appears nowhere. Judging the tail would refuse every remote
+        // command of a repository over text no command can reach, which is the more expensive
+        // mistake. A remotes/ file is different: its URL:/Push:/Pull: lines are all live, so it is
+        // read whole.
+        String[] lines = content.split("\n"); //$NON-NLS-1$
+        int judged = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? Math.min(1, lines.length)
+            : lines.length;
+        for (int at = 0; at < judged; at++)
         {
+            String line = lines[at];
             for (String value : legacyValuesOf(line, directory))
             {
                 StoredRemoteFlaw flaw = storedTextFlaw(value);
@@ -1776,33 +1958,38 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * The value(s) of one line of a legacy remote file - everything on it that git will use as an
-     * address or a ref, each piece judged on its own.
+     * Trims a {@code branches/} record the way git trims it - both ends, over git's own whitespace
+     * set.
      * <p>
-     * The KEY comes off first: {@code URL: } / {@code Push: } / {@code Pull: } in a
-     * {@code remotes/} file. It has to, because it ends in a colon, and a colon in front of an
-     * {@code @} is exactly what marks a password - the raw line would refuse every legacy file ever
-     * written. The key is recognised only as letters, a colon and then a SPACE, which keeps a bare
-     * {@code https://host/r.git} line intact ({@code https:} is letters and a colon too) so it is
-     * still judged as the URL it is.
-     * <p>
-     * A {@code branches/} file then splits at {@code #}. There that character is NOT a URL
-     * fragment: the documented format is {@code <url>#<head>}, and git turns the tail into a REF -
-     * measured, {@code https://example.com/r.git#sec:ret@x} produced
-     * {@code fatal: invalid refspec 'refs/heads/sec:ret@x:refs/heads/bh'}, the text printed as a
-     * refspec with nothing masked. Judging it as a fragment would hand it to the redaction, which
-     * never sees a URL there at all. This is not the query/fragment boundary of a URL - that one is
-     * about a fragment the redaction DOES mask, and it stays where it is.
-     * <p>
-     * Nothing is trimmed beyond the line terminator. {@link String#trim} removes every character up
-     * to {@code U+0020}, so it would eat exactly the control bytes this check exists to catch,
-     * before {@link #storedTextFlaw} ever saw them; a lone trailing {@code \r} is dropped because
-     * that is a line ending, not content.
+     * Deliberately not {@link String#trim}: that removes every character up to {@code U+0020}, and
+     * the vertical tab and form feed were measured NOT to be whitespace to git here (see
+     * {@link #isLegacyIndent}). Removing them would delete exactly the control bytes this check
+     * refuses on.
      *
-     * @param line one line of the file, terminator included
-     * @param directory which legacy directory the file came from
-     * @return the pieces to judge
+     * @param value the record, without its line terminator
+     * @return it with git's whitespace removed from both ends
      */
+    private static String trimLegacyRecord(String value)
+    {
+        int from = 0;
+        int to = value.length();
+        while (from < to && isLegacyWhitespace(value.charAt(from)))
+        {
+            from++;
+        }
+        while (to > from && isLegacyWhitespace(value.charAt(to - 1)))
+        {
+            to--;
+        }
+        return value.substring(from, to);
+    }
+
+    /** The characters git strips around a legacy record - measured, one byte at a time. */
+    private static boolean isLegacyWhitespace(char c)
+    {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    }
+
     /**
      * Whether git treats this character as INDENT after a legacy key - measured, one byte at a
      * time, because "whitespace" is not the same set here as anywhere else.
@@ -1821,6 +2008,42 @@ public class GitTool implements IMcpTool
         return c == ' ' || c == '\t' || c == '\r';
     }
 
+    /**
+     * The value(s) of one line of a legacy remote file - everything on it that git will use as an
+     * address or a ref, each piece judged on its own.
+     * <p>
+     * The KEY comes off first: {@code URL: } / {@code Push: } / {@code Pull: } in a
+     * {@code remotes/} file. It has to, because it ends in a colon, and a colon in front of an
+     * {@code @} is exactly what marks a password - the raw line would refuse every legacy file ever
+     * written. The key is recognised by NAME, anchored at the start of the line and case-sensitively
+     * - one of exactly three - with any run of indent after the colon, or none at all. A space is
+     * NOT required, and demanding one was the bug: it left the key on the perfectly ordinary
+     * {@code URL:git@github.com:acme/repo.git} and refused a healthy repository. A bare
+     * {@code https://host/r.git} line survives on the other half of the same rule - {@code https:}
+     * is not one of the three names - so it is still judged as the URL it is.
+     * <p>
+     * A {@code branches/} file then splits at {@code #}. There that character is NOT a URL
+     * fragment: the documented format is {@code <url>#<head>}, and git turns the tail into a REF -
+     * measured, {@code https://example.com/r.git#sec:ret@x} produced
+     * {@code fatal: invalid refspec 'refs/heads/sec:ret@x:refs/heads/bh'}, the text printed as a
+     * refspec with nothing masked. Judging it as a fragment would hand it to the redaction, which
+     * never sees a URL there at all. This is not the query/fragment boundary of a URL - that one is
+     * about a fragment the redaction DOES mask, and it stays where it is.
+     * <p>
+     * Nothing is trimmed beyond the line terminator IN A {@code remotes/} FILE. {@link String#trim}
+     * removes every character up to {@code U+0020}, so it would eat exactly the control bytes this
+     * check exists to catch, before {@link #storedTextFlaw} ever saw them; a lone trailing
+     * {@code \r} is dropped because that is a line ending, not content.
+     * <p>
+     * A {@code branches/} record IS trimmed at both ends, over git's own set and not
+     * {@link String#trim}'s - see {@link #trimLegacyRecord}. Measured: git ignores a file whose
+     * record trims to nothing, and strips spaces, tabs and CRs around a healthy URL, so judging
+     * that padding refused a repository over bytes no command prints.
+     *
+     * @param line one line of the file, terminator included
+     * @param directory which legacy directory the file came from
+     * @return the pieces to judge
+     */
     private static List<String> legacyValuesOf(String line, String directory)
     {
         String value = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line; //$NON-NLS-1$
@@ -1832,8 +2055,11 @@ public class GitTool implements IMcpTool
         if (LEGACY_REMOTES_DIRECTORY.equals(directory))
         {
             // Exactly git's own reading, measured rather than guessed: the line has to BEGIN with
-            // one of three keys, case and all, and any run of whitespace after the colon - or none
-            // - is indent, not value. Demanding a single space instead ('URL: ' only) left the key
+            // one of three keys, case and all, and any run of SPACE, TAB or CR after the colon - or
+            // none at all - is indent, not value. Not "whitespace": vertical tab and form feed were
+            // measured NOT to be consumed by git (see isLegacyIndent), and treating them as indent
+            // would delete the very control byte this check refuses on. Demanding a single space
+            // instead ('URL: ' only) left the key
             // on an ordinary 'URL:git@github.com:acme/repo.git', and the colon of that key then
             // read as the password marker in front of the '@' - a REFUSAL on a healthy repository,
             // which is worse than a missed leak: a leak leaves things as they were, a false refusal
@@ -1859,6 +2085,16 @@ public class GitTool implements IMcpTool
                 after++;
             }
             value = value.substring(after);
+        }
+        if (LEGACY_BRANCHES_DIRECTORY.equals(directory))
+        {
+            // git TRIMS this record, both ends - measured: a file holding one TAB gives
+            // 'No such remote' (trimmed to nothing, the file ignored), and spaces, tabs or CRs
+            // around a healthy URL come back off it. Judging the untrimmed text refused a working
+            // repository over padding git never looks at. The set is git's own - space, tab, CR,
+            // LF - and NOT String.trim(), which would also eat the vertical tab and form feed that
+            // isLegacyIndent was measured to leave in place.
+            value = trimLegacyRecord(value);
         }
         int head = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? value.indexOf('#') : -1;
         return head < 0 ? List.of(value)
@@ -1916,8 +2152,69 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Adds the PER-WORKTREE configuration on top when the repository has it switched on, because
-     * JGit does not - and a remote can live there and nowhere else.
+     * The inherited configuration to judge ON TOP OF - JGit's chain, minus the ONE link git does not
+     * read in a linked worktree.
+     * <p>
+     * In the ordinary linked layout JGit's top link is {@code <git dir>/config}, which git ignores:
+     * it reads the shared {@code <common dir>/config} instead ({@code rev-parse --git-path config}
+     * resolves there, measured). Dropping the link and adding the shared file back is therefore the
+     * same file in the one case where the two are the same directory - a {@code commondir} whose
+     * content strips to nothing resolves back to the git directory - and the right file in every
+     * other case. Either way the layer that ends up in the chain is the one git reads. Leaving that link in the chain would not be harmless-because-empty
+     * - "it is empty" is an observation, not an invariant, and the chain does not merge the way a
+     * single file does: {@link Config#getSubsections} and {@link Config#getSections} UNION every
+     * link, and {@link Config#getStringList} CONCATENATES the base's values with the layer's own
+     * (read from JGit's sources, not assumed). So an entry in a file git never opens would be
+     * enumerated and could not be shadowed by a clean value above it - a refusal on a healthy
+     * repository, the expensive direction.
+     * <p>
+     * The link is dropped ONLY when it can be IDENTIFIED, and identified by the very expression
+     * {@code FileRepository} built it from ({@code getFS().resolve(getDirectory(), "config")}), so
+     * on the shapes this plug-in is given the two {@link File}s are the same path by construction.
+     * Anything else - a repository whose configuration is not a {@link FileBasedConfig}, or whose
+     * top link is some other file - keeps the whole chain, unchanged. That is deliberately not
+     * defensive noise:
+     * <ul>
+     * <li>a blind {@code getBaseConfig()} would, on an unexpected shape, drop the USER configuration
+     * and stop judging remotes inherited from it - the same blindness this whole change removes;</li>
+     * <li>and it is what keeps a future JGit right without a version check. JGit 7.1 gained
+     * {@code Repository.getCommonDirectory()}; there the top link is no longer
+     * {@code <git dir>/config}, the test simply fails, nothing is dropped, and the shared layer
+     * added below becomes a duplicate - which a predicate that unions and concatenates VALUES
+     * cannot be changed by.</li>
+     * </ul>
+     * Nothing here mutates {@code config}: the repository is EGit's, shared with
+     * {@code list_git_branches} and the branch tools, and a check has no business changing what they
+     * read. {@link Config#getBaseConfig()} is a plain accessor, and every layer built on top of it
+     * is a fresh object private to this call.
+     *
+     * @param repo the repository the command would run in
+     * @param config the merged configuration JGit hands out for it
+     * @param common where the shared part of the repository lives
+     * @return the configuration chain to build the judgement on
+     */
+    static Config inheritedChain(Repository repo, StoredConfig config, GitCommonDirectory common)
+    {
+        File gitDir = repo.getDirectory();
+        if (!common.linked() || gitDir == null || !(config instanceof FileBasedConfig))
+        {
+            return config;
+        }
+        Config base = config.getBaseConfig();
+        File ignored = repo.getFS().resolve(gitDir, REPOSITORY_CONFIG_FILE);
+        return base != null && ignored.equals(((FileBasedConfig)config).getFile()) ? base : config;
+    }
+
+    /**
+     * Adds the SHARED configuration of a linked worktree, and the PER-WORKTREE configuration on top
+     * when the repository has it switched on, because JGit does neither - and a remote can live in
+     * either and nowhere else.
+     * <p>
+     * <b>The shared file.</b> In a linked worktree git reads {@code <common dir>/config} as the
+     * repository's configuration and never touches the {@code <git dir>/config} JGit reads
+     * ({@link #inheritedChain} takes that one out). JGit 6.8 knows nothing about any of it, so
+     * without this layer a remote declared in the shared configuration - which is where every remote
+     * of every ordinary clone lives - is invisible here while {@code remote -v} prints it.
      * <p>
      * With {@code extensions.worktreeConfig = true} git reads {@code <git dir>/config.worktree}
      * after {@code config} ({@code git rev-parse --git-path config.worktree} resolves it, and for a
@@ -1928,13 +2225,26 @@ public class GitTool implements IMcpTool
      * {@code .git/config} declares. So {@code remote -v} would print a remote this check never saw.
      * <p>
      * Layered as a BASE-chained {@link FileBasedConfig}, which is how git reads it too: a remote
-     * declared only there is enumerated, and one declared in both takes the worktree value. Built
-     * fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new object has no
-     * cached content to go stale.
+     * declared only there is enumerated. What happens to one declared in BOTH is not the scalar
+     * override it looks like, and the difference matters here: {@link Config#getStringList} - which
+     * is what a multi-valued {@code url} is read through - CONCATENATES the base's values with the
+     * layer's own, so both are judged and a clean worktree value cannot hide an inherited poisoned
+     * one. That is the direction this check wants; it is recorded because the opposite was assumed
+     * once. Built fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new
+     * object has no cached content to go stale.
      * <p>
-     * The switch is read from the REPOSITORY's own file, never from the merged chain, and NOT
-     * gated on {@code core.repositoryformatversion}. Both halves are what git was measured doing
+     * The switch is read from the SHARED file, never from the merged chain, and NOT gated on
+     * {@code core.repositoryformatversion}. All three halves are what git was measured doing
      * (2.35.1), not what its documentation suggests:
+     * <ul>
+     * <li>the switch and the FILE it switches on live in different places in a linked worktree:
+     * {@code extensions.worktreeConfig} in the SHARED config, {@code config.worktree} in the
+     * worktree's own git directory. Measured - with the switch in the shared config and the remote
+     * in the worktree's {@code config.worktree}, {@code remote -v} prints it from the linked
+     * worktree and NOT from the main one. Reading the switch from {@code <git dir>/config} there
+     * would find nothing and silently disable this whole layer;</li>
+     * </ul>
+     * and, unchanged from before:
      * <ul>
      * <li>with the switch only in a user's {@code ~/.gitconfig} - via {@code GIT_CONFIG_GLOBAL} -
      * {@code git remote -v} prints NOTHING from {@code config.worktree}. So an inherited one must
@@ -1949,37 +2259,46 @@ public class GitTool implements IMcpTool
      * safe direction; narrowing the condition that switches the file on is what keeps a stale
      * entry elsewhere from refusing a healthy repository.
      * <p>
-     * LINKED worktrees are outside this - and outside the whole check - for a reason that is not
-     * ours: JGit 6.8 gives such a repository no repository-level configuration at all. Its
-     * {@code getDirectory()} is the {@code .git/worktrees/<name>} directory, which is the right
-     * place to look for {@code config.worktree} (that is what {@code --git-path} resolves to there),
-     * but the {@code config} JGit reads beside it does not exist, and the common one is never read:
-     * on a linked worktree {@code getConfig()} reports no format version and no remotes whatsoever.
-     * So nothing is judged there, and nothing here can change that.
+     * The order this produces is git's own: {@code config.worktree} over the shared {@code config}
+     * over the user's over the system's. Nothing here writes to the repository - every layer is a
+     * fresh {@link FileBasedConfig} private to this call, so the instance EGit shares with
+     * {@code list_git_branches} and the branch tools is left exactly as it was found.
+     * <p>
+     * Package-visible so a test can drive it with a base chain of its own: what it must NOT do -
+     * lose the inherited configuration while adding the shared one - is invisible to any fixture
+     * built out of files, because a test cannot plant a remote in the machine's {@code ~/.gitconfig}.
      *
      * @param repo the repository the command would run in
-     * @param config the merged configuration already read for it
-     * @return the configuration to judge - {@code config} itself when the extension is off
+     * @param inherited the configuration chain to build on ({@link #inheritedChain})
+     * @param common where the shared part of the repository lives
+     * @return the configuration to judge - {@code inherited} itself for an ordinary clone with the
+     *         extension off
      * @throws IOException when a configuration file cannot be read
      * @throws ConfigInvalidException when one cannot be parsed
      */
-    private static Config withWorktreeConfig(Repository repo, Config config)
+    static Config effectiveConfig(Repository repo, Config inherited, GitCommonDirectory common)
         throws IOException, ConfigInvalidException
     {
         File gitDir = repo.getDirectory();
         if (gitDir == null)
         {
-            return config;
+            return inherited;
         }
-        FileBasedConfig repositoryOnly =
-            new FileBasedConfig(null, new File(gitDir, REPOSITORY_CONFIG_FILE), repo.getFS());
-        repositoryOnly.load();
-        if (!repositoryOnly.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false))
+        File sharedConfigFile = new File(common.directory(), REPOSITORY_CONFIG_FILE);
+        Config effective = inherited;
+        if (common.linked())
         {
-            return config;
+            FileBasedConfig shared = new FileBasedConfig(inherited, sharedConfigFile, repo.getFS());
+            // A missing file is not an error: load() clears and the layer simply adds nothing.
+            shared.load();
+            effective = shared;
+        }
+        if (!worktreeConfigSwitchedOn(sharedConfigFile))
+        {
+            return effective;
         }
         FileBasedConfig worktree =
-            new FileBasedConfig(config, new File(gitDir, WORKTREE_CONFIG_FILE), repo.getFS());
+            new FileBasedConfig(effective, new File(gitDir, WORKTREE_CONFIG_FILE), repo.getFS());
         // A missing file is not an error here: load() clears and the layer simply adds nothing.
         worktree.load();
         return worktree;
@@ -2002,6 +2321,136 @@ public class GitTool implements IMcpTool
     {
         return GitFailureLog.typesOnly(
             "git: reading the repository config to check stored remotes failed", failure); //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for an unusable {@code commondir}, naming THE fault this pointer hit.
+     * <p>
+     * It names one fault rather than listing every fault that exists, and that is the whole point.
+     * The earlier version pasted in every reason and left the operator to work out
+     * which line was about their repository - which is also how the list ended up duplicated in two
+     * guides, a constant's javadoc and a test, and drifted out of step three review rounds running.
+     * The exception carries the fault; there was never a reason to enumerate.
+     * <p>
+     * Nothing here quotes the file: {@link GitCommonDirectory.Fault#reason()} is fixed text that
+     * describes the FILE, never its content.
+     *
+     * Package-visible so the {@code null} branch is reachable from a test: it fires only on an
+     * unchecked failure of the resolution itself, which a fixture cannot provoke, and it is exactly
+     * the branch that must NOT borrow the confident head above.
+     *
+     * @param fault which way the pointer is unusable, or {@code null} when it failed in a way
+     *            {@link GitCommonDirectory} does not classify (an unchecked failure)
+     * @return the refusal
+     */
+    static String commonDirRefusal(GitCommonDirectory.Fault fault)
+    {
+        if (fault == null)
+        {
+            // Nothing has been established here - not even that this IS a linked worktree, because
+            // the failure can come from the very call that would have told us. So this branch says
+            // only what it knows, and does not borrow the head above, which asserts both.
+            return UNEXAMINED_REPOSITORY_REFUSAL_HEAD
+                + "The failure is of a kind this tool does not classify. " //$NON-NLS-1$
+                + COMMON_DIR_UNREADABLE_REFUSAL_TAIL;
+        }
+        // No claim about git, on purpose and after measuring. This sentence used to name a side -
+        // "this tool's limit" or "git fails too" - and five of the eleven were wrong against a real
+        // git. The decisive one shows the claim was unfixable rather than merely wrong: '\shared'
+        // in a commondir kills git on Windows and is an ordinary relative path on POSIX, so no
+        // constant could be right on both. What this refusal reports is what this code did.
+        String what = "The fault: " + fault.reason() + ". This tool refused rather than run " //$NON-NLS-1$ //$NON-NLS-2$
+            + "blind; whether native git can use this repository is not something it determines - " //$NON-NLS-1$
+            + "check that in a terminal. "; //$NON-NLS-1$
+        if (!fault.confirmed())
+        {
+            // Nothing established: not that this is a linked worktree, not that it has a commondir.
+            return UNEXAMINED_REPOSITORY_REFUSAL_HEAD + what + LAYOUT_REPAIR_TAIL;
+        }
+        if (fault == GitCommonDirectory.Fault.NOT_A_DIRECTORY)
+        {
+            // The pointer may be right and the target gone - a dangling link resolves to nothing
+            // here just as a wrong path does. Telling the operator to repair the file would send
+            // them to edit something that may be perfectly correct.
+            return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + MISSING_TARGET_REPAIR_TAIL;
+        }
+        if (fault == GitCommonDirectory.Fault.TARGET_UNREADABLE)
+        {
+            // The POINTER may be flawless here - one line, the right path - and what it names is
+            // what could not be examined. Telling the operator to repair the file would send them
+            // to edit something that is already correct, which is the retry loop repairClause holds
+            // every other refusal in this tool to.
+            return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + TARGET_REPAIR_TAIL;
+        }
+        return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + COMMON_DIR_UNREADABLE_REFUSAL_TAIL;
+    }
+
+    /**
+     * Whether the SHARED configuration file itself switches the per-worktree file on.
+     * <p>
+     * Read WITHOUT following {@code [include]}, which is what git does - and the difference is not
+     * theoretical. Measured on git 2.35.1 with the switch in an included file:
+     * {@code git config --get extensions.worktreeConfig} answers {@code true}, and
+     * {@code git remote -v} prints NOTHING from {@code config.worktree}; with the same switch
+     * written directly in {@code .git/config}, {@code remote -v} prints it. The only difference is
+     * where the switch sits, so an included one arms nothing.
+     * <p>
+     * A {@link FileBasedConfig} follows includes, so using one here armed the per-worktree file
+     * where git leaves it alone, and a stale {@code config.worktree} then took every protected
+     * command off a repository git considers clean. A plain {@link Config} parsed from the file's
+     * own text does not follow includes - {@code readIncludedConfig} is the hook
+     * {@code FileBasedConfig} overrides and the base class does not.
+     *
+     * @param sharedConfigFile the shared configuration file
+     * @return {@code true} when that FILE turns the extension on
+     * @throws IOException when it cannot be read
+     * @throws ConfigInvalidException when it cannot be parsed
+     */
+    private static boolean worktreeConfigSwitchedOn(File sharedConfigFile)
+        throws IOException, ConfigInvalidException
+    {
+        if (!sharedConfigFile.isFile())
+        {
+            return false;
+        }
+        String text = new String(Files.readAllBytes(sharedConfigFile.toPath()),
+            StandardCharsets.UTF_8);
+        // A UTF-8 BOM is accepted by git and stripped by FileBasedConfig.load(); a plain Config
+        // parsed from raw text would choke on it before the first section and turn a perfectly
+        // valid configuration into the unreadable-config refusal.
+        if (!text.isEmpty() && text.charAt(0) == '\uFEFF')
+        {
+            text = text.substring(1);
+        }
+        Config own = new Config();
+        own.fromText(text);
+        return own.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false);
+    }
+
+    /**
+     * The EDT-log line for a git directory that could not be resolved - types only, for the same
+     * reason as {@link #configReadFailureLog}.
+     * <p>
+     * The reason is narrower here but not absent: the exception's message carries the path this
+     * pointer names, which is repository content and travels into a permanent log. There is no gain
+     * in writing it there when the refusal already tells the caller which file to repair.
+     * <p>
+     * The HEAD is chosen the way the refusal's is, and for the same reason. It used to say
+     * "resolving the linked worktree's commondir" unconditionally, which is false for a failure
+     * that happened before anything established there was a linked worktree or a {@code commondir}
+     * at all. A permanent log is the worst place to leave an assertion nobody checked: it outlives
+     * the response that was carefully corrected not to make it.
+     *
+     * @param fault which way the resolution failed, or {@code null} when it was not classified
+     * @param failure the exception the resolution threw (may be {@code null})
+     * @return the message to log; it embeds no file content
+     */
+    static String commonDirFailureLog(GitCommonDirectory.Fault fault, Throwable failure)
+    {
+        String what = fault != null && fault.confirmed()
+            ? "git: resolving the linked worktree's commondir to check stored remotes failed" //$NON-NLS-1$
+            : "git: reading a repository's git-directory layout to check stored remotes failed"; //$NON-NLS-1$
+        return GitFailureLog.typesOnly(what, failure);
     }
 
     /**
@@ -2136,9 +2585,16 @@ public class GitTool implements IMcpTool
         }
         if (source == RemoteSource.LEGACY_FILE)
         {
+            // The path is named INDIRECTLY on purpose: in a linked worktree '.git' is a FILE, and
+            // these two directories live in the SHARED repository, so '.git/remotes/<name>' is a
+            // path that does not exist there. 'rev-parse --git-path' prints the right one in every
+            // layout, main worktree and linked alike.
             return "this one is git's LEGACY per-remote file, not configuration - " //$NON-NLS-1$
-                + "'git remote remove' does not know it. Delete the file itself, " //$NON-NLS-1$
-                + "'.git/remotes/<name>' or '.git/branches/<name>', and declare the remote with " //$NON-NLS-1$
+                + "'git remote remove' does not know it. Delete the file itself: it is " //$NON-NLS-1$
+                + "'<name>' under the directory 'git rev-parse --git-path remotes' prints, or " //$NON-NLS-1$
+                + "under 'git rev-parse --git-path branches' (in a plain clone those are " //$NON-NLS-1$
+                + "'.git/remotes' and '.git/branches'; in a linked worktree they live in the " //$NON-NLS-1$
+                + "SHARED repository, not beside the worktree). Then declare the remote with " //$NON-NLS-1$
                 + "'git remote add' instead, pointing at a URL that embeds no credentials."; //$NON-NLS-1$
         }
         return "'git remote remove <name>', then 'git remote add' with a name and a " //$NON-NLS-1$
@@ -2147,8 +2603,10 @@ public class GitTool implements IMcpTool
             + "those answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
             + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
             + "--system); and if this repository uses extensions.worktreeConfig, the entry may sit " //$NON-NLS-1$
-            + "in '.git/config.worktree', where 'git remote remove' answers 'Could not remove " //$NON-NLS-1$
-            + "config section' - there it is 'git config --worktree --remove-section " //$NON-NLS-1$
+            + "in the file 'git rev-parse --git-path config.worktree' prints ('.git/config.worktree' " //$NON-NLS-1$
+            + "in a plain clone; beside the worktree's own HEAD in a linked one, where '.git' is a " //$NON-NLS-1$
+            + "FILE and that path does not exist), where 'git remote remove' answers 'Could not " //$NON-NLS-1$
+            + "remove config section' - there it is 'git config --worktree --remove-section " //$NON-NLS-1$
             + "remote.<name>'."; //$NON-NLS-1$
     }
 
@@ -2392,7 +2850,14 @@ public class GitTool implements IMcpTool
         return candidate;
     }
 
-
+    /**
+     * @return {@code true} when {@code token} is a blocked long flag - by exact name, its
+     *         {@code --flag=value} form, OR an <b>abbreviation</b> of one. Git resolves any unambiguous
+     *         prefix of a long option (so {@code --upload-pa} means {@code --upload-pack}); we therefore
+     *         reject any {@code --<opt>} whose {@code <opt>} is a prefix of a blocked flag's name. Only
+     *         {@code --} long options are inspected (the dangerous global {@code -c}/{@code -C} shorts are
+     *         already rejected by the rule that the first token must be a bare subcommand).
+     */
     private static boolean isBlockedFlag(String token)
     {
         if (!token.startsWith("--") || token.length() <= 2) //$NON-NLS-1$
@@ -2479,12 +2944,6 @@ public class GitTool implements IMcpTool
     // ==================== exec ====================
 
     /**
-     * Runs {@code argv} as a bounded external process in {@code workTree}, combining stdout+stderr,
-     * capping the output and killing the process on a {@link #TIMEOUT_SECONDS} timeout. Never prompts
-     * (auth failures fail fast). The output stream is drained on a separate thread so a large output can
-     * never deadlock the wait.
-     */
-    /**
      * Whether this command can rewrite the working tree, so the Eclipse workspace must be refreshed
      * afterwards. Keyed on the SUBCOMMAND (the first token after {@code git}), matching the set the
      * branch tools already treat as checkout-like.
@@ -2550,7 +3009,7 @@ public class GitTool implements IMcpTool
             }
         };
         refresh.setUser(false);
-        refresh.schedule();
+        McpJobs.schedule(refresh);
         try
         {
             // Bounded by what is LEFT of the call's own budget, so a slow refresh cannot push the
@@ -2662,6 +3121,12 @@ public class GitTool implements IMcpTool
         }
     }
 
+    /**
+     * Runs {@code argv} as a bounded external process in {@code workTree}, combining stdout+stderr,
+     * capping the output and killing the process on a {@link #TIMEOUT_SECONDS} timeout. Never prompts
+     * (auth failures fail fast). The output stream is drained on a separate thread so a large output can
+     * never deadlock the wait.
+     */
     String runGit(List<String> argv, File workTree)
     {
         ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
@@ -3823,22 +4288,6 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Sets the safe, non-interactive git environment and drops inherited {@code GIT_*} variables that
-     * could redirect git to another repository, config, object store, exec-path or proxy program than the
-     * resolved one. Auth-related variables (SSH, credential helpers, {@code HOME}, {@code PATH}) and the
-     * machine's own {@code ~/.gitconfig} are deliberately KEPT: authentication and repository config are
-     * the machine's, exactly like the developer's terminal.
-     */
-    /**
-     * Inserts {@code -c core.askPass=} right after the {@code git} executable, so a {@code core.askPass}
-     * configured in the machine's gitconfig cannot pop a GUI credential dialog for this call. The
-     * caller-supplied tokens are untouched (and {@code --config}/{@code --config-env} stay blocked for
-     * them), so this adds no new injection surface.
-     *
-     * @param argv the parsed command ({@code git} first)
-     * @return a new argv with the non-interactive config option applied
-     */
-    /**
      * The hardening options this tool prepends to every git call, exposed so a unit test can assert
      * the non-interactive guarantees without spawning git. Package-private on purpose.
      *
@@ -3849,6 +4298,15 @@ public class GitTool implements IMcpTool
         return withNonInteractiveConfig(List.of("git")); //$NON-NLS-1$
     }
 
+    /**
+     * Inserts {@code -c core.askPass=} right after the {@code git} executable, so a {@code core.askPass}
+     * configured in the machine's gitconfig cannot pop a GUI credential dialog for this call. The
+     * caller-supplied tokens are untouched (and {@code --config}/{@code --config-env} stay blocked for
+     * them), so this adds no new injection surface.
+     *
+     * @param argv the parsed command ({@code git} first)
+     * @return a new argv with the non-interactive config option applied
+     */
     private static List<String> withNonInteractiveConfig(List<String> argv)
     {
         List<String> command = new ArrayList<>(argv.size() + 2);
@@ -3893,6 +4351,13 @@ public class GitTool implements IMcpTool
         return command;
     }
 
+    /**
+     * Sets the safe, non-interactive git environment and drops inherited {@code GIT_*} variables that
+     * could redirect git to another repository, config, object store, exec-path or proxy program than the
+     * resolved one. Auth-related variables (SSH, credential helpers, {@code HOME}, {@code PATH}) and the
+     * machine's own {@code ~/.gitconfig} are deliberately KEPT: authentication and repository config are
+     * the machine's, exactly like the developer's terminal.
+     */
     private static void hardenEnv(Map<String, String> env, File workTree)
     {
         env.put("GIT_TERMINAL_PROMPT", "0"); // a missing credential fails fast, never a hanging prompt //$NON-NLS-1$ //$NON-NLS-2$

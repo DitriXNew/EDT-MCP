@@ -63,13 +63,8 @@ public class ExportCommonPictureTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants " + //$NON-NLS-1$
-            "(dpi, theme, interface variant, direction, template flag, glyph size). Resolves the " + //$NON-NLS-1$
-            "picture by FQN 'CommonPicture.<Name>' (Russian token ОбщаяКартинка accepted). Omit " + //$NON-NLS-1$
-            "'variant' to get the inventory only (no image bytes); pass variant='best'/'svg'/an " + //$NON-NLS-1$
-            "exact variant name to also get that variant decoded to PNG as base64. SVG variants are " + //$NON-NLS-1$
-            "rasterized to PNG. Full parameters and examples: call " + //$NON-NLS-1$
-            "get_tool_guide('export_common_picture')."; //$NON-NLS-1$
+        return "Inspect or extract the image data of a 1C common picture. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('export_common_picture')."; //$NON-NLS-1$
     }
 
     @Override

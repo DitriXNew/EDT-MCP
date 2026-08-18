@@ -41,11 +41,8 @@ public class ListToolsetsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List the tool groups (toolsets) used by progressive tool disclosure: each toolset's id, " //$NON-NLS-1$
-            + "title, description, member tools, and whether it is currently visible in tools/list. " //$NON-NLS-1$
-            + "When progressive disclosure is on, only the 'core' toolset plus toolsets you reveal with " //$NON-NLS-1$
-            + "enable_toolset appear in tools/list; when off (default) all tools are already listed. " //$NON-NLS-1$
-            + "Read-only. Use it to discover which toolset id to pass to enable_toolset."; //$NON-NLS-1$
+        return "Discover available groups of MCP tools and their visibility. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_toolsets')."; //$NON-NLS-1$
     }
 
     @Override

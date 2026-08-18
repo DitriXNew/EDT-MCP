@@ -168,7 +168,13 @@ public class ToolGroupTest
         assertTrue(tools.contains("delete_project"));
         assertTrue(tools.contains("resync_to_disk"));
         assertTrue(tools.contains("create_project"));
-        assertEquals(11, tools.size());
+        assertTrue(tools.contains("get_server_status")); //$NON-NLS-1$
+        assertTrue(tools.contains("get_tool_guide")); //$NON-NLS-1$
+        assertTrue(tools.contains("list_toolsets")); //$NON-NLS-1$
+        assertTrue(tools.contains("enable_toolset")); //$NON-NLS-1$
+        assertTrue(tools.contains("get_event_log")); //$NON-NLS-1$
+        assertTrue(tools.contains("get_mcp_history")); //$NON-NLS-1$
+        assertEquals(17, tools.size());
     }
 
     @Test
@@ -179,7 +185,8 @@ public class ToolGroupTest
         assertTrue(tools.contains("resume"));
         assertTrue(tools.contains("get_variables"));
         assertTrue(tools.contains("set_variable"));
-        assertEquals(13, tools.size());
+        assertTrue(tools.contains("stop_profiling")); //$NON-NLS-1$
+        assertEquals(14, tools.size());
     }
 
     @Test
@@ -219,11 +226,12 @@ public class ToolGroupTest
         // add_form_*/set_form_item_property/delete_form_item tools were folded into
         // create/modify/delete_metadata and removed in F4b).
         assertTrue(tools.contains("modify_metadata"));
+        assertTrue(tools.contains("adopt_metadata_object")); //$NON-NLS-1$
         assertFalse(tools.contains("add_form_attribute"));
         assertFalse(tools.contains("set_form_item_property"));
         assertFalse(tools.contains("add_form_command"));
         assertFalse(tools.contains("delete_form_item"));
         assertFalse(tools.contains("add_form_item"));
-        assertEquals(4, tools.size());
+        assertEquals(5, tools.size());
     }
 }

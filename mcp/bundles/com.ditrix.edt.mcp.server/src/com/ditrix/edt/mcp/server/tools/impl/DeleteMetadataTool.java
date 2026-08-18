@@ -25,20 +25,19 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
-import com._1c.g5.v8.dt.platform.version.Version;
-import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
@@ -53,7 +52,9 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -65,8 +66,10 @@ import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
+import com.google.gson.JsonObject;
 
 /**
  * Deletes a metadata node (a top-level object or a subordinate member) addressed by a 1C full-name
@@ -81,6 +84,31 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /** Bounded cascade settle seam; production delegates to {@link ProjectStateChecker}. */
+    @FunctionalInterface
+    interface CascadeSettler
+    {
+        String settle(String projectName, long timeoutMs);
+    }
+
+    /**
+     * Queues one top object's {@code .mdo} export. A package-private SEAM: production delegates to
+     * {@link BmTransactions#forceExportToDisk(IProject, String)}, while a unit test substitutes a
+     * recorder to observe that the generic delete SUBMITS its export, and submits it AFTER the
+     * refactoring performed - the ordering the export barrier depends on and cannot create by
+     * itself.
+     */
+    @FunctionalInterface
+    interface ExportSubmitter
+    {
+        /**
+         * @param project the project owning the object
+         * @param topObjectFqn the FQN of the top object whose {@code .mdo} to queue
+         * @return whether the platform accepted a save task
+         */
+        boolean submit(IProject project, String topObjectFqn);
+    }
+
     /**
      * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
      * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
@@ -98,12 +126,34 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
     }
 
+    /**
+     * Reads which projects take part in a cascade rooted at the target. A package-private SEAM: the
+     * production default is {@link ProjectStateChecker#cascadeParticipants(IProject)}, which needs a
+     * live workspace, while a unit test substitutes a fixed set so what a confirmed delete DECLARES
+     * can be observed headlessly.
+     */
+    @FunctionalInterface
+    interface CascadeParticipants
+    {
+        /**
+         * @param base the project the cascade mutates
+         * @return the other projects taking part; never {@code null}
+         */
+        List<IProject> of(IProject base);
+    }
+
     private final ConsentRequester consentRequester;
+    private final CascadeSettler cascadeSettler;
+    private final ExportSubmitter exportSubmitter;
+    private final CascadeParticipants cascadeParticipants;
 
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
     {
-        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview),
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was deleted."), //$NON-NLS-1$
+            BmTransactions::forceExportToDisk, ProjectStateChecker::cascadeParticipants);
     }
 
     /**
@@ -113,7 +163,34 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     DeleteMetadataTool(ConsentRequester consentRequester)
     {
+        this(consentRequester,
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was deleted."), //$NON-NLS-1$
+            BmTransactions::forceExportToDisk, ProjectStateChecker::cascadeParticipants);
+    }
+
+    /** Test seam for the caller-thread cascade settle. */
+    DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler)
+    {
+        this(consentRequester, cascadeSettler, BmTransactions::forceExportToDisk,
+            ProjectStateChecker::cascadeParticipants);
+    }
+
+    /** Test seam for the cascade settle AND the post-refactoring export submission. */
+    DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler,
+        ExportSubmitter exportSubmitter)
+    {
+        this(consentRequester, cascadeSettler, exportSubmitter, ProjectStateChecker::cascadeParticipants);
+    }
+
+    /** Test seam for everything above PLUS the cascade participant set the write scope declares. */
+    DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler,
+        ExportSubmitter exportSubmitter, CascadeParticipants cascadeParticipants)
+    {
         this.consentRequester = consentRequester;
+        this.cascadeSettler = cascadeSettler;
+        this.exportSubmitter = exportSubmitter;
+        this.cascadeParticipants = cascadeParticipants;
     }
 
     /**
@@ -167,6 +244,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
 
+    /** Shared bound for derived-data drain and BM-model registration before an mdclass cascade. */
+    private static final long SETTLE_TIMEOUT_MS = 60_000L;
+
     /** Output key: title of the delete refactoring (preview). */
     private static final String KEY_REFACTORING_TITLE = "refactoringTitle"; //$NON-NLS-1$
 
@@ -197,28 +277,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Delete a metadata node (object or member, including a FORM object " //$NON-NLS-1$
-            + "'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO " //$NON-NLS-1$
-            + "package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
-            + "'...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item " //$NON-NLS-1$
-            + "'<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / " //$NON-NLS-1$
-            + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
-            + "addressed by a 1C full-name FQN. Two-phase: call without confirm to " //$NON-NLS-1$
-            + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
-            + "A top-level object - and equally an mdclass MEMBER of one (attribute / tabular " //$NON-NLS-1$
-            + "section / dimension / resource / enum value) - goes through EDT's md-refactoring, " //$NON-NLS-1$
-            + "which CASCADES the cleanup of " //$NON-NLS-1$
-            + "references in BSL code, forms and other metadata; when a reference cannot be " //$NON-NLS-1$
-            + "auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed " //$NON-NLS-1$
-            + "- pass force=true to delete anyway and leave those references dangling. A PREDEFINED " //$NON-NLS-1$
-            + "item is checked for incoming references the same way. An owned FORM object, a FORM " //$NON-NLS-1$
-            + "member and an XDTO package member are removed from their own container instead: " //$NON-NLS-1$
-            + "nothing blocks them (force is ignored), and no CROSS-object cascade runs - a " //$NON-NLS-1$
-            + "reference from elsewhere (a field's dataPath, a Property whose type points at the " //$NON-NLS-1$
-            + "deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details. Only the " //$NON-NLS-1$
-            + "owner's OWN pointers are cleaned: deleting an owned form clears the default-form " //$NON-NLS-1$
-            + "settings that named it. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('delete_metadata')."; //$NON-NLS-1$
+        return "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the " //$NON-NLS-1$
+            + "md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms " //$NON-NLS-1$
+            + "and metadata - the referring objects themselves are NOT deleted. Two-phase: call once " //$NON-NLS-1$
+            + "WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A " //$NON-NLS-1$
+            + "reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring " //$NON-NLS-1$
+            + "objects; force=true overrides that block and leaves those references dangling. " //$NON-NLS-1$
+            + "EXCEPTION - an owned FORM object, a FORM " //$NON-NLS-1$
+            + "member or an XDTO package member is removed straight from its container: NOTHING blocks " //$NON-NLS-1$
+            + "it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a " //$NON-NLS-1$
+            + "field's dataPath, a command, an XDTO type) are left broken - re-check with " //$NON-NLS-1$
+            + "get_metadata_details (find_references takes TOP-level FQNs only, not these members). " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
     @Override
@@ -262,7 +332,37 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "(the same count), kept for one release for wire compatibility") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable description of the result") //$NON-NLS-1$
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
+    }
+
+    @Override
+    protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        if (projectName == null || projectName.isEmpty() || fqn == null || fqn.isEmpty())
+        {
+            return null;
+        }
+
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        try
+        {
+            if (FormElementWriter.parse(normFqn) != null
+                || FormElementWriter.parseFormObjectCreate(normFqn) != null
+                || XdtoWriter.parseMemberRef(normFqn) != null
+                || PredefinedWriter.parseRef(normFqn) != null)
+            {
+                return null;
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // Preserve the existing UI-thread validation/error path for a malformed specialized FQN.
+            return null;
+        }
+        return cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
     }
 
     @Override
@@ -276,6 +376,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        if (!confirm)
+        {
+            // A preview writes nothing, on every branch - the flag IS the gate. Said once, here,
+            // and safe against being wrong: an actual write record always beats it.
+            WriteScope.recordNothingQueued();
+        }
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
@@ -366,14 +472,80 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             normFqn = resolved.fqn;
         }
 
-        IRefactoring refactoring = refactoringService.createMdObjectDeleteRefactoring(
-            Collections.singletonList(node.object));
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(ctx.project);
+        // Read WHILE THE NODE IS STILL THERE: after the refactoring the node is detached, and the
+        // container is what has to be re-exported (see performDeleteRefactoring).
+        String containerFqn = containerExportFqn(node.owner);
+        return prepareMdClassDelete(ctx.project, normFqn, node.object, containerFqn, confirm, force,
+            refactoringService, modelResolution);
+    }
+
+    /**
+     * The FQN of the top object whose {@code .mdo} REGISTERS the node being deleted - the file that
+     * has to be rewritten for the deletion to be complete on disk.
+     * <p>
+     * Taken from the model, never derived from the caller's FQN string:
+     * {@link MetadataNodeResolver.MetadataNode#owner} is the {@code Configuration} for a top object
+     * and the owning {@code MdObject} for a member, and {@link #findTopContainer} climbs a member's
+     * owner to the top object it is serialized into (a WebService operation parameter's owner is the
+     * operation, whose file is the web service's). So a top-object delete names
+     * {@code Configuration.mdo} and a member delete names the owning object's own {@code .mdo}.
+     * <p>
+     * Returns {@code null} when the container is not a BM object or its container chain has no top
+     * (both mean "nothing here we can name"), and the caller then submits nothing rather than
+     * guessing.
+     *
+     * Package-visible: which file a delete has to rewrite is the whole decision here, and it is not
+     * observable from the tool's JSON result.
+     *
+     * @param owner the resolved node's container
+     * @return the container's top-object FQN, or {@code null}
+     */
+    static String containerExportFqn(EObject owner)
+    {
+        if (!(owner instanceof IBmObject))
+        {
+            return null;
+        }
+        IBmObject top = findTopContainer((IBmObject)owner);
+        return top == null ? null : top.bmGetFqn();
+    }
+
+    /**
+     * Creates the EDT mdclass delete refactoring only after the shared BM resolver has verified the
+     * target and dependent project models. Package-visible so the null-model refusal is covered
+     * without requiring a live workbench.
+     */
+    String prepareMdClassDelete(IProject project, String normFqn, MdObject object,
+        String containerFqn, boolean confirm, boolean force,
+        IMdRefactoringService refactoringService, BmModelResolver.Resolution modelResolution)
+    {
+        if (!modelResolution.isAvailable())
+        {
+            return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
+        }
+
+        IRefactoring refactoring;
+        try
+        {
+            refactoring = refactoringService.createMdObjectDeleteRefactoring(
+                Collections.singletonList(object));
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not prepare delete refactoring for " + normFqn, e); //$NON-NLS-1$
+            return ToolResult.error("Could not prepare deletion of '" + normFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + project.getName() + "'. Nothing was deleted. Use list_projects to check the project " //$NON-NLS-1$
+                + "state and get_metadata_details to verify the target, then retry delete_metadata.") //$NON-NLS-1$
+                .toJson();
+        }
         if (refactoring == null)
         {
             return ToolResult.error("Failed to create delete refactoring for: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
-        return confirm ? performDelete(normFqn, refactoring, force) : buildPreview(normFqn, refactoring);
+        return confirm ? performDelete(project, normFqn, containerFqn, refactoring, force)
+            : buildPreview(normFqn, refactoring);
     }
 
     private String buildPreview(String fqn, IRefactoring refactoring)
@@ -421,8 +593,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    private String performDelete(String fqn, IRefactoring refactoring, boolean force)
+    private String performDelete(IProject project, String fqn, String containerFqn,
+        IRefactoring refactoring, boolean force)
     {
+        String projectName = project.getName();
         // EDT's own reference check: if the node is still referenced by metadata the refactoring
         // cannot auto-clean and the caller did not force, refuse the delete and report the
         // referencing objects (mirrors the UI). 'confirm' is the preview gate; 'force' overrides
@@ -455,7 +629,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview preview = new ConsentPreview(
             "Delete metadata node", //$NON-NLS-1$
             subtitle, 1, Collections.singletonList(fqn));
-        return deleteWithConsent(preview, () -> performDeleteRefactoring(fqn, refactoring, force, blocking));
+        return deleteWithConsent(preview,
+            () -> performDeleteRefactoring(project, fqn, containerFqn, refactoring, force, blocking));
     }
 
     /**
@@ -466,18 +641,54 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      *
      * <p>Call only after consent was granted.</p>
      *
+     * @param project the project whose model is being changed
      * @param fqn the normalized FQN being deleted
+     * @param containerFqn the FQN of the top object registering the deleted node, captured before
+     *     the delete; {@code null} when it could not be named
      * @param refactoring the prepared delete refactoring
      * @param force whether blocking references were overridden
      * @param blocking the blocking references the caller already collected
      * @return the tool's JSON result
      */
-    private static String performDeleteRefactoring(String fqn, IRefactoring refactoring, boolean force,
-        List<Map<String, Object>> blocking)
+    private String performDeleteRefactoring(IProject project, String fqn, String containerFqn,
+        IRefactoring refactoring, boolean force, List<Map<String, Object>> blocking)
     {
+        String projectName = project.getName();
         try
         {
             refactoring.perform();
+            // This project was written in, whatever the container export below manages to queue:
+            // stating it here rather than leaving it to that submission keeps the wait honest when
+            // the container could not be named at all.
+            WriteScope.recordWrite(project);
+            // The cascade also cleans the references held by dependent extensions - EDT's
+            // refactoring writes them, we do not, and it does not report which of them it touched.
+            // So they are declared as projects this call MAY have written in: awaited, so a caller
+            // that reads the disk next no longer sees the extension half-written, but never able to
+            // refuse, because a stalled queue in a project we never submitted to is not evidence
+            // about this call. That grading is what makes awaiting them safe at all - the set is
+            // "every open extension of the target", i.e. what EDT SCANS, and awaiting a
+            // scanned-but-untouched extension under the strict grade would fail a healthy delete.
+            for (IProject participant : cascadeParticipants.of(project))
+            {
+                WriteScope.recordCascade(participant);
+            }
+            // Said out loud in the answer, not only in the log: when this call could not queue the
+            // container's export, the barrier behind it is back to reporting only what the
+            // refactoring queued on its own - which is exactly the state that let a delete answer
+            // over a stale Configuration.mdo. A caller that is about to read the disk has to be
+            // able to tell the two apart, and the specialized branches already say so for their
+            // own write (see the "in-memory only" clause on the form-object delete).
+            // Names the CONTAINER's file, never "its": the file at risk is the one that registers
+            // the deleted node (Configuration.mdo for a top object, the owner .mdo for a member),
+            // and the deleted object's own file was never this call's to queue.
+            String exportLag = submitContainerExport(project, containerFqn)
+                ? "" //$NON-NLS-1$
+                : " The .mdo export of " //$NON-NLS-1$
+                    + (containerFqn == null || containerFqn.isEmpty()
+                        ? "the object that registers it" : "'" + containerFqn + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " could not be queued by this call, so that file may still list the deleted " //$NON-NLS-1$
+                    + "node; re-check it before relying on it."; //$NON-NLS-1$
             ToolResult result = ToolResult.success()
                 .put(McpKeys.ACTION, VAL_EXECUTED)
                 .put("fqn", fqn) //$NON-NLS-1$
@@ -486,19 +697,92 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 putBlockingReferences(result, blocking)
                     .put(McpKeys.MESSAGE, "Delete refactoring completed (forced). " + blocking.size() //$NON-NLS-1$
-                        + " incoming reference(s) were left dangling."); //$NON-NLS-1$
+                        + " incoming reference(s) were left dangling." + exportLag); //$NON-NLS-1$
             }
             else
             {
-                result.put(McpKeys.MESSAGE, "Delete refactoring completed successfully."); //$NON-NLS-1$
+                result.put(McpKeys.MESSAGE, "Delete refactoring completed successfully." + exportLag); //$NON-NLS-1$
             }
             return result.toJson();
         }
         catch (Exception e)
         {
             Activator.logError("Error performing delete refactoring", e); //$NON-NLS-1$
-            return ToolResult.error("Delete failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Delete failed for '" + fqn + "' in project '" + projectName //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. The final state is uncertain. Use get_metadata_details to check whether the " //$NON-NLS-1$
+                + "node still exists before retrying delete_metadata.").toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Queues the export of the container the delete just emptied - the SUBMIT half of "submit, then
+     * wait".
+     * <p>
+     * The export barrier this tool inherits only WAITS. A wait is ordered with an export only when
+     * the same call put that export in the queue: {@code create_metadata} and the four specialized
+     * delete branches call {@code forceExportToDisk} and only then let the barrier run, so by the
+     * time they answer, nothing of THEIRS is still queued. (Which is all a drained queue ever
+     * proves - the platform logs a per-file write failure and completes the computation anyway, so
+     * "drained" never means "the bytes are right".) This branch left the scheduling to EDT's
+     * md-refactoring, and the barrier's probe of the export segment could therefore answer "quiet"
+     * truthfully and uselessly - observed on run 31728870176: the object's own {@code .mdo} already
+     * gone, {@code Configuration.mdo} not yet rewritten, and no barrier-failure marker in the log.
+     * Submitting here restores the ordering by construction instead of by timing luck.
+     * <p>
+     * Two things it deliberately does NOT do, because the platform cannot be asked for them:
+     * <ul>
+     * <li>the deleted object's OWN {@code .mdo} (or its removal) is not resubmitted - EDT builds a
+     * save task by looking the FQN up in the transaction, so an FQN that no longer resolves yields
+     * no task at all. That file stays scheduled by the refactoring alone;</li>
+     * <li>the cascade's other files - referring objects cleaned in this project, and any dependent
+     * extension - are not submitted either. Naming them would mean re-exporting an unbounded set
+     * inside one deadline, and a false REFUSAL on a healthy delete costs more than a miss. That
+     * boundary is issue #408's, and the tool reporting what it actually wrote is the maintainer's
+     * call, not something to be inferred here.
+     * </ul>
+     * A refusal or a {@link RuntimeException} never becomes a failed delete - the model change
+     * already happened, and answering "delete failed" would be a worse lie than answering late. It
+     * is REPORTED instead: the caller is told which file may lag, and the log carries the reason.
+     * That is also why the submission is wrapped here rather than left to the caller's catch block:
+     * an exception thrown on the way to queueing an export says nothing about whether the delete
+     * succeeded. An {@link Error} is deliberately NOT caught and reaches the caller's handler - a
+     * JVM-level failure is not a fact about this export.
+     *
+     * @param project the project owning the container
+     * @param containerFqn the container's top-object FQN, or {@code null} when it could not be named
+     * @return whether the platform accepted an export task for the container
+     */
+    private boolean submitContainerExport(IProject project, String containerFqn)
+    {
+        if (containerFqn == null || containerFqn.isEmpty())
+        {
+            Activator.logInfo("delete_metadata: the deleted node's container could not be named, so " //$NON-NLS-1$
+                + "no .mdo export was queued for it; the export barrier can only report what the " //$NON-NLS-1$
+                + "refactoring queued on its own"); //$NON-NLS-1$
+            return false;
+        }
+        try
+        {
+            if (exportSubmitter.submit(project, containerFqn))
+            {
+                return true;
+            }
+            Activator.logInfo("delete_metadata: the platform accepted no .mdo export task for '" //$NON-NLS-1$
+                + containerFqn + "' after the delete; the export barrier can only report what the " //$NON-NLS-1$
+                + "refactoring queued on its own"); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: queueing the .mdo export of '" + containerFqn //$NON-NLS-1$
+                + "' after the delete threw", e); //$NON-NLS-1$
+        }
+        return false;
+    }
+
+    private static String unavailableModelError(BmModelResolver.Resolution resolution,
+        String stateStatement)
+    {
+        return ToolResult.error(resolution.actionableError(NAME, stateStatement)).toJson();
     }
 
     /**
@@ -1128,6 +1412,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to delete form: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
+        // The form is out of the model at this point; an owner FQN we could not name only costs
+        // the submission, not the fact that this project was written in (#408).
+        WriteScope.recordWrite(project);
         boolean persisted = ownerFqn != null && !ownerFqn.isEmpty()
             && BmTransactions.forceExportToDisk(project, ownerFqn);
 
@@ -1380,16 +1667,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String normFqn, PredefinedWriter.PredefinedRef ref, PredefinedRefScan refScan,
         boolean force)
     {
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolve(project);
+        if (!modelResolution.isAvailable())
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(project);
-        if (bmModel == null)
-        {
-            return ToolResult.error("BM model not available for project: " + project.getName()).toJson(); //$NON-NLS-1$
-        }
+        IBmModel bmModel = modelResolution.getModel();
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String itemName = ref.itemName;
@@ -1557,16 +1840,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         try
         {
-            IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-            if (bmModelManager == null)
+            BmModelResolver.Resolution modelResolution = BmModelResolver.resolve(project);
+            if (!modelResolution.isAvailable())
             {
                 return new PredefinedRefScan(Collections.emptyList(), false);
             }
-            final IBmModel bmModel = bmModelManager.getModel(project);
-            if (bmModel == null)
-            {
-                return new PredefinedRefScan(Collections.emptyList(), false);
-            }
+            final IBmModel bmModel = modelResolution.getModel();
             final long ownerBmId = owner.bmGetId();
             return BmTransactions.<PredefinedRefScan>read(bmModel, "PredefinedItemBackReferences", //$NON-NLS-1$
                 (tx, pm) ->
@@ -1929,21 +2208,21 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("XDTOPackage not found: " + ref.packageFqn //$NON-NLS-1$
                 + ". Use get_metadata_objects to find an FQN.").toJson(); //$NON-NLS-1$
         }
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         // The generator is needed only on the confirm=true (write) path - to derive the content's own
         // export FQN from the OWNER (never via bmGetFqn() on the content itself; see
         // XdtoWriter.resolvePackageContent's javadoc for why that throws BmAssertionException even on
         // content that looks "attached").
         ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (bmModelManager == null || (confirm && fqnGenerator == null))
+        if (confirm && fqnGenerator == null)
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(ctx.project);
-        if (bmModel == null)
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolve(ctx.project);
+        if (!modelResolution.isAvailable())
         {
-            return ToolResult.error("BM model not available for project: " + ctx.project.getName()).toJson(); //$NON-NLS-1$
+            return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
         }
+        IBmModel bmModel = modelResolution.getModel();
         final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
         // The RESOLVED package's canonical FQN: with the yo fallback the caller-typed spelling may
         // differ from the stored name, and force-export must target the stored top object.

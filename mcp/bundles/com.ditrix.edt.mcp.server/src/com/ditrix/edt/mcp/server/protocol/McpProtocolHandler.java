@@ -143,8 +143,43 @@ public class McpProtocolHandler
                 // Intentionally swallowed — the wire path must be unaffected by the
                 // recorder (see the contract above).
             }
+
+            // Counted in its OWN guard, not the recorder's: the recorder is allowed to
+            // fail (a supported, tested path), and sharing one catch let a recorder
+            // failure silently stop the status bar from counting.
+            try
+            {
+                countRequest();
+            }
+            catch (Exception countingFailure) // NOSONAR: the counter must never break a call
+            {
+                // Same contract as the recorder above.
+            }
         }
         return response;
+    }
+
+    /**
+     * Counts one processed request for the status bar, at the same choke point as the
+     * history.
+     * <p>
+     * It deliberately does NOT live in the HTTP handler: requests also arrive through
+     * the in-process bridge, and counting them at the transport made the status bar
+     * stand still while Workmate was driving tool after tool. Package-private and
+     * overridable so the guard around it is unit-testable; a missing plugin context
+     * (shutdown race, headless test) is tolerated exactly like the recorder above.
+     */
+    void countRequest()
+    {
+        Activator activator = Activator.getDefault();
+        if (activator != null)
+        {
+            McpServer server = activator.getMcpServer();
+            if (server != null)
+            {
+                server.incrementRequestCount();
+            }
+        }
     }
 
     /**
@@ -917,8 +952,12 @@ public class McpProtocolHandler
 
         for (IMcpTool tool : toolRegistry.getVisibleTools())
         {
-            // Parse inputSchema from JSON string to JsonElement
-            JsonElement schema = JsonParser.parseString(tool.getInputSchema());
+            // Parse inputSchema from JSON string to JsonElement. The SHAPE a call is
+            // built from goes over the wire; the prose around it stops here, except the
+            // few parameters allowlisted in InputSchemaCompactor — see it for why this
+            // reverses what OutputSchemaCompactor's javadoc used to say.
+            JsonElement schema =
+                InputSchemaCompactor.compact(tool.getName(), JsonParser.parseString(tool.getInputSchema()));
             // A tool may supply explicit annotations; otherwise the central
             // classifier derives the MCP behavioral hints from the tool name.
             Object annotations = tool.getAnnotations() != null
@@ -926,10 +965,11 @@ public class McpProtocolHandler
                 : ToolAnnotationClassifier.classify(tool.getName());
             // JSON tools declare the shape of their structuredContent; other tools
             // return content (not structured data) and leave outputSchema null, in
-            // which case the shared Gson omits the field entirely.
+            // which case the shared Gson omits the field entirely. The shape goes over
+            // the wire but its prose does not — see OutputSchemaCompactor for why.
             String outputSchemaJson = tool.getOutputSchema();
             JsonElement outputSchema = outputSchemaJson != null
-                ? JsonParser.parseString(outputSchemaJson)
+                ? OutputSchemaCompactor.compact(JsonParser.parseString(outputSchemaJson))
                 : null;
             result.addTool(tool.getName(), tool.getDescription(), schema, annotations, outputSchema);
         }

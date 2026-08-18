@@ -317,6 +317,27 @@ def test_concise_is_default_and_leaner_than_detailed():
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
+@e2e_test(tool="get_project_errors", kind="read")
+def test_fix_column_present_in_both_modes():
+    """The quick-fix enrichment: BOTH modes carry a 'Fix registered' column (flags rows whose
+    CHECK TYPE has a registered EDT auto-fix — not a promise this exact marker will produce an
+    applicable fix; apply_quick_fix is then addressed by that row's Check code + Module path +
+    Line — there is no opaque marker id). Asserted only when a real problems table is rendered,
+    so it is robust to an empty live marker set."""
+    concise = call("get_project_errors", {"projectName": PROJECT})
+    detailed = call("get_project_errors", {"projectName": PROJECT, "responseFormat": "detailed"})
+    assert_ok(concise, "concise scan")
+    assert_ok(detailed, "detailed scan")
+
+    if "# Configuration Problems" in concise.text:
+        assert_contains(concise.text, "Fix registered", "concise table must carry the 'Fix registered' column")
+    if "# Configuration Problems" in detailed.text:
+        assert_contains(detailed.text, "Fix registered", "detailed table must carry the 'Fix registered' column")
+        # No opaque per-marker handle column — EDT markers have none; addressing is by locator.
+        assert_not_contains(detailed.text, "Marker id", "there must be no 'Marker id' column")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
 @e2e_test(tool="get_project_errors", kind="write-metadata")
 def test_seeded_marker_is_found_by_both_language_spellings_of_the_filter():
     """EN and RU spellings of the SAME address must select the SAME rows.

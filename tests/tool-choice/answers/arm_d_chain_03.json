@@ -1,0 +1,275 @@
+[
+ {
+  "id": "c051",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_modules"}},
+   {"tool": "list_modules", "args": {"projectName": "УправлениеТорговлей", "metadataType": "catalogs", "objectName": "Контрагенты"}},
+   {"tool": "read_module_source", "args": {"projectName": "УправлениеТорговлей", "modulePath": "Catalogs/Контрагенты/ObjectModule.bsl"}},
+   {"tool": "get_symbol_info", "args": {"projectName": "УправлениеТорговлей", "modulePath": "Catalogs/Контрагенты/ObjectModule.bsl", "line": 87, "column": 5}}
+  ],
+  "expected_result": "План находит в модуле объекта справочника Контрагенты подозрительное присваивание, через get_symbol_info определяет фактический тип значения в этой точке и объясняет несовпадение типов, вызывающее ошибку записи.",
+  "confidence": 3
+ },
+ {
+  "id": "c052",
+  "calls": [
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration", "launchConfigurationName": "ТонкийКлиент"}},
+   {"tool": "wait_for_break", "args": {"applicationId": "<из результата debug_launch>"}},
+   {"tool": "get_variables", "args": {"frameRef": "<из результата wait_for_break>"}},
+   {"tool": "resume", "args": {"applicationId": "<из результата debug_launch>"}}
+  ],
+  "expected_result": "Конфигурация запускается под отладкой по конфигурации ТонкийКлиент, ожидается первая остановка, показываются переменные текущего кадра и выполнение отпускается дальше через resume.",
+  "confidence": 4
+ },
+ {
+  "id": "c053",
+  "calls": [
+   {"tool": "set_variable", "args": {"variableName": "ФлагПроверки", "value": "Ложь", "frameRef": "<текущий кадр на брейкпоинте>"}},
+   {"tool": "step", "args": {"kind": "into", "threadId": "<текущий поток>"}},
+   {"tool": "get_variables", "args": {"frameRef": "<новый кадр после step>"}}
+  ],
+  "expected_result": "Переменная ФлагПроверки меняется на Ложь, выполнение шагает с заходом внутрь вызова, и показываются переменные нового кадра стека.",
+  "confidence": 4
+ },
+ {
+  "id": "c054",
+  "calls": [
+   {"tool": "stop_profiling", "args": {"applicationId": "app-1"}},
+   {"tool": "get_profiling_results", "args": {"applicationId": "app-1"}},
+   {"tool": "read_method_source", "args": {"projectName": "<проект app-1>", "modulePath": "<модуль самого тяжёлого метода из результата>", "methodName": "<имя самого тяжёлого метода>"}}
+  ],
+  "expected_result": "Профилирование в app-1 останавливается, показываются горячие точки, и открывается исходный код метода с наибольшим временем выполнения.",
+  "confidence": 3
+ },
+ {
+  "id": "c055",
+  "calls": [
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "start_profiling", "args": {"applicationId": "<из результата debug_launch>"}},
+   {"tool": "stop_profiling", "args": {"applicationId": "<из результата debug_launch>"}},
+   {"tool": "get_profiling_results", "args": {"applicationId": "<из результата debug_launch>"}}
+  ],
+  "expected_result": "Проект запускается под отладкой, включается профайлер, по команде пользователя замер останавливается и показываются горячие точки закрытия месяца.",
+  "confidence": 3
+ },
+ {
+  "id": "c056",
+  "calls": [
+   {"tool": "debug_status", "args": {}},
+   {"tool": "get_variables", "args": {"frameRef": "<приостановленный сеанс>"}},
+   {"tool": "evaluate_expression", "args": {"expression": "ЭтотОбъект.Ссылка", "frameRef": "<приостановленный сеанс>"}}
+  ],
+  "expected_result": "Показывается список живых отладочных сеансов, выбирается приостановленный, выводятся его переменные и вычисляется значение ЭтотОбъект.Ссылка.",
+  "confidence": 4
+ },
+ {
+  "id": "c057",
+  "calls": [
+   {"tool": "list_breakpoints", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "remove_breakpoint", "args": {"projectName": "TestConfiguration", "breakpointId": "<каждая из найденных точек останова>"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl", "lineNumber": 200}},
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Все текущие точки останова в проекте снимаются, ставится новая точка на строке 200 модуля CommonModule.Проведение, и запускается отладка.",
+  "confidence": 3
+ },
+ {
+  "id": "c058",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "documents", "objectName": "ЗаказПоставщику"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ЗаказПоставщику/ObjectModule.bsl"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ЗаказПоставщику/ObjectModule.bsl", "methodName": "ЗаполнитьПоОстаткам"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ЗакупкиСервер", "commonModuleKind": "Server"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ЗакупкиСервер/Module.bsl", "mode": "append", "source": "<код процедуры ЗаполнитьПоОстаткам из шага 3>"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ЗаказПоставщику/ObjectModule.bsl", "mode": "searchReplace", "oldSource": "<исходный текст процедуры ЗаполнитьПоОстаткам>", "source": ""}}
+  ],
+  "expected_result": "Показывается структура модуля объекта Документ.ЗаказПоставщику, извлекается код процедуры ЗаполнитьПоОстаткам, создаётся общий модуль ЗакупкиСервер, и процедура переносится в него из модуля документа.",
+  "confidence": 3
+ },
+ {
+  "id": "c059",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Контрагенты", "Catalog.Партнёры"]}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Контрагенты"}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Партнёры"}}
+  ],
+  "expected_result": "Показывается структура справочников Контрагенты и Партнёры, находятся все места их использования, и по числу и характеру ссылок делается вывод о возможности удаления одного из них без удаления.",
+  "confidence": 4
+ },
+ {
+  "id": "c060",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Обмен"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Обмен", "newName": "ОбменДанными"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Обмен", "newName": "ОбменДанными", "confirm": true}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показываются использования общего модуля Обмен, модуль переименовывается в ОбменДанными с каскадным обновлением ссылок, проект перевалидируется, и проверяется отсутствие новых ошибок.",
+  "confidence": 4
+ },
+ {
+  "id": "c061",
+  "calls": [
+   {"tool": "list_subsystems", "args": {"projectName": "УправлениеТорговлей", "recursive": true}},
+   {"tool": "get_subsystem_content", "args": {"projectName": "УправлениеТорговлей", "subsystemFqn": "Subsystem.Продажи"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "УправлениеТорговлей", "fqn": "Subsystem.Справочники", "content": [{"op": "add", "metadata": "Catalog.Products"}]}}
+  ],
+  "expected_result": "Показывается дерево подсистем и содержимое подсистемы Продажи, после чего справочник Catalog.Products добавляется в содержимое подсистемы Справочники.",
+  "confidence": 4
+ },
+ {
+  "id": "c062",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "commonModules", "objectName": "РаботаСВалютами"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "methodName": "ПолучитьКурс"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "methodName": "ПолучитьКурс", "direction": "callees"}},
+   {"tool": "get_outgoing_structures", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "method": "ПолучитьКурс"}}
+  ],
+  "expected_result": "Показывается код функции ПолучитьКурс, дерево вызываемых ею методов и структуры полей, которые она собирает для своих вызовов.",
+  "confidence": 4
+ },
+ {
+  "id": "c063",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "commonModules", "objectName": "Печать"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl", "direction": "callers"}}
+  ],
+  "expected_result": "Фиксируется текущее состояние модуля CommonModule.Печать перед рефакторингом: его структура, полный исходный код и список вызывающих его методов.",
+  "confidence": 4
+ },
+ {
+  "id": "c064",
+  "calls": [
+   {"tool": "get_objects_by_tags", "args": {"projectName": "TestConfiguration", "tags": ["deprecated"]}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "<каждый объект из результата get_objects_by_tags>"}}
+  ],
+  "expected_result": "Показывается список объектов с тегом deprecated, по каждому проверяются использования, и формируется отчёт о том, какие из них не используются и потенциально можно удалить, без фактического удаления.",
+  "confidence": 3
+ },
+ {
+  "id": "c065",
+  "calls": [
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "hotfix/проведение", "startPoint": "master", "checkout": true}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Создаётся и открывается ветка hotfix/проведение от master, проверяются ошибки проекта, и при их отсутствии база обновляется конфигурацией через предпросмотр и подтверждение.",
+  "confidence": 4
+ },
+ {
+  "id": "c066",
+  "calls": [
+   {"tool": "revalidate_objects", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "УправлениеТорговлей", "outputPath": "D:\\\\ship"}}
+  ],
+  "expected_result": "Проект перевалидируется, показывается сводка проблем, и при отсутствии блокеров конфигурация выгружается в XML по пути D:\\ship.",
+  "confidence": 4
+ },
+ {
+  "id": "c067",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "ВнешниеОбработки", "branch": "release"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "ВнешниеОбработки"}},
+   {"tool": "build_external_objects", "args": {"projectName": "ВнешниеОбработки", "outputDir": "D:\\\\dist"}}
+  ],
+  "expected_result": "Проект ВнешниеОбработки переключается на ветку release, показывается список содержащихся в нём объектов, и все они собираются в развёртываемые файлы в каталог D:\\dist.",
+  "confidence": 4
+ },
+ {
+  "id": "c068",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_event_log"}},
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "severity": ["Error"], "from": "2026-08-14T13:00:00", "order": "date_desc"}}
+  ],
+  "expected_result": "База обновляется конфигурацией, прогоняются тесты YAXUnit, и проверяется журнал регистрации на ошибки за последний час, чтобы убедиться в работоспособности инфобазы.",
+  "confidence": 3
+ },
+ {
+  "id": "c069",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "develop"}},
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Проект переключается на ветку develop, полностью пересобирается с диска, и показываются ошибки, найденные после пересборки.",
+  "confidence": 4
+ },
+ {
+  "id": "c070",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "checkId": "<самый частый checkId из шага 1>"}},
+   {"tool": "get_check_description", "args": {"checkId": "<самый частый checkId>", "projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "apply_quick_fix"}},
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "<самый частый checkId>"}}
+  ],
+  "expected_result": "Показываются ошибки проекта, выделяется наиболее частый код проверки, объясняется его суть, и там, где для него зарегистрирован автофикс, он применяется.",
+  "confidence": 3
+ },
+ {
+  "id": "c071",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "commonModules", "objectName": "Расчеты"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objects": ["CommonModule.Расчеты"]}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl", "startLine": "<строка замечания из шага 2>", "endLine": "<строка замечания из шага 2>"}},
+   {"tool": "get_check_description", "args": {"checkId": "<checkId из шага 2>", "projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показываются замечания валидации по модулю CommonModule.Расчеты, открывается код в проблемных строках, и объясняется суть сработавшей проверки.",
+  "confidence": 4
+ },
+ {
+  "id": "c072",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objects": ["<отчёт с проблемным запросом>"]}},
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "<текст запроса отчёта>"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["<используемый регистр>"], "full": true}}
+  ],
+  "expected_result": "Проверяется текст запроса отчёта на ошибки, показываются замечания валидации по самому отчёту, и выводится полный список полей используемого регистра.",
+  "confidence": 2
+ },
+ {
+  "id": "c073",
+  "calls": [
+   {"tool": "clean_project", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Проект полностью пересобирается с диска, и после её завершения показывается свежая сводка проблем по проекту.",
+  "confidence": 4
+ },
+ {
+  "id": "c074",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "checkId": "md-reference-intergrity"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "resync_to_disk"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration", "cleanDanglingReferences": true}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "checkId": "md-reference-intergrity"}}
+  ],
+  "expected_result": "Проверяется наличие предупреждений о потерянных ссылках, при их наличии рассинхрон модели с диском чинится через resync_to_disk с очисткой висячих ссылок, и повторной проверкой подтверждается, что предупреждения исчезли.",
+  "confidence": 4
+ },
+ {
+  "id": "c075",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком"}},
+   {"tool": "validate_xdto_package", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ОбменСБанкомСервер", "commonModuleKind": "Server", "serverCall": true}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ОбменСБанкомСервер/Module.bsl", "mode": "append", "source": "Функция ПолучитьДанныеИзБанка() Экспорт\n\t\nКонецФункции"}}
+  ],
+  "expected_result": "Создаётся XDTO-пакет ОбменСБанком, проверяется валидатором, создаётся серверный общий модуль ОбменСБанкомСервер, и в него добавляется заготовка экспортной функции.",
+  "confidence": 4
+ }
+]

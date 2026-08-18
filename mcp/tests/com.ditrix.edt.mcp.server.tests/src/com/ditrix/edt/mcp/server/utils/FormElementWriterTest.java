@@ -39,6 +39,9 @@ import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.eclipse.emf.ecore.util.EcoreEList;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -1883,6 +1886,92 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCreateAttributeWritesViewAndEditDefaults()
+    {
+        // Issue #382: an attribute written without view/edit makes the whole configuration
+        // unloadable - the platform's XDTO reader rejects the generated Form.xml. Every GUI-created
+        // attribute carries <view><common>true</common></view> and the same for <edit>.
+        EObject form = newForm();
+
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Flag", null, null, //$NON-NLS-1$
+            null, null, false, null));
+
+        EObject attribute = FormElementWriter.findFormAttribute(form, "Flag"); //$NON-NLS-1$
+        assertNotNull(attribute);
+        assertAdjustableBooleanIsCommon(attribute, "view"); //$NON-NLS-1$
+        assertAdjustableBooleanIsCommon(attribute, "edit"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateColumnWritesViewAndEditDefaults()
+    {
+        // view/edit are declared on AbstractFormAttribute, so a COLUMN needs them exactly as much as
+        // an attribute does - the same one helper serves both (issue #382).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows"); //$NON-NLS-1$
+        assertNotNull(rows);
+
+        assertNull(FormElementWriter.createMember(form, Kind.COLUMN, "Price", "Rows", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+
+        EObject column = findColumn(rows, "Price"); //$NON-NLS-1$
+        assertNotNull("the column must exist", column); //$NON-NLS-1$
+        assertAdjustableBooleanIsCommon(column, "view"); //$NON-NLS-1$
+        assertAdjustableBooleanIsCommon(column, "edit"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSettingAnAdjustableBooleanKeepsItsForOverrides()
+    {
+        // modify_metadata turns the flag off by rewriting `common` on the EXISTING object. Replacing
+        // the object instead would silently discard the sibling `for` list - the per-role overrides
+        // the designer stores next to it - turning a flag edit into a quiet loss of data (issue #382).
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Flag", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject attribute = FormElementWriter.findFormAttribute(form, "Flag"); //$NON-NLS-1$
+        EObject adjustable = (EObject)attribute.eGet(feature(attribute, "view")); //$NON-NLS-1$
+        assertNotNull(adjustable);
+        @SuppressWarnings("unchecked")
+        List<EObject> overrides = (List<EObject>)adjustable.eGet(feature(adjustable, "for")); //$NON-NLS-1$
+        overrides.add(MdClassFactory.eINSTANCE.createForRoleType());
+        assertEquals(1, overrides.size());
+
+        assertTrue(FormElementWriter.setAdjustableBooleanFeature(attribute, "view", false)); //$NON-NLS-1$
+
+        EObject after = (EObject)attribute.eGet(feature(attribute, "view")); //$NON-NLS-1$
+        assertSame("the contained object must be REUSED, not replaced", adjustable, after); //$NON-NLS-1$
+        assertEquals(Boolean.FALSE, after.eGet(feature(after, "common"))); //$NON-NLS-1$
+        assertEquals("the per-role overrides must survive the flag edit", 1, //$NON-NLS-1$
+            ((List<?>)after.eGet(feature(after, "for"))).size()); //$NON-NLS-1$
+    }
+
+    /** Asserts that {@code owner}'s {@code featureName} holds an AdjustableBoolean with common=true. */
+    private static void assertAdjustableBooleanIsCommon(EObject owner, String featureName)
+    {
+        Object value = owner.eGet(feature(owner, featureName));
+        assertTrue(featureName + " must be an AdjustableBoolean object, was: " + value, //$NON-NLS-1$
+            value instanceof EObject);
+        EObject adjustable = (EObject)value;
+        assertEquals(featureName + ".common must be true", Boolean.TRUE, //$NON-NLS-1$
+            adjustable.eGet(feature(adjustable, "common"))); //$NON-NLS-1$
+    }
+
+    /** The named column of a collection attribute, or {@code null}. */
+    private static EObject findColumn(EObject attribute, String name)
+    {
+        for (Object column : (List<?>)attribute.eGet(feature(attribute, "columns"))) //$NON-NLS-1$
+        {
+            EObject c = (EObject)column;
+            if (name.equals(c.eGet(feature(c, "name")))) //$NON-NLS-1$
+            {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    @Test
     public void testCreateAttributeAssignsUniqueIdsInAttributeNamespace()
     {
         EObject form = newForm();
@@ -1998,6 +2087,361 @@ public class FormElementWriterTest
         assertTrue(ids.add((Integer)second.eGet(feature(second, "id")))); //$NON-NLS-1$
         assertEquals(Integer.valueOf(7), attribute.eGet(feature(attribute, "id"))); //$NON-NLS-1$
         assertEquals(Integer.valueOf(9), group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    // ==== the id space: WIDE ceiling, NARROW renumbering targets (issue #373) ====
+    //
+    // The platform splits these two jobs and so do we. FormIdentifierService.getMaxId scans
+    // EcoreUtil.getAllContents(form, true) - the whole live model - to decide which ids are taken,
+    // while its validation and repair paths (the form-invalid-item-id diagnostic and the merge-time
+    // checkUniqueItemIds) judge and rewrite only what FormItemIterator yields, and that follows
+    // persisted children only.
+
+    /**
+     * The ceiling must keep counting the layouter's items. They are {@code FormItem}s carrying real
+     * ids that are reachable ONLY through a transient containment, and the platform holds those ids
+     * reserved - so an id handed out here has to clear them. This is the NEGATIVE control for the
+     * narrowing: point {@code maxItemId} at {@link PersistedContents} and the ceiling falls to the
+     * table's 3, so the authored group below is handed 4 - an id the layouter's bar range already
+     * covers. It deliberately passes on the pre-change code too; its job is to fail if the WIDE half
+     * of the split is ever narrowed along with the target pass.
+     */
+    @Test
+    public void testItemIdCeilingCountsLayouterItemsBehindTransientContainments()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        // The layouter's own command bar for that table - transient, so it never reaches Form.form,
+        // yet it holds an allocated id.
+        EObject layouterBar = newObject(MODEL.autoCommandBar);
+        layouterBar.eSet(feature(layouterBar, "name"), "TableTopCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        layouterBar.eSet(feature(layouterBar, "id"), Integer.valueOf(50)); //$NON-NLS-1$
+        table.eSet(feature(table, "topCommandBar"), layouterBar); //$NON-NLS-1$
+
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("the ceiling must clear the id the layouter item already holds", //$NON-NLS-1$
+            Integer.valueOf(51), group.eGet(feature(group, "id"))); //$NON-NLS-1$
+        assertEquals("an authored item with a good id keeps it", Integer.valueOf(3), //$NON-NLS-1$
+            table.eGet(feature(table, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * On a form with NO computed content the split must be bit-for-bit what it always was, so the
+     * exact numbers are pinned rather than "unique and non-zero". The existing invariant assertions
+     * would survive a target pass that visited the same objects in a different ORDER, which would
+     * silently move ids between authored elements; these equalities would not.
+     *
+     * <p>Ceiling = 3 (the highest authored id, the root command bar excluded), then in document
+     * order: a zero takes 4, a good unique id is kept, the duplicate 3 takes 5, the last zero
+     * takes 6.</p>
+     */
+    @Test
+    public void testAuthoredOnlyFormIsNumberedExactlyAsBefore()
+    {
+        EObject form = newForm();
+        EObject zeroFirst = newObject(MODEL.formGroup);
+        zeroFirst.eSet(feature(zeroFirst, "name"), "ZeroFirst"); //$NON-NLS-1$ //$NON-NLS-2$
+        zeroFirst.eSet(feature(zeroFirst, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", zeroFirst); //$NON-NLS-1$
+        EObject good = newObject(MODEL.formGroup);
+        good.eSet(feature(good, "name"), "Good"); //$NON-NLS-1$ //$NON-NLS-2$
+        good.eSet(feature(good, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", good); //$NON-NLS-1$
+        EObject duplicate = newObject(MODEL.formGroup);
+        duplicate.eSet(feature(duplicate, "name"), "Duplicate"); //$NON-NLS-1$ //$NON-NLS-2$
+        duplicate.eSet(feature(duplicate, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", duplicate); //$NON-NLS-1$
+        EObject zeroLast = newObject(MODEL.decoration);
+        zeroLast.eSet(feature(zeroLast, "name"), "ZeroLast"); //$NON-NLS-1$ //$NON-NLS-2$
+        zeroLast.eSet(feature(zeroLast, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", zeroLast); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals(Integer.valueOf(4), zeroFirst.eGet(feature(zeroFirst, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(3), good.eGet(feature(good, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(5), duplicate.eGet(feature(duplicate, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(6), zeroLast.eGet(feature(zeroLast, "id"))); //$NON-NLS-1$
+        EObject rootBar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(-1), rootBar.eGet(feature(rootBar, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The same exact-value parity pin for the attribute and command id spaces. Their existing tests
+     * assert only "positive and unique", which a reversed target order would satisfy while quietly
+     * swapping ids between authored objects; these equalities would not.
+     */
+    @Test
+    public void testAuthoredAttributesAndCommandsAreNumberedExactlyAsBefore()
+    {
+        EObject form = newForm();
+        EObject attrZero = newObject(MODEL.formAttribute);
+        attrZero.eSet(feature(attrZero, "name"), "AttrZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        attrZero.eSet(feature(attrZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "attributes", attrZero); //$NON-NLS-1$
+        EObject attrGood = newObject(MODEL.formAttribute);
+        attrGood.eSet(feature(attrGood, "name"), "AttrGood"); //$NON-NLS-1$ //$NON-NLS-2$
+        attrGood.eSet(feature(attrGood, "id"), Integer.valueOf(2)); //$NON-NLS-1$
+        addTo(form, "attributes", attrGood); //$NON-NLS-1$
+        EObject attrDup = newObject(MODEL.formAttribute);
+        attrDup.eSet(feature(attrDup, "name"), "AttrDup"); //$NON-NLS-1$ //$NON-NLS-2$
+        attrDup.eSet(feature(attrDup, "id"), Integer.valueOf(2)); //$NON-NLS-1$
+        addTo(form, "attributes", attrDup); //$NON-NLS-1$
+
+        EObject cmdZero = newObject(MODEL.formCommand);
+        cmdZero.eSet(feature(cmdZero, "name"), "CmdZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        cmdZero.eSet(feature(cmdZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "formCommands", cmdZero); //$NON-NLS-1$
+        EObject cmdGood = newObject(MODEL.formCommand);
+        cmdGood.eSet(feature(cmdGood, "name"), "CmdGood"); //$NON-NLS-1$ //$NON-NLS-2$
+        cmdGood.eSet(feature(cmdGood, "id"), Integer.valueOf(5)); //$NON-NLS-1$
+        addTo(form, "formCommands", cmdGood); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+        FormElementWriter.normalizeFormCommandIds(form);
+
+        // Ceiling 2, then in document order: the zero takes 3, the good id is kept, the duplicate 4.
+        assertEquals(Integer.valueOf(3), attrZero.eGet(feature(attrZero, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(2), attrGood.eGet(feature(attrGood, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(4), attrDup.eGet(feature(attrDup, "id"))); //$NON-NLS-1$
+        // Ceiling 5, so the zero takes 6 and the good id is kept.
+        assertEquals(Integer.valueOf(6), cmdZero.eGet(feature(cmdZero, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(5), cmdGood.eGet(feature(cmdGood, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A layouter item is never a renumbering target. Writing into it would mutate an object that is
+     * never serialized, and the platform's own repair iterator does not admit it either.
+     */
+    @Test
+    public void testLayouterItemsAreNeverRenumbered()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(5)); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        // id 0 is exactly what the layouter leaves behind (ModelAccessHelper attaches these panels
+        // without ever allocating one), so this is the value the old walk would have "repaired".
+        EObject panel = newObject(modelClass("SelectedItemsActionsPanel")); //$NON-NLS-1$
+        panel.eSet(feature(panel, "name"), "SelectedItemsActionsPanel"); //$NON-NLS-1$ //$NON-NLS-2$
+        panel.eSet(feature(panel, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        table.eSet(feature(table, "selectedItemsActionsPanel"), panel); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("a computed item must keep the id the layouter gave it", Integer.valueOf(0), //$NON-NLS-1$
+            panel.eGet(feature(panel, "id"))); //$NON-NLS-1$
+        assertEquals("an authored item with a good id keeps it", Integer.valueOf(5), //$NON-NLS-1$
+            table.eGet(feature(table, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The hazard the narrowing removes: when a layouter item and an AUTHORED item hold the same id,
+     * the wide walk let visit order pick the loser. Here the layouter bar sits under an earlier
+     * sibling, so depth-first reaches it first, claims id 7 for a throw-away object and renumbers the
+     * authored group - a change that lands in {@code Form.form} and outlives the layouter entirely.
+     */
+    @Test
+    public void testAuthoredItemKeepsItsIdWhenALayouterItemSharesIt()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        EObject layouterBar = newObject(MODEL.autoCommandBar);
+        layouterBar.eSet(feature(layouterBar, "name"), "TableTopCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        layouterBar.eSet(feature(layouterBar, "id"), Integer.valueOf(7)); //$NON-NLS-1$
+        table.eSet(feature(table, "topCommandBar"), layouterBar); //$NON-NLS-1$
+
+        // Visited AFTER the table's computed subtree, so this is the one the old walk renumbered.
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(7)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("an ephemeral item must not renumber authored content", Integer.valueOf(7), //$NON-NLS-1$
+            group.eGet(feature(group, "id"))); //$NON-NLS-1$
+        assertEquals("and the computed item is left exactly as it was", Integer.valueOf(7), //$NON-NLS-1$
+            layouterBar.eGet(feature(layouterBar, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The form root's own {@code autoCommandBar} is a PERSISTED containment, so narrowing the target
+     * pass must not lose it - it still gets the platform sentinel {@code -1}.
+     */
+    @Test
+    public void testRootAutoCommandBarKeepsItsSentinelUnderTheNarrowedPass()
+    {
+        EObject form = newForm();
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        bar.eSet(feature(bar, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("the root command bar keeps the platform sentinel", Integer.valueOf(-1), //$NON-NLS-1$
+            bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+        assertEquals("and an authored item is still numbered from 1", Integer.valueOf(1), //$NON-NLS-1$
+            group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * PARITY, not a numeric difference - and the distinction is deliberate. The shipped metamodel has
+     * NO transient containment that reaches an {@code AbstractFormAttribute}, so on a real form this
+     * narrowing changes nothing at all; claiming otherwise would be inventing evidence. What this
+     * pins is the RULE - which traversal decides the targets - so that a metamodel that later grows
+     * such a path does not silently start renumbering computed attributes.
+     */
+    @Test
+    public void testComputedAttributeIsNotARenumberingTarget()
+    {
+        EObject form = newForm();
+        EObject authored = newObject(MODEL.formAttribute);
+        authored.eSet(feature(authored, "name"), "Customer"); //$NON-NLS-1$ //$NON-NLS-2$
+        authored.eSet(feature(authored, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "attributes", authored); //$NON-NLS-1$
+        // TWO computed attributes, because one cannot pin both halves of the split - measured, not
+        // assumed. A ghost with a good unique id pins the CEILING (drop it from the maximum and the
+        // authored attribute below falls to 1) but says nothing about the target pass, since the
+        // repair keeps any id that is positive and unique. A ghost with id 0 pins the TARGET PASS
+        // (the wide loop would allocate one for it) but says nothing about the ceiling, since 0
+        // raises no maximum.
+        EObject computedHigh = newObject(MODEL.formAttribute);
+        computedHigh.eSet(feature(computedHigh, "name"), "ComputedHigh"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedHigh.eSet(feature(computedHigh, "id"), Integer.valueOf(40)); //$NON-NLS-1$
+        addTo(form, "ghostAttributes", computedHigh); //$NON-NLS-1$
+        EObject computedZero = newObject(MODEL.formAttribute);
+        computedZero.eSet(feature(computedZero, "name"), "ComputedZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedZero.eSet(feature(computedZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "ghostAttributes", computedZero); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        assertEquals("the ceiling must still count the computed attribute", Integer.valueOf(41), //$NON-NLS-1$
+            authored.eGet(feature(authored, "id"))); //$NON-NLS-1$
+        assertEquals("a computed attribute is never written to", Integer.valueOf(40), //$NON-NLS-1$
+            computedHigh.eGet(feature(computedHigh, "id"))); //$NON-NLS-1$
+        assertEquals("not even one the repair would consider unnumbered", Integer.valueOf(0), //$NON-NLS-1$
+            computedZero.eGet(feature(computedZero, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * PARITY for the command id space, on the same terms as
+     * {@link #testComputedAttributeIsNotARenumberingTarget}. On a real form the inferred
+     * {@code FormStandardCommand} behind {@code FormStandardCommandSource.commands} is not even a
+     * {@code FormCommand} - it extends {@code Command} directly and declares no {@code id} - so it
+     * never entered this loop. The fixture supplies a computed command anyway, to pin which
+     * traversal chooses the targets.
+     */
+    @Test
+    public void testComputedCommandIsNotARenumberingTarget()
+    {
+        EObject form = newForm();
+        EObject authored = newObject(MODEL.formCommand);
+        authored.eSet(feature(authored, "name"), "Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        authored.eSet(feature(authored, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "formCommands", authored); //$NON-NLS-1$
+        // Two of them, for the reason spelled out in the attribute test: a good unique id pins the
+        // ceiling, a zero pins the target pass, and neither pins both.
+        EObject computedHigh = newObject(MODEL.formCommand);
+        computedHigh.eSet(feature(computedHigh, "name"), "ComputedHigh"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedHigh.eSet(feature(computedHigh, "id"), Integer.valueOf(60)); //$NON-NLS-1$
+        addTo(form, "ghostCommands", computedHigh); //$NON-NLS-1$
+        EObject computedZero = newObject(MODEL.formCommand);
+        computedZero.eSet(feature(computedZero, "name"), "ComputedZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedZero.eSet(feature(computedZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "ghostCommands", computedZero); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormCommandIds(form);
+
+        assertEquals("the ceiling must still count the computed command", Integer.valueOf(61), //$NON-NLS-1$
+            authored.eGet(feature(authored, "id"))); //$NON-NLS-1$
+        assertEquals("a computed command is never written to", Integer.valueOf(60), //$NON-NLS-1$
+            computedHigh.eGet(feature(computedHigh, "id"))); //$NON-NLS-1$
+        assertEquals("not even one the repair would consider unnumbered", Integer.valueOf(0), //$NON-NLS-1$
+            computedZero.eGet(feature(computedZero, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The before/after measurement on a form of known composition. Six authored objects hang off
+     * persisted containments (the root command bar, a table, a group and its field, one attribute,
+     * one command) and six more are reachable only through transient ones (the table's layouter
+     * command bar and the button under it, its two actions panels, a computed attribute and a
+     * computed command). The wide walk enumerates all twelve; the target pass enumerates the six
+     * that can actually be written back to disk.
+     */
+    @Test
+    public void testPersistedWalkEnumeratesOnlyTheAuthoredHalfOfTheForm()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", table); //$NON-NLS-1$
+        EObject layouterBar = newObject(MODEL.autoCommandBar);
+        layouterBar.eSet(feature(layouterBar, "name"), "TableTopCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "topCommandBar"), layouterBar); //$NON-NLS-1$
+        EObject layouterButton = newObject(MODEL.decoration);
+        layouterButton.eSet(feature(layouterButton, "name"), "LayouterButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(layouterBar, "items", layouterButton); //$NON-NLS-1$
+        EObject selected = newObject(modelClass("SelectedItemsActionsPanel")); //$NON-NLS-1$
+        selected.eSet(feature(selected, "name"), "Selected"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "selectedItemsActionsPanel"), selected); //$NON-NLS-1$
+        EObject rows = newObject(modelClass("RowActionsPanel")); //$NON-NLS-1$
+        rows.eSet(feature(rows, "name"), "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "rowActionsPanel"), rows); //$NON-NLS-1$
+
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", group); //$NON-NLS-1$
+        EObject field = newObject(MODEL.decoration);
+        field.eSet(feature(field, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(group, "items", field); //$NON-NLS-1$
+
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "Customer"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), "Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+        EObject ghostAttribute = newObject(MODEL.formAttribute);
+        ghostAttribute.eSet(feature(ghostAttribute, "name"), "GhostAttribute"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "ghostAttributes", ghostAttribute); //$NON-NLS-1$
+        EObject ghostCommand = newObject(MODEL.formCommand);
+        ghostCommand.eSet(feature(ghostCommand, "name"), "GhostCommand"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "ghostCommands", ghostCommand); //$NON-NLS-1$
+
+        int wide = 0;
+        for (TreeIterator<EObject> it = form.eAllContents(); it.hasNext(); it.next())
+        {
+            wide++;
+        }
+        int narrow = 0;
+        for (EObject each : PersistedContents.descendants(form))
+        {
+            if (each != null)
+            {
+                narrow++;
+            }
+        }
+
+        assertEquals("the wide walk still sees the whole live form", 12, wide); //$NON-NLS-1$
+        assertEquals("the target pass sees only what can be written back", 6, narrow); //$NON-NLS-1$
     }
 
     @Test
@@ -2996,9 +3440,12 @@ public class FormElementWriterTest
             EEnum editMode =
                 newEnum(f, "TableFieldEditMode", "Directly", "Enter", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
-            EClass adjustableBoolean = f.createEClass();
-            adjustableBoolean.setName("AdjustableBoolean"); //$NON-NLS-1$
-            addBoolean(f, adjustableBoolean, "common"); //$NON-NLS-1$
+            // The REAL mdclass AdjustableBoolean, not a synthetic look-alike: the form metamodel's
+            // view / edit / userVisible / use references all target this very EClass, and the
+            // property introspector recognizes them BY THAT TYPE. A synthetic stand-in named
+            // "AdjustableBoolean" would diverge from production exactly where the recognition
+            // happens, so the fixture points at the genuine type (issue #382).
+            EClass adjustableBoolean = MdClassPackage.Literals.ADJUSTABLE_BOOLEAN;
 
             // The extInfo family: an abstract base plus the concrete classes the writer resolves by
             // name (group ext-infos, the input-field ext-info and the tooltip's label ext-info).
@@ -3171,20 +3618,24 @@ public class FormElementWriterTest
             abstractFormAttribute.setAbstract(true);
             addInt(f, abstractFormAttribute, "id"); //$NON-NLS-1$
             addString(f, abstractFormAttribute, "name"); //$NON-NLS-1$
+            // view/edit (each an AdjustableBoolean - "use") are declared HERE, on the abstract
+            // supertype, exactly as the EDT metamodel declares them - so BOTH FormAttribute and
+            // FormAttributeColumn inherit them. Declaring them on the concrete FormAttribute instead
+            // left the synthetic column WITHOUT the features, which made the reflective writer a
+            // silent no-op there and let a broken column default pass green (issue #382).
+            abstractFormAttribute.getEStructuralFeatures().add(
+                containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
+            abstractFormAttribute.getEStructuralFeatures().add(
+                containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
 
             formAttribute = f.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$
             formAttribute.getESuperTypes().add(abstractFormAttribute);
-            // The seed (issue #208) sets these on the main Object attribute: main/savedData booleans and
-            // the presentation flags view/edit (each an AdjustableBoolean - "use"). Declare them so the
-            // headless write logic can be exercised and the test can read them back (an absent feature
-            // would make the reflective writer a no-op and the eGet(null) read throw).
+            // The seed (issue #208) sets these on the main Object attribute: main/savedData booleans.
+            // Declare them so the headless write logic can be exercised and the test can read them back
+            // (an absent feature would make the reflective writer a no-op and the eGet(null) read throw).
             addBoolean(f, formAttribute, "main"); //$NON-NLS-1$
             addBoolean(f, formAttribute, "savedData"); //$NON-NLS-1$
-            formAttribute.getEStructuralFeatures().add(
-                containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
-            formAttribute.getEStructuralFeatures().add(
-                containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
             // A collection attribute's value type + its COLUMNS (issue #295): the writer reads both
             // reflectively, so a headless test can exercise the collection paths (a table bound to a
             // ValueTable attribute, a field bound to one of its columns). 'types' is NON-containment,
@@ -3248,6 +3699,19 @@ public class FormElementWriterTest
                 containment(f, "searchControlAddition", addition, false)); //$NON-NLS-1$
             pkg.getEClassifiers().add(addition);
 
+            // The LAYOUTER-ONLY children (issue #373). In the shipped Form.xcore these sit on
+            // CommandBarHolder / SelectedItemsActionsPanelHolder / RowActionsPanelHolder and are
+            // declared "contains transient" - transient with derived=false,
+            // which is the shape that makes an isDerived()-only check useless. They are ordinary
+            // stored slots that simply never reach Form.form, so a test populates them with eSet,
+            // exactly as the layouter does at runtime.
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "topCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "selectedItemsActionsPanel", selectedItemsActionsPanel, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "rowActionsPanel", rowActionsPanel, false)); //$NON-NLS-1$
+
             form = f.createEClass();
             form.setName("Form"); //$NON-NLS-1$
             form.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
@@ -3256,6 +3720,16 @@ public class FormElementWriterTest
                 containment(f, "attributes", formAttribute, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "topCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            // NOT in the shipped metamodel: no transient containment reaches an AbstractFormAttribute
+            // or a FormCommand today. These two exist so the RULE ("a computed object is never a
+            // renumbering target") can be pinned for those id spaces as well - see the tests that
+            // use them, which say so explicitly rather than claiming an observable difference.
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "ghostAttributes", formAttribute, true)); //$NON-NLS-1$
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "ghostCommands", formCommand, true)); //$NON-NLS-1$
 
             pkg.getEClassifiers().add(form);
             // The owner that holds several forms: the level the orphan-item scan must NOT climb to,
@@ -3276,7 +3750,9 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(fieldType);
             pkg.getEClassifiers().add(horizontalAlign);
             pkg.getEClassifiers().add(editMode);
-            pkg.getEClassifiers().add(adjustableBoolean);
+            // adjustableBoolean is deliberately NOT added: it is the REAL mdclass EClass, and
+            // EClassifier containment is single-parent - adding it here would REPARENT it out of
+            // MdClassPackage for the whole JVM, corrupting the metamodel for every later test.
             pkg.getEClassifiers().add(extInfoBase);
             pkg.getEClassifiers().add(usualGroupExtInfo);
             pkg.getEClassifiers().add(popupGroupExtInfo);
@@ -3370,6 +3846,20 @@ public class FormElementWriterTest
             reference.setEType(type);
             reference.setContainment(true);
             reference.setUpperBound(many ? -1 : 1);
+            return reference;
+        }
+
+        /**
+         * A containment the model keeps in memory but never writes - the layouter-only shape of
+         * the real metamodel. TRANSIENT with {@code derived} left FALSE on purpose: that is how EDT
+         * declares every computed form containment, so a check that asked only about
+         * {@code isDerived()} would let all of these through.
+         */
+        private static EReference layouterContainment(EcoreFactory f, String name, EClass type,
+            boolean many)
+        {
+            EReference reference = containment(f, name, type, many);
+            reference.setTransient(true);
             return reference;
         }
     }
@@ -4702,6 +5192,598 @@ public class FormElementWriterTest
             reference.setDerived(derived);
             reference.setTransient(isTransient);
             reference.setVolatile(true);
+            return reference;
+        }
+    }
+
+    // ============ the form-attribute <extInfo> its VALUE TYPE decides (issue #369) ============
+    //
+    // Nine platform value types pair with a concrete FormAttributeExtInfo. Setting the value type
+    // without it leaves the attribute half-built - which is exactly what "ValueList is not created"
+    // looked like from the outside. The matrix below walks EVERY one of the nine, so a category
+    // added to (or mis-spelled in) the writer's map cannot pass unnoticed.
+
+    /** Every value-type category that pairs with an ext-info, and the EClass it must produce. */
+    private static final String[][] EXT_INFO_MATRIX = {
+        {"DynamicList", "DynamicListExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ValueList", "ValueListExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Planner", "PlannerExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"SpreadsheetDocument", "SpreadsheetDocumentExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Chart", "ChartExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Dendrogram", "DendrogramExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GanttChart", "GanttChartExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GeographicalSchema", "GeographicalSchemaExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        // The platform TYPE says Schema, its ext-info EClass says Scheme. Pinned because a
+        // "corrected" spelling on either side silently produces an attribute with no ext-info.
+        {"GraphicalSchema", "GraphicalSchemeExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    @Test
+    public void testEveryExtInfoBearingValueTypeGetsItsExtInfo()
+    {
+        for (String[] pair : EXT_INFO_MATRIX)
+        {
+            AttrModel model = new AttrModel();
+            setValueType(model.attribute, pair[0]);
+
+            String applied = FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+            assertEquals("value type " + pair[0], pair[1], applied); //$NON-NLS-1$
+            EObject extInfo = (EObject)model.attribute.eGet(feature(model.attribute, "extInfo")); //$NON-NLS-1$
+            assertNotNull("value type " + pair[0] + " must carry an extInfo", extInfo); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(pair[1], extInfo.eClass().getName());
+        }
+    }
+
+    @Test
+    public void testValueListAlsoGetsTheEmptyItemValueType()
+    {
+        // The designer writes <itemValueType/> - an EMPTY TypeDescription, i.e. "items of any type".
+        // Production .form files carry it, so an MCP-authored ValueList must too.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+        EObject extInfo = (EObject)model.attribute.eGet(feature(model.attribute, "extInfo")); //$NON-NLS-1$
+        Object itemValueType = extInfo.eGet(feature(extInfo, "itemValueType")); //$NON-NLS-1$
+        assertTrue("a ValueList's itemValueType must be a TypeDescription, not left unset", //$NON-NLS-1$
+            itemValueType instanceof TypeDescription);
+        assertTrue("and it must be EMPTY (any item type), like the designer's", //$NON-NLS-1$
+            ((TypeDescription)itemValueType).getTypes().isEmpty());
+    }
+
+    @Test
+    public void testAPlainValueTypeGetsNoExtInfo()
+    {
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "String"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRetypingAwayFromAnExtInfoTypeCLEARSTheStaleExtInfo()
+    {
+        // Keeping the previous type's ext-info is a silent inconsistency EDT serialization rejects;
+        // the platform's own setExtInfo clears it, so this does too.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+        assertNotNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+
+        setValueType(model.attribute, "String"); //$NON-NLS-1$
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull("a stale ValueListExtInfo must not survive a retype to String", //$NON-NLS-1$
+            model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRetypingBetweenExtInfoTypesREPLACESTheExtInfo()
+    {
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+        setValueType(model.attribute, "Chart"); //$NON-NLS-1$
+        assertEquals("ChartExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertEquals("ChartExtInfo", ((EObject)model.attribute.eGet( //$NON-NLS-1$
+            feature(model.attribute, "extInfo"))).eClass().getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResyncingTheSameValueTypeKeepsTheSAMEExtInfoInstance()
+    {
+        // Re-creating it on every write would drop whatever the ext-info already holds (a dynamic
+        // list's query text lives there), so an unchanged category must be a no-op.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+        Object first = model.attribute.eGet(feature(model.attribute, "extInfo")); //$NON-NLS-1$
+
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+        assertSame(first, model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACompositeValueTypeGetsNoExtInfo()
+    {
+        // The platform's precondition is types.size() == 1: a composite attribute takes none.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAReferenceValueTypeIsClassifiedByItsCATEGORY()
+    {
+        // CatalogRef.Goods -> category CatalogRef, which pairs with nothing. The category (the name
+        // up to the first dot) is what the platform switches on, not the whole name.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "CatalogRef.Goods"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+    }
+
+    @Test
+    public void testAnAttributeCOLUMNIsANoOp()
+    {
+        // A FormAttributeColumn carries a valueType but no extInfo feature - the form metamodel puts
+        // extInfo on FormAttribute only. The sync must tolerate that, not fail on it.
+        AttrModel model = new AttrModel();
+        setValueType(model.column, "ValueList"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.column));
+    }
+
+    @Test
+    public void testAnUnknownExtInfoClassifierLeavesTheAttributeAlone()
+    {
+        // A form EPackage that does not know the classifier (an older platform) must degrade to
+        // "no ext-info", the way the platform itself does for an unknown category - never throw.
+        AttrModel model = new AttrModel(false);
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnavailableClassifierCLEARSTheStaleExtInfoRatherThanKeepingIt()
+    {
+        // The nastier half of the same case: the slot is NOT empty. setExtInfoClassifier is
+        // best-effort, so on a platform whose form EPackage lacks the NEW classifier it does nothing
+        // at all - and reading the slot back then answers the PREVIOUS type's holder. Reporting that
+        // as the new pairing would persist a value-type/ext-info mismatch under a success, so the
+        // result is verified and an un-creatable slot is cleared instead.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        assertEquals("ValueListExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+
+        model.dropClassifier("ChartExtInfo"); //$NON-NLS-1$
+        setValueType(model.attribute, "Chart"); //$NON-NLS-1$
+
+        assertNull("an ext-info that cannot be created must not be reported as one that was", //$NON-NLS-1$
+            FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull("and the PREVIOUS type's holder must not survive - it describes a type the " //$NON-NLS-1$
+            + "attribute no longer has", model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnavailableItemClassifierCLEARSTheStaleExtInfoToo()
+    {
+        // The same guarantee on the item side - syncItemExtInfo shares the replacement path.
+        ItemModel model = new ItemModel("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.setType("Label"); //$NON-NLS-1$
+        assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item));
+
+        model.dropClassifier("PictureDecorationExtInfo"); //$NON-NLS-1$
+        model.setType("Picture"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNull("a Picture decoration must not keep the LabelDecorationExtInfo", //$NON-NLS-1$
+            model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    // ============ the form-ITEM <extInfo> its TYPE decides (issue #369) ============
+    //
+    // A form item's `type` is a CLASSIFIER: it decides which concrete extInfo EClass applies. Setting
+    // it without re-pairing the extInfo left the item reading back as its new type while its nested
+    // holder still described the old one - a Picture decoration carrying a LabelDecorationExtInfo.
+    // The matrices below walk every literal of all four typed item kinds.
+
+    /** Every ManagedFormFieldType literal that pairs with an extInfo, and the EClass it produces. */
+    private static final String[][] FIELD_EXT_INFO_MATRIX = {
+        {"InputField", "InputFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"LabelField", "LabelFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"CheckBoxField", "CheckBoxFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"CalendarField", "CalendarFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ChartField", "ChartFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"DendrogramField", "DendrogramFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"FormattedDocumentField", "FormattedDocFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GanttChartField", "GanttChartFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        // The four pairings whose two sides are different words - each is the platform's own, and a
+        // "corrected" spelling on either side silently produces a field with no extInfo.
+        {"GeographicalSchemaField", "GeographicalMapFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GraphicalSchemaField", "FlowchartFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"HTMLDocumentField", "HtmlFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PictureField", "ImageFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ProgressBarField", "ProgressBarFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"RadioButtonField", "RadioButtonsFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"SpreadsheetDocumentField", "SpreadSheetDocFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"TextDocumentField", "TextDocFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"TrackBarField", "TrackBarFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PlannerField", "PlannerFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PeriodField", "PeriodFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PDFDocumentField", "PDFDocumentFieldExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** Every ManagedFormGroupType literal; a null second slot means "pairs with no extInfo". */
+    private static final String[][] GROUP_EXT_INFO_MATRIX = {
+        {"UsualGroup", "UsualGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Pages", "PagesGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Page", "PageGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"CommandBar", "CommandBarExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ButtonGroup", "ButtonGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Popup", "PopupGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ColumnGroup", "ColumnGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        // The five the platform's createGroupExtInfo has no case for.
+        {"ContextMenu", null}, //$NON-NLS-1$
+        {"AutoCommandBar", null}, //$NON-NLS-1$
+        {"Navigator", null}, //$NON-NLS-1$
+        {"RowActionsPanel", null}, //$NON-NLS-1$
+        {"SelectedItemsActionsPanel", null}}; //$NON-NLS-1$
+
+    private static final String[][] DECORATION_EXT_INFO_MATRIX = {
+        {"Label", "LabelDecorationExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Picture", "PictureDecorationExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    private static final String[][] ADDITION_EXT_INFO_MATRIX = {
+        {"SearchStringAddition", "SearchStringAdditionExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ViewStatusAddition", "ViewStatusAdditionExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"SearchControlAddition", "SearchControlAdditionExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    @Test
+    public void testEveryFieldTypeGetsItsExtInfo()
+    {
+        assertItemMatrix("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryGroupTypeGetsItsExtInfoOrNone()
+    {
+        assertItemMatrix(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
+    }
+
+    @Test
+    public void testEveryDecorationTypeGetsItsExtInfo()
+    {
+        assertItemMatrix("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryAdditionTypeGetsItsExtInfo()
+    {
+        assertItemMatrix("Addition", ADDITION_EXT_INFO_MATRIX); //$NON-NLS-1$
+    }
+
+    /** Sets each literal on a fresh item of {@code eClassName} and checks the extInfo it produces. */
+    private static void assertItemMatrix(String eClassName, String[][] matrix)
+    {
+        for (String[] pair : matrix)
+        {
+            ItemModel model = new ItemModel(eClassName, matrix);
+            model.setType(pair[0]);
+
+            String applied = FormElementWriter.syncItemExtInfo(model.form, model.item);
+
+            assertEquals(eClassName + " type " + pair[0], pair[1], applied); //$NON-NLS-1$
+            EObject extInfo = (EObject)model.item.eGet(feature(model.item, "extInfo")); //$NON-NLS-1$
+            if (pair[1] == null)
+            {
+                assertNull(eClassName + " type " + pair[0] + " pairs with no extInfo", extInfo); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            else
+            {
+                assertNotNull(eClassName + " type " + pair[0], extInfo); //$NON-NLS-1$
+                assertEquals(pair[1], extInfo.eClass().getName());
+            }
+        }
+    }
+
+    @Test
+    public void testChangingAnItemTypeREPLACESTheStaleExtInfo()
+    {
+        // The bug this closes: a Picture decoration kept the LabelDecorationExtInfo it was created
+        // with, so every extInfo property then resolved against the wrong EClass.
+        ItemModel model = new ItemModel("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.setType("Label"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+
+        model.setType("Picture"); //$NON-NLS-1$
+        assertEquals("PictureDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertEquals("PictureDecorationExtInfo", ((EObject)model.item.eGet( //$NON-NLS-1$
+            feature(model.item, "extInfo"))).eClass().getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testChangingToATypeThatPairsWithNoExtInfoCLEARSIt()
+    {
+        ItemModel model = new ItemModel(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
+        model.setType("UsualGroup"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        assertNotNull(model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+
+        model.setType("ContextMenu"); //$NON-NLS-1$
+        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNull("a ContextMenu must not keep the UsualGroupExtInfo", //$NON-NLS-1$
+            model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResyncingTheSameItemTypeKeepsTheSAMEExtInfoInstance()
+    {
+        // Re-creating it would reset the layout properties already set on the holder.
+        ItemModel model = new ItemModel(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
+        model.setType("Pages"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        Object first = model.item.eGet(feature(model.item, "extInfo")); //$NON-NLS-1$
+
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+
+        assertSame(first, model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnItemKindWithNoTypeDrivenPairingKeepsItsExtInfo()
+    {
+        // A Table's extInfo follows its dataPath, not a `type` (it has none), so the sync must leave
+        // it alone - clearing it would drop a dynamic list table's DynamicListTableExtInfo.
+        ItemModel model = new ItemModel("Table", DECORATION_EXT_INFO_MATRIX, false); //$NON-NLS-1$
+        model.item.eSet(feature(model.item, "extInfo"), //$NON-NLS-1$
+            model.extInfoClass("LabelDecorationExtInfo")); //$NON-NLS-1$
+
+        assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNotNull("a Table's extInfo must survive an item sync", //$NON-NLS-1$
+            model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    /** The form-model EClass name of a group - shared by the group matrix tests. */
+    private static final String ITEM_ECLASS_GROUP = "FormGroup"; //$NON-NLS-1$
+
+    /**
+     * A form-shaped dynamic model holding ONE typed item: a Form whose EPackage owns the item's
+     * ext-info classifiers, and the item itself with (optionally) a {@code type} EEnum + an
+     * {@code extInfo} reference.
+     */
+    private static final class ItemModel
+    {
+        final EObject form;
+        final EObject item;
+        private final EPackage pkg;
+
+        ItemModel(String itemEClassName, String[][] matrix)
+        {
+            this(itemEClassName, matrix, true);
+        }
+
+        ItemModel(String itemEClassName, String[][] matrix, boolean withType)
+        {
+            EcoreFactory f = EcoreFactory.eINSTANCE;
+            pkg = f.createEPackage();
+            pkg.setName("formitem"); //$NON-NLS-1$
+            pkg.setNsPrefix("formitem"); //$NON-NLS-1$
+            pkg.setNsURI("http://ditrix.com/test/formlike-item"); //$NON-NLS-1$
+
+            EClass extInfoBase = f.createEClass();
+            extInfoBase.setName("ExtInfo"); //$NON-NLS-1$
+            extInfoBase.setAbstract(true);
+            pkg.getEClassifiers().add(extInfoBase);
+            for (String[] pair : matrix)
+            {
+                if (pair[1] == null || pkg.getEClassifier(pair[1]) != null)
+                {
+                    continue;
+                }
+                EClass extInfo = f.createEClass();
+                extInfo.setName(pair[1]);
+                extInfo.getESuperTypes().add(extInfoBase);
+                pkg.getEClassifiers().add(extInfo);
+            }
+            // The group matrix's "no extInfo" literals still need the UsualGroup class to exist, so
+            // the CLEAR case is reached by the mapping and not by a missing classifier.
+            if (pkg.getEClassifier("LabelDecorationExtInfo") == null) //$NON-NLS-1$
+            {
+                EClass extInfo = f.createEClass();
+                extInfo.setName("LabelDecorationExtInfo"); //$NON-NLS-1$
+                extInfo.getESuperTypes().add(extInfoBase);
+                pkg.getEClassifiers().add(extInfo);
+            }
+
+            EClass itemClass = f.createEClass();
+            itemClass.setName(itemEClassName);
+            if (withType)
+            {
+                EEnum typeEnum = f.createEEnum();
+                typeEnum.setName(itemEClassName + "Type"); //$NON-NLS-1$
+                int value = 0;
+                for (String[] pair : matrix)
+                {
+                    EEnumLiteral literal = f.createEEnumLiteral();
+                    literal.setName(pair[0]);
+                    literal.setLiteral(pair[0]);
+                    literal.setValue(value++);
+                    typeEnum.getELiterals().add(literal);
+                }
+                pkg.getEClassifiers().add(typeEnum);
+                EAttribute type = f.createEAttribute();
+                type.setName("type"); //$NON-NLS-1$
+                type.setEType(typeEnum);
+                itemClass.getEStructuralFeatures().add(type);
+            }
+            EReference extInfoRef = f.createEReference();
+            extInfoRef.setName("extInfo"); //$NON-NLS-1$
+            extInfoRef.setEType(extInfoBase);
+            extInfoRef.setContainment(true);
+            extInfoRef.setUpperBound(1);
+            itemClass.getEStructuralFeatures().add(extInfoRef);
+            pkg.getEClassifiers().add(itemClass);
+
+            EClass formClass = f.createEClass();
+            formClass.setName("Form"); //$NON-NLS-1$
+            EReference items = f.createEReference();
+            items.setName("items"); //$NON-NLS-1$
+            items.setEType(itemClass);
+            items.setContainment(true);
+            items.setUpperBound(-1);
+            formClass.getEStructuralFeatures().add(items);
+            pkg.getEClassifiers().add(formClass);
+
+            form = new DynamicEObjectImpl(formClass);
+            item = new DynamicEObjectImpl(itemClass);
+            addTo(form, "items", item); //$NON-NLS-1$
+        }
+
+        void setType(String literal)
+        {
+            EStructuralFeature type = feature(item, "type"); //$NON-NLS-1$
+            item.eSet(type, ((EEnum)type.getEType()).getEEnumLiteral(literal).getInstance());
+        }
+
+        EObject extInfoClass(String name)
+        {
+            EClass eClass = (EClass)pkg.getEClassifier(name);
+            return pkg.getEFactoryInstance().create(eClass);
+        }
+
+        /** Removes an ext-info classifier, standing in for a platform version that lacks it. */
+        void dropClassifier(String name)
+        {
+            pkg.getEClassifiers().remove(pkg.getEClassifier(name));
+        }
+    }
+
+    /** Gives {@code member} a real mcore {@code TypeDescription} carrying one {@code Type} per name. */
+    private static void setValueType(EObject member, String... typeNames)
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String typeName : typeNames)
+        {
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            td.getTypes().add(type);
+        }
+        member.eSet(feature(member, "valueType"), td); //$NON-NLS-1$
+    }
+
+    /**
+     * A form-shaped dynamic model with exactly what the ext-info sync reads: a Form whose EPackage
+     * owns the concrete ext-info classifiers, a FormAttribute with {@code valueType} + {@code extInfo},
+     * and a FormAttributeColumn with {@code valueType} only.
+     */
+    private static final class AttrModel
+    {
+        final EObject form;
+        final EObject attribute;
+        final EObject column;
+        private final EPackage pkg;
+
+        AttrModel()
+        {
+            this(true);
+        }
+
+        /** Removes an ext-info classifier, standing in for a platform version that lacks it. */
+        void dropClassifier(String name)
+        {
+            pkg.getEClassifiers().remove(pkg.getEClassifier(name));
+        }
+
+        AttrModel(boolean withExtInfoClassifiers)
+        {
+            EcoreFactory f = EcoreFactory.eINSTANCE;
+            pkg = f.createEPackage();
+            pkg.setName("formattr"); //$NON-NLS-1$
+            pkg.setNsPrefix("formattr"); //$NON-NLS-1$
+            pkg.setNsURI("http://ditrix.com/test/formlike-attr"); //$NON-NLS-1$
+
+            EClass extInfoBase = f.createEClass();
+            extInfoBase.setName("FormAttributeExtInfo"); //$NON-NLS-1$
+            extInfoBase.setAbstract(true);
+            pkg.getEClassifiers().add(extInfoBase);
+
+            if (withExtInfoClassifiers)
+            {
+                for (String[] pair : EXT_INFO_MATRIX)
+                {
+                    EClass extInfo = f.createEClass();
+                    extInfo.setName(pair[1]);
+                    extInfo.getESuperTypes().add(extInfoBase);
+                    if ("ValueListExtInfo".equals(pair[1])) //$NON-NLS-1$
+                    {
+                        extInfo.getEStructuralFeatures().add(
+                            singleRef(f, "itemValueType", EcorePackage.Literals.EOBJECT)); //$NON-NLS-1$
+                    }
+                    pkg.getEClassifiers().add(extInfo);
+                }
+            }
+
+            EClass abstractAttribute = f.createEClass();
+            abstractAttribute.setName("AbstractFormAttribute"); //$NON-NLS-1$
+            abstractAttribute.setAbstract(true);
+            abstractAttribute.getEStructuralFeatures().add(
+                singleRef(f, "valueType", EcorePackage.Literals.EOBJECT)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(abstractAttribute);
+
+            EClass attributeClass = f.createEClass();
+            attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+            attributeClass.getESuperTypes().add(abstractAttribute);
+            attributeClass.getEStructuralFeatures().add(singleRef(f, "extInfo", extInfoBase)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(attributeClass);
+
+            EClass columnClass = f.createEClass();
+            columnClass.setName("FormAttributeColumn"); //$NON-NLS-1$
+            columnClass.getESuperTypes().add(abstractAttribute);
+            pkg.getEClassifiers().add(columnClass);
+
+            EClass formClass = f.createEClass();
+            formClass.setName("Form"); //$NON-NLS-1$
+            formClass.getEStructuralFeatures().add(containment(f, "attributes", //$NON-NLS-1$
+                abstractAttribute, true));
+            pkg.getEClassifiers().add(formClass);
+
+            form = new DynamicEObjectImpl(formClass);
+            attribute = new DynamicEObjectImpl(attributeClass);
+            column = new DynamicEObjectImpl(columnClass);
+            addTo(form, "attributes", attribute); //$NON-NLS-1$
+            addTo(form, "attributes", column); //$NON-NLS-1$
+        }
+
+        private static EReference singleRef(EcoreFactory f, String featureName, EClass type)
+        {
+            EReference reference = f.createEReference();
+            reference.setName(featureName);
+            reference.setEType(type);
+            reference.setContainment(true);
+            reference.setUpperBound(1);
+            return reference;
+        }
+
+        private static EReference containment(EcoreFactory f, String featureName, EClass type,
+            boolean many)
+        {
+            EReference reference = f.createEReference();
+            reference.setName(featureName);
+            reference.setEType(type);
+            reference.setContainment(true);
+            reference.setUpperBound(many ? -1 : 1);
             return reference;
         }
     }

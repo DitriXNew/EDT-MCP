@@ -21,6 +21,14 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * BM model + an extension project, so the actual adopt behaviour (objectBelonging=ADOPTED,
  * extendedConfigurationObject link, multi-extension selection) is covered by the E2E suite.
  */
+import java.util.Collections;
+
+import com.google.gson.JsonObject;
+
+import java.util.ArrayList;
+
+import java.util.Map;
+
 public class AdoptMetadataObjectToolTest
 {
     @Test
@@ -79,4 +87,5 @@ public class AdoptMetadataObjectToolTest
         assertTrue(schema.contains("\"objectBelonging\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"persisted\"")); //$NON-NLS-1$
     }
+
 }

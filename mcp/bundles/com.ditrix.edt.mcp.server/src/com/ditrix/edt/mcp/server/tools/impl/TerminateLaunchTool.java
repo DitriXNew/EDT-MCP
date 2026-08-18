@@ -103,10 +103,11 @@ public class TerminateLaunchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Terminate one or more 1C launches started from THIS EDT instance; externally " //$NON-NLS-1$
-            + "launched 1C clients are never touched. Select ONE target mode: " //$NON-NLS-1$
-            + "launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('terminate_launch')."; //$NON-NLS-1$
+        return "Stop 1C sessions started by EDT. NOT two-phase for a single launch: selecting one " //$NON-NLS-1$
+            + "(launchConfigurationName, or projectName + applicationId) stops it IMMEDIATELY, with " //$NON-NLS-1$
+            + "no preview call. Only mass termination is gated - all=true is rejected without " //$NON-NLS-1$
+            + "confirm=true. Either way, list_configurations first to see what is running. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('terminate_launch')."; //$NON-NLS-1$
     }
 
     @Override

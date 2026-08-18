@@ -80,6 +80,30 @@ public class RenameMetadataObjectToolTest
     }
 
     @Test
+    public void testFormElementRenamePropagatesDependentModelSettleRefusal()
+    {
+        AtomicBoolean settled = new AtomicBoolean(false);
+        String settleError = "BM model is not available for project 'DemoExtension'."; //$NON-NLS-1$
+        RenameMetadataObjectTool tool = new RenameMetadataObjectTool(
+            (projectName, timeoutMs) ->
+            {
+                assertEquals("Demo", projectName); //$NON-NLS-1$
+                settled.set(true);
+                return settleError;
+            });
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectFqn", "Catalog.Products.Form.ItemForm.Field.Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("newName", "Cost"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+
+        assertTrue("the caller-thread settle must run before the workbench hand-off", settled.get()); //$NON-NLS-1$
+        assertTrue("a dependent-model refusal must stop the form rename before the UI thread: " + result, //$NON-NLS-1$
+            result.contains(settleError));
+    }
+
+    @Test
     public void testSchemaDeclaresParameters()
     {
         String schema = new RenameMetadataObjectTool().getInputSchema();
@@ -87,6 +111,8 @@ public class RenameMetadataObjectToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"objectFqn\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"newName\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"disableIndices\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"expectedHash\"")); //$NON-NLS-1$
         assertTrue("the cascade bound must be reachable from the wire", //$NON-NLS-1$
             schema.contains("\"timeout\"")); //$NON-NLS-1$
     }
@@ -108,6 +134,8 @@ public class RenameMetadataObjectToolTest
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
         assertTrue(guide.contains("disableIndices")); //$NON-NLS-1$
+        assertTrue(guide.contains("contentHash")); //$NON-NLS-1$
+        assertTrue(guide.contains("expectedHash")); //$NON-NLS-1$
         assertTrue(guide.contains("Attribute")); //$NON-NLS-1$
         assertTrue(guide.contains("preview")); //$NON-NLS-1$
     }
@@ -141,14 +169,68 @@ public class RenameMetadataObjectToolTest
         assertTrue(result.contains("newName is required")); //$NON-NLS-1$
     }
 
-    // ============ Change-point numbering (A2: preview #index must equal execute index) ============
+    @Test
+    public void testNonNumericDisableIndexIsRefusedBeforeAnythingRuns()
+    {
+        Map<String, String> params = validRenameParams();
+        params.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("disableIndices", "abc"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new RenameMetadataObjectTool().execute(params);
+
+        assertTrue(result.contains("could not be read as a change-point index")); //$NON-NLS-1$
+        assertTrue(result.contains("Nothing was renamed")); //$NON-NLS-1$
+        assertTrue(result.contains("preview")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNegativeDisableIndexIsRefusedBeforeAnythingRuns()
+    {
+        Map<String, String> params = validRenameParams();
+        params.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("disableIndices", "-1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new RenameMetadataObjectTool().execute(params);
+
+        assertTrue(result.contains("index -1 below the first preview index (0)")); //$NON-NLS-1$
+        assertTrue(result.contains("Nothing was renamed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmWithDisableIndicesRequiresExpectedHashBeforeAnythingRuns()
+    {
+        Map<String, String> params = validRenameParams();
+        params.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("disableIndices", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new RenameMetadataObjectTool().execute(params);
+
+        assertTrue(result.contains("expectedHash is required")); //$NON-NLS-1$
+        assertTrue(result.contains("contentHash")); //$NON-NLS-1$
+        assertTrue(result.contains("Nothing was renamed")); //$NON-NLS-1$
+    }
+
+    private static Map<String, String> validRenameParams()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectFqn", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("newName", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        return params;
+    }
+
+    // ================= Change-point numbering: the EXECUTE side of the walk only =================
     //
-    // The preview assigns one #index per leaf change; on execute, disableIndices is
-    // applied by re-walking the change tree with the SAME numbering. walkLeafChanges
-    // is that single source of truth: composites are recursed but never counted, and
-    // every leaf gets exactly one sequential index in depth-first order. If this
-    // drifts, a previewed "skip #N" would disable a different change on execute
-    // (the A2 bug: preview expanded a leaf into N rows while execute counted it once).
+    // On execute, disableIndices is applied by walking the change tree with walkLeafChanges:
+    // composites are recursed but never counted, and every leaf gets exactly one sequential
+    // index in depth-first order. The tests below pin THAT walk, and nothing else.
+    //
+    // They do NOT prove the A2 contract (a preview #index maps back to the same leaf on
+    // execute): the preview mirrors this numbering in its own walk, and these tests never run
+    // it, so a preview-side drift passes right through them - which is exactly what happened
+    // in issue #388 (the preview's fallback row took a SECOND index for a leaf that had
+    // already taken one). The parity of the two walks is pinned where both are reachable:
+    // MetadataRenameNumberingParityTest#testPreviewAndExecuteNumberTheSameLeavesIdentically.
 
     @Test
     public void testWalkLeafChangesNumbersLeavesDepthFirst()
@@ -298,6 +380,67 @@ public class RenameMetadataObjectToolTest
                 + error, error.contains("PARTIALLY renamed")); //$NON-NLS-1$
             assertTrue("it must name the way back to a consistent model: " + error, //$NON-NLS-1$
                 error.contains("clean_project")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    /**
+     * A timeout's recovery advice has to name a tool that can actually SHOW the target. It used to
+     * say {@code get_metadata_objects} for everything, and that tool enumerates top-level metadata
+     * COLLECTIONS: a managed-form element is in none of them (issue #381), and a MEMBER is not a
+     * collection entry either. At the moment the caller must decide whether the old or the new name
+     * now exists - right after a cascade that may have half-applied - being pointed at a listing
+     * that cannot contain the target is what turns into a repeat of a destructive call.
+     * <p>
+     * All three target shapes are asserted, in both directions. Pinning only the form case would be
+     * satisfied by advice switched over wholesale; pinning only the presence of the right tool name
+     * would be satisfied by advice that pointed it at the wrong place.
+     */
+    @Test
+    public void testTimeoutAdviceNamesAnInspectorThatCanSeeTheTarget() throws Exception
+    {
+        String formError = timeoutErrorFor("Catalog.Products.Form.ItemForm.Field.Price"); //$NON-NLS-1$
+        assertTrue("a form element is not in any metadata collection, so the advice must send " //$NON-NLS-1$
+            + "the caller to the form's own structure: " + formError, //$NON-NLS-1$
+            formError.contains("get_metadata_details on its form")); //$NON-NLS-1$
+
+        String memberError = timeoutErrorFor("Document.SalesOrder.Attribute.Amount"); //$NON-NLS-1$
+        assertTrue("a member is not a collection entry either, so it must be pointed at its " //$NON-NLS-1$
+            + "owner: " + memberError, memberError.contains("on its owner for a member")); //$NON-NLS-1$
+
+        String objectError = timeoutErrorFor("Catalog.Products"); //$NON-NLS-1$
+        assertTrue("a top object is answered by the same details tool: " + objectError, //$NON-NLS-1$
+            objectError.contains("get_metadata_details")); //$NON-NLS-1$
+
+        for (String error : new String[] {formError, memberError, objectError})
+        {
+            assertFalse("no branch may send the caller to the collection listing, which cannot " //$NON-NLS-1$
+                + "show a form element, a member, or a top object of an unlisted type: " + error, //$NON-NLS-1$
+                error.contains("get_metadata_objects")); //$NON-NLS-1$
+        }
+    }
+
+    /** The same wedged-rename timeout as the tests above, for an arbitrary target FQN. */
+    private static String timeoutErrorFor(String objectFqn) throws Exception
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch started = new CountDownLatch(1);
+        try
+        {
+            String error = RenameMetadataObjectTool.runRenameBounded(objectFqn, "Goods", //$NON-NLS-1$
+                true, SHORT_TIMEOUT_MS, progress -> {
+                    progress.enter(RenameProgress.Phase.PREPARING);
+                    started.countDown();
+                    awaitQuietly(release);
+                    return WEDGED_PAYLOAD;
+                });
+            assertTrue("the action must have started for its message to be judged", //$NON-NLS-1$
+                started.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
+            assertNotNull("a missed deadline must produce an error payload", error); //$NON-NLS-1$
+            return error;
         }
         finally
         {

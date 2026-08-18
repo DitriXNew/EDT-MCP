@@ -19,6 +19,8 @@ log.log
 !.claude/settings.json
 /mcp/repositories/com.ditrix.edt.mcp.server.repository/target
 /tests/e2e/__pycache__/
+# grade.py now imports a sibling module, so this directory grows one too.
+/tests/tool-choice/__pycache__/
 /tests/e2e/*.xml
 /.devtool
 .mcp.json
@@ -26,3 +28,6 @@ log.log
 # Proxy module build output
 proxy/target/
 tests/TestConfiguration/.scannerwork/
+
+# Scratch: EDT workspace .metadata dumps pulled in for diagnosis (logs, telemetry)
+tmp/

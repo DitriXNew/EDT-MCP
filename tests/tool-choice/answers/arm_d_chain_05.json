@@ -1,0 +1,278 @@
+[
+ {
+  "id": "c101",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_modules"}},
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "objectName": "Номенклатура", "metadataType": "catalogs"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/Forms/ФормаСписка/Module.bsl"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/Forms/ФормаСписка/Module.bsl", "methodName": "ПриОткрытии"}}
+  ],
+  "expected_result": "Показана структура модуля формы списка Номенклатуры и код обработчика ПриОткрытии, из которого видна причина зависания.",
+  "confidence": 4
+ },
+ {
+  "id": "c102",
+  "calls": [
+   {"tool": "evaluate_expression", "args": {"frameRef": 2, "expression": "Параметры.Количество"}},
+   {"tool": "evaluate_expression", "args": {"frameRef": 2, "expression": "ЭтотОбъект.Дата"}},
+   {"tool": "set_variable", "args": {"frameRef": 2, "variableName": "Параметры.Количество", "value": "5"}},
+   {"tool": "resume", "args": {}}
+  ],
+  "expected_result": "Оба выражения вычислены в кадре frame-2, параметру Количество присвоено значение 5, и выполнение продолжено.",
+  "confidence": 4
+ },
+ {
+  "id": "c103",
+  "calls": [
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl", "lineNumber": 50}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl", "lineNumber": 120}},
+   {"tool": "list_breakpoints", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration", "updateBeforeLaunch": true}}
+  ],
+  "expected_result": "Брейкпоинты установлены на строках 50 и 120 модуля CommonModule.Обмен, полный список брейкпоинтов показан, отладка запущена с предварительным обновлением базы.",
+  "confidence": 4
+ },
+ {
+  "id": "c104",
+  "calls": [
+   {"tool": "debug_status", "args": {"applicationId": "app-2"}},
+   {"tool": "resume", "args": {"applicationId": "app-2"}},
+   {"tool": "wait_for_break", "args": {"applicationId": "app-2", "timeout": 30}},
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "terminate_launch", "args": {"applicationId": "app-2"}},
+   {"tool": "terminate_launch", "args": {"applicationId": "app-2", "confirm": true}}
+  ],
+  "expected_result": "Статус сеанса app-2 проверен, выполнение отпущено, и если в течение 30 секунд сеанс снова встал на брейкпоинте, он завершён через предпросмотр и подтверждение.",
+  "confidence": 3
+ },
+ {
+  "id": "c105",
+  "calls": [
+   {"tool": "get_profiling_results", "args": {"applicationId": "app-1", "moduleFilter": "Обмен"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl", "methodName": "<самый тяжёлый метод из результатов профилирования>", "direction": "callees"}}
+  ],
+  "expected_result": "Показаны результаты профилирования app-1 по модулям с Обмен в названии и построено дерево вызовов вниз от самого тяжёлого метода.",
+  "confidence": 3
+ },
+ {
+  "id": "c106",
+  "calls": [
+   {"tool": "get_outgoing_structures", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl"}},
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "<метод-получатель из исходящего вызова>", "includeSource": true}}
+  ],
+  "expected_result": "Показаны исходящие структуры (ключи, которые собирает метод) модуля CommonModule.Обмен и найден код метода-получателя.",
+  "confidence": 4
+ },
+ {
+  "id": "c107",
+  "calls": [
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl", "methodName": "ОтправитьДанные"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl", "methodName": "ОтправитьДанные", "direction": "callers"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl", "mode": "searchReplace", "oldSource": "<текущая сигнатура ОтправитьДанные>", "source": "<новая сигнатура и тело ОтправитьДанные>"}}
+  ],
+  "expected_result": "Показан код функции ОтправитьДанные и список всех вызывающих её мест, после чего сигнатура функции переписана в модуле.",
+  "confidence": 4
+ },
+ {
+  "id": "c108",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "УправлениеТорговлей", "objectFqn": "Catalog.Products.Attribute.Устаревший"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"projectName": "УправлениеТорговлей", "fqn": "Catalog.Products.Attribute.Устаревший"}},
+   {"tool": "delete_metadata", "args": {"projectName": "УправлениеТорговлей", "fqn": "Catalog.Products.Attribute.Устаревший", "confirm": true}},
+   {"tool": "revalidate_objects", "args": {"projectName": "УправлениеТорговлей", "objects": ["Catalog.Products"]}}
+  ],
+  "expected_result": "Ссылки на реквизит Устаревший проверены, при отсутствии использований реквизит удалён через предпросмотр и подтверждение, и справочник Products перевалидирован.",
+  "confidence": 4
+ },
+ {
+  "id": "c109",
+  "calls": [
+   {"tool": "get_tags", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_objects_by_tags", "args": {"projectName": "TestConfiguration", "tags": ["legacy"]}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "<каждый объект с тегом legacy>"}}
+  ],
+  "expected_result": "Показан список существующих тегов, найдены объекты с тегом legacy и для каждого из них показаны его использования.",
+  "confidence": 4
+ },
+ {
+  "id": "c110",
+  "calls": [
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/ObjectModule.bsl"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/ManagerModule.bsl"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/ManagerModule.bsl", "mode": "append", "source": "<перенесённый код из модуля объекта>"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/ObjectModule.bsl", "mode": "replace", "source": "<модуль объекта без перенесённого кода>", "overwrite": true}}
+  ],
+  "expected_result": "Оба модуля Номенклатуры показаны, перенесённый код добавлен в модуль менеджера, а модуль объекта переписан без него.",
+  "confidence": 4
+ },
+ {
+  "id": "c111",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "master"}},
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}},
+   {"tool": "create_launch_config", "args": {"projectName": "TestConfiguration", "clientType": "thin"}},
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration", "launchConfigurationName": "<созданная конфигурация тонкого клиента>"}}
+  ],
+  "expected_result": "Проект переключён на master, пересобран с диска, показана сводка проблем, база обновлена через предпросмотр и подтверждение, и тонкий клиент запущен под отладкой.",
+  "confidence": 3
+ },
+ {
+  "id": "c112",
+  "calls": [
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "D:\\ship\\xml"}},
+   {"tool": "build_external_objects", "args": {"projectName": "ВнешниеОбработки", "outputDir": "D:\\ship\\epf"}}
+  ],
+  "expected_result": "TestConfiguration выгружен в XML в D:\\ship\\xml, а внешние обработки проекта ВнешниеОбработки собраны в D:\\ship\\epf.",
+  "confidence": 5
+ },
+ {
+  "id": "c113",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "feature/скидки"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tags": ["regression"]}}
+  ],
+  "expected_result": "Проект переключён на ветку feature/скидки, перевалидирован, показаны ошибки и прогнаны тесты с тегом regression.",
+  "confidence": 4
+ },
+ {
+  "id": "c114",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "applicationId": "app-1"}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "applicationId": "app-1", "confirm": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_event_log"}},
+   {"tool": "get_event_log", "args": {"projectName": "УправлениеТорговлей", "applicationId": "app-1", "from": "<время 10 минут назад>"}}
+  ],
+  "expected_result": "База app-1 обновлена через предпросмотр и подтверждение, и показан журнал регистрации за последние 10 минут для проверки отсутствия ошибок обновления.",
+  "confidence": 4
+ },
+ {
+  "id": "c115",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_check_description"}},
+   {"tool": "get_check_description", "args": {"checkId": "<код диагностики первой проблемы>", "projectName": "TestConfiguration"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "<путь модуля из первой проблемы>", "startLine": "<строка проблемы>", "endLine": "<строка проблемы>"}}
+  ],
+  "expected_result": "Показаны проблемы Document.SalesOrder точным адресом, объяснена первая диагностика и открыт её код без внесения правок.",
+  "confidence": 4
+ },
+ {
+  "id": "c116",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "severity": "MINOR"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "severity": "TRIVIAL"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "apply_quick_fix"}},
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "<код первой проблемы с автофиксом>"}},
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "<код второй проблемы с автофиксом>"}}
+  ],
+  "expected_result": "Показаны проблемы уровня MINOR и TRIVIAL, и автофикс применён к нескольким из тех, у кого он есть.",
+  "confidence": 4
+ },
+ {
+  "id": "c117",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "validate_query"}},
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "<текст запроса из отчёта>", "dcsMode": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_details"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["<FQN соответствующего регистра>"], "full": true}}
+  ],
+  "expected_result": "Запрос отчёта проверен в режиме СКД, и при ошибке на несуществующее поле показаны реальные поля соответствующего регистра.",
+  "confidence": 4
+ },
+ {
+  "id": "c118",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "clean_project", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Изменения после git pull подтянуты пересборкой проекта с диска, и показана разница числа проблем до и после.",
+  "confidence": 4
+ },
+ {
+  "id": "c119",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "adopt_metadata_object"}},
+   {"tool": "adopt_metadata_object", "args": {"projectName": "УправлениеТорговлей", "extensionProjectName": "ДоработкиУТ", "fqn": "Catalog.Номенклатура"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "ДоработкиУТ", "fqn": "Catalog.Номенклатура.Attribute.СрокГодности"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "ДоработкиУТ", "fqn": "Catalog.Номенклатура.Attribute.СрокГодности", "properties": [{"name": "type", "value": {"types": [{"kind": "Date", "fractions": "Date"}]}}]}}
+  ],
+  "expected_result": "Справочник Номенклатура захвачен в расширение ДоработкиУТ и в нём создан реквизит СрокГодности типа Дата.",
+  "confidence": 4
+ },
+ {
+  "id": "c120",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "ДоработкиУТ"}},
+   {"tool": "adopt_metadata_object", "args": {"projectName": "УправлениеТорговлей", "extensionProjectName": "ДоработкиУТ", "fqn": "Document.РеализацияТоваров"}},
+   {"tool": "list_modules", "args": {"projectName": "ДоработкиУТ", "objectName": "РеализацияТоваров"}}
+  ],
+  "expected_result": "Показаны уже захваченные в расширение объекты, добавлен документ РеализацияТоваров и показаны появившиеся у него модули.",
+  "confidence": 4
+ },
+ {
+  "id": "c121",
+  "calls": [
+   {"tool": "get_configuration_properties", "args": {"projectName": "РасширениеОтчетов"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "РасширениеОтчетов"}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "РасширениеОтчетов", "outputPath": "D:\\ext"}}
+  ],
+  "expected_result": "Показаны свойства конфигурации расширения РасширениеОтчетов, проведена валидация и выполнена выгрузка в XML в D:\\ext.",
+  "confidence": 5
+ },
+ {
+  "id": "c122",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "documents", "language": "en"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["<первый документ из списка>"], "language": "ru"}}
+  ],
+  "expected_result": "Показан список документов с английскими синонимами, и для первого из них показана карточка с русскими синонимами.",
+  "confidence": 4
+ },
+ {
+  "id": "c123",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "УправлениеТорговлей", "objectFqn": "Catalog.Контрагенты"}},
+   {"tool": "go_to_definition", "args": {"projectName": "УправлениеТорговлей", "symbol": "Catalog.Контрагенты"}}
+  ],
+  "expected_result": "Через FQN найдены все обращения к справочнику Контрагенты независимо от языка написания типа в коде, и показано его определение.",
+  "confidence": 4
+ },
+ {
+  "id": "c124",
+  "calls": [
+   {"tool": "get_translation_project_info", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "generate_translation_strings"}},
+   {"tool": "generate_translation_strings", "args": {"projectName": "TestConfiguration", "targetLanguages": ["de"], "collectInterface": true, "collectModel": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "translate_configuration"}},
+   {"tool": "translate_configuration", "args": {"projectName": "TestConfiguration", "targetLanguages": ["de"]}}
+  ],
+  "expected_result": "Показана текущая настройка перевода, собраны строки интерфейса и модели, и запущен перевод конфигурации на немецкий.",
+  "confidence": 4
+ },
+ {
+  "id": "c125",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "ExchangePlan.СинхронизацияСБанком"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "ExchangePlan.СинхронизацияСБанком", "content": [{"metadata": "Catalog.Products"}, {"metadata": "Document.SalesOrder"}]}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["ExchangePlan.СинхронизацияСБанком"]}}
+  ],
+  "expected_result": "Создан план обмена СинхронизацияСБанком, в его состав добавлены Catalog.Products и Document.SalesOrder, конфигурация перевалидирована.",
+  "confidence": 5
+ }
+]

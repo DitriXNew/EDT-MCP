@@ -10,6 +10,7 @@ import org.osgi.framework.BundleContext;
 
 import com.ditrix.edt.mcp.server.groups.IGroupService;
 import com.ditrix.edt.mcp.server.groups.internal.GroupServiceImpl;
+import com.ditrix.edt.mcp.server.utils.WorkmateChatSessionPublisher;
 
 /**
  * Orchestrates the EDT MCP plugin's startup and shutdown side effects that are
@@ -37,6 +38,10 @@ public class StartupOrchestrator
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
     private IGroupService groupService;
 
+    /** Publishes the constant JShell session 1C:Workmate's chat needs to call the bridge. */
+    private final WorkmateChatSessionPublisher chatSessionPublisher =
+        new WorkmateChatSessionPublisher();
+
     /**
      * Runs the startup steps in the same order as the original
      * {@code Activator.start}.
@@ -52,6 +57,10 @@ public class StartupOrchestrator
         // Initialize UI components only in non-headless mode
         if (!headless)
         {
+            // Best effort and off the startup path: 1C:Workmate is optional and comes up
+            // on its own schedule, so this retries quietly instead of blocking or failing.
+            chatSessionPublisher.start();
+
             // Initialize filter manager to reset toggle state on startup
             com.ditrix.edt.mcp.server.tags.ui.FilterByTagManager.getInstance();
 
@@ -74,6 +83,8 @@ public class StartupOrchestrator
      */
     public void stop(boolean headless)
     {
+        chatSessionPublisher.stop();
+
         // Dispose UI components only in non-headless mode.
         // Never block on the UI thread from here: stop() runs on the OSGi
         // framework shutdown thread after the workbench event loop has exited,

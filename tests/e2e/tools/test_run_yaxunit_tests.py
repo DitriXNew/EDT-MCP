@@ -4,10 +4,11 @@ the git-tracked project tree).
 
 What the tool does
 ------------------
-RunYaxunitTestsTool launches a 1C runtime-client with the RunUnitTests startup
-parameter, polls until the launch terminates (or `timeout` seconds elapse), parses
-the JUnit XML the YAXUnit run drops on disk, and returns a Markdown report
-(getResponseType() == MARKDOWN, so the payload is in r.text, NOT r.structured).
+RunYaxunitTestsTool starts a named BackgroundJobs job that launches a 1C runtime-client
+with the RunUnitTests startup parameter and collects its JUnit XML. The start call waits
+up to `timeout`: a short run returns the original Markdown report in r.text; otherwise
+**Pending** carries a jobId that is polled with get_job_status. Repeating reconstructed
+arguments is only a live duplicate guard and is not how a known run is addressed.
 The report.md / junit.xml / xUnitParams.json files all live under the SYSTEM TEMP
 dir (java.io.tmpdir/edt-mcp-yaxunit/...), NEVER inside the TestConfiguration/ git
 tree — so a correct run leaves the fixture clean. Every test here ends with
@@ -62,11 +63,34 @@ mutation-sensitive against the SPECIFIC message, not just is_error):
 Parameter shape (from getInputSchema / execute) — all OPTIONAL at the schema level;
 the required-ness is conditional and enforced in code:
     launchConfigurationName (str), projectName (str), applicationId (str),
-    extensions (array), modules (array), tests (array) -- each declared type:array
-    but a comma-separated string is also accepted (shared extractArrayArgument),
-    timeout (int, default 60, clamped to >=1), updateBeforeLaunch (bool, default true).
+    extensions (array), modules (array), tests (array), tags (array) -- each declared
+    type:array but a comma-separated string is also accepted (shared extractArrayArgument),
+    timeout (int, default 45, clamped into [1, 45] — see below), updateBeforeLaunch
+    (bool, default true).
 There is NO closed enum and NO declared XOR pair; the real conditional-required
 branches (projectName/applicationId vs launchConfigurationName) ARE exercised below.
+
+TIMEOUT BOUNDS THE START CALL, AND IT IS CLAMPED (#357)
+------------------------------------------------------
+`timeout` bounds how long the start call waits for the job (whose work covers resolve +
+pre-launch preparation + spawn + poll), and RunYaxunitTestsTool.clampTimeout() caps it at
+MAX_TIMEOUT_SECONDS = 45. An MCP transport cuts a call at roughly 60s, so a larger
+window could only turn the tool's answer into a bare transport error — which is
+exactly what #357 reported. The clamp is SILENT: a large value is accepted and
+quietly reduced, never rejected, so an existing caller passing `timeout: 240` keeps
+working. That silence is asserted below, because "reject anything above 45" would be
+a plausible-looking implementation that breaks every such caller.
+
+Whenever the call has not finished the work it returns **Pending** with a `jobId`, the
+`run_yaxunit_tests` owning-tool name, and progress naming the phase (`resolve` /
+`prep:terminate` / `prep:recompute` / `prep:db-update` / `spawn` / `run`). The job
+continues independently of this window and is polled by id, never by rebuilt arguments.
+
+The named job declares a YAXUnit-specific destructive cancellation capability. A
+cancel_job preview does nothing and warns that a confirmed live-run stop kills the
+client, does not roll back the infobase, and can leave a partial/absent report. This
+headless fixture cannot launch a client, so the actual termination path is proved by
+the Java unit tests with a committed job and launch double rather than faked here.
 
 Fixture inventory used (TestConfiguration, English Names): the project itself
 (projectName "TestConfiguration"); CommonModule.Calc exists but is irrelevant here
@@ -279,3 +303,115 @@ def test_unknown_external_infobase_changes_value_is_rejected():
     assert_error_quality(e, names=[bad], suggests=["override", "import", "cancel"],
                          ctx="unknown externalInfobaseChanges names the bad value and lists the accepted ones")
     assert_no_diff("a rejected run must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #357 — the timeout ceiling is enforced SILENTLY
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_timeout_above_the_ceiling_is_clamped_not_rejected():
+    """`timeout: 240` — the exact value from the #357 report — must be ACCEPTED and
+    quietly clamped to MAX_TIMEOUT_SECONDS, not rejected.
+
+    The tool cannot honour a window longer than the MCP transport lives, so the
+    ceiling is real; but turning an over-large value into an error would break every
+    caller that already passes one (and #357's reporter passed 240). So the call must
+    reach the ordinary flow and fail on its ACTUAL precondition — the missing launch
+    configuration — with no mention of `timeout` anywhere in the message.
+
+    Mutation-sensitive both ways: an implementation that rejected the value would
+    produce a timeout-shaped error (caught by the substring check), and one that
+    honoured it unclamped would be invisible here but is pinned by the unit ratchet
+    RunYaxunitTestsToolTest.testTimeoutIsClampedToTheTransportSafeCeiling."""
+    # NB the name must not itself contain the word this test greps for.
+    bad_cfg = "NoSuchLaunchConfig_Ceiling_e2e"
+    r = call("run_yaxunit_tests", {"launchConfigurationName": bad_cfg, "timeout": 240})
+    err = assert_error(r, "over-large timeout must reach the normal flow")
+    assert_error_quality(
+        err,
+        names=[bad_cfg],
+        suggests=["list_configurations"],
+        ctx="an over-large timeout is clamped silently: the call still fails on its real precondition",
+    )
+    assert "timeout" not in err.lower(), (
+        "an over-large timeout must be clamped SILENTLY, not rejected: " + err
+    )
+    assert_no_diff("a rejected launch must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #409 — the tag filter is a first-class filter family
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_tags_filter_is_accepted_as_an_array():
+    """`tags` must be ACCEPTED and carried into the ordinary flow.
+
+    SCOPE, stated honestly: this call dies at launch-config resolution, long before any
+    xUnitParams.json is written, so it does NOT prove the tag reaches the filter — an
+    implementation that ignored `tags` outright would also pass. What it does prove is
+    the wire contract: the argument is accepted in its declared array form and the call
+    proceeds to fail on its REAL precondition (the missing launch configuration) instead
+    of on the parameter. A schema/validation regression that rejected the new key would
+    surface here; a carriage regression would not.
+
+    Carriage is pinned by the unit ratchets RunYaxunitTestsToolTest.
+    testTagsLandInTheGeneratedFilter and ...testRunKeyDistinguishesTagSelections, which
+    drive the production seams with the same RunRequest the run path builds, and which
+    were verified to go red when the filter branch or the key term is deleted."""
+    bad_cfg = "NoSuchLaunchConfig_Filtered_e2e"
+    r = call(
+        "run_yaxunit_tests",
+        {"launchConfigurationName": bad_cfg, "tags": ["smoke", "nodb"]},
+    )
+    err = assert_error(r, "a tag filter must reach the normal flow")
+    assert_error_quality(
+        err,
+        names=[bad_cfg],
+        suggests=["list_configurations"],
+        ctx="a tag filter is accepted like any other filter family",
+    )
+    # The failure must be the no-config sentinel, NOT a complaint about the argument:
+    # an unknown/rejected parameter would surface as an error naming the value instead.
+    assert "smoke" not in err and "nodb" not in err, (
+        "tags must be accepted silently, not echoed back as a bad argument: " + err
+    )
+    assert_no_diff("a rejected launch must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_tags_filter_also_accepts_a_comma_separated_string():
+    """`tags` follows the same dual wire shape as the other filter families.
+
+    `extensions`/`modules`/`tests` are declared as arrays but a comma-separated string
+    is accepted too (shared extractArrayArgument). A new family that took only one of
+    the two shapes would be an inconsistency callers trip over, so pin the string form
+    explicitly — it is the shape the deprecated debug_yaxunit_tests alias forwards."""
+    bad_cfg = "NoSuchLaunchConfig_FilteredCsv_e2e"
+    r = call(
+        "run_yaxunit_tests",
+        {"launchConfigurationName": bad_cfg, "tags": "smoke,nodb"},
+    )
+    err = assert_error(r, "a comma-separated tag filter must reach the normal flow")
+    assert_error_quality(
+        err,
+        names=[bad_cfg],
+        suggests=["list_configurations"],
+        ctx="a comma-separated tag filter is accepted like the array form",
+    )
+    assert_no_diff("a rejected launch must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_unknown_standalone_server_port_conflict_value_is_rejected():
+    """standaloneServerPortConflict answers EDT's blocking "Standalone server port
+    conflict" modal. One of its two answers makes EDT REWRITE the server configuration,
+    so a typo must never resolve to it - nor silently fall back to the default. An
+    unrecognised token is rejected up front, naming the bad value and the accepted ones."""
+    bad = "find-free-port"
+    r = call("run_yaxunit_tests", {
+        "launchConfigurationName": "no such configuration at all",
+        "standaloneServerPortConflict": bad,
+    })
+    e = assert_error(r, "unknown standaloneServerPortConflict value")
+    assert_error_quality(e, names=[bad], suggests=["cancel", "reassign"],
+                         ctx="unknown standaloneServerPortConflict names the bad value and lists the accepted ones")

@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**86 tools.**
+**89 tools.**
 
 ## Core
 
@@ -33,15 +33,15 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`create_launch_config`](create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
 | [`delete_launch_config`](delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
-| [`delete_metadata`](delete_metadata.md) | Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO pac… |
+| [`delete_metadata`](delete_metadata.md) | Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a… |
 | [`export_common_picture`](export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |
 | [`get_configuration_properties`](get_configuration_properties.md) | Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.) |
 | [`get_subsystem_content`](get_subsystem_content.md) | Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsy… |
 | [`list_common_pictures`](list_common_pictures.md) | List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, p… |
 | [`list_configurations`](list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
 | [`list_subsystems`](list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
-| [`modify_metadata`](modify_metadata.md) | Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{n… |
-| [`rename_metadata_object`](rename_metadata_object.md) | Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call wi… |
+| [`modify_metadata`](modify_metadata.md) | Set properties of a metadata node - an object, a member, or a FORM member (item / attribute / command / handler) - addressed by a 1C full-name FQN, as proper… |
+| [`rename_metadata_object`](rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ## Code
 
@@ -51,7 +51,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 |------|-------------|
 | [`find_references`](find_references.md) | Find every place a metadata object is used: BSL code modules (with line numbers), other metadata, forms, roles, subsystems, etc. Pass the object FQN; the typ… |
 | [`get_content_assist`](get_content_assist.md) | Get code-completion proposals at a 1-based line/column in a BSL module - the members, globals and variables valid at that caret (e.g. after a '.'). May retur… |
-| [`get_method_call_hierarchy`](get_method_call_hierarchy.md) | Find a BSL method's call hierarchy: who calls it (callers, default) or what it calls (callees), via semantic AST analysis that resolves ru/en spellings (unli… |
+| [`get_method_call_hierarchy`](get_method_call_hierarchy.md) | Trace which BSL methods call a method or are called by it; optional depth walks the chain transitively for impact analysis (callers only, max 5). Finds STATI… |
 | [`get_outgoing_structures`](get_outgoing_structures.md) | For each outgoing qualified call in a BSL module (or one method), report the top-level literal keys of the Structure passed as its first argument (local .Ins… |
 | [`get_symbol_info`](get_symbol_info.md) | Get type/hover info about a symbol at a position in a BSL module. Returns inferred types, signatures, and documentation. |
 | [`go_to_definition`](go_to_definition.md) | Go to the definition of a symbol (the inverse of find_references): a qualified method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or… |
@@ -81,12 +81,15 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Testing
 
-> YAXUnit unit testing: run and debug test suites.
+> YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling.
 
 | Tool | Description |
 |------|-------------|
+| [`ask_workmate`](ask_workmate.md) | Start a background question to the 1C:Workmate plugin and return its jobId. Poll the job with get_job_status instead of calling ask_workmate again. Requires… *(not enabled by default)* |
+| [`cancel_job`](cancel_job.md) | Preview or cancel a background job by jobId. Destructive: omitting confirm or passing confirm=false only describes the owning tool, state, and progress; conf… |
 | [`debug_yaxunit_tests`](debug_yaxunit_tests.md) | Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect. Prefer… |
-| [`run_yaxunit_tests`](run_yaxunit_tests.md) | Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (… |
+| [`get_job_status`](get_job_status.md) | Poll any background job by the jobId returned from its owning tool. Returns the current state, progress journal, and terminal result; optionally waits for a… |
+| [`run_yaxunit_tests`](run_yaxunit_tests.md) | Run YAXUnit tests as a named background job and return a JUnit Markdown report. The start call waits up to `timeout` (default and maximum 45s, larger values… |
 
 ## Profiling
 
@@ -133,9 +136,9 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 | Tool | Description |
 |------|-------------|
+| [`apply_quick_fix`](apply_quick_fix.md) | Apply EDT's official quick-fix (auto-fix) to one validation marker — the headless counterpart of the 'Quick Fix' action in the problems view. Address the mar… |
 | [`build_external_objects`](build_external_objects.md) | Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL o… |
 | [`clean_project`](clean_project.md) | Clean EDT project and trigger full revalidation. Direction: DISK -> MODEL - re-imports the on-disk src/ .mdo files into the in-memory model. Refreshes files… |
-| [`code_review`](code_review.md) | Review BSL code quality with the BSL Language Server engine: its FULL diagnostic catalog (magic number, cyclomatic/cognitive complexity, method/line length,… |
 | [`create_git_branch`](create_git_branch.md) | Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's c… |
 | [`create_infobase`](create_infobase.md) | Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create'… |
 | [`create_project`](create_project.md) | Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'ex… |

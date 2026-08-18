@@ -42,7 +42,7 @@ public final class Toolsets
     public static final String CODE = "code"; //$NON-NLS-1$
     /** Runtime debugging: launches, breakpoints, suspended-state inspection. */
     public static final String DEBUG = "debug"; //$NON-NLS-1$
-    /** YAXUnit unit testing (run / debug). */
+    /** YAXUnit unit testing and 1C:Workmate assistance. */
     public static final String TESTING = "testing"; //$NON-NLS-1$
     /** Performance profiling (start / stop / results). */
     public static final String PROFILING = "profiling"; //$NON-NLS-1$
@@ -106,7 +106,7 @@ public final class Toolsets
         define(DEBUG, "Debug",
             "Runtime debugging: launch/attach, breakpoints, step/resume, variables, expression evaluation."); //$NON-NLS-1$
         define(TESTING, "Testing",
-            "YAXUnit unit testing: run and debug test suites."); //$NON-NLS-1$
+            "YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling."); //$NON-NLS-1$
         define(PROFILING, "Profiling",
             "Performance profiling: start/stop a measurement and read the results."); //$NON-NLS-1$
         define(FORMS, "Forms",
@@ -148,7 +148,8 @@ public final class Toolsets
             "step", "resume", "evaluate_expression", "get_applications", "terminate_launch"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
         assign(TESTING,
-            "run_yaxunit_tests", "debug_yaxunit_tests"); //$NON-NLS-1$ //$NON-NLS-2$
+            "run_yaxunit_tests", "debug_yaxunit_tests", "ask_workmate", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "get_job_status", "cancel_job"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assign(PROFILING,
             "start_profiling", "stop_profiling", "get_profiling_results"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -171,7 +172,7 @@ public final class Toolsets
             "get_event_log", //$NON-NLS-1$
             "get_mcp_history", //$NON-NLS-1$
             "list_git_branches", "switch_git_branch", "set_branch_infobase", "create_git_branch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "get_check_description", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$
+            "get_check_description", "apply_quick_fix", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assign(GIT,
             "git"); //$NON-NLS-1$

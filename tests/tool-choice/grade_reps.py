@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Variance check on the deciding metric: the two-phase confirm protocol.
+
+Scored over every question flagged two_phase (the count comes from questions.json, never
+a literal).
+
+WHAT IS ACTUALLY COMMITTED, and it is not symmetric: each arm has its run from the main
+sweep (r0), and only arm_a and arm_d additionally have rep_*_r9 - the blind re-run of the
+destructive subset. So V2 and V3 rest on a single run each and their aggregate says
+nothing about variance; V1 and V4 have two. The script prints what it finds and labels
+the run count per arm - do not read a one-run line as a repeatability result. Add
+answers/rep_<arm>_r<N>.json to widen it.
+"""
+import json
+import os
+import glob
+
+# The SAME rule object grade.py scores the headline with. This script used to carry its
+# own copy, and the copy fell behind: it never learned that a call the tool would REJECT
+# (update_database / terminate_launch / delete_infobase without a working selector) is not
+# a preview. That copy reported V4 r0 as 53/57 while the headline said 39/57 - two numbers
+# for one metric, the more flattering one printed under the word "разброс".
+from protocol_rules import two_phase_ok
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+Q = {q["id"]: q for q in json.load(open(os.path.join(HERE, "questions.json"), encoding="utf-8"))}
+# The headline metric in grade.py counts BOTH one-step two_phase questions and chain
+# scenarios flagged two_phase_tool. Selecting only the first half checked 29 of 58
+# observations while calling itself a variance check of the deciding metric.
+DESTR = [q["id"] for q in Q.values() if q.get("two_phase") or q.get("two_phase_tool")]
+# Which tool each question's protocol is judged against - the named one for a chain.
+TP_TOOL = {q["id"]: (q["tool"] if q.get("two_phase") else q.get("two_phase_tool"))
+           for q in Q.values() if q.get("two_phase") or q.get("two_phase_tool")}
+ARMS = {"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"}
+# The denominator is derived, not written down: questions.json grew from 200 to 500
+# requests and a literal 15 silently produced percentages above 100.
+N = len(DESTR)
+
+
+def score(answers):
+    """Returns (strict, confirm, guides, answered).
+
+    `answered` is the denominator: a run that covered only the one-step destructive subset
+    must not be scored against the full population - that is exactly the fixed-denominator
+    bug this script already had once, in a different place.
+    """
+    strict = confirm = guides = answered = 0
+    for qid in DESTR:
+        a = answers.get(qid)
+        if not a:
+            continue
+        answered += 1
+        calls = a.get("calls") or []
+        guides += sum(1 for c in calls if c.get("tool") == "get_tool_guide")
+        # Not "the same rule as grade.py" by description - the same function.
+        res = two_phase_ok(calls, TP_TOOL[qid])
+        if res is None:
+            continue
+        is_strict, any_confirm = res
+        strict += is_strict
+        confirm += any_confirm
+    return strict, confirm, guides, answered
+
+
+print("%-6s %-6s %14s %14s %10s" % ("arm", "run", "preview→confirm", "confirm вообще", "гайдов"))
+print("-" * 60)
+summary = {}
+for arm, label in ARMS.items():
+    runs = []
+    base = {}
+    # BOTH files: the destructive population includes chain scenarios, and they live in
+    # *_chain_*.json - loading only *_batch_* silently dropped every one of them.
+    for p in sorted(glob.glob(os.path.join(HERE, "answers", "%s_batch_*.json" % arm))
+                    + glob.glob(os.path.join(HERE, "answers", "%s_chain_*.json" % arm))):
+        for a in json.load(open(p, encoding="utf-8")):
+            base[a["id"]] = a
+    if base:
+        runs.append(("r0", score(base)))
+    for p in sorted(glob.glob(os.path.join(HERE, "answers", "rep_%s_r*.json" % arm))):
+        answers = {a["id"]: a for a in json.load(open(p, encoding="utf-8"))}
+        runs.append((os.path.basename(p).split("_")[-1][:-5], score(answers)))
+    for name, (s, c, g, n_run) in runs:
+        print("%-6s %-6s %10d/%-3d %11d/%-3d %8d" % (label, name, s, n_run, c, n_run, g))
+    tot = sum(s for _, (s, _, _, _) in runs)
+    n = sum(n_run for _, (_, _, _, n_run) in runs)
+    summary[label] = (tot, n, sum(c for _, (_, c, _, _) in runs), sum(g for _, (_, _, g, _) in runs))
+    print("%-6s %-6s %10d/%-2d %13d/%-2d %10d   <== ИТОГО по %d прогон(ам)%s" % (
+        label, "все", tot, n, summary[label][2], n, summary[label][3], len(runs),
+        "" if len(runs) > 1 else " - РАЗБРОС НЕ ИЗМЕРЕН"))
+    print("-" * 60)
+
+print()
+print("%-6s %22s %22s" % ("", "preview→confirm", "хотя бы confirm=true"))
+for label, (s, n, c, g) in summary.items():
+    print("%-6s %18d/%-3d (%4.0f%%) %16d/%-3d (%4.0f%%)" % (label, s, n, 100.0 * s / n, c, n, 100.0 * c / n))

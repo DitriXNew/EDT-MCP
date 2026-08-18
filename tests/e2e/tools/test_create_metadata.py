@@ -122,6 +122,24 @@ def test_create_top_level_catalog_appears_in_readback():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_reports_the_project_it_wrote_in():
+    """#408: the call states WHERE it wrote instead of having it inferred for it.
+
+    The export barrier used to derive its wait set from the arguments and from the response;
+    now the write itself records the project, and the same value is published. Mutation
+    thinking: a tool that stopped recording would publish nothing (member absent) and a tool
+    that published the ARGUMENT rather than the recorded write would still pass a
+    "projectName is in there" check - so this asserts the exact list."""
+    name = "E2EWriteScopeCatalog"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog." + name})
+    assert_ok(r, "create Catalog.%s" % name)
+
+    s = r.structured
+    assert s is not None, "JSON tool must return structuredContent"
+    assert s.get("writtenProjects") == [PROJECT],         "a real write must publish exactly the project it wrote in: %r" % (s.get("writtenProjects"),)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_document_with_synonym_echoes_language_code():
     name = "E2EUnifiedDoc"
     r = call("create_metadata", {
@@ -1092,6 +1110,69 @@ def test_create_form_attribute():
     assert_ok(r, "create a form attribute by FQN")
     assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
     poll_diff_contains(attr, ctx="the new form attribute must land in the form's .form on disk")
+
+
+def _form_attribute_block(form_xml, name):
+    """The <attributes> element named `name` from a Form.form document, or None."""
+    root = ET.fromstring(form_xml)
+    for attributes in root.iter("attributes"):
+        child = attributes.find("name")
+        if child is not None and child.text == name:
+            return attributes
+    return None
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_attribute_writes_view_and_edit():
+    # Issue #382: an attribute written without <view>/<edit> makes the whole configuration
+    # unloadable - the platform's XDTO reader rejects the generated Form.xml. Every
+    # designer-created attribute carries <view><common>true</common></view> and the same <edit>.
+    attr = "E2EViewEditAttr"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "create a form attribute by FQN")
+    form_path = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    poll_disk_contains(form_path, "<name>" + attr + "</name>",
+                       ctx="the new form attribute must land in the form's .form on disk")
+    block = _form_attribute_block(read_disk(form_path), attr)
+    assert block is not None, "the new attribute must be present in Form.form"
+    for flag in ("view", "edit"):
+        node = block.find(flag)
+        assert node is not None, \
+            "the new attribute must carry <%s> - without it the platform refuses the load" % flag
+        common = node.find("common")
+        assert common is not None and common.text == "true", \
+            "<%s> must default to <common>true</common>, got %r" % (
+                flag, None if common is None else common.text)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column_writes_view_and_edit():
+    # view/edit are declared on AbstractFormAttribute, so a COLUMN needs them just as much.
+    attr, col = "E2EColViewEditOwner", "E2EColViewEdit"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(r, "create a column on a collection form attribute")
+    form_path = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    poll_disk_contains(form_path, "<name>" + col + "</name>",
+                       ctx="the new column must land in the form's .form on disk")
+    owner = _form_attribute_block(read_disk(form_path), attr)
+    assert owner is not None, "the owning attribute must be present in Form.form"
+    column = None
+    for candidate in owner.iter("columns"):
+        child = candidate.find("name")
+        if child is not None and child.text == col:
+            column = candidate
+    assert column is not None, "the new column must be present under its owning attribute"
+    for flag in ("view", "edit"):
+        node = column.find(flag)
+        assert node is not None, "the new column must carry <%s>" % flag
+        common = node.find("common")
+        assert common is not None and common.text == "true", \
+            "<%s> must default to <common>true</common>, got %r" % (
+                flag, None if common is None else common.text)
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

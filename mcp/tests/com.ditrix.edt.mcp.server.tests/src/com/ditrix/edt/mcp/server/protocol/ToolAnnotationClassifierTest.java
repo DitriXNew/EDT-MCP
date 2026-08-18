@@ -34,7 +34,8 @@ public class ToolAnnotationClassifierTest
             "delete_metadata",
             "update_database",
             "rename_metadata_object",
-            "delete_project" })
+            "delete_project",
+            "cancel_job" })
         {
             ToolAnnotations a = ToolAnnotationClassifier.classify(name);
             assertEquals(name + " must be destructiveHint=true", Boolean.TRUE, a.getDestructiveHint());

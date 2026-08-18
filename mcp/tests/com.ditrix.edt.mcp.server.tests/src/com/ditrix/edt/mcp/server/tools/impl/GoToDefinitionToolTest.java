@@ -80,7 +80,7 @@ public class GoToDefinitionToolTest
     public void testDescriptionPointsToGuide()
     {
         String desc = new GoToDefinitionTool().getDescription();
-        assertTrue(desc.contains("find_references")); //$NON-NLS-1$
+        assertTrue(new GoToDefinitionTool().getGuide().contains("find_references")); //$NON-NLS-1$
         assertTrue(desc.contains("get_tool_guide('go_to_definition')")); //$NON-NLS-1$
     }
 

@@ -8,14 +8,20 @@ package com.ditrix.edt.mcp.server.tools.rename;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
@@ -24,6 +30,9 @@ import org.osgi.framework.Bundle;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
+import com._1c.g5.v8.dt.common.StringUtils;
+import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
+import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -46,16 +55,24 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
- * Domain service backing {@code rename_metadata_object}: resolves the target object, builds the
- * LTK refactoring, renders the preview, and performs the rename (applying disabled change-point
+ * Domain service backing {@code rename_metadata_object}: resolves the target, builds the LTK
+ * refactoring, renders the preview, and performs the rename (applying disabled change-point
  * indices).
+ * <p>
+ * Two targets, two branches, one contract: a managed-form ELEMENT FQN goes through
+ * {@code IFormRefactoringService}, everything else through {@code IMdRefactoringService}, and
+ * both end in the same preview rendering and the same consent-gated apply.
  * <p>
  * Two-phase workflow:
  * 1. Preview mode (confirm=false, default): Returns list of affected refactoring items and problems.
@@ -66,11 +83,30 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  */
 public class MetadataRenameService
 {
+    /** MCP operation name used in actionable preflight refusals. */
+    private static final String TOOL_NAME = "rename_metadata_object"; //$NON-NLS-1$
+
     /** Em dash placeholder rendered in markdown table cells with no value. */
     private static final String DASH = "\u2014"; //$NON-NLS-1$
 
+    /**
+     * Form-model EClasses the DESIGNER owns: the platform derives each one's name from the element
+     * that owns it and refuses a direct rename ({@code FormItemNamingService} rejects a predefined
+     * item). Addressable through their kind tokens (an AutoCommandBar / ContextMenu IS a Group, an
+     * ExtendedTooltip IS a Decoration), so the rename branch has to recognize and refuse them by
+     * EClass rather than by address (issue #381).
+     */
+    private static final Set<String> DESIGNER_OWNED_ECLASSES =
+        Set.of("AutoCommandBar", "ContextMenu", "ExtendedTooltip"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
     /** Change-point type tag for BSL reference changes. */
     private static final String BSL_REF = "bslRef"; //$NON-NLS-1$
+
+    /** Separates fields in the canonical change-point signature; not legal in the rendered values. */
+    private static final char HASH_FIELD_SEPARATOR = '\u001f';
+
+    /** Separates points in the canonical change-point signature; not legal in the rendered values. */
+    private static final char HASH_POINT_SEPARATOR = '\u001e';
 
     /** Reflective method name: Guice injector instance lookup. */
     private static final String GET_INSTANCE = "getInstance"; //$NON-NLS-1$
@@ -89,21 +125,33 @@ public class MetadataRenameService
      * Runs the rename (preview or execute), reporting how far it got to {@code progress}.
      *
      * @param projectName the EDT project holding the object
-     * @param objectFqn the FQN of the object or member to rename
+     * @param objectFqn the FQN of the object, member or managed-form element to rename
      * @param newName the new programmatic Name
      * @param confirm {@code false} previews, {@code true} applies
-     * @param disableIndices preview '#' indices of optional change points to skip
+     * @param disableRequest what the caller asked to skip: the preview '#' indices of optional
+     *     change points
+     * @param expectedHash the preview's optimistic-lock token; required when applying disableIndices
      * @param maxResults cap on the change points listed in the preview (0 = no limit)
      * @param progress the sink this method publishes its {@link RenameProgress.Phase} to, so a
      *     caller whose deadline elapsed can say what the model was left in (issue #365)
      * @return the Markdown report, or a {@link ToolResult#error} JSON payload
      */
     public String rename(String projectName, String objectFqn, String newName,
-        boolean confirm, java.util.Set<Integer> disableIndices, int maxResults, RenameProgress progress)
+        boolean confirm, DisableRequest disableRequest, String expectedHash, int maxResults,
+        RenameProgress progress)
     {
         // Reported as the FIRST thing the UI thread does: it is what separates "the UI thread never
         // picked the work up" from "the work started" for a caller that gave up on its deadline.
         progress.enter(RenameProgress.Phase.PREPARING);
+
+        // ONE point of judgment for BOTH branches, and it runs before anything is resolved: an
+        // identifier is an identifier whether the target lives in the mdclass tree or on a form, so
+        // the rule cannot sit inside one of the two paths.
+        String badName = invalidNewNameError(newName);
+        if (badName != null)
+        {
+            return ToolResult.error(badName).toJson();
+        }
 
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
@@ -114,6 +162,21 @@ public class MetadataRenameService
         IProject project = resolved.project();
         Configuration config = resolved.configuration();
 
+        objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
+
+        // A FQN addressing a FORM element (attribute / column / command / field / button / group /
+        // decoration / table) is handled by a dedicated branch BEFORE the mdclass path, mirroring how
+        // delete_metadata dispatches the same shapes: form elements live on the form's content model,
+        // not the mdclass tree, so resolveObject below can never see them. The dispatch precedes the
+        // IMdRefactoringService lookup on purpose - a form rename must not fail because an unrelated
+        // mdclass service is unavailable (issue #381).
+        FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(objectFqn);
+        if (formRef != null)
+        {
+            return renameFormMember(project, config, objectFqn, newName, confirm, disableRequest,
+                expectedHash, maxResults, progress, formRef);
+        }
+
         // Get refactoring service
         IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
         if (refactoringService == null)
@@ -121,15 +184,19 @@ public class MetadataRenameService
             return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
-        // Normalize and find the object
-        objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
+        // Find the object
         MdObject targetObject = resolveObject(config, objectFqn);
         if (targetObject == null)
         {
             return ToolResult.error("Object not found: " + objectFqn + ". " + //$NON-NLS-1$
                 "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
                 "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
-                "Supported child types: Attribute, TabularSection, Dimension, Resource.").toJson(); //$NON-NLS-1$
+                "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
+                "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
+                "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
+                "Kind = Attribute / Command / Field / Button / Group / Decoration / Table (an " + //$NON-NLS-1$
+                "attribute column as '...Attribute.AttrName.Column.ColName'). A form itself " + //$NON-NLS-1$
+                "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
         }
 
         // NB: an ADOPTED object in a configuration extension CAN be renamed. Its link to the base
@@ -137,8 +204,41 @@ public class MetadataRenameService
         // (keepMappingToExtendedConfigurationObjectsByIDs), so the EDT rename refactoring below keeps
         // the adoption intact - exactly as the EDT UI rename does. (Do NOT refuse adopted objects.)
 
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
+        return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,
+            disableRequest, expectedHash, maxResults, progress, refactoringService, modelResolution);
+    }
+
+    /**
+     * Creates the EDT mdclass rename refactoring only after the shared BM resolver has verified the
+     * target and dependent project models. Package-visible so the null-model refusal is covered
+     * without requiring a live workbench.
+     */
+    String prepareMdClassRename(IProject project, String objectFqn, String newName,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, IMdRefactoringService refactoringService,
+        BmModelResolver.Resolution modelResolution)
+    {
+        if (!modelResolution.isAvailable())
+        {
+            return ToolResult.error(modelResolution.actionableError(TOOL_NAME,
+                "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+        }
+
         // Create refactoring (returns collection because it may also rename in extension projects)
-        Collection<IRefactoring> refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+        Collection<IRefactoring> refactorings;
+        try
+        {
+            refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not prepare rename refactoring for " + objectFqn, e); //$NON-NLS-1$
+            return ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + project.getName() + "'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
+                + "to check the project state and get_metadata_details to verify the target, then " //$NON-NLS-1$
+                + "retry rename_metadata_object.").toJson(); //$NON-NLS-1$
+        }
         if (refactorings == null || refactorings.isEmpty())
         {
             return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
@@ -152,7 +252,306 @@ public class MetadataRenameService
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableIndices, progress);
+            return performRename(objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
+                "metadata object"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The refusal for a {@code newName} that is not a legal 1C identifier, or {@code null} when it
+     * is one. Applies to EVERY rename target - top object, member, form element - because the rule
+     * belongs to the identifier, not to where it is stored.
+     * <p>
+     * The verdict is the PLATFORM'S OWN, {@link StringUtils#isValidName(String)}: a non-empty string
+     * whose first code point is alphabetic or {@code '_'} and whose remaining code points are
+     * alphabetic, decimal digits or {@code '_'} (Cyrillic included - it asks
+     * {@code Character.isAlphabetic}, not an ASCII range; read off its bytecode, not guessed).
+     * Deferring to it rather than writing another rule is the whole point: an invented predicate
+     * would refuse names the platform accepts, and a false refusal on a legal rename is worse than
+     * the miss it was meant to prevent. Note what it therefore does NOT judge - length, for one:
+     * an over-long name is a validation MARKER for the platform to raise, not grounds for this tool
+     * to refuse a rename.
+     * <p>
+     * Without this an agent could rename an element to something like {@code Bad.Name}: the write
+     * itself succeeds, but the result is addressable by no FQN (the dot is the FQN separator) and
+     * the form module it cascades into no longer parses. The old name is gone by then, so the
+     * damage is not undoable through this tool.
+     * <p>
+     * PUBLIC because the tool adapter calls the SAME predicate before it drains the derived-data
+     * pipeline: a malformed name is a deterministic argument error and answering it should not cost
+     * a settle wait (or be masked by a BUILDING refusal). The check stays here as well, so the
+     * domain guarantee does not depend on which adapter reached it.
+     *
+     * @param newName the requested new name
+     * @return the refusal message, or {@code null} when the name is a legal identifier
+     */
+    public static String invalidNewNameError(String newName)
+    {
+        if (newName != null && StringUtils.isValidName(newName))
+        {
+            return null;
+        }
+        return "'" + newName + "' is not a valid 1C name. A name must start with a letter or " //$NON-NLS-1$ //$NON-NLS-2$
+            + "underscore and contain only letters, digits and underscores - no dots, spaces or " //$NON-NLS-1$
+            + "punctuation (Cyrillic letters are allowed). Pass only the new NAME here, not an FQN."; //$NON-NLS-1$
+    }
+
+    /**
+     * Renames a FORM element (attribute / attribute column / command / field / button / group /
+     * decoration / table) addressed by a form FQN, through EDT's OWN
+     * {@link IFormRefactoringService} - the exact twin of the mdclass path's
+     * {@code createMdObjectRenameRefactoring}. Because the result is the same {@link IRefactoring}
+     * type, the preview rendering and the apply path (including the destructive-consent gate) are
+     * shared verbatim with the mdclass branch; only the two mdclass-only BSL preview inputs are
+     * skipped (see {@link #renderPreview}).
+     * <p>
+     * Using EDT's refactoring rather than a hand-written name write is what makes the cascade real:
+     * it carries the form's internal references and the {@code Items.<Name>} / {@code Элементы.<Имя>}
+     * occurrences in the form module, exactly as the designer's own rename does - and, as a side
+     * effect that is EDT's and not ours, it refreshes the element's derived title. String literals
+     * holding an element name are deliberately NOT rewritten - that was the issue author's explicit
+     * scope call (issue #381).
+     * <p>
+     * The refactoring is BUILT inside a BM READ transaction (the form element only exists as a live
+     * EObject there) but PERFORMED outside it: {@code IRefactoring.perform()} opens its own batch
+     * session and write transaction, exactly as the mdclass path does, and nothing is force-exported
+     * by hand. What THIS method carries out of the read is a plain {@code String} old name; the
+     * refactoring itself is EDT's object and may hold model elements of its own - the mdclass branch
+     * hands the identical kind of object to the identical preview and apply code, so nothing here is
+     * a new exposure, but the claim is stated as it is rather than as "nothing escapes".
+     *
+     * @param project the EDT project
+     * @param config the project's configuration
+     * @param normFqn the normalized form FQN
+     * @param newName the new element name
+     * @param confirm {@code false} previews, {@code true} applies
+     * @param disableRequest what the caller asked to skip (see {@link #rename})
+     * @param expectedHash the preview's optimistic-lock token
+     * @param maxResults cap on the change points listed
+     * @param progress the phase sink
+     * @param ref the parsed form-member reference
+     * @return the Markdown report, or a {@link ToolResult#error} JSON payload
+     */
+    private String renameFormMember(IProject project, Configuration config, String normFqn,
+        String newName, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, FormElementWriter.FormMemberRef ref)
+    {
+        String ineligible = formRenameIneligibility(ref);
+        if (ineligible != null)
+        {
+            return ToolResult.error(ineligible).toJson();
+        }
+        IFormRefactoringService formRefactoringService =
+            Activator.getDefault().getFormRefactoringService();
+        if (formRefactoringService == null)
+        {
+            return ToolResult.error("IFormRefactoringService not available").toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
+                ref.formPath, "Form not found for '" + normFqn //$NON-NLS-1$
+                    + "'. Address a form element as 'Type.Object.Form.FormName.<Kind>.Name' or " //$NON-NLS-1$
+                    + "'CommonForm.FormName.<Kind>.Name' (Kind = Attribute / Command / Field / " //$NON-NLS-1$
+                    + "Button / Group / Decoration / Table / Column on a collection attribute)."); //$NON-NLS-1$
+
+            // Only the old name and the refactoring leave the read transaction - never the element.
+            FormRenameTarget target = FormElementWriter.readEditableForm(fctx,
+                "Prepare form element rename", (formModel, tx) -> { //$NON-NLS-1$
+                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                    if (member == null)
+                    {
+                        return FormRenameTarget.notFound(FormElementWriter.kindMismatchAdvice(
+                            formModel, ref.kindToken, ref.name, normFqn));
+                    }
+                    String designerChild = designerChildRefusal(member, ref);
+                    if (designerChild != null)
+                    {
+                        return FormRenameTarget.refused(designerChild);
+                    }
+                    if (!(member instanceof NamedElement))
+                    {
+                        return FormRenameTarget.refused("Form element '" + ref.name //$NON-NLS-1$
+                            + "' cannot be renamed: its model type carries no renameable name."); //$NON-NLS-1$
+                    }
+                    String duplicate = duplicateNameRefusal(formModel, member, ref, newName);
+                    if (duplicate != null)
+                    {
+                        return FormRenameTarget.refused(duplicate);
+                    }
+                    return FormRenameTarget.of(((NamedElement)member).getName(),
+                        formRefactoringService.createFormRenameRefactoring((NamedElement)member,
+                            newName));
+                });
+
+            if (target.error != null)
+            {
+                return ToolResult.error(target.error).toJson();
+            }
+            Collection<IRefactoring> refactorings = Collections.singletonList(target.refactoring);
+            if (!confirm)
+            {
+                return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
+                    Collections.emptyMap(), Collections.emptyList());
+            }
+            return performRename(normFqn, newName, refactorings, disableRequest, expectedHash, progress,
+                "form element"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            String ready = FormValidationException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error renaming form element", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to rename form element: " //$NON-NLS-1$
+                + causeMessage(e)).toJson();
+        }
+    }
+
+    /**
+     * The most specific message in {@code e}'s cause chain - the deepest non-empty one - so a
+     * generic wrapper does not hide what the platform actually said. Falls back to the exception's
+     * simple type name when nothing in the chain carries a message.
+     */
+    private static String causeMessage(Throwable e)
+    {
+        String message = null;
+        Throwable current = e;
+        int depth = 0;
+        while (current != null && depth < 10)
+        {
+            if (current.getMessage() != null && !current.getMessage().isEmpty())
+            {
+                message = current.getMessage();
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return message != null ? message : e.getClass().getSimpleName();
+    }
+
+    /**
+     * The refusal for a form FQN shape this branch cannot rename, or {@code null} when the address is
+     * eligible. Checked BEFORE anything is resolved, so a shape that could never work says so without
+     * opening a transaction.
+     */
+    private static String formRenameIneligibility(FormElementWriter.FormMemberRef ref)
+    {
+        if (FormElementWriter.isHandlerToken(ref.kindToken)
+            || FormElementWriter.isHandlerToken(ref.itemKindToken))
+        {
+            // A handler address names an EVENT BINDING, not a named element: its leaf is the event
+            // name, which the platform owns. Renaming the BSL procedure behind it is a different
+            // operation with its own path.
+            return "This FQN addresses a form event handler, not a renameable form element. " //$NON-NLS-1$
+                + "An event name is fixed by the platform; to point the handler at a different BSL " //$NON-NLS-1$
+                + "procedure use modify_metadata with the 'procedure' property, or rename the " //$NON-NLS-1$
+                + "procedure itself in the form module."; //$NON-NLS-1$
+        }
+        return FormElementWriter.columnAddressingError(ref);
+    }
+
+    /**
+     * The refusal for a DESIGNER-OWNED child whose name the platform derives from its owner - an
+     * auto command bar, a context menu, an extended tooltip. EDT's own naming service refuses to
+     * rename a predefined item, so this says why (and what to rename instead) rather than letting the
+     * refactoring fail with a platform message. Returns {@code null} for an ordinary element.
+     */
+    private static String designerChildRefusal(EObject member, FormElementWriter.FormMemberRef ref)
+    {
+        String eClassName = member.eClass().getName();
+        if (!DESIGNER_OWNED_ECLASSES.contains(eClassName))
+        {
+            return null;
+        }
+        return "Form element '" + ref.name + "' is a designer-owned " + eClassName //$NON-NLS-1$ //$NON-NLS-2$
+            + ": the platform derives its name from the element that owns it, and refuses a direct " //$NON-NLS-1$
+            + "rename. Rename the OWNING element instead - its auto children follow."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal when {@code newName} is already taken IN THE SAME NAMESPACE, or {@code null}.
+     * <p>
+     * A form has FOUR independent name spaces, and each addressed kind must be checked against its
+     * own: attributes, form commands, an attribute's columns, and the visual item tree. Checking a
+     * command or a column against the ITEM tree got it wrong in both directions - it refused a
+     * command whose new name merely matched some field (a false refusal on a healthy rename), and it
+     * let a genuine duplicate command through.
+     * <p>
+     * The element BEING RENAMED is excluded by identity, so a case-only rename ({@code Price} to
+     * {@code price}) is not refused as a clash with itself: every lookup here is case-INSENSITIVE, so
+     * without that exclusion the target always finds itself. EDT's own naming service does the same.
+     *
+     * @param formModel the tx-bound form model
+     * @param member the element being renamed - excluded from the clash search
+     * @param ref the parsed form-member ref
+     * @param newName the proposed name
+     * @return the refusal, or {@code null} when the name is free
+     */
+    private static String duplicateNameRefusal(EObject formModel, EObject member,
+        FormElementWriter.FormMemberRef ref, String newName)
+    {
+        FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
+        EObject clash;
+        if (kind == FormElementWriter.Kind.ATTRIBUTE)
+        {
+            clash = FormElementWriter.findFormAttribute(formModel, newName);
+        }
+        else if (kind == FormElementWriter.Kind.COLUMN)
+        {
+            EObject owner = FormElementWriter.findFormAttribute(formModel, ref.ownerAttributeName);
+            clash = owner == null ? null : FormElementWriter.findColumn(owner, newName);
+        }
+        else if (kind == FormElementWriter.Kind.COMMAND)
+        {
+            clash = FormElementWriter.findFormCommand(formModel, newName);
+        }
+        else
+        {
+            clash = FormElementWriter.findFormItem(formModel, newName);
+        }
+        if (clash == null || clash == member)
+        {
+            return null;
+        }
+        return "Form element '" + newName + "' already exists on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Pick a different name."; //$NON-NLS-1$
+    }
+
+    /** What survives the prepare read transaction: the old name plus EDT's refactoring, or an error. */
+    private static final class FormRenameTarget
+    {
+        private final String oldName;
+        private final IRefactoring refactoring;
+        private final String error;
+
+        private FormRenameTarget(String oldName, IRefactoring refactoring, String error)
+        {
+            this.oldName = oldName;
+            this.refactoring = refactoring;
+            this.error = error;
+        }
+
+        static FormRenameTarget of(String oldName, IRefactoring refactoring)
+        {
+            return refactoring == null
+                ? new FormRenameTarget(null, null, "EDT created no rename refactoring for this " //$NON-NLS-1$
+                    + "form element.") //$NON-NLS-1$
+                : new FormRenameTarget(oldName, refactoring, null);
+        }
+
+        static FormRenameTarget notFound(String advice)
+        {
+            return new FormRenameTarget(null, null, "Form element not found." //$NON-NLS-1$
+                + (advice == null || advice.isEmpty()
+                    ? " Use get_metadata_details to list the form's elements." : advice)); //$NON-NLS-1$
+        }
+
+        static FormRenameTarget refused(String error)
+        {
+            return new FormRenameTarget(null, null, error);
         }
     }
 
@@ -165,8 +564,31 @@ public class MetadataRenameService
     {
         Map<String, ExactMatchInfo> exactMatches = buildExactMatchInfo(project, targetObject, newName);
         List<ChangePoint> edtBslPreviewChanges = buildEdtBslPreviewChanges(targetObject, newName, exactMatches);
-        String oldName = targetObject.getName();
+        return renderPreview(objectFqn, newName, targetObject.getName(), refactorings, maxResults,
+            exactMatches, edtBslPreviewChanges);
+    }
 
+    /**
+     * Assembles the preview markdown from data the caller already gathered. Split out of
+     * {@link #buildPreview} so the FORM-element branch can reuse the identical rendering without the
+     * two mdclass-only inputs it has no equivalent for: {@code buildExactMatchInfo} and
+     * {@code buildEdtBslPreviewChanges} both take an {@code MdObject} and describe the supplemental
+     * BSL pipeline for a metadata object. A form element's BSL change points arrive inside EDT's own
+     * form refactoring instead, so that branch passes an empty map and list (issue #381).
+     *
+     * @param objectFqn the FQN being renamed
+     * @param newName the new programmatic Name
+     * @param oldName the current Name of the rename target
+     * @param refactorings the refactorings EDT created for the rename
+     * @param maxResults cap on the change points listed (0 = no limit)
+     * @param exactMatches the mdclass exact-match data, or an empty map
+     * @param edtBslPreviewChanges the mdclass supplemental BSL change points, or an empty list
+     * @return the Markdown preview report
+     */
+    private String renderPreview(String objectFqn, String newName, String oldName,
+        Collection<IRefactoring> refactorings, int maxResults,
+        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> edtBslPreviewChanges)
+    {
         // Phase 1: collect all changes and problems
         List<ChangePoint> allChanges = new ArrayList<>();
         List<String> allProblems = new ArrayList<>();
@@ -179,13 +601,20 @@ public class MetadataRenameService
 
         // Phase 2: build markdown with YAML frontmatter
         StringBuilder sb = new StringBuilder();
+        // A leaf without a stable identity now costs only THAT row its ability to be skipped. The
+        // signature records an explicit no-identity marker for it, so the preview can always issue
+        // the optimistic-lock token that keeps every independently verifiable index usable. Confirm
+        // refuses only requested indices whose rows cannot be proven to denote the same leaf.
+        String contentHash = changePointContentHash(refactorings);
         PreviewSummary summary = new PreviewSummary(objectFqn, newName, allChanges.size(), enabledCount,
-            allProblems.size(), exactMatches.size(), shown);
+            allProblems.size(), exactMatches.size(), shown, contentHash);
         appendFrontmatter(sb, summary);
         appendChangePointsTable(sb, allChanges, shown);
         appendCodeContext(sb, allChanges, shown);
         appendProblemsSection(sb, allProblems);
-        appendFooter(sb);
+        boolean hasUnverifiableRows = allChanges.subList(0, shown).stream()
+            .anyMatch(changePoint -> !hasStableIdentity(changePoint));
+        appendFooter(sb, hasUnverifiableRows);
 
         return sb.toString();
     }
@@ -208,6 +637,86 @@ public class MetadataRenameService
     }
 
     /**
+     * Computes the optimistic-lock token over the FULL canonical change-point list. Both preview and
+     * confirm call this method, so the second refactoring tree is compared through the same
+     * {@link #collectChangesAndProblems} / {@link #collectRefactoringItems} walk that assigned the
+     * preview indices. Stable identities prove individual rows; an explicit no-identity marker keeps
+     * an opaque row structurally distinct while that row remains unavailable to {@code disableIndices}.
+     * <p>
+     * The neutral inputs are deliberate. {@code exactMatches} is preview-only enrichment: it can fan
+     * one leaf out into several context rows, suppress a fallback row, and replace project/FQN/line/
+     * column. The supplemental EDT BSL list can replace those locations afterwards too. Neither is
+     * available identically on confirm, while {@code oldName} is currently carried but not read by the
+     * walk. Hashing this neutral collection on both calls therefore locks the ordered observable tree
+     * and every stable row without making metadata previews disagree with form previews or their own
+     * confirm call.
+     *
+     * @param refactorings the freshly built refactoring tree
+     * @return the opaque {@link ContentHash} token
+     */
+    String changePointContentHash(Collection<IRefactoring> refactorings)
+    {
+        return ContentHash.of(changePointSignatureFor(refactorings));
+    }
+
+    /**
+     * Serializes every field that can change what an index means, plus the signature-only leaf
+     * identity evidence. Optionality controls whether confirm may disable the current leaf. For a
+     * native point, enabled is the leaf's default apply state and nativeItemChecked is the owning
+     * item's independent execution gate; for a plain point, enabled remains the item's checked state
+     * and nativeItemChecked is absent. The explicit native/plain state kind keeps those two meanings
+     * from collapsing into one ambiguous boolean. An explicit id/noid kind likewise keeps an absent
+     * stable identity from sharing a field layout with a present one. A stable identity distinguishes
+     * leaves whose rendered fields happen to be equal; a point without one remains signed but cannot
+     * itself be named in {@code disableIndices}.
+     */
+    private static String changePointSignature(List<ChangePoint> changePoints)
+    {
+        StringBuilder signature = new StringBuilder();
+        boolean first = true;
+        for (ChangePoint changePoint : changePoints)
+        {
+            if (!first)
+            {
+                signature.append(HASH_POINT_SEPARATOR);
+            }
+            String stableIdentity = hasStableIdentity(changePoint)
+                ? changePoint.signatureIdentity.stableValue : null;
+            signature.append(changePoint.index).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.type)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.description)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.project)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.fqn)).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.lineNumber).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.columnNumber).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.optional).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.nativeItemChecked == null ? "plain" : "native") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.enabled).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.nativeItemChecked == null ? "" : changePoint.nativeItemChecked) //$NON-NLS-1$
+                .append(HASH_FIELD_SEPARATOR)
+                .append(stableIdentity == null ? "noid" : "id") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(HASH_FIELD_SEPARATOR)
+                .append(stableIdentity == null ? "" : stableIdentity); //$NON-NLS-1$
+            first = false;
+        }
+        return signature.toString();
+    }
+
+    /** Whether a change point carries stable identity evidence that confirm can prove again. */
+    private static boolean hasStableIdentity(ChangePoint changePoint)
+    {
+        return changePoint.signatureIdentity != null
+            && changePoint.signatureIdentity.stableValue != null;
+    }
+
+    /** Canonical representation for an absent string field in the change-point signature. */
+    private static String hashValue(String value)
+    {
+        return value == null ? "" : value; //$NON-NLS-1$
+    }
+
+    /**
      * Flattens one refactoring's items into change points: native items recurse through the LTK change
      * tree, while plain rename items each consume one global index. Preserves the original ordering.
      */
@@ -227,16 +736,27 @@ public class MetadataRenameService
                 if (nativeChange != null)
                 {
                     ScanContext ctx = new ScanContext(exactMatches, allChanges, indexCounter, title,
-                        item.isOptional(), oldName);
+                        nativeItem.isOptional(), nativeItem.isChecked(), oldName);
                     collectFlatChanges(nativeChange, null, null, ctx);
                 }
             }
             else
             {
+                // Skippable is FALSE here whatever the platform says about the item, and that is the
+                // column answering its own question: it means "can this be passed to disableIndices",
+                // and a regular item owns no leaf Change to switch off, so the answer is no (#400).
+                //
+                // Not "the platform is wrong" - the platform's own optionality cannot be honoured
+                // through it either. IRefactoringItem.setChecked(false) is only consulted for
+                // operations executed as BM operations (AbstractBmObjectRefactoring.isEnabled, read
+                // through the gated BmTopObjectRefactoringTask); the participant operations that a
+                // regular item can stand for are also queued as plain eObject operations, and those
+                // run unconditionally. Which of the two a given item stands for is not observable
+                // from here, so promising a skip would be promising something we cannot deliver.
                 allChanges.add(new ChangePoint(
                     indexCounter[0]++, "rename", //$NON-NLS-1$
-                    item.getName(), item.isOptional(), item.isChecked(),
-                    CodeLocation.of(null, null)));
+                    item.getName(), false, item.isChecked(),
+                    null, CodeLocation.of(null, null), ChangePointIdentity.forPlainItem(item)));
             }
         }
     }
@@ -304,9 +824,10 @@ public class MetadataRenameService
         final int problemCount;
         final int exactMatchCount;
         final int shown;
+        final String contentHash;
 
         PreviewSummary(String objectFqn, String newName, int totalChanges, long enabledCount,
-            int problemCount, int exactMatchCount, int shown)
+            int problemCount, int exactMatchCount, int shown, String contentHash)
         {
             this.objectFqn = objectFqn;
             this.newName = newName;
@@ -315,6 +836,7 @@ public class MetadataRenameService
             this.problemCount = problemCount;
             this.exactMatchCount = exactMatchCount;
             this.shown = shown;
+            this.contentHash = contentHash;
         }
     }
 
@@ -329,6 +851,9 @@ public class MetadataRenameService
         sb.append("enabledChanges: ").append(summary.enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("problems: ").append(summary.problemCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("debugExactMatches: ").append(summary.exactMatchCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Always present: opaque rows carry a distinct no-identity signature marker and are marked
+        // non-skippable, while the token keeps stable rows safe to address across preview and confirm.
+        sb.append("contentHash: ").append(summary.contentHash).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("---\n\n"); //$NON-NLS-1$
 
         sb.append("# Refactoring Preview: Rename `").append(summary.objectFqn) //$NON-NLS-1$
@@ -367,7 +892,7 @@ public class MetadataRenameService
     private void appendChangePointRow(StringBuilder sb, ChangePoint cp)
     {
         String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
-        String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
+        String optionalMark = cp.optional && hasStableIdentity(cp) ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
         String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
         String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
         String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
@@ -435,12 +960,18 @@ public class MetadataRenameService
         sb.append("\n"); //$NON-NLS-1$
     }
 
-    /** Appends the trailing usage hint (confirm/disableIndices) shared by every preview. */
-    private void appendFooter(StringBuilder sb)
+    /** Appends the trailing usage hint and, when needed, explains unverifiable table rows. */
+    private void appendFooter(StringBuilder sb, boolean hasUnverifiableRows)
     {
         sb.append("> To execute, call with `confirm=true`.\n"); //$NON-NLS-1$
         sb.append("> Use `disableIndices='1,2,3'` to skip change points by their `#` index " //$NON-NLS-1$
+            + "and pass this preview's `contentHash` as `expectedHash` " //$NON-NLS-1$
             + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
+        if (hasUnverifiableRows)
+        {
+            sb.append("> Rows whose change point cannot be proven to be the same one at confirm " //$NON-NLS-1$
+                + "time show `Skippable: no`; do not include their `#` indices in `disableIndices`.\n"); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -477,6 +1008,29 @@ public class MetadataRenameService
         }
     }
 
+    /**
+     * Signature-only identity evidence for the operation behind a row. The stable value is
+     * deliberately not rendered: when present, it stops two equal-looking leaves from exchanging
+     * preview indices. A {@code null} stable value means the native leaf exposes no stable target;
+     * the signature records that absence explicitly, the row is non-skippable, and other rows retain
+     * their usable preview token.
+     */
+    private static final class ChangePointIdentity
+    {
+        final String stableValue;
+
+        ChangePointIdentity(String stableValue)
+        {
+            this.stableValue = stableValue;
+        }
+
+        static ChangePointIdentity forPlainItem(IRefactoringItem item)
+        {
+            String itemClass = item.getClass().getName();
+            return new ChangePointIdentity(identityPart("plainItemClass", itemClass)); //$NON-NLS-1$
+        }
+    }
+
     /** Simple data holder for a single change point in preview. */
     private static class ChangePoint
     {
@@ -487,13 +1041,17 @@ public class MetadataRenameService
         final String description;
         final boolean optional;
         final boolean enabled;
+        /** Owning native item's checked state; absent for a plain item change point. */
+        final Boolean nativeItemChecked;
         final int lineNumber;
         final int columnNumber;
         final String codeContext;
         final String methodName;
+        final ChangePointIdentity signatureIdentity;
 
         ChangePoint(int index, String type, String description,
-            boolean optional, boolean enabled, CodeLocation location)
+            boolean optional, boolean enabled, Boolean nativeItemChecked, CodeLocation location,
+            ChangePointIdentity signatureIdentity)
         {
             this.index = index;
             this.type = type;
@@ -502,10 +1060,12 @@ public class MetadataRenameService
             this.description = description;
             this.optional = optional;
             this.enabled = enabled;
+            this.nativeItemChecked = nativeItemChecked;
             this.lineNumber = location.lineNumber;
             this.columnNumber = location.columnNumber;
             this.codeContext = location.codeContext;
             this.methodName = location.methodName;
+            this.signatureIdentity = signatureIdentity;
         }
     }
 
@@ -549,6 +1109,7 @@ public class MetadataRenameService
         String fqn;
         String project;
         boolean addedFallbackChange;
+        ChangePointIdentity signatureIdentity;
 
         LeafScan(String fqn, String project)
         {
@@ -560,9 +1121,10 @@ public class MetadataRenameService
     /**
      * Immutable per-scan context threaded through the change-tree walk and the per-leaf scan helpers.
      * Bundles the state that stays constant for one top-level refactoring item: the exact-match index,
-     * the change-point accumulator, the shared leaf-index counter, the refactoring title, the optional
-     * flag and the old object name. Carried so the recursive/scan helpers stay within the parameter
-     * limit while reading exactly the same values in the same order as before.
+     * the change-point accumulator, the shared leaf-index counter, the refactoring title, and the
+     * owning native item's optional and checked flags, plus the old object name. Carried so the
+     * recursive/scan helpers stay within the parameter limit while every native leaf receives the
+     * same item-level execution state.
      */
     private static final class ScanContext
     {
@@ -571,16 +1133,18 @@ public class MetadataRenameService
         final int[] indexCounter;
         final String refactoringTitle;
         final boolean optional;
+        final boolean nativeItemChecked;
         final String oldName;
 
         ScanContext(Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
-            String refactoringTitle, boolean optional, String oldName)
+            String refactoringTitle, boolean optional, boolean nativeItemChecked, String oldName)
         {
             this.exactMatches = exactMatches;
             this.result = result;
             this.indexCounter = indexCounter;
             this.refactoringTitle = refactoringTitle;
             this.optional = optional;
+            this.nativeItemChecked = nativeItemChecked;
             this.oldName = oldName;
         }
     }
@@ -641,6 +1205,7 @@ public class MetadataRenameService
         boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
         boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
         LeafScan scan = new LeafScan(currentFqn, currentProject);
+        scan.signatureIdentity = changePointIdentity(change);
         List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, ctx.exactMatches);
         logPreviewMapping(change, scan.fqn, scan.project, exactMatchInfos.size());
         if (!exactMatchInfos.isEmpty())
@@ -667,10 +1232,15 @@ public class MetadataRenameService
             return;
         }
 
+        // Reuse the index already taken at the top of this method - do NOT take a second one.
+        // Whatever a leaf renders, it consumes exactly ONE index; taking a fresh one here made
+        // the leaf consume two, shifting every later index away from walkLeafChanges() and
+        // pointing disableIndices at a different change point than the caller saw. (issue #388)
         ctx.result.add(new ChangePoint(
-            ctx.indexCounter[0]++, BSL_REF,
+            leafIndex, BSL_REF,
             change.getName(), ctx.optional, change.isEnabled(),
-            CodeLocation.of(scan.fqn, scan.project)));
+            Boolean.valueOf(ctx.nativeItemChecked), CodeLocation.of(scan.fqn, scan.project),
+            scan.signatureIdentity));
     }
 
     /** Emits one change point per resolved exact-match, defaulting fqn/project to the leaf context. */
@@ -684,8 +1254,9 @@ public class MetadataRenameService
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
+                Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
-                    exactMatch.codeContext, exactMatch.methodName)));
+                    exactMatch.codeContext, exactMatch.methodName), scan.signatureIdentity));
         }
     }
 
@@ -778,8 +1349,9 @@ public class MetadataRenameService
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
+                Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
-                    matchedCodeContext, matchedMethodName)));
+                    matchedCodeContext, matchedMethodName), scan.signatureIdentity));
         }
     }
 
@@ -929,7 +1501,7 @@ public class MetadataRenameService
             List<ChangePoint> edtChanges = new ArrayList<>();
             int[] indexCounter = {0};
             ScanContext ctx = new ScanContext(exactMatches, edtChanges, indexCounter, "edt-preview", false, //$NON-NLS-1$
-                targetObject.getName());
+                true, targetObject.getName());
             collectFlatChanges(edtChange, null, null, ctx);
             return edtChanges;
         }
@@ -989,13 +1561,15 @@ public class MetadataRenameService
                 original.description,
                 original.optional,
                 original.enabled,
+                original.nativeItemChecked,
                 new CodeLocation(
                     edt.fqn != null ? edt.fqn : original.fqn,
                     edt.project != null ? edt.project : original.project,
                     edt.lineNumber,
                     edt.columnNumber,
                     edt.codeContext,
-                    edt.methodName)));
+                    edt.methodName),
+                original.signatureIdentity));
         }
     }
 
@@ -1436,6 +2010,157 @@ public class MetadataRenameService
         return array;
     }
 
+    /**
+     * Builds the signature-only identity for one native leaf. The concrete change class says which
+     * operation implementation will run; the stable target says what it will edit. Text-edit shape
+     * and the BM feature refine that target when one object owns several independent edits. No Java
+     * object identity, {@code hashCode()} or arbitrary {@code toString()} value is accepted because a
+     * confirm rebuild allocates a fresh change tree.
+     */
+    private static ChangePointIdentity changePointIdentity(Change change)
+    {
+        String changeClass = change.getClass().getName();
+        String targetIdentity = stableTargetIdentity(invokeNoArg(change, "getModifiedElement")); //$NON-NLS-1$
+        if (targetIdentity == null)
+        {
+            targetIdentity = stableAffectedObjectsIdentity(invokeNoArg(change, "getAffectedObjects")); //$NON-NLS-1$
+        }
+        if (targetIdentity == null)
+        {
+            return new ChangePointIdentity(null);
+        }
+
+        StringBuilder stableValue = new StringBuilder();
+        stableValue.append(identityPart("changeClass", changeClass)) //$NON-NLS-1$
+            .append(identityPart("target", targetIdentity)); //$NON-NLS-1$
+        if (change instanceof BmObjectTextContentChange<?> bmChange)
+        {
+            EStructuralFeature feature = getBmChangeFeature(bmChange);
+            if (feature != null)
+            {
+                String featureOwner = feature.getEContainingClass() != null
+                    ? feature.getEContainingClass().getName() : ""; //$NON-NLS-1$
+                stableValue.append(identityPart("feature", featureOwner + "." + feature.getName())); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        TextEdit edit = getChangeEdit(change);
+        if (edit != null)
+        {
+            stableValue.append(identityPart("edit", stableTextEditIdentity(edit))); //$NON-NLS-1$
+        }
+        return new ChangePointIdentity(stableValue.toString());
+    }
+
+    /** Stable descriptions for the edit-target shapes EDT and Eclipse expose to LTK changes. */
+    private static String stableTargetIdentity(Object target)
+    {
+        if (target == null)
+        {
+            return null;
+        }
+        if (target instanceof IResource resource)
+        {
+            return identityPart("resource", resource.getFullPath().toPortableString()); //$NON-NLS-1$
+        }
+        if (target instanceof IPath path)
+        {
+            return identityPart("path", path.toPortableString()); //$NON-NLS-1$
+        }
+        if (target instanceof IBmObject bmObject)
+        {
+            String fqn = bmObject.bmGetFqn();
+            if (fqn != null && !fqn.isBlank())
+            {
+                String engine = bmObject.bmGetEngine() != null ? bmObject.bmGetEngine().getId() : ""; //$NON-NLS-1$
+                return identityPart("bmEngine", engine) + identityPart("bmFqn", fqn); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (target instanceof EObject eObject)
+        {
+            org.eclipse.emf.common.util.URI uri = EcoreUtil.getURI(eObject);
+            if (uri != null && !uri.toString().isBlank())
+            {
+                return identityPart("eObjectUri", uri.toString()); //$NON-NLS-1$
+            }
+        }
+        if (target instanceof org.eclipse.emf.common.util.URI uri)
+        {
+            return identityPart("emfUri", uri.toString()); //$NON-NLS-1$
+        }
+        if (target instanceof java.net.URI uri)
+        {
+            return identityPart("uri", uri.toASCIIString()); //$NON-NLS-1$
+        }
+        if (target instanceof CharSequence || target instanceof Number || target instanceof Boolean
+            || target instanceof Character || target instanceof Enum<?>)
+        {
+            return identityPart(target.getClass().getName(), String.valueOf(target));
+        }
+
+        // Several EDT wrappers expose the actual workspace file rather than implementing IResource.
+        Object fileObject = invokeNoArg(target, GET_FILE);
+        if (fileObject != target && fileObject instanceof IFile file)
+        {
+            return identityPart("file", file.getFullPath().toPortableString()); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Uses affected objects only when every entry has a stable representation. */
+    private static String stableAffectedObjectsIdentity(Object affected)
+    {
+        if (!(affected instanceof Object[] affectedObjects) || affectedObjects.length == 0)
+        {
+            return null;
+        }
+        StringBuilder identity = new StringBuilder();
+        for (Object affectedObject : affectedObjects)
+        {
+            String part = stableTargetIdentity(affectedObject);
+            if (part == null)
+            {
+                return null;
+            }
+            identity.append(identityPart("affected", part)); //$NON-NLS-1$
+        }
+        return identity.toString();
+    }
+
+    /** Stable structural form of an LTK text edit, including replacement text when exposed. */
+    private static String stableTextEditIdentity(TextEdit edit)
+    {
+        StringBuilder identity = new StringBuilder();
+        appendStableTextEditIdentity(edit, identity);
+        return identity.toString();
+    }
+
+    private static void appendStableTextEditIdentity(TextEdit edit, StringBuilder identity)
+    {
+        identity.append(identityPart("editClass", edit.getClass().getName())) //$NON-NLS-1$
+            .append(identityPart("offset", String.valueOf(edit.getOffset()))) //$NON-NLS-1$
+            .append(identityPart("length", String.valueOf(edit.getLength()))); //$NON-NLS-1$
+        Object text = invokeNoArg(edit, "getText"); //$NON-NLS-1$
+        if (text instanceof String replacement)
+        {
+            identity.append(identityPart("text", replacement)); //$NON-NLS-1$
+        }
+        TextEdit[] children = edit.getChildren();
+        if (children != null)
+        {
+            for (TextEdit child : children)
+            {
+                identity.append(identityPart("child", stableTextEditIdentity(child))); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /** Length-prefixing keeps identity components unambiguous without trusting their character set. */
+    private static String identityPart(String kind, String value)
+    {
+        String nonNullValue = value != null ? value : ""; //$NON-NLS-1$
+        return kind.length() + ":" + kind + nonNullValue.length() + ":" + nonNullValue; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private static boolean isInstanceOf(Object value, String className)
     {
         try
@@ -1694,17 +2419,26 @@ public class MetadataRenameService
 
 
     private String performRename(String objectFqn, String newName,
-        Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices,
-        RenameProgress progress)
+        Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
+        RenameProgress progress, String subject)
     {
+        String hashError = expectedHashError(refactorings, disableRequest, expectedHash);
+        if (hashError != null)
+        {
+            return ToolResult.error(hashError).toJson();
+        }
+
         // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
         // model (rewriting every reference across BSL, forms and metadata). Built from the refactorings
         // the tool already resolved; on ALLOW the behaviour is byte-identical, on REJECT nothing is
         // mutated. This runs inside the tool's UI-thread syncExec scope, so the dialog (when armed)
         // opens directly. Headless / env-bypass / non-ASK never block.
-        ConsentPreview preview = new ConsentPreview("Rename metadata object", //$NON-NLS-1$
+        // The subject is passed in rather than hardcoded: this path now also renames FORM elements,
+        // and a prompt saying "metadata object" about a form field would misdescribe what is being
+        // authorized (issue #381).
+        ConsentPreview preview = new ConsentPreview("Rename " + subject, //$NON-NLS-1$
             "This renames '" + objectFqn + "' to '" + newName //$NON-NLS-1$ //$NON-NLS-2$
-                + "' and cascades the change across all references in BSL code, forms and metadata.", //$NON-NLS-1$
+                + "' and cascades the change across the references EDT resolves for it.", //$NON-NLS-1$
             countRefactoringItems(refactorings), collectRefactoringTitles(refactorings));
         // The tool NAME literal is intentionally inlined here (matching the frozen value in
         // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than
@@ -1730,10 +2464,12 @@ public class MetadataRenameService
         // check, erring the other way costs a silent half-renamed configuration.
         progress.enter(RenameProgress.Phase.APPLYING);
 
-        // Apply disableIndices by traversing items and their native changes
-        if (!disableIndices.isEmpty())
+        // Apply disableIndices by traversing items and their native changes. Malformed entries cannot
+        // reach this point: the tool refuses them before the cascade starts (#401).
+        DisableOutcome disableOutcome = new DisableOutcome(disableRequest);
+        if (!disableRequest.indices().isEmpty())
         {
-            applyDisableIndices(refactorings, disableIndices);
+            applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome);
         }
 
         List<String> performed = new ArrayList<>();
@@ -1757,7 +2493,207 @@ public class MetadataRenameService
         // nothing is left to apply.
         progress.enter(RenameProgress.Phase.APPLIED);
 
-        return renderExecutedReport(objectFqn, newName, disableIndices, performed, errors);
+        return renderExecutedReport(objectFqn, newName, disableOutcome, performed, errors);
+    }
+
+    /**
+     * The missing-token refusal shared by the cheap tool-adapter preflight and the service guard.
+     * Public so the adapter does not grow a second copy of this safety-critical wording.
+     */
+    public static String missingExpectedHashError()
+    {
+        return "expectedHash is required when disableIndices is non-empty. Nothing was renamed. " //$NON-NLS-1$
+            + "Run rename_metadata_object without confirm to read the current preview, then pass " //$NON-NLS-1$
+            + "its contentHash as expectedHash together with those indices."; //$NON-NLS-1$
+    }
+
+    /**
+     * Validates the preview token before consent or any mutation. A call without indices has no index
+     * handle in play, so its token is deliberately optional and is not evaluated.
+     *
+     * @return an actionable refusal, or {@code null} when confirm may continue
+     */
+    String expectedHashError(Collection<IRefactoring> refactorings, DisableRequest disableRequest,
+        String expectedHash)
+    {
+        if (disableRequest.isEmpty())
+        {
+            return null;
+        }
+        if (expectedHash == null || expectedHash.isBlank())
+        {
+            return missingExpectedHashError();
+        }
+        List<ChangePoint> changePoints = changePointsForSignature(refactorings);
+        String currentSignature = changePointSignature(changePoints);
+        if (!ContentHash.matches(currentSignature, expectedHash))
+        {
+            return "expectedHash does not match the current ordered change-point list, so the " //$NON-NLS-1$
+                + "preview is stale. Nothing was renamed. Re-read the rename_metadata_object " //$NON-NLS-1$
+                + "preview and pass its new contentHash as expectedHash, because the same indices " //$NON-NLS-1$
+                + "may now mean different change points."; //$NON-NLS-1$
+        }
+        SortedSet<Integer> unverifiableIndices = new TreeSet<>();
+        for (ChangePoint changePoint : changePoints)
+        {
+            if (disableRequest.indices().contains(changePoint.index)
+                && !hasStableIdentity(changePoint))
+            {
+                unverifiableIndices.add(changePoint.index);
+            }
+        }
+        if (!unverifiableIndices.isEmpty())
+        {
+            String indices = formatIndexList(unverifiableIndices);
+            return "disableIndices names change point indices " + indices //$NON-NLS-1$
+                + ", but the preview marked them `Skippable: no` because those change points " //$NON-NLS-1$
+                + "cannot be proven to be the same ones at confirm time. Nothing was renamed. " //$NON-NLS-1$
+                + "Retry without indices " + indices + "; the rest of disableIndices will be " //$NON-NLS-1$ //$NON-NLS-2$
+                + "skipped as asked."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Collects and signs the current canonical list for preview-side token creation. */
+    private String changePointSignatureFor(Collection<IRefactoring> refactorings)
+    {
+        return changePointSignature(changePointsForSignature(refactorings));
+    }
+
+    /** Collects the neutral canonical list once for confirm-side hashing and index verification. */
+    private List<ChangePoint> changePointsForSignature(Collection<IRefactoring> refactorings)
+    {
+        List<ChangePoint> changePoints = new ArrayList<>();
+        collectChangesAndProblems(refactorings, Collections.emptyMap(), null, changePoints,
+            new ArrayList<>());
+        return changePoints;
+    }
+
+    /**
+     * What each requested {@code disableIndices} entry actually did, so the executed report can state the
+     * REAL number of skipped change points instead of echoing the size of the request (#394).
+     * <p>
+     * Every index the confirm-side walk hands out is classified at most once - the counter issues each
+     * value exactly once - so the buckets are disjoint by construction, and a single
+     * {@code index -> status} map keeps them that way rather than trusting three sets to stay exclusive.
+     * {@code UNKNOWN} is derived, not recorded: it is whatever the caller asked for that the walk never
+     * reached at all (out of range, or an index that no longer exists in the tree confirm rebuilt).
+     * <p>
+     * Entries that never became indices at all are NOT here: the tool refuses them before the cascade
+     * starts, so they cannot reach this walk or this report (#401).
+     * <p>
+     * The counts describe the LTK flags this call set before {@code perform()} ran. A refactoring that
+     * then fails is reported separately, under {@code errors} - "disabled" here never means "the edit is
+     * proven to have been left alone on disk".
+     */
+    private static final class DisableOutcome
+    {
+        private enum Status
+        {
+            /**
+             * The index named a leaf under a skippable item, which is disabled once the pass is done.
+             * A leaf that ARRIVED disabled counts too - the caller asked for it and got it; the report
+             * describes the state the request produced, not how far the flag had to travel.
+             */
+            DISABLED,
+            /**
+             * The index named a real change point that the REFACTORING deems mandatory, so it stayed in
+             * the rename. Whether it then SUCCEEDED is a different question, answered by
+             * {@code performedCount} and {@code errors} - this pass runs before {@code perform()}.
+             */
+            NOT_SKIPPABLE,
+            /**
+             * The index named a change point THIS TOOL cannot switch off, whatever the refactoring
+             * thinks of it: a plain item owns no leaf {@code Change} to disable, and the only lever it
+             * has - unchecking the item - this branch does not pull. Kept apart from
+             * {@link #NOT_SKIPPABLE} because the two are different facts and the caller acts on them
+             * differently: one says the rename requires this edit, the other says we cannot honour the
+             * request. Reporting the second as the first is the report telling an untruth (#394's rule).
+             * <p>
+             * Since #400 the preview no longer invites the request either - it prints {@code Skippable:
+             * no} for every regular item - so reaching this status means the caller guessed an index
+             * rather than read one. It stays because the guess deserves the accurate answer.
+             */
+            UNSUPPORTED
+        }
+
+        private final SortedSet<Integer> requested;
+        private final TreeMap<Integer, Status> classified = new TreeMap<>();
+
+        DisableOutcome(DisableRequest request)
+        {
+            this.requested = new TreeSet<>(request.indices());
+        }
+
+        void recordDisabled(int index)
+        {
+            classified.put(index, Status.DISABLED);
+        }
+
+        void recordNotSkippable(int index)
+        {
+            classified.put(index, Status.NOT_SKIPPABLE);
+        }
+
+        void recordUnsupported(int index)
+        {
+            classified.put(index, Status.UNSUPPORTED);
+        }
+
+        /**
+         * How many change points this request left switched off - deliberately not "switched off",
+         * which would exclude a leaf that arrived disabled and was named anyway (see {@link #DISABLED}).
+         */
+        int disabledCount()
+        {
+            return countOf(Status.DISABLED);
+        }
+
+        /** Requested indices that named a change point the rename keeps regardless. */
+        SortedSet<Integer> notSkippableIndices()
+        {
+            return indicesOf(Status.NOT_SKIPPABLE);
+        }
+
+        /** Requested indices the walk never reached - nothing in the tree carries them. */
+        SortedSet<Integer> unknownIndices()
+        {
+            TreeSet<Integer> unknown = new TreeSet<>(requested);
+            unknown.removeAll(classified.keySet());
+            return unknown;
+        }
+
+        /** Requested indices naming a change point this tool has no way to switch off. */
+        SortedSet<Integer> unsupportedIndices()
+        {
+            return indicesOf(Status.UNSUPPORTED);
+        }
+
+        private int countOf(Status status)
+        {
+            int count = 0;
+            for (Status value : classified.values())
+            {
+                if (value == status)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private SortedSet<Integer> indicesOf(Status status)
+        {
+            TreeSet<Integer> result = new TreeSet<>();
+            for (Map.Entry<Integer, Status> entry : classified.entrySet())
+            {
+                if (entry.getValue() == status)
+                {
+                    result.add(entry.getKey());
+                }
+            }
+            return result;
+        }
     }
 
     /**
@@ -1798,14 +2734,16 @@ public class MetadataRenameService
 
     /**
      * Toggles the LTK change-tree flags for the requested {@code disableIndices} BEFORE the rename is
-     * performed: walks every refactoring item, disables the matching leaf changes (via
-     * {@link #applyDisableToChange}) and unchecks an optional native item whose leaves are all
-     * disabled. Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT
-     * perform the rename. Extracted verbatim from {@link #performRename} so it runs at the same point
-     * under the same {@code !disableIndices.isEmpty()} guard.
+     * performed: walks every refactoring item, disables the matching leaf changes of the SKIPPABLE ones
+     * (via {@link #applyDisableToChange}) and unchecks an optional native item this request emptied.
+     * Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT perform the
+     * rename. Runs at the same point as before, under the same "the caller asked for indices" guard.
+     * <p>
+     * Records into {@code outcome} what each requested index actually did - the report states THAT,
+     * not the request (#394).
      */
     private void applyDisableIndices(Collection<IRefactoring> refactorings,
-        java.util.Set<Integer> disableIndices)
+        java.util.Set<Integer> disableIndices, DisableOutcome outcome)
     {
         int[] indexCounter = {0};
         for (IRefactoring refactoring : refactorings)
@@ -1815,37 +2753,69 @@ public class MetadataRenameService
                 continue;
             for (IRefactoringItem item : items)
             {
-                applyDisableToItem(item, disableIndices, indexCounter);
+                applyDisableToItem(item, disableIndices, indexCounter, outcome);
             }
         }
     }
 
     /**
      * Applies {@code disableIndices} to a single refactoring item, advancing {@code indexCounter} by the
-     * same amount as the preview-side walk: native items disable their matching leaf changes (and uncheck
-     * the optional item when every leaf is disabled), while plain rename items consume one index. Extracted
-     * verbatim from {@link #applyDisableIndices} so it mutates the same in-memory state at the same point.
+     * same amount as the preview-side walk: native items disable their matching leaf changes when the item
+     * is optional (and uncheck the item when this request disabled every leaf under it), while plain rename
+     * items consume one index without ever being disabled.
+     * <p>
+     * A NON-optional native item consumes its indices exactly as before but keeps its leaves enabled: the
+     * preview footer and the guide both promise that only optional change points can be skipped and that
+     * "required ones are always applied", and before #393 that promise was enforced for plain items only -
+     * {@link #applyDisableToChange} was reached unconditionally, so a leaf under a REQUIRED native item was
+     * switched off just the same. The index is still consumed either way, because dropping it here is how
+     * preview and confirm numbering drift apart (#388).
      */
     private void applyDisableToItem(IRefactoringItem item, java.util.Set<Integer> disableIndices,
-        int[] indexCounter)
+        int[] indexCounter, DisableOutcome outcome)
     {
         if (item instanceof INativeChangeRefactoringItem nativeItem)
         {
             Change nativeChange = nativeItem.getNativeChange();
-            if (nativeChange != null)
+            if (nativeChange == null)
             {
-                applyDisableToChange(nativeChange, disableIndices, indexCounter);
+                return;
             }
-            // If all leaf changes under this native item are disabled, uncheck the item itself
-            if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
+            int disabledBefore = outcome.disabledCount();
+            applyDisableToChange(nativeChange, disableIndices, indexCounter, nativeItem.isOptional(), outcome);
+            // Uncheck the item only when THIS request NAMED at least one skippable leaf under it. The
+            // walk visits EVERY item, so an optional item whose leaves were already all disabled - or
+            // whose change tree is empty, which isCompletelyDisabled() also reports as completely
+            // disabled - would otherwise be unchecked by a request that never mentioned any of its
+            // indices. Naming is the criterion rather than a state TRANSITION: asking to skip a leaf
+            // that was already off is still asking for this item, and the caller who named every leaf
+            // of an item means the item, whatever its leaves happened to be set to beforehand.
+            boolean requestedHere = outcome.disabledCount() > disabledBefore;
+            if (requestedHere && isCompletelyDisabled(nativeChange))
             {
                 nativeItem.setChecked(false);
             }
         }
         else
         {
-            // Regular rename item — not skippable (non-optional), just advance index
-            indexCounter[0]++;
+            // Regular rename item: it owns no leaf Change to switch off, so this branch cannot honour
+            // a request for it either way. WHY it cannot differs, though, and the report must not blur
+            // the two: a non-optional item is one the refactoring itself requires, while an OPTIONAL one
+            // is a point only this implementation cannot switch off. Since #400 the preview prints the
+            // latter as Skippable=no too, but a caller can still guess its index; calling it "mandatory"
+            // would still be the report asserting something untrue about the refactoring.
+            int index = indexCounter[0]++;
+            if (disableIndices.contains(index))
+            {
+                if (item.isOptional())
+                {
+                    outcome.recordUnsupported(index);
+                }
+                else
+                {
+                    outcome.recordNotSkippable(index);
+                }
+            }
         }
     }
 
@@ -1855,14 +2825,29 @@ public class MetadataRenameService
      * note. Pure string building with no side effects; extracted verbatim from {@link #performRename}.
      */
     private static String renderExecutedReport(String objectFqn, String newName,
-        java.util.Set<Integer> disableIndices, List<String> performed, List<String> errors)
+        DisableOutcome disableOutcome, List<String> performed, List<String> errors)
     {
+        SortedSet<Integer> notSkippable = disableOutcome.notSkippableIndices();
+        SortedSet<Integer> unknown = disableOutcome.unknownIndices();
+        SortedSet<Integer> unsupported = disableOutcome.unsupportedIndices();
         StringBuilder sb = new StringBuilder();
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: executed\n"); //$NON-NLS-1$
         sb.append("objectFqn: ").append(objectFqn).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("newName: ").append(newName).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("disabledCount: ").append(disableIndices.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("disabledCount: ").append(disableOutcome.disabledCount()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!notSkippable.isEmpty())
+        {
+            sb.append("notSkippableIndices: ").append(formatIndexList(notSkippable)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!unknown.isEmpty())
+        {
+            sb.append("unknownIndices: ").append(formatIndexList(unknown)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!unsupported.isEmpty())
+        {
+            sb.append("unsupportedIndices: ").append(formatIndexList(unsupported)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         sb.append("performedCount: ").append(performed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("errors: ").append(errors.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("---\n\n"); //$NON-NLS-1$
@@ -1890,25 +2875,95 @@ public class MetadataRenameService
             sb.append("\n"); //$NON-NLS-1$
         }
 
-        if (!disableIndices.isEmpty())
+        if (disableOutcome.disabledCount() > 0)
         {
-            sb.append("_").append(disableIndices.size()) //$NON-NLS-1$
+            sb.append("_").append(disableOutcome.disabledCount()) //$NON-NLS-1$
               .append(" change point(s) were skipped as requested._\n"); //$NON-NLS-1$
         }
+        if (!notSkippable.isEmpty())
+        {
+            // Deliberately NOT "were applied": this is written from what the disable pass decided,
+            // which happens before perform() runs, so a refactoring that then fails would make an
+            // "applied" claim false while `errors` said otherwise in the same report. "Left in the
+            // rename" is true either way, and `performedCount`/`errors` remain the word on outcome.
+            sb.append("_Change point(s) ").append(formatIndexList(notSkippable)) //$NON-NLS-1$
+              .append(" could NOT be skipped and were left in the rename:") //$NON-NLS-1$
+              .append(" the refactoring deems them mandatory._\n"); //$NON-NLS-1$
+        }
+        if (!unsupported.isEmpty())
+        {
+            sb.append("_Change point(s) ").append(formatIndexList(unsupported)) //$NON-NLS-1$
+              .append(" were left in the rename because THIS TOOL cannot switch them off,") //$NON-NLS-1$
+              .append(" not because the refactoring requires them") //$NON-NLS-1$
+              .append(" - only native change points can be skipped._\n"); //$NON-NLS-1$
+        }
+        if (!unknown.isEmpty())
+        {
+            sb.append("_Index(es) ").append(formatIndexList(unknown)) //$NON-NLS-1$
+              .append(" matched no change point and were ignored") //$NON-NLS-1$
+              .append(" - re-run the preview to get the current indices._\n"); //$NON-NLS-1$
+        }
+        // No "unparsed entries" note here, by construction: an entry that is not a change-point index
+        // is refused by the tool before the cascade starts (#401), so this report cannot be reached
+        // with one. A branch for it would describe a state that can no longer happen.
 
         return sb.toString();
     }
 
+    /** Renders a set of change-point indices as a YAML flow sequence, e.g. {@code [1, 99]}. */
+    private static String formatIndexList(SortedSet<Integer> indices)
+    {
+        return "[" + join(indices, String::valueOf) + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /**
-     * Recursively walks the LTK change tree and calls setEnabled(false) on leaves
-     * whose global index is in the disableIndices set.
+     * The one joiner behind every "you asked for this and it produced no skip" list, so the index
+     * buckets cannot drift into two shapes.
      */
-    private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices, int[] indexCounter)
+    private static String join(Collection<?> values, java.util.function.Function<Object, String> render)
+    {
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (Object value : values)
+        {
+            if (!first)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            sb.append(render.apply(value));
+            first = false;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Recursively walks the LTK change tree and calls setEnabled(false) on leaves whose global index is
+     * in the disableIndices set - but only when the owning item is {@code skippable}; a requested index
+     * under a non-skippable item is recorded and left ENABLED (#393). In production, requested leaves
+     * have already passed the per-row stable-identity guard in {@link #expectedHashError}; an opaque
+     * leaf is refused before this mutation path rather than being silently left enabled.
+     * <p>
+     * The {@code skippable} argument carries the remaining item-level decision - whether EDT marks the
+     * owning item optional - because this leaf walk cannot see its owner. The index is consumed by
+     * {@link #walkLeafChanges} itself, ahead of and independently of that decision, so no branch here
+     * can leave the counter behind the preview's (#388).
+     */
+    private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices,
+        int[] indexCounter, boolean skippable, DisableOutcome outcome)
     {
         walkLeafChanges(change, indexCounter, (leaf, idx) -> {
-            if (disableIndices.contains(idx))
+            if (!disableIndices.contains(idx))
+            {
+                return;
+            }
+            if (skippable)
             {
                 leaf.setEnabled(false);
+                outcome.recordDisabled(idx);
+            }
+            else
+            {
+                outcome.recordNotSkippable(idx);
             }
         });
     }
@@ -1916,11 +2971,15 @@ public class MetadataRenameService
     /**
      * Walks the LTK change tree in canonical order, invoking {@code leafConsumer}
      * for every leaf (non-{@link CompositeChange}) change with its global index.
-     * Composites are recursed into but never assigned an index - this is the single
-     * source of truth for the change-point numbering. The preview side
-     * ({@link #collectFlatChanges}) MUST assign exactly one index per leaf in the
-     * same order, so that a preview {@code #index} maps back to the same leaf here
+     * Composites are recursed into but never assigned an index - this walk DEFINES
+     * the change-point numbering. The preview side ({@link #collectFlatChanges}) does
+     * not delegate to it: it MIRRORS it, and must assign exactly one index per leaf in
+     * the same order, so that a preview {@code #index} maps back to the same leaf here
      * when {@code disableIndices} is applied on execute. (card A2)
+     * <p>
+     * Because it is a mirror rather than a delegation, the two can drift silently - so
+     * the parity is pinned by a test that drives BOTH walks over the same synthetic
+     * change tree and compares them leaf by leaf (issue #388), not by this walk alone.
      * <p>
      * Public and static so the leaf numbering can be unit-tested headless.
      */

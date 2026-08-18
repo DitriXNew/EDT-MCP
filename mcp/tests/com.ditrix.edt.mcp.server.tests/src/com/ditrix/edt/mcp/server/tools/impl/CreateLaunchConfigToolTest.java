@@ -62,7 +62,7 @@ public class CreateLaunchConfigToolTest
         String desc = new CreateLaunchConfigTool().getDescription();
         // The key fact that run and debug share the same config type must be surfaced.
         assertTrue("description must mention both run and debug", //$NON-NLS-1$
-            desc.toLowerCase().contains("run") && desc.toLowerCase().contains("debug")); //$NON-NLS-1$ //$NON-NLS-2$
+            new CreateLaunchConfigTool().getGuide().toLowerCase().contains("run") && new CreateLaunchConfigTool().getGuide().toLowerCase().contains("debug")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

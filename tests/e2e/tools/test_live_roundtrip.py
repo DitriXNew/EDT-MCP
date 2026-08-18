@@ -122,28 +122,53 @@ _TRANSIENT_BUSY = ("already connected", "being updated", "already in progress",
                    "build in progress", "derived data not complete")
 
 
+def _finish_named_yaxunit_start(r, attempts=4):
+    """Turn the start reply into a terminal reply without reconstructing its args.
+
+    Short runs already carry the original report/launch handle. A Pending reply carries
+    the durable BackgroundJobs identity; all later waits address that identity through
+    get_job_status, which is the contract under test for long live runs."""
+    body = (r.text or "") + " " + (r.error_text() or "")
+    if "**Pending:**" not in body:
+        return r
+    match = re.search(r'jobId\s*=\s*"([^"]+)"', body)
+    if not match:
+        match = re.search(r"\|\s*jobId\s*\|\s*([^|\s]+)", body)
+    if not match:
+        _fail("Pending run_yaxunit_tests reply carried no jobId:\n%s" % body[:500])
+    job_id = match.group(1)
+    for _ in range(attempts):
+        r = call("get_job_status", {"jobId": job_id, "waitSeconds": 45})
+        polled = ((r.text or "") + " " + (r.error_text() or "")).lower()
+        if "# background job: running" in polled:
+            continue
+        if "# background job: failed" in polled or "# background job: cancelled" in polled:
+            _fail("YAXUnit background job %s became terminal without a result:\n%s"
+                  % (job_id, polled[:500]))
+        return r
+    _fail("YAXUnit background job %s stayed running after %d polls"
+          % (job_id, attempts))
+
+
 def _run_yaxunit_until_done(args, attempts=4):
     """Run YAXUnit, tolerating two non-fatal conditions:
-      - **Pending**: the launch is still running past `timeout`; re-call to keep
-        polling (the launch is not terminated on timeout).
+      - **Pending**: the named job is still running past `timeout`; poll its jobId
+        with get_job_status (the launch is not terminated on timeout).
       - a transient infobase-busy error (a lingering client/lock from a prior run):
         quiet the infobase and retry.
-    Returns the first Result that is neither Pending nor a transient-busy error; if
-    every attempt is exhausted still Pending/busy, fails with a clear reason (so the
-    caller does not misread an empty report as 'no tests ran')."""
+    Returns the first terminal Result that is not a transient-busy error."""
     r = None
     for _ in range(attempts):
         r = call("run_yaxunit_tests", dict(args))
+        r = _finish_named_yaxunit_start(r, attempts=attempts)
         body = ((r.text or "") + " " + (r.error_text() or "")).lower()
-        if "pending" in body:
-            continue
-        if r.is_error and any(s in body for s in _TRANSIENT_BUSY):
+        if any(s in body for s in _TRANSIENT_BUSY):
             _quiet_infobase()
             wait_for_project_ready(timeout=120)  # clears a 'build in progress' transient
             time.sleep(3)
             continue
         return r
-    _fail("run_yaxunit_tests did not finish after %d attempts (still pending/busy); last body: %s"
+    _fail("run_yaxunit_tests did not finish after %d attempts (still busy); last body: %s"
           % (attempts, ((r.text if r else "") or (r.error_text() if r else "") or "")[:200]))
 
 
@@ -277,11 +302,9 @@ def test_live_yaxunit_rerun_reexecutes_not_cached():
     report path itself is asserted stable, so a fresh run must reuse the SAME dir (proving
     we compare like-for-like, not two unrelated runs).
 
-    NOT covered (deliberately): the 'abandoned Pending -> rerun' angle — a caller that got a
-    Pending, never fetched, then re-ran with identical args gets the prior report served ONCE
-    before the following call re-executes. That is #136's documented "ambiguous identical args"
-    tradeoff (see runTests javadoc + PENDING_FETCH); it cannot be reproduced deterministically
-    here without forcing a polling timeout, so it is left unasserted."""
+    A completed named job remains pollable by jobId, but it is never selected as a cache by a
+    later start. Therefore these two sequential starts must both execute even if the first report
+    was fetched through get_job_status after Pending."""
     requires_live_infobase("re-runs tests_SampleTests twice to prove no stale cache")
     import os
     args = {"launchConfigurationName": LIVE_LAUNCH_CONFIG,
@@ -351,11 +374,11 @@ def test_live_debug_breakpoint_suspend_inspect_resume():
         bp_id = (bset.structured or {}).get("breakpointId")
 
         # DEBUG-mode launch of the single test method; returns immediately (handle).
-        launch = call("run_yaxunit_tests", {
+        launch = _finish_named_yaxunit_start(call("run_yaxunit_tests", {
             "launchConfigurationName": LIVE_LAUNCH_CONFIG,
             "tests": SAMPLE_TEST,
             "debug": "true",
-        })
+        }))
         assert_ok(launch, "debug-mode YAXUnit launch of the single test")
         app_id = extract_application_id(launch.text)
 
@@ -434,11 +457,11 @@ def test_live_debug_launch_id_consumed_by_status_and_terminate():
     app_id = None
     try:
         _ready_for_launch()  # quiet the infobase + wait for the index to be fully built
-        launch = call("run_yaxunit_tests", {
+        launch = _finish_named_yaxunit_start(call("run_yaxunit_tests", {
             "launchConfigurationName": LIVE_LAUNCH_CONFIG,
             "tests": SAMPLE_TEST,
             "debug": "true",
-        })
+        }))
         assert_ok(launch, "debug-mode launch to mint an applicationId")
         app_id = extract_application_id(launch.text)
         if not app_id:
@@ -505,9 +528,9 @@ def test_live_profiling_start_results_stop_roundtrip():
         assert_ok(bset, "breakpoint so the session pauses while we enable profiling")
         bp_id = (bset.structured or {}).get("breakpointId")
 
-        launch = call("run_yaxunit_tests", {
+        launch = _finish_named_yaxunit_start(call("run_yaxunit_tests", {
             "launchConfigurationName": LIVE_LAUNCH_CONFIG, "tests": SAMPLE_TEST, "debug": "true",
-        })
+        }))
         assert_ok(launch, "debug-mode launch for profiling")
         app_id = extract_application_id(launch.text)
         if not app_id:

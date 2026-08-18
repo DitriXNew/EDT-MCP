@@ -57,6 +57,16 @@ on:
         required: false
         default: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.38.0/"
         type: string
+      shards:
+        description: >-
+          JSON array of shard numbers, one runner each (e.g. "[1,2,3,4]"). The DIVISOR is not
+          written anywhere: run_all gets it from strategy.job-total, so changing this list is the
+          only edit needed to re-balance. Four is the knee of the curve - the ~3 min EDT setup is
+          paid per shard and does not divide, so 4 gives ~17 min against ~60 serial (3.8x on
+          measured durations) while 8 would give ~10 min for twice the runner minutes.
+        required: false
+        default: "[1, 2, 3, 4]"
+        type: string
 
 jobs:
   build:
@@ -88,19 +98,7 @@ jobs:
         working-directory: mcp
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
-        run: |
-          # edt.1c.ru intermittently 502s / resets while Tycho mirrors the EDT p2 platform
-          # (most often on a cold cache). Retry, but ONLY on those transient network errors —
-          # fail fast on a real compile failure.
-          for attempt in 1 2 3; do
-            if mvn clean verify --batch-mode --no-transfer-progress -T 1C -DskipTests 2>&1 | tee "$RUNNER_TEMP/mvn.log"; then
-              exit 0
-            fi
-            grep -qiE "Could not mirror artifact|Connection reset|HTTP code: 50[0-9]|Unable to read repository|Return code is: 50[0-9]" "$RUNNER_TEMP/mvn.log" \
-              || { echo "::error::plugin build failed (not a transient edt.1c.ru error)"; exit 1; }
-            echo "::warning::transient edt.1c.ru failure (attempt $attempt/3); cooling 30s"; sleep 30
-          done
-          exit 1
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/mvn-retry.sh" clean verify --batch-mode --no-transfer-progress -T 1C -DskipTests
 
       - name: Upload plugin p2 repository
         uses: actions/upload-artifact@v7
@@ -112,6 +110,20 @@ jobs:
   e2e:
     needs: build
     runs-on: ubuntu-latest
+    name: "e2e (shard ${{ matrix.shard }})"
+    # SHARDED across runners, which is also what makes it safe. The suite is serial by
+    # construction - every test resets the same git fixture and the same EDT workspace, so two
+    # tests must never run against one checkout. A matrix does not share anything: each shard gets
+    # its own runner, its own clone, its own EDT install and its own :8765. The isolation comes
+    # from separate machines, not from locking.
+    #
+    # fail-fast is OFF on purpose. Cancelling the siblings the moment one shard fails would hand
+    # back a quarter of the picture, and this gate exists to say what is broken - not to say that
+    # something is.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shards) }}
     permissions:
       contents: read
       checks: write
@@ -401,9 +413,13 @@ jobs:
           # like a hang during the (long) index wait. -u/PYTHONUNBUFFERED stream it live.
           PYTHONUNBUFFERED: "1"
         run: |
+          # The divisor comes from strategy.job-total, so the matrix list above is the single
+          # place a shard count is written. Report and artifact names carry the shard number
+          # because they are collected from every runner into one place.
           python -u tests/e2e/run_all.py \
             --project TestConfiguration \
-            --junit-xml tests/e2e/e2e-results.xml
+            --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            --junit-xml "tests/e2e/e2e-results-${{ matrix.shard }}.xml"
 
       # Coverage: dump the in-memory JaCoCo data out of the still-running EDT JVM (the
       # agent is in tcpserver mode), then upload it for the Coverage workflow to merge
@@ -413,18 +429,23 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
+          # The FILE name carries the shard, not just the artifact name. coverage.yml downloads
+          # every e2e-jacoco-exec-* with merge-multiple:true, which flattens them into one
+          # directory - four artifacts all containing "e2e-jacoco.exec" would overwrite each other
+          # there and three quarters of the e2e coverage would vanish without a single error.
           java -jar "$JACOCO_CLI" dump \
             --address 127.0.0.1 --port 6300 \
-            --destfile "$RUNNER_TEMP/e2e-jacoco.exec" \
+            --destfile "$RUNNER_TEMP/e2e-jacoco-${{ matrix.shard }}.exec" \
             || echo "[coverage] jacoco dump failed (agent unreachable / EDT not up)"
-          ls -la "$RUNNER_TEMP/e2e-jacoco.exec" 2>/dev/null || echo "[coverage] no e2e exec produced"
+          ls -la "$RUNNER_TEMP/e2e-jacoco-${{ matrix.shard }}.exec" 2>/dev/null \
+            || echo "[coverage] no e2e exec produced"
 
       - name: "Coverage · upload e2e JaCoCo exec"
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-jacoco-exec-${{ inputs.edt }}
-          path: ${{ runner.temp }}/e2e-jacoco.exec
+          name: e2e-jacoco-exec-${{ inputs.edt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-jacoco-${{ matrix.shard }}.exec
           if-no-files-found: warn
 
       - name: Dump EDT IDE log (the real boot/index log — separate from this console)
@@ -441,30 +462,102 @@ jobs:
             echo "(no EDT IDE log at $LOG)"
           fi
 
-      - name: Publish E2E Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always()
-        continue-on-error: true
-        with:
-          check_name: "E2E Test Results (EDT ${{ inputs.edt }})"
-          files: tests/e2e/e2e-results.xml
-
+      # Each shard only UPLOADS its report; the single combined check is published once, by the
+      # report job below. Publishing per shard would have four jobs racing to write one check
+      # name, and whichever finished last would decide what the PR says.
       - name: Upload test report
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-test-results-${{ inputs.edt }}
-          path: tests/e2e/e2e-results.xml
+          name: e2e-test-results-${{ inputs.edt }}-${{ matrix.shard }}
+          path: tests/e2e/e2e-results-${{ matrix.shard }}.xml
           if-no-files-found: ignore
 
       - name: Upload EDT log
         if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-edt-log-${{ inputs.edt }}
+          name: e2e-edt-log-${{ inputs.edt }}-${{ matrix.shard }}
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 
       - name: Stop EDT
         if: always()
         run: kill "${edt_pid:-0}" 2>/dev/null || true
+
+  # ONE check for the whole gate, assembled after every shard has reported. The shards are four
+  # jobs, but the question a reader has is one question - "did the e2e suite pass?" - and the
+  # check name is unchanged from the pre-sharding gate so any branch protection keeps working.
+  #
+  # always(): a shard that FAILED is exactly the run whose report matters most. The job's own
+  # success does not decide the gate either way - the shard jobs are the gate, and a red shard
+  # keeps the workflow red on its own.
+  report:
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      # continue-on-error so that "no artifact matched the pattern" reaches the counting step
+      # below, which says WHICH reports are missing, instead of dying in the action with a generic
+      # "unable to find any artifacts". The shard jobs are the gate; this job only reports.
+      - name: Download every shard's report
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: e2e-test-results-${{ inputs.edt }}-*
+          path: shard-reports
+          merge-multiple: true
+
+      - name: List what arrived
+        shell: bash
+        run: |
+          # A missing shard report is not a pass. It means a runner died before writing one, and
+          # the combined check would then quietly describe a fraction of the suite.
+          #
+          # The directory is CREATED first, not assumed. When every shard dies the download step
+          # fails - which its continue-on-error explicitly permits - and may never create its
+          # destination; the count then reaches zero correctly, but the redirect below has nowhere
+          # to write, dies under -e, and the synthetic failing report never appears. The worst case
+          # is exactly the one where the red check matters most, so nothing on that path may assume
+          # a previous step succeeded.
+          mkdir -p shard-reports
+          ls -la shard-reports || true
+          # Counted with nullglob, NOT `ls *.xml | wc -l`. GitHub runs `shell: bash` as
+          # `bash -eo pipefail`, so with zero reports the ls fails, pipefail propagates it out of
+          # the command substitution, and -e kills the step - taking with it the very diagnostic
+          # this step exists to print. The empty case is the one it was written for, so it is the
+          # one case it must survive; an unmatched glob has to expand to nothing, not to an error.
+          shopt -s nullglob
+          reports=(shard-reports/*.xml)
+          COUNT=${#reports[@]}
+          EXPECTED=$(echo '${{ inputs.shards }}' | tr -d '[] ' | tr ',' '\n' | grep -c .)
+          echo "shard reports: $COUNT of $EXPECTED expected"
+          if [ "$COUNT" -lt "$EXPECTED" ]; then
+            echo "::warning::only $COUNT of $EXPECTED shard reports arrived; the combined result covers less than the whole suite"
+            # A warning is not enough. The publisher would take the surviving subset and put a
+            # GREEN check under the gate's own name - "E2E Test Results" saying pass while a
+            # quarter of the suite never reported. The matrix job going red is a different
+            # signal in a different place, and anything reading THIS check by name would be
+            # misled. So the shortfall enters the report as a failing case and the check goes
+            # red for the reason it actually is.
+            {
+              echo '<?xml version="1.0" encoding="UTF-8"?>'
+              echo '<testsuite name="edt-mcp-e2e-shards" tests="1" failures="1">'
+              echo "  <testcase name=\"shards::all_reported\"><failure>only $COUNT of $EXPECTED"
+              echo "  shard reports arrived - a shard died before writing one, so these results"
+              echo "  describe part of the suite, not all of it</failure></testcase>"
+              echo '</testsuite>'
+            } > shard-reports/zz-missing-shards.xml
+          fi
+
+      - name: Publish E2E Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        continue-on-error: true
+        with:
+          check_name: "E2E Test Results (EDT ${{ inputs.edt }})"
+          files: shard-reports/*.xml
