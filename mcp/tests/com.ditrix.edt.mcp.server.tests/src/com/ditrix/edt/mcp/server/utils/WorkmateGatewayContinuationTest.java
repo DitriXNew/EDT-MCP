@@ -98,6 +98,18 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testANegatedPromiseIsADecisionNotAPlan()
+    {
+        // Review of #440, fifth round: a refusal looks exactly like an announcement and means
+        // the opposite. Continuing it would ask Workmate to do what it just declined to do.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "I will not edit generated files; change the source model instead."));
+        assertFalse(WorkmateGateway.needsContinuation("I won't touch the infobase."));
+        assertTrue("the affirmative form still announces work",
+            WorkmateGateway.needsContinuation("I will check the module list."));
+    }
+
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word

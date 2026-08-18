@@ -114,6 +114,21 @@ public class WorkmateGateway
      * one as readily as a plan does, and a continuation is not free - it can run Workmate's tools
      * again, and its own answer then REPLACES the one already in hand.
      */
+    /**
+     * Announcements turned into their opposite. A short answer containing one of these is a
+     * decision NOT to act - the one shape that looks exactly like an intent marker and means the
+     * opposite of one, so it is checked first and wins.
+     */
+    private static final String[] NEGATED_INTENT = {
+        "i will not", //$NON-NLS-1$
+        "i won't", //$NON-NLS-1$
+        "i'll not", //$NON-NLS-1$
+        "i'll never", //$NON-NLS-1$
+        "i will never", //$NON-NLS-1$
+        "\u043D\u0435 \u0431\u0443\u0434\u0443", // не буду //$NON-NLS-1$
+        "\u043D\u0435 \u0441\u0442\u0430\u043D\u0443" // не стану //$NON-NLS-1$
+    };
+
     private static final String[] INTENT_MARKERS = {
         "\u0432\u043E\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044E\u0441\u044C", // воспользуюсь //$NON-NLS-1$
         "\u043F\u043E\u0438\u0449\u0443", // поищу //$NON-NLS-1$
@@ -523,7 +538,7 @@ public class WorkmateGateway
      * ask stream after one assistant turn:
      * <ul>
      *   <li>an EMPTY answer — nothing was said at all, so there is nothing to report;</li>
-     *   <li>a SHORT answer that states an intention ("For a full reference … I will use the 1C
+     *   <li>a SHORT answer that states an intention ("For a full reference \u2026 I will use the 1C
      *       documentation search"). Length is what keeps this from eating real answers: a
      *       finished answer that happens to contain such a word is not {@value
      *       #PLAN_TEXT_MAX_CHARS} characters short.</li>
@@ -547,6 +562,16 @@ public class WorkmateGateway
             return false;
         }
         String lower = trimmed.toLowerCase(Locale.ROOT);
+        for (String negation : NEGATED_INTENT)
+        {
+            if (mentions(lower, negation))
+            {
+                // "I will not touch generated files" is a DECISION, already final. Continuing it
+                // asks Workmate to do the thing it just refused, and the next turn's answer would
+                // replace the refusal.
+                return false;
+            }
+        }
         for (String marker : INTENT_MARKERS)
         {
             if (mentions(lower, marker))
@@ -627,6 +652,18 @@ public class WorkmateGateway
         }
         progress.onProgress(sentMessage);
 
+        // Recomputed AFTER the dispatch returned: sendAsync does synchronous work of its own
+        // (it creates the conversation), and waiting on the budget measured before it would add
+        // that duration back on top of the absolute deadline, once per turn.
+        long waitMillis = remainingMillis(deadlineNanos);
+        if (waitMillis <= 0)
+        {
+            // The request is already out, so this is never the retryable kind of timeout.
+            cancelled.set(true);
+            ((CompletableFuture<?>)futureValue).cancel(true);
+            throw GatewayException.timedOutAfterDispatch();
+        }
+
         Object sendResult;
         CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
         try
@@ -634,7 +671,7 @@ public class WorkmateGateway
             // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
             // before the advertised budget ran out, and a floor of one second let an already
             // spent budget overshoot by one more.
-            sendResult = future.get(remainingMillis, TimeUnit.MILLISECONDS);
+            sendResult = future.get(waitMillis, TimeUnit.MILLISECONDS);
         }
         catch (TimeoutException e)
         {
@@ -664,8 +701,10 @@ public class WorkmateGateway
         String text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
         String reasoning =
             stringValue(invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
-        Integer count = integerValue(
-            invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult)); //$NON-NLS-1$
+        // null BEFORE integerValue: that helper rejects every non-Number, null included, so
+        // converting first would turn "the platform reported no count" into a failed job.
+        Object rawCount = invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult); //$NON-NLS-1$
+        Integer count = rawCount == null ? null : integerValue(rawCount);
         return new Turn(text, reasoning, count, sessionOf(resultClass, sendResult));
     }
 
