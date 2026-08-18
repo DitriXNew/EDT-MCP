@@ -86,6 +86,18 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testAPunctuatedAnnouncementIsStillAnAnnouncement()
+    {
+        // Review of #440, fourth round: a marker with a trailing space missed every announcement
+        // the model punctuates, which is exactly the shape this predicate exists to catch.
+        assertTrue(WorkmateGateway.needsContinuation("I will:\n- search the documentation"));
+        assertTrue(WorkmateGateway.needsContinuation("I will."));
+        assertTrue(WorkmateGateway.needsContinuation("I'll: look at the module first"));
+        assertFalse("a longer word that merely starts the same way is not a marker",
+            WorkmateGateway.needsContinuation("Willingness to index the column decides the plan."));
+    }
+
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word

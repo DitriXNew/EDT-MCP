@@ -266,7 +266,7 @@ public class AskWorkmateTool implements IMcpTool
                         // Commit-capable, not progress::add: a Workmate tool can run arbitrary
                         // code, and once it is invoked no timeout can take that back.
                         String out = gateway.callWorkmateTool(workmateTool, workmateArgs,
-                            remainingBudgetSeconds(progress, jobTimeoutSeconds),
+                            remainingBudgetMillis(progress, jobTimeoutSeconds),
                             jobProgress(progress));
                         return new WorkmateResponse(out == null || out.isEmpty()
                             ? "(the tool returned no text)" : out, null); //$NON-NLS-1$
@@ -313,13 +313,12 @@ public class AskWorkmateTool implements IMcpTool
      * @param jobTimeoutSeconds the job's total budget, the ceiling of the result
      * @return at least one second, never more than the total budget
      */
-    private static int remainingBudgetSeconds(ProgressReporter progress, int jobTimeoutSeconds)
+    private static long remainingBudgetMillis(ProgressReporter progress, int jobTimeoutSeconds)
     {
-        long remainingMs = progress.remainingMillis();
-        // One second is the floor on purpose: a budget already spent still has to make ONE
-        // attempt, whose own timeout then reports the honest "sent and not answered in time".
-        long seconds = Math.max(1L, remainingMs / 1000L);
-        return (int)Math.min(jobTimeoutSeconds, seconds);
+        long total = TimeUnit.SECONDS.toMillis(jobTimeoutSeconds);
+        // Milliseconds all the way through: dividing by 1000 here would hand a job with 1 999 ms
+        // left only one second, and a job with 300 ms left a whole second it no longer has.
+        return Math.min(total, Math.max(0L, progress.remainingMillis()));
     }
 
     private static ProgressListener jobProgress(ProgressReporter progress)
@@ -521,7 +520,7 @@ public class AskWorkmateTool implements IMcpTool
                         }
                         WorkmateResponse response = gateway.ask(jobProject, jobQuestion,
                             maxToolRounds, skillName,
-                            remainingBudgetSeconds(progress, jobTimeoutSeconds), listener);
+                            remainingBudgetMillis(progress, jobTimeoutSeconds), listener);
                         if (response == null || trimToNull(response.getText()) == null)
                         {
                             throw new WorkmateJobException(emptyAnswerMessage(

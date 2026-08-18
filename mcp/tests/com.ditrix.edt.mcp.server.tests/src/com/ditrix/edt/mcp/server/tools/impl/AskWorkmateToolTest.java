@@ -666,7 +666,7 @@ public class AskWorkmateToolTest
         AskWorkmateTool tool = tool(new WorkmateGateway()
         {
             @Override
-            public String callWorkmateTool(String toolName, String argsJson, int timeoutSeconds,
+            public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
                 ProgressListener progress) throws GatewayException
             {
                 throw GatewayException.callFailed("JShell rejected the manual_ids"); //$NON-NLS-1$
@@ -730,7 +730,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
             {
                 reportRealisticProgress(progress);
                 sent.set(question);
@@ -759,7 +759,7 @@ public class AskWorkmateToolTest
         return new WorkmateGateway()
         {
             @Override
-            public String callWorkmateTool(String toolName, String argsJson, int timeoutSeconds,
+            public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
                 ProgressListener progress)
             {
                 progress.onProgress("Located the 1C:Workmate plugin."); //$NON-NLS-1$
@@ -802,7 +802,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
             {
                 reportRealisticProgress(progress);
                 return response;
@@ -816,7 +816,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
                 throws GatewayException
             {
                 throw failure;
@@ -831,7 +831,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
                 throws GatewayException
             {
                 progress.onProgress("Located the 1C:Workmate plugin."); //$NON-NLS-1$

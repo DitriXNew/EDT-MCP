@@ -124,8 +124,8 @@ public class WorkmateGateway
         "\u0441\u043E\u0437\u0434\u0430\u043C", // создам //$NON-NLS-1$
         "\u043D\u0430\u0447\u043D\u0443", // начну //$NON-NLS-1$
         "\u0441\u0435\u0439\u0447\u0430\u0441 \u044F", // сейчас я //$NON-NLS-1$
-        "i will ", //$NON-NLS-1$
-        "i'll ", //$NON-NLS-1$
+        "i will", //$NON-NLS-1$
+        "i'll", //$NON-NLS-1$
         // "let me" alone is a discourse marker ("let me clarify: ..."), so only the phrases
         // that announce an ACTION are markers of intent.
         "let me search", //$NON-NLS-1$
@@ -350,14 +350,14 @@ public class WorkmateGateway
      * @param question user message
      * @param maxToolRounds optional Workmate tool-round limit
      * @param skillName optional Workmate skill name
-     * @param timeoutSeconds wall-clock wait bound
+     * @param timeoutMillis wall-clock wait bound
      * @return Workmate text and optional reasoning
      * @throws GatewayException categorized runtime/compatibility failure
      */
     public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-        String skillName, int timeoutSeconds) throws GatewayException
+        String skillName, long timeoutMillis) throws GatewayException
     {
-        return ask(project, question, maxToolRounds, skillName, timeoutSeconds, message -> {
+        return ask(project, question, maxToolRounds, skillName, timeoutMillis, message -> {
             // The compatibility overload has no progress consumer.
         });
     }
@@ -370,18 +370,18 @@ public class WorkmateGateway
      * @param question user message
      * @param maxToolRounds optional Workmate tool-round limit
      * @param skillName optional Workmate skill name
-     * @param timeoutSeconds total remaining job budget used to await Workmate
+     * @param timeoutMillis total remaining job budget used to await Workmate
      * @param progress milestone listener
      * @return Workmate text, optional reasoning and assistant-message count
      * @throws GatewayException categorized runtime/compatibility failure
      */
     public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-        String skillName, int timeoutSeconds, ProgressListener progress) throws GatewayException
+        String skillName, long timeoutMillis, ProgressListener progress) throws GatewayException
     {
         // Taken BEFORE the reflective setup, not after it: bundle lookup, injector resolution
         // and the authorization probe all spend the caller's budget, and a deadline started
         // afterwards would hand the conversation a fresh full one on top of what setup used.
-        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         try
         {
             Bundle aiBundle = requireBundle(AI_BUNDLE);
@@ -465,13 +465,20 @@ public class WorkmateGateway
                 // edits already made. So the job is committed before the FIRST send - a later
                 // "timed out, start a new job" would invite a retry that runs those edits again.
                 // The continuations need no second commit: they belong to a job already committed.
+                // Checked BEFORE the commit handshake, not only inside the send: a request that
+                // has not gone out yet leaves nothing behind, so an expired budget here is an
+                // ordinary retryable timeout rather than the "already dispatched" kind.
+                if (session == null && remainingMillis(deadlineNanos) <= 0)
+                {
+                    throw GatewayException.timedOut();
+                }
                 if (session == null && !progress.onTryCommit())
                 {
                     throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
                         + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
                 }
                 Turn turn = sendTurn(facade, sendAsync, request, cancellationTokenClass,
-                    resultClass, remainingMillis(deadlineNanos),
+                    resultClass, deadlineNanos, session == null,
                     session == null ? "Sent the request to Workmate." //$NON-NLS-1$
                         : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
                     progress);
@@ -542,10 +549,42 @@ public class WorkmateGateway
         String lower = trimmed.toLowerCase(Locale.ROOT);
         for (String marker : INTENT_MARKERS)
         {
-            if (lower.contains(marker))
+            if (mentions(lower, marker))
             {
                 return true;
             }
+        }
+        return false;
+    }
+
+    /**
+     * Whether {@code text} contains {@code marker} as a whole word.
+     *
+     * <p>A plain {@code contains} with a trailing space in the marker misses every announcement
+     * the model punctuates - "I will:", "I'll." or a bullet list opener - which is the very shape
+     * this predicate exists to catch. Requiring a NON-LETTER (or the end of the text) after the
+     * marker accepts those and still refuses a longer word that merely starts the same way.
+     *
+     * @param text the lowercased answer
+     * @param marker the lowercased marker
+     * @return {@code true} when the marker appears as a whole word
+     */
+    private static boolean mentions(String text, String marker)
+    {
+        int from = 0;
+        while (from <= text.length() - marker.length())
+        {
+            int at = text.indexOf(marker, from);
+            if (at < 0)
+            {
+                return false;
+            }
+            int after = at + marker.length();
+            if (after >= text.length() || !Character.isLetter(text.charAt(after)))
+            {
+                return true;
+            }
+            from = at + 1;
         }
         return false;
     }
@@ -558,16 +597,25 @@ public class WorkmateGateway
      * @param request the prepared {@code SendUserMessageRequest}
      * @param cancellationTokenClass the token interface to implement for this send
      * @param resultClass the {@code SendMessageResult} class to read the turn from
-     * @param remainingMillis what is left of the caller's total budget
+     * @param deadlineNanos when the caller's total budget expires
+     * @param firstTurn whether this is the first send of the conversation
      * @param sentMessage the progress milestone to report once the request is away
      * @param progress milestone listener
      * @return the turn Workmate answered with
      * @throws GatewayException categorized runtime/compatibility failure
      */
     private Turn sendTurn(Object facade, Method sendAsync, Object request, // NOSONAR one reflective send needs every piece of the reflective context
-        Class<?> cancellationTokenClass, Class<?> resultClass, long remainingMillis,
-        String sentMessage, ProgressListener progress) throws GatewayException
+        Class<?> cancellationTokenClass, Class<?> resultClass, long deadlineNanos,
+        boolean firstTurn, String sentMessage, ProgressListener progress) throws GatewayException
     {
+        // Immediately before the send, because dispatching is what has consequences: Workmate's
+        // tool loop can change this configuration, and a request let out after the advertised
+        // budget spends time the caller was never promised. A later wait-timeout does not undo it.
+        long remainingMillis = remainingMillis(deadlineNanos);
+        if (remainingMillis <= 0)
+        {
+            throw firstTurn ? GatewayException.timedOut() : GatewayException.timedOutAfterDispatch();
+        }
         AtomicBoolean cancelled = new AtomicBoolean(false);
         Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
         Object futureValue = invoke(sendAsync, facade, request, cancellationToken);
@@ -586,7 +634,7 @@ public class WorkmateGateway
             // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
             // before the advertised budget ran out, and a floor of one second let an already
             // spent budget overshoot by one more.
-            sendResult = future.get(Math.max(0L, remainingMillis), TimeUnit.MILLISECONDS);
+            sendResult = future.get(remainingMillis, TimeUnit.MILLISECONDS);
         }
         catch (TimeoutException e)
         {
@@ -715,12 +763,12 @@ public class WorkmateGateway
      *
      * @param toolName exact Workmate tool name, e.g. {@code JShellSession} or {@code JShell}
      * @param argsJson JSON OBJECT with that tool's arguments; blank means no arguments
-     * @param timeoutSeconds how long to wait for the tool
+     * @param timeoutMillis how long to wait for the tool
      * @param progress milestone listener
      * @return the tool's own textual result
      * @throws GatewayException categorized runtime/compatibility failure
      */
-    public String callWorkmateTool(String toolName, String argsJson, int timeoutSeconds,
+    public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
         ProgressListener progress) throws GatewayException
     {
         try
@@ -797,7 +845,7 @@ public class WorkmateGateway
             Object result;
             try
             {
-                result = future.get(timeoutSeconds, TimeUnit.SECONDS);
+                result = future.get(timeoutMillis, TimeUnit.MILLISECONDS);
             }
             catch (TimeoutException e)
             {
