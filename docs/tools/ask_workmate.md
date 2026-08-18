@@ -154,8 +154,10 @@ How a turn is judged finished, in order of authority:
    an announcement of work ("I will search the documentation", «я воспользуюсь поиском»)
    rather than a result. This is a heuristic and knows only Russian and English.
 
-A single turn that goes quiet for two minutes ends the conversation instead of holding the
-job open: you get whatever Workmate produced so far.
+A turn that goes SILENT for two minutes ends the conversation instead of holding the job
+open: you get whatever Workmate produced so far. Silence, not elapsed time - a turn that is
+working (its calls back into this plugin are recorded) keeps its clock reset, so a tool loop
+that legitimately runs for minutes is never cut off.
 
 Whenever the marker never arrived - because the conversation went quiet, or because the
 continuations ran out - the result carries an explicit **"Completion not confirmed"** note

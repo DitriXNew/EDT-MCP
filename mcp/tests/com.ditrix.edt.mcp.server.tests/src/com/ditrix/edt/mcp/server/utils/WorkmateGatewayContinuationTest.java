@@ -205,6 +205,16 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testStrippingSurvivesACharacterThatGrowsWhenLowercased()
+    {
+        // Review of #440: U+0130 lowercases to TWO chars, so an index taken from a lowercased
+        // copy no longer points at the same place in the original - the answer got cut.
+        String answer = "\u0130 answer";
+        assertEquals(answer,
+            WorkmateGateway.stripFinalMarker(answer + "\n" + WorkmateGateway.FINAL_MARKER));
+    }
+
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word

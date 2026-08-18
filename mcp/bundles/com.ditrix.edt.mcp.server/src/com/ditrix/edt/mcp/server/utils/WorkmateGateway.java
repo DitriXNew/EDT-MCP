@@ -22,6 +22,8 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
+import com.ditrix.edt.mcp.server.history.McpCallHistory;
+
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.swt.widgets.Display;
@@ -137,8 +139,16 @@ public class WorkmateGateway
      * done in every sense that matters to the caller, and waiting out the whole budget only
      * delays the answer already in hand. What is NOT done is pretending it finished cleanly -
      * the result says the completion marker never arrived.
+     *
+     * <p>IDLE, not elapsed: a turn that is working - calling this plugin's tools through the
+     * bridge, which every call records in {@code McpCallHistory} - keeps the clock reset. Only
+     * silence counts, because a tool loop that legitimately runs for minutes must not be cut off
+     * (a project question measured 75 s here, and a bigger project takes longer).
      */
     private static final long IDLE_TURN_TIMEOUT_MS = 120_000L;
+
+    /** How often the wait wakes up to see whether the turn is still doing anything. */
+    private static final long IDLE_POLL_MS = 5_000L;
 
     /**
      * Appended by THIS adapter to every request, so the caller's question stays their own and the
@@ -649,6 +659,26 @@ public class WorkmateGateway
     }
 
     /**
+     * Whether {@link #FINAL_MARKER} sits at {@code at}, compared case-insensitively and without
+     * copying or re-casing the text.
+     *
+     * @param text the text being cleaned
+     * @param at the candidate offset
+     * @return {@code true} when the marker starts there
+     */
+    private static boolean regionMatchesIgnoreCase(CharSequence text, int at)
+    {
+        for (int i = 0; i < FINAL_MARKER.length(); i++)
+        {
+            if (Character.toLowerCase(text.charAt(at + i)) != FINAL_MARKER.charAt(i))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Whether the turn declared itself final by carrying {@link #FINAL_MARKER}.
      *
      * @param text the turn's text (may be {@code null})
@@ -675,13 +705,16 @@ public class WorkmateGateway
         {
             return null;
         }
+        // Case-insensitive matching WITHOUT lowercasing the text: a character whose lowercase
+        // mapping is longer (U+0130, say) shifts every later index, and deleting by an index taken
+        // from the lowercased copy would then cut the answer instead of the marker.
         StringBuilder cleaned = new StringBuilder(text);
-        String lower = text.toLowerCase(Locale.ROOT);
-        int at = lower.lastIndexOf(FINAL_MARKER);
-        while (at >= 0)
+        for (int at = cleaned.length() - FINAL_MARKER.length(); at >= 0; at--)
         {
-            cleaned.delete(at, at + FINAL_MARKER.length());
-            at = lower.lastIndexOf(FINAL_MARKER, at - 1);
+            if (regionMatchesIgnoreCase(cleaned, at))
+            {
+                cleaned.delete(at, at + FINAL_MARKER.length());
+            }
         }
         String result = cleaned.toString().trim();
         return result.isEmpty() ? null : result;
@@ -948,17 +981,16 @@ public class WorkmateGateway
 
         Object sendResult;
         CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
-        boolean idleBound = IDLE_TURN_TIMEOUT_MS < waitMillis;
         try
         {
             // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
             // before the advertised budget ran out, and a floor of one second let an already
-            // spent budget overshoot by one more. The idle bound caps a SINGLE silent turn.
-            sendResult = future.get(Math.min(waitMillis, IDLE_TURN_TIMEOUT_MS),
-                TimeUnit.MILLISECONDS);
+            // spent budget overshoot by one more.
+            sendResult = awaitTurn(future, waitMillis);
         }
         catch (TimeoutException e)
         {
+            boolean idleBound = e instanceof IdleTimeoutException;
             // The token ASKS Workmate to stop; it does not undo what its tools have
             // already done. So this is a dispatched timeout, not a plain retryable one -
             // the difference is whether the caller may safely run the same request again.
@@ -1030,6 +1062,79 @@ public class WorkmateGateway
             + "conversation (" + detail + "). Earlier turns had already run and their tools may " //$NON-NLS-1$ //$NON-NLS-2$
             + "have changed the project: inspect Workmate and the project before repeating the " //$NON-NLS-1$
             + "request."); //$NON-NLS-1$
+    }
+
+    /**
+     * Waits for the turn, giving up early only when it has gone SILENT.
+     *
+     * <p>Activity is counted as calls Workmate made back into this plugin (every one is recorded
+     * by {@code McpCallHistory}), so a working tool loop keeps its clock reset while a
+     * conversation that simply stopped is not waited out to the end of the job's budget.
+     *
+     * @param future the turn's future
+     * @param budgetMillis what is left of the caller's total budget
+     * @return the turn's result
+     * @throws IdleTimeoutException when nothing happened for {@link #IDLE_TURN_TIMEOUT_MS}
+     * @throws TimeoutException when the caller's budget ran out first
+     * @throws InterruptedException if the wait is interrupted
+     * @throws ExecutionException if the turn failed
+     */
+    private static Object awaitTurn(CompletableFuture<?> future, long budgetMillis)
+        throws TimeoutException, InterruptedException, ExecutionException
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMillis);
+        long lastActivity = System.nanoTime();
+        int seenCalls = bridgeCallCount();
+        while (true)
+        {
+            long leftMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+            if (leftMs <= 0)
+            {
+                throw new TimeoutException("the job's budget ran out"); //$NON-NLS-1$
+            }
+            try
+            {
+                return future.get(Math.min(leftMs, IDLE_POLL_MS), TimeUnit.MILLISECONDS);
+            }
+            catch (TimeoutException stillRunning)
+            {
+                int calls = bridgeCallCount();
+                if (calls != seenCalls)
+                {
+                    seenCalls = calls;
+                    lastActivity = System.nanoTime();
+                }
+                else if (System.nanoTime() - lastActivity
+                    >= TimeUnit.MILLISECONDS.toNanos(IDLE_TURN_TIMEOUT_MS))
+                {
+                    throw new IdleTimeoutException();
+                }
+            }
+        }
+    }
+
+    /**
+     * How many calls Workmate has made back into this plugin so far, or {@code -1} when the
+     * history is unavailable - which only means "no activity signal", never an error.
+     *
+     * @return the recorded call count
+     */
+    private static int bridgeCallCount()
+    {
+        try
+        {
+            return McpCallHistory.getInstance().size();
+        }
+        catch (RuntimeException | LinkageError e) // NOSONAR an activity probe must never fail a turn
+        {
+            return -1;
+        }
+    }
+
+    /** A turn that stopped doing anything, as opposed to one that ran out of budget. */
+    private static final class IdleTimeoutException extends TimeoutException
+    {
+        private static final long serialVersionUID = 1L;
     }
 
     /**
