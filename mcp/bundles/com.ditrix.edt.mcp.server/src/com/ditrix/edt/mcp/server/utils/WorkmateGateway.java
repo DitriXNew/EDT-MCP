@@ -1429,12 +1429,17 @@ public class WorkmateGateway
     {
         while (true)
         {
-            long leftMs = remainingMillis(deadlineNanos);
-            if (leftMs <= 0)
+            // Expiry is decided in NANOSECONDS: remainingMillis truncates, so a remainder under
+            // one millisecond would read as zero and end the wait before the deadline it was
+            // given - cancelling a tool that was about to finish inside it.
+            if (System.nanoTime() - deadlineNanos >= 0)
             {
                 cancelled.set(true);
                 throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
             }
+            // ... while the WAIT length may round, as long as it never rounds down to zero (which
+            // would spin) - it only decides how soon the deadline is looked at again.
+            long leftMs = Math.max(1L, remainingMillis(deadlineNanos));
             try
             {
                 return future.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
