@@ -380,4 +380,70 @@ public class LaunchLifecycleUtilsAwaitTest
         assertEquals(ApplicationUpdateState.UPDATED, result);
         assertEquals(1, removeCount[0]);
     }
+
+    /** A manager whose cached read fires a pushed event from INSIDE the read. */
+    private static IApplicationManager mockManagerFiringDuringRead(IApplication app,
+            AtomicReference<IApplicationListener> captured, int[] removeCount, int fireOnCall)
+        throws ApplicationException
+    {
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        doAnswer(inv -> {
+            captured.set(inv.getArgument(0));
+            return null;
+        }).when(mgr).addAppllicationListener(any(IApplicationListener.class));
+        doAnswer(inv -> {
+            removeCount[0]++;
+            return null;
+        }).when(mgr).removeAppllicationListener(any(IApplicationListener.class));
+        int[] reads = {0};
+        when(mgr.getUpdateState(app)).thenAnswer(inv -> {
+            reads[0]++;
+            if (reads[0] == fireOnCall)
+            {
+                captured.get().applicationChanged(event(app,
+                    ApplicationEventType.UPDATE_STATE_CHANGED, ApplicationUpdateState.UPDATED));
+            }
+            // The cached read LAGS the event - that is the whole reason this wait is
+            // event-driven rather than a poll.
+            return ApplicationUpdateState.BEING_UPDATED;
+        });
+        return mgr;
+    }
+
+    @Test
+    public void testAnEventLandingDuringTheEntryReadIsNotLost() throws ApplicationException
+    {
+        // Regression: the entry read stored its lagging cached state OVER the state an event
+        // had just pushed. That event had already spent the latch, so nothing woke the wait
+        // again and it ran to its full timeout reporting a state that was already superseded.
+        IApplication app = mock(IApplication.class);
+        AtomicReference<IApplicationListener> captured = new AtomicReference<>();
+        int[] removeCount = {0};
+        IApplicationManager mgr = mockManagerFiringDuringRead(app, captured, removeCount, 1);
+
+        ApplicationUpdateState result = LaunchLifecycleUtils.awaitUpdateState(mgr, app,
+            s -> s == ApplicationUpdateState.UPDATED, 300L);
+
+        assertEquals("a pushed state must survive the entry read",
+            ApplicationUpdateState.UPDATED, result);
+        assertEquals(1, removeCount[0]);
+    }
+
+    @Test
+    public void testAnEventLandingDuringASafetyNetPollIsNotLost() throws ApplicationException
+    {
+        // The same lost update, one loop later: the timed safety-net re-read wrote its lagging
+        // value over a state pushed while it was reading, and the wake that came with it had
+        // already been consumed.
+        IApplication app = mock(IApplication.class);
+        AtomicReference<IApplicationListener> captured = new AtomicReference<>();
+        int[] removeCount = {0};
+        IApplicationManager mgr = mockManagerFiringDuringRead(app, captured, removeCount, 2);
+
+        ApplicationUpdateState result = LaunchLifecycleUtils.awaitUpdateState(mgr, app,
+            s -> s == ApplicationUpdateState.UPDATED, 300L);
+
+        assertEquals("a pushed state must survive the safety-net re-read",
+            ApplicationUpdateState.UPDATED, result);
+    }
 }

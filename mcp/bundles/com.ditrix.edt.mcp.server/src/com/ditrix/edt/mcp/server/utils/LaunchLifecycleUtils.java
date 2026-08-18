@@ -1881,11 +1881,18 @@ public final class LaunchLifecycleUtils
         try
         {
             // An event may already have fired before registration — read once now.
+            //
+            // SEED, do not overwrite: an event can also arrive between the registration above and
+            // this read, and it pushes its state and counts the latch down. Storing the cached
+            // (lagging) read over it loses that state for good — the latch is already spent, so
+            // nothing pushes again and the wait runs to its full timeout reporting a state that
+            // was superseded milliseconds after it was read.
             ApplicationUpdateState current = readUpdateState(appManager, application);
-            awaitState.observed.set(current);
-            if (done.test(current))
+            awaitState.observed.compareAndSet(ApplicationUpdateState.UNKNOWN, current);
+            ApplicationUpdateState seeded = awaitState.observed.get();
+            if (done.test(seeded))
             {
-                return current;
+                return seeded;
             }
 
             long deadline = System.currentTimeMillis() + timeoutMs;
@@ -2007,9 +2014,14 @@ public final class LaunchLifecycleUtils
             return done.test(observed) ? observed : null;
         }
         // Timed wake — re-read the cached state as a fallback.
+        // Same reason as the seeding read: replace only the value this loop last saw. A state
+        // pushed by an event while we were polling is newer than the cached read, and storing
+        // the read over it would drop the event this wait exists to catch.
+        ApplicationUpdateState previous = awaitState.observed.get();
         ApplicationUpdateState polled = readUpdateState(appManager, application);
-        awaitState.observed.set(polled);
-        return done.test(polled) ? polled : null;
+        ApplicationUpdateState current =
+            awaitState.observed.compareAndSet(previous, polled) ? polled : awaitState.observed.get();
+        return done.test(current) ? current : null;
     }
 
     /**
