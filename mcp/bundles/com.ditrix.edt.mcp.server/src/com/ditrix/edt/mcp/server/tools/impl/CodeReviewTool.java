@@ -410,6 +410,15 @@ public class CodeReviewTool implements IMcpTool
      * requested project's own {@code src/} (a sibling project, or any workspace-visible
      * location) and have it silently analyzed instead of rejected as out of scope.
      *
+     * Lexical on purpose. This guard exists for a CALLER-supplied escape (an absolute path, or
+     * {@code ..} segments) - CLAUDE.md pre-push #4 - and normalize + startsWith answers exactly
+     * that. Following symlinks here would NOT close the symlink concern (a whole-project review
+     * walks {@code src/} and reads the same linked file with no modulePath involved) while it WOULD
+     * break the legitimate layout where shared BSL is linked into {@code src/}: the module stays
+     * reviewable project-wide but becomes unaddressable per-module. Deciding whether the engine may
+     * follow links out of a project is a srcDir-level policy question, not something to bolt onto
+     * this one check.
+     *
      * @param srcRoot the requested project's own {@code src} directory
      * @param candidate the resolved module file's on-disk location
      * @return {@code true} when {@code candidate} is {@code srcRoot} itself or a descendant of it

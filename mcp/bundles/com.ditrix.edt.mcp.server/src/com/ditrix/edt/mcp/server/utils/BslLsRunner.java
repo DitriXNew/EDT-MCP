@@ -90,6 +90,7 @@ public final class BslLsRunner
      */
     private static final int DRAIN_CHUNK_CHARS = 8_192;
 
+
     /**
      * Bound on the engine's JSON report file size, checked BEFORE it is read into memory. A report
      * this large indicates a pathological/misconfigured run (or a corrupt engine process) — reading
@@ -98,6 +99,17 @@ public final class BslLsRunner
      * response text (that guard only bounds the rendered Markdown, not this intermediate JSON).
      */
     static final long MAX_REPORT_BYTES = 50_000_000L;
+
+    /**
+     * Bound on the engine CONFIG we read, checked BEFORE it is materialized — the same rule as
+     * {@link #MAX_REPORT_BYTES}, applied to the other file this class now opens.
+     * <p>
+     * {@link #withoutFileWritingKeys} reads the project's {@code .bsl-language-server.json} into a
+     * String and then has Gson build a tree over it. A hand-written settings file is a few KB; a
+     * pathological or generated one is not, and both copies would land on the long-lived EDT heap
+     * before anything noticed. 2 MB is far above any real configuration and far below trouble.
+     */
+    static final long MAX_CONFIG_BYTES = 2_000_000L;
 
     private BslLsRunner()
     {
@@ -297,7 +309,19 @@ public final class BslLsRunner
 
         try
         {
-            return execute(java, jar, withoutFileWritingKeys(config, outputDir), request, outputDir);
+            File safeConfig;
+            try
+            {
+                safeConfig = withoutFileWritingKeys(config, outputDir);
+            }
+            catch (RuntimeException e)
+            {
+                // Sanitizing is the read-only guarantee; when it cannot be made, refusing is the
+                // answer. Converted here rather than thrown on, because run() is documented never
+                // to throw for an operational problem (CLAUDE.md don't #8).
+                return Result.error(e.getMessage());
+            }
+            return execute(java, jar, safeConfig, request, outputDir);
         }
         finally
         {
@@ -333,6 +357,32 @@ public final class BslLsRunner
     }
 
     /**
+     * Reads at most {@code cap} bytes of {@code file}, so a file that grows during the read cannot
+     * defeat the bound the caller means to enforce.
+     *
+     * @param file the file to read
+     * @param cap the hard ceiling on retained bytes
+     * @return the bytes read (at most {@code cap})
+     * @throws IOException when the file cannot be read
+     */
+    private static byte[] readAtMost(Path file, long cap) throws IOException
+    {
+        try (java.io.InputStream in = Files.newInputStream(file);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream())
+        {
+            byte[] chunk = new byte[8192];
+            long total = 0;
+            int read;
+            while (total < cap && (read = in.read(chunk, 0, (int)Math.min(chunk.length, cap - total))) != -1)
+            {
+                out.write(chunk, 0, read);
+                total += read;
+            }
+            return out.toByteArray();
+        }
+    }
+
+    /**
      * Keys in the engine's own configuration that make it WRITE a file. Verified against engine
      * 1.0.3: with {@code "traceLog": "bsl-trace.log"} in the project's
      * {@code .bsl-language-server.json}, an analyze run creates that file relative to the process
@@ -365,7 +415,19 @@ public final class BslLsRunner
         }
         try
         {
-            String text = new String(Files.readAllBytes(config.toPath()), StandardCharsets.UTF_8);
+            // Bounded READ, not a size check followed by an unbounded one: the file can grow
+            // between the two (a generator still writing it), and then the "limit" would bound
+            // nothing. Read at most one byte past the cap and judge by what actually arrived.
+            byte[] raw = readAtMost(config.toPath(), MAX_CONFIG_BYTES + 1);
+            if (raw.length > MAX_CONFIG_BYTES)
+            {
+                // Deliberately NOT "pass it through unparsed": unparsed means traceLog survives,
+                // and the engine would then write that log into the project - from a tool that
+                // declares itself read-only. Refusing is the only answer that keeps the promise.
+                throw new IllegalStateException("the engine configuration " + config //$NON-NLS-1$
+                    + " is larger than " + MAX_CONFIG_BYTES + " bytes"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            String text = new String(raw, StandardCharsets.UTF_8);
             JsonElement rootEl = JsonParser.parseString(text);
             if (!rootEl.isJsonObject())
             {
@@ -387,9 +449,15 @@ public final class BslLsRunner
         }
         catch (IOException | RuntimeException e)
         {
-            Activator.logWarning("Could not strip file-writing keys from " + config //$NON-NLS-1$
-                + "; passing it through unchanged: " + e.getMessage()); //$NON-NLS-1$
-            return config;
+            // Cannot guarantee the engine will not write into the project, so do not let it try.
+            // The alternative - hand over the original - is exactly the read-only violation this
+            // method exists to prevent (verified against engine 1.0.3: traceLog lands in the
+            // project root), and a silent violation is worse than a refused review.
+            throw new IllegalStateException("Refusing to run: " + e.getMessage() //$NON-NLS-1$
+                + ". code_review must strip file-writing settings (such as traceLog) from " //$NON-NLS-1$
+                + config + " before handing it to the engine, or the engine would write into " //$NON-NLS-1$
+                + "the project - and this tool is declared read-only. Fix or shrink that file, " //$NON-NLS-1$
+                + "or remove it to fall back to the engine defaults.", e); //$NON-NLS-1$
         }
     }
 

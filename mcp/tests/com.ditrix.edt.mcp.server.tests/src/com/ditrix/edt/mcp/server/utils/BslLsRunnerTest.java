@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -744,15 +745,62 @@ public class BslLsRunnerTest
     }
 
     @Test
-    public void testMalformedConfigIsPassedThroughSoTheEngineReportsIt() throws Exception
+    public void testOversizedConfigIsRefusedRatherThanPassedThroughUnstripped()
     {
-        File dir = newFolder("cfg-broken"); //$NON-NLS-1$
+        // The failure mode that matters is NOT the heap: it is what "give up safely" means. Passing
+        // an unparsed config to the engine leaves traceLog in it, and the engine then writes that
+        // log INTO the project - from a tool that declares readOnlyHint. So the oversize case must
+        // refuse, not degrade.
+        File dir = newFolder("cfg-huge"); //$NON-NLS-1$
         File config = new File(dir, ".bsl-language-server.json"); //$NON-NLS-1$
-        Files.write(config.toPath(), "{ this is not json".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
-        File outputDir = newFolder("cfg-broken-out"); //$NON-NLS-1$
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < BslLsRunner.MAX_CONFIG_BYTES + 1024)
+        {
+            padding.append('x');
+        }
+        try
+        {
+            Files.write(config.toPath(),
+                ("{\"traceLog\":\"bsl-trace.log\",\"pad\":\"" + padding + "\"}") //$NON-NLS-1$
+                    .getBytes(StandardCharsets.UTF_8));
+            File outputDir = newFolder("cfg-huge-out"); //$NON-NLS-1$
+            BslLsRunner.withoutFileWritingKeys(config, outputDir.toPath());
+            fail("an oversized config must be refused, not handed to the engine unstripped");
+        }
+        catch (IOException e)
+        {
+            fail("unexpected IO failure: " + e.getMessage()); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue("the refusal must explain itself: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("read-only") //$NON-NLS-1$
+                    || expected.getMessage().contains("larger than")); //$NON-NLS-1$
+        }
+    }
 
-        assertEquals("a malformed config must reach the engine, which diagnoses it better than we can", //$NON-NLS-1$
-            config.getAbsolutePath(),
-            BslLsRunner.withoutFileWritingKeys(config, outputDir.toPath()).getAbsolutePath());
+    @Test
+    public void testMalformedConfigIsRefusedForTheSameReason()
+    {
+        // Previously a broken config was passed through "so the engine can diagnose it" - but the
+        // engine reading it directly is precisely what leaves traceLog in play. Same verdict.
+        File dir = newFolder("cfg-bad"); //$NON-NLS-1$
+        File config = new File(dir, ".bsl-language-server.json"); //$NON-NLS-1$
+        try
+        {
+            Files.write(config.toPath(), "{ this is not json".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+            File outputDir = newFolder("cfg-bad-out"); //$NON-NLS-1$
+            BslLsRunner.withoutFileWritingKeys(config, outputDir.toPath());
+            fail("a config that cannot be parsed cannot be stripped, so it must be refused");
+        }
+        catch (IOException e)
+        {
+            fail("unexpected IO failure: " + e.getMessage()); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue("the refusal must name the file: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains(".bsl-language-server.json")); //$NON-NLS-1$
+        }
     }
 }

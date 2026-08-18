@@ -25,7 +25,7 @@ dir (cleaned up) and must never mutate the project on disk.
 from harness import (
     call, assert_ok, assert_contains, assert_not_contains, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, PROJECT, E2ESkip, _fail,
-    split_markdown_row,
+    split_markdown_row, PROJECT_DIR,
 )
 
 # Substrings that identify the actionable "engine not installed" error
@@ -209,6 +209,22 @@ def test_exclude_rule_drops_only_the_named_rule():
     assert_no_diff("a read-only review must not touch the project on disk")
 
 
+def _filesystem_is_case_insensitive():
+    """Does THIS filesystem resolve a differently-cased name to the same file?
+
+    Asked of the fixture itself rather than guessed from the OS name: a case-sensitive volume can
+    be mounted on Windows and macOS is configurable either way.
+    """
+    import os
+    probe = os.path.join(PROJECT_DIR, "src", "Configuration", "Configuration.mdo")
+    if not os.path.isfile(probe):
+        # NOT the same as "case-sensitive": the probe is simply gone (fixture moved, or
+        # MCP_PROJECT_REL points elsewhere). Returning False here would silently disable the
+        # regression this test guards on Windows while claiming the filesystem is case-sensitive.
+        _fail("case-sensitivity probe %s is missing - cannot tell what this filesystem does" % probe)
+    return os.path.isfile(probe.lower()) and os.path.isfile(probe.upper())
+
+
 @e2e_test(tool="code_review", kind="read")
 def test_module_path_matching_is_case_insensitive_on_the_filesystem():
     """A modulePath whose casing differs from the on-disk name must still scope correctly.
@@ -219,7 +235,14 @@ def test_module_path_matching_is_case_insensitive_on_the_filesystem():
     clean". A false clean is the worst answer this tool can give, which is why identity is
     decided by the filesystem (Files.isSameFile) rather than by string equality.
 
-    Needs a real filesystem, so it lives here rather than in a unit test."""
+    Needs a real filesystem, so it lives here rather than in a unit test - and it only MEANS
+    anything where the filesystem is case-insensitive. On a case-sensitive volume (Linux) the
+    lowercased path names nothing, the tool correctly answers "Module not found", and asserting
+    findings there would be asserting the opposite of correct behaviour. So probe the filesystem
+    first and skip when case-only lookup genuinely cannot work."""
+    if not _filesystem_is_case_insensitive():
+        raise E2ESkip("case-sensitive filesystem: a case-only path variant names no file here, "
+                      "so there is nothing for this test to assert")
     exact = _run_or_skip({"projectName": PROJECT, "modulePath": CALC_MODULE}, "module review, exact casing")
     assert_ok(exact, "module review with the canonical casing")
     assert_contains(exact.text, "MagicNumber", "the canonical casing must report the module's finding")
