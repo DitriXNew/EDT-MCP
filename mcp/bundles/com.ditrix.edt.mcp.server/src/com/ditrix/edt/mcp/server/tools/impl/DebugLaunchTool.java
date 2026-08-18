@@ -1038,7 +1038,13 @@ public class DebugLaunchTool implements IMcpTool
         try
         {
             String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            String applicationId = LaunchConfigUtils.getApplicationIdFor(config);
+            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
+            // configuration without a stored ATTR_APPLICATION_ID launches the default application
+            // application, while getApplicationIdFor yields a synthetic "launch:<name>" that no
+            // IApplicationManager knows - so attribution came back null and the arm, though
+            // created, could never authorise the re-address the caller asked for.
+            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
+                projectName);
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.isOpen())
             {
@@ -1065,7 +1071,13 @@ public class DebugLaunchTool implements IMcpTool
         try
         {
             String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            String applicationId = LaunchConfigUtils.getApplicationIdFor(config);
+            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
+            // configuration without a stored ATTR_APPLICATION_ID launches the default application
+            // application, while getApplicationIdFor yields a synthetic "launch:<name>" that no
+            // IApplicationManager knows - so attribution came back null and the arm, though
+            // created, could never authorise the re-address the caller asked for.
+            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
+                projectName);
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.isOpen())
             {

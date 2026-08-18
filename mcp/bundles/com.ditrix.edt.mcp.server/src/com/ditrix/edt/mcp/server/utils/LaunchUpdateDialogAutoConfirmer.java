@@ -2326,11 +2326,7 @@ public final class LaunchUpdateDialogAutoConfirmer
                 {
                     // Told apart: a caller that asked to move the server but was outvoted by a
                     // concurrent one gets different advice from a caller whose own policy refused.
-                    // Told apart by the SAME attribution the press uses. On the loose matcher a
-                    // dialog of "My Base" was reported as "vetoed" because an arm for "Base"
-                    // had asked for a re-address — advice about someone else's call.
-                    refusalReason = portArmsForServer(detail).isEmpty() ? PORT_REASON_NOT_ATTRIBUTED
-                        : (reassignAskedFor(detail) ? PORT_REASON_VETOED : PORT_REASON_POLICY);
+                    refusalReason = refusalReasonFor(detail);
                 }
             }
             notePortConflict(detail, refusalReason);
@@ -2371,6 +2367,40 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param detail the dialog text
      * @return the arms demonstrably about this server
      */
+    /**
+     * WHY the writing answer was refused, told apart so the caller gets advice about its OWN call.
+     *
+     * <p>Attribution by server name comes first, matching the press itself. When no arm named this
+     * server, one that could not resolve a name may still be the caller's own — and if ITS policy
+     * declined the re-address, the honest reason is {@code POLICY} with the
+     * {@code standaloneServerPortConflict='reassign'} hint, not {@code NOT_ATTRIBUTED}. A nameless
+     * arm that DID ask for the re-address gets {@code NOT_ATTRIBUTED}, because "we could not tell
+     * whose dialog this is" is exactly why it was refused.
+     *
+     * @param detail the dialog text
+     * @return one of the {@code PORT_REASON_*} constants
+     */
+    private static String refusalReasonFor(String detail)
+    {
+        synchronized (LOCK)
+        {
+            if (!portArmsForServer(detail).isEmpty())
+            {
+                return reassignAskedFor(detail) ? PORT_REASON_VETOED : PORT_REASON_POLICY;
+            }
+            for (PortConflictArm arm : PORT_CONFLICT_ARMS)
+            {
+                if (arm.serverName == null && arm.infobaseName != null
+                    && arm.policy != StandaloneServerPortConflictPolicy.REASSIGN
+                    && namesThisServer(detail, arm.infobaseName))
+                {
+                    return PORT_REASON_POLICY;
+                }
+            }
+            return PORT_REASON_NOT_ATTRIBUTED;
+        }
+    }
+
     private static List<PortConflictArm> portArmsForServer(String detail)
     {
         List<PortConflictArm> attributed = new ArrayList<>();
@@ -2719,6 +2749,52 @@ public final class LaunchUpdateDialogAutoConfirmer
         return segments;
     }
 
+    /**
+     * Whether some OTHER window covering {@code infobaseName} resolved a server name and that name
+     * is what this dialog quotes.
+     *
+     * <p>This is what tells two look-alike situations apart. Two windows over the SAME server, one
+     * of whose lookups failed: the named one matches exactly, so the unnamed one is demonstrably
+     * about the same server and must hear the event too. A window over {@code Base} while
+     * {@code My Base} raises the dialog: nothing corroborates it, and the suffix alone must not be
+     * allowed to claim a foreign conflict.
+     *
+     * @param detail the dialog text
+     * @param infobaseName the unnamed window's infobase
+     * @return {@code true} when a named sibling claims this dialog
+     */
+    private static boolean corroboratedByNamedSibling(String detail, String infobaseName)
+    {
+        for (ConflictWatch other : CONFLICT_WATCHES)
+        {
+            if (other.serverName != null && Objects.equals(other.infobaseName, infobaseName)
+                && namesThisServerExactly(detail, other.serverName))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether NO open window could resolve a server name at all — the older-EDT / everything-failed
+     * case, where the infobase matcher is the only evidence anyone has and refusing it would blind
+     * every window at once.
+     *
+     * @return {@code true} when no window carries a server name
+     */
+    private static boolean noWindowNamedAServer()
+    {
+        for (ConflictWatch watch : CONFLICT_WATCHES)
+        {
+            if (watch.serverName != null)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static List<ConflictWatch> portConflictTargets(String detail)
     {
         // Each window is judged by the BEST evidence it has, and only a window that demonstrably
@@ -2738,10 +2814,15 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
             else if (watch.infobaseName != null)
             {
-                // No server name resolved: the infobase is the best evidence it has. Loose, but
-                // this window has already proved it cannot do better, and losing its diagnosis is
-                // the failure this accounting exists to prevent.
-                if (detail != null && namesThisServer(detail, watch.infobaseName))
+                // No server name resolved, so the infobase is all it has - and by itself that is
+                // the very test this change removed: "…for My Base" ends with " Base" too. It is
+                // trusted only when CORROBORATED, i.e. when another window for the SAME infobase
+                // did resolve a server name and that name is what this dialog quotes. Then the
+                // dialog is demonstrably about this infobase's server, and both windows - the
+                // same operation, one of whose lookups happened to fail - hear it.
+                if (corroboratedByNamedSibling(detail, watch.infobaseName)
+                    || (noWindowNamedAServer() && detail != null
+                        && namesThisServer(detail, watch.infobaseName)))
                 {
                     targets.add(watch);
                 }
