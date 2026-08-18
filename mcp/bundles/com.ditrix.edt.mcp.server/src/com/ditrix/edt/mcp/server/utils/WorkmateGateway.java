@@ -1456,6 +1456,20 @@ public class WorkmateGateway
                 // Deliberately swallowed: only the absolute deadline above ends this wait.
                 continue;
             }
+            catch (ExecutionException failed)
+            {
+                // The token handed to Workmate reports "cancelled" the moment the budget is spent,
+                // and Workmate answers that by completing the future EXCEPTIONALLY - waking this
+                // blocking get with a failure that is really our own timeout in disguise.
+                // Re-arbitrated against the clock, so the caller gets the timeout diagnosis and
+                // its "raise timeoutSeconds" advice instead of "the tool failed".
+                if (budgetSpent(deadlineNanos))
+                {
+                    cancelled.set(true);
+                    throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
+                }
+                throw failed;
+            }
         }
     }
 
