@@ -289,7 +289,13 @@ public class WorkmateGateway
          * a larger budget" would run that work a second time.
          */
         TIMED_OUT_AFTER_DISPATCH,
-        CALL_FAILED
+        CALL_FAILED,
+        /**
+         * The call failed AFTER the request had reached Workmate. Same reason
+         * {@link #TIMED_OUT_AFTER_DISPATCH} exists: that turn had already started and its
+         * tools change this configuration, so the advice must not end in "retry".
+         */
+        FAILED_AFTER_DISPATCH
     }
 
     /** Checked adapter failure carrying a stable category and a diagnostic detail. */
@@ -357,6 +363,12 @@ public class WorkmateGateway
         public static GatewayException callFailed(String detail)
         {
             return new GatewayException(FailureKind.CALL_FAILED, detail);
+        }
+
+        /** @return failure of a turn that had already been sent and may have run tools */
+        public static GatewayException failedAfterDispatch(String detail)
+        {
+            return new GatewayException(FailureKind.FAILED_AFTER_DISPATCH, detail);
         }
     }
 
@@ -667,7 +679,7 @@ public class WorkmateGateway
                 // Workmate said something every time and never finished. Reporting its last
                 // announcement as the answer would be exactly the #427 behaviour; reporting
                 // "empty" would be untrue. So the call fails, quoting what it kept saying.
-                throw GatewayException.callFailed("1C:Workmate never produced a final answer: " //$NON-NLS-1$
+                throw GatewayException.failedAfterDispatch("1C:Workmate never produced a final answer: " //$NON-NLS-1$
                     + "after " + continuations + " continuation(s) - each of which had already " //$NON-NLS-1$ //$NON-NLS-2$
                     + "run, possibly through its tools, so inspect Workmate and the project " //$NON-NLS-1$
                     + "before repeating the request - it was still announcing what " //$NON-NLS-1$
@@ -1093,7 +1105,8 @@ public class WorkmateGateway
             cancelled.set(true);
             future.cancel(true);
             Thread.currentThread().interrupt();
-            throw GatewayException.callFailed("the waiting thread was interrupted"); //$NON-NLS-1$
+            throw GatewayException.failedAfterDispatch("the waiting thread was interrupted " //$NON-NLS-1$
+                + "while the turn was already running."); //$NON-NLS-1$
         }
         catch (ExecutionException e)
         {
@@ -1136,7 +1149,7 @@ public class WorkmateGateway
             // This turn has ALREADY run - possibly through Workmate's tools, which change this
             // configuration. A bare "call failed" would be answered with a retry that performs
             // the same work again, so the message says what happened and what to check first.
-            throw GatewayException.callFailed("1C:Workmate answered, but its conversation handle "
+            throw GatewayException.failedAfterDispatch("1C:Workmate answered, but its conversation handle "
                 + "could not be read (" + e.getDetail() + "), so the conversation cannot be "
                 + "continued. That answer was already produced and its tools may have run: "
                 + "inspect Workmate and the project before starting the same request again."); //$NON-NLS-1$
@@ -1158,9 +1171,10 @@ public class WorkmateGateway
         {
             return continuationFailed(detail);
         }
-        return GatewayException.callFailed("1C:Workmate failed after its turn had already " //$NON-NLS-1$
-            + "started (" + detail + "). That turn was running Workmate's tools, which change " //$NON-NLS-1$ //$NON-NLS-2$
-            + "this project: inspect Workmate and the project before repeating the request."); //$NON-NLS-1$
+        return GatewayException.failedAfterDispatch("1C:Workmate failed after its turn had " //$NON-NLS-1$
+            + "already started (" + detail + "). That turn was running Workmate's tools, which " //$NON-NLS-1$ //$NON-NLS-2$
+            + "change this project: inspect Workmate and the project before repeating the " //$NON-NLS-1$
+            + "request."); //$NON-NLS-1$
     }
 
     /**
@@ -1172,7 +1186,7 @@ public class WorkmateGateway
      */
     private static GatewayException continuationFailed(String detail)
     {
-        return GatewayException.callFailed("1C:Workmate failed while continuing the " //$NON-NLS-1$
+        return GatewayException.failedAfterDispatch("1C:Workmate failed while continuing the " //$NON-NLS-1$
             + "conversation (" + detail + "). Earlier turns had already run and their tools may " //$NON-NLS-1$ //$NON-NLS-2$
             + "have changed the project: inspect Workmate and the project before repeating the " //$NON-NLS-1$
             + "request."); //$NON-NLS-1$
@@ -1223,12 +1237,19 @@ public class WorkmateGateway
                     // still running now. Without the second, a single long tool call - the very
                     // case this timeout must not interrupt - would look like silence after its
                     // one tick.
-                    if (calls != seenCalls || BridgeActivity.inFlight() > 0)
+                    //
+                    // The third case is not evidence at all: while a second turn is awaited the
+                    // signal cannot be attributed, so the clock does not RUN rather than merely
+                    // not firing. Without this reset, the silence measured during the ambiguous
+                    // stretch would be spent the instant the other turn ended, and the survivor
+                    // would be cut without ever having been watched alone for a full window.
+                    if (calls != seenCalls || BridgeActivity.inFlight() > 0
+                        || !isOnlyAwaitedTurn())
                     {
                         seenCalls = calls;
                         lastActivity = System.nanoTime();
                     }
-                    else if (isOnlyAwaitedTurn() && System.nanoTime() - lastActivity
+                    else if (System.nanoTime() - lastActivity
                         >= TimeUnit.MILLISECONDS.toNanos(idleTurnTimeoutMs))
                     {
                         throw new IdleTimeoutException();

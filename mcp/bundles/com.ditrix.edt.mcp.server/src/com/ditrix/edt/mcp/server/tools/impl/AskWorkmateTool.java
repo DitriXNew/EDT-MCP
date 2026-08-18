@@ -653,6 +653,14 @@ public class AskWorkmateTool implements IMcpTool
                     + "simply retry: check the Workmate chat panel and the project (" //$NON-NLS-1$
                     + "get_project_errors, git status) for what it already did, and only then " //$NON-NLS-1$
                     + "start a new ask_workmate job, with a larger timeoutSeconds."; //$NON-NLS-1$
+            case FAILED_AFTER_DISPATCH:
+                // The detail already says the turn had run; what must NOT follow it is the
+                // "then retry ask_workmate" this method appends to an ordinary failure. The two
+                // sentences together would tell the caller to repeat work that may be half-done.
+                return "1C:Workmate failed after the request had been sent: " //$NON-NLS-1$
+                    + error.getDetail() + " Do NOT simply repeat the question: check the " //$NON-NLS-1$
+                    + "Workmate chat panel and the project (get_project_errors, git status) " //$NON-NLS-1$
+                    + "for what it already did, and only then start a new ask_workmate job."; //$NON-NLS-1$
             case CALL_FAILED:
             default:
                 return "1C:Workmate failed to answer: " + error.getDetail() //$NON-NLS-1$

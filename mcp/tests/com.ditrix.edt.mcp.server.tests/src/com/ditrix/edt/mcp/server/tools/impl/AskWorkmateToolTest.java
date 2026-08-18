@@ -355,6 +355,19 @@ public class AskWorkmateToolTest
     }
 
     @Test
+    public void testAFailureAfterDispatchNeverAsksForARetry()
+    {
+        // The detail says the turn had already run; the wrapper must not undo that by
+        // appending "then retry ask_workmate", which is what the ordinary failure says.
+        String result = executeWithFailure(GatewayException.failedAfterDispatch(
+            "1C:Workmate failed while continuing the conversation (boom).")); //$NON-NLS-1$
+        assertJobFailedContains(result, "failed after the request had been sent", //$NON-NLS-1$
+            "Do NOT simply repeat", "get_project_errors", "start a new ask_workmate job"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a dispatched failure must never invite a blind retry", //$NON-NLS-1$
+            result.contains("then retry ask_workmate")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testEmptyAnswerMovesJobToFailed()
     {
         AskWorkmateTool nullText = tool(stubReturning(null, "reasoning")); //$NON-NLS-1$
