@@ -1433,6 +1433,14 @@ public class WorkmateGateway
             // given - cancelling a tool that was about to finish inside it.
             if (budgetSpent(deadlineNanos))
             {
+                // A RESULT beats the clock. If this thread was descheduled at the boundary while
+                // the tool finished, the work is done and its answer is in hand: reporting a
+                // timeout would throw away a real result and, worse, tell the caller its tool may
+                // still be running when it demonstrably is not.
+                if (future.isDone() && !future.isCancelled())
+                {
+                    return future.get();
+                }
                 cancelled.set(true);
                 throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
             }
