@@ -122,6 +122,12 @@ public class WorkmateGateway
     /** The Russian negation particle that turns any of the verbs below into a refusal. */
     private static final String NEGATION_PARTICLE = "\u043D\u0435"; // не
 
+    /** Words that turn a following "not" into a correlative rather than a denial. */
+    private static final String[] CORRELATIVE_AFTER_NOT = {
+        "only", //$NON-NLS-1$
+        "just" //$NON-NLS-1$
+    };
+
     private static final String[] NEGATING_ADVERBS = {
         "not", //$NON-NLS-1$
         "never" //$NON-NLS-1$
@@ -611,6 +617,34 @@ public class WorkmateGateway
     }
 
     /**
+     * Whether one of {@code words} begins at the first non-space position at or after
+     * {@code from}, as a whole word.
+     *
+     * @param text the lowercased answer
+     * @param from where to start looking
+     * @param words the candidate words
+     * @return {@code true} when one of them is the next word
+     */
+    private static boolean startsWord(String text, int from, String[] words)
+    {
+        int start = from;
+        while (start < text.length() && text.charAt(start) == ' ')
+        {
+            start++;
+        }
+        for (String word : words)
+        {
+            int end = start + word.length();
+            if (text.startsWith(word, start)
+                && (end >= text.length() || !Character.isLetter(text.charAt(end))))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether {@code text} contains {@code marker} as a whole word.
      *
      * <p>A plain {@code contains} with a trailing space in the marker misses every announcement
@@ -700,11 +734,13 @@ public class WorkmateGateway
         }
         for (String adverb : NEGATING_ADVERBS)
         {
+            int end = start + adverb.length();
             if (text.startsWith(adverb, start)
-                && (start + adverb.length() >= text.length()
-                    || !Character.isLetter(text.charAt(start + adverb.length()))))
+                && (end >= text.length() || !Character.isLetter(text.charAt(end))))
             {
-                return true;
+                // "I will NOT ONLY inspect the module, I will also fix it" denies nothing - the
+                // correlative intensifies the announcement that follows it.
+                return !startsWord(text, end, CORRELATIVE_AFTER_NOT);
             }
         }
         return false;
@@ -787,7 +823,12 @@ public class WorkmateGateway
         }
         catch (ExecutionException e)
         {
-            throw GatewayException.callFailed(rootCauseMessage(e));
+            // A CONTINUATION failing means earlier turns already ran - possibly through Workmate's
+            // tools. Repeating the whole request would repeat those, so the message says so.
+            throw GatewayException.callFailed(firstTurn ? rootCauseMessage(e)
+                : "1C:Workmate failed while continuing the conversation (" + rootCauseMessage(e) //$NON-NLS-1$
+                    + "). Earlier turns had already run and their tools may have changed the " //$NON-NLS-1$
+                    + "project: inspect Workmate and the project before repeating the request."); //$NON-NLS-1$
         }
 
         if (sendResult == null)

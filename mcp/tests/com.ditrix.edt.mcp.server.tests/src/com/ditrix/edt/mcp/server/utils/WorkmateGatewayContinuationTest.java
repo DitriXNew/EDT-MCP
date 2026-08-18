@@ -152,6 +152,14 @@ public class WorkmateGatewayContinuationTest
             WorkmateGateway.needsContinuation("\u042F \u0431\u0443\u0434\u0443 \u0440\u0430\u0434 \u043F\u043E\u043C\u043E\u0447\u044C \u0441 \u044D\u0442\u0438\u043C \u0437\u0430\u043F\u0440\u043E\u0441\u043E\u043C.")); //$NON-NLS-1$
     }
     @Test
+    public void testNotOnlyIntensifiesRatherThanNegates()
+    {
+        // Review of #440, eighth round: the correlative denies nothing - the sentence announces
+        // MORE work, not less.
+        assertTrue(WorkmateGateway.needsContinuation(
+            "I will not only inspect the module, I will also fix the query."));
+    }
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word
