@@ -137,21 +137,26 @@ How a turn is judged finished, in order of authority:
 
 A turn that goes SILENT for two minutes ends the conversation instead of holding the job
 open: you get whatever Workmate produced so far. Silence, not elapsed time - a turn that is
-working (its calls back into this plugin are recorded) keeps its clock reset, so a tool loop
-that legitimately runs for minutes is never cut off.
+working keeps its clock reset, and "working" means a call it started through this plugin's
+bridge or one still running there, so a tool loop that legitimately runs for minutes is never
+cut off.
 
 Whenever the marker never arrived - because the conversation went quiet, or because the
 continuations ran out - the result carries an explicit **"Completion not confirmed"** note
 above the answer. Read that as "this is the last thing it said", not as "this is the answer".
-What comes back is the last text that was ACCEPTED as an answer - an
-announcement is never promoted to the result just because nothing better
-followed it, and a later empty turn never erases an answer already produced. If
-no turn ever produced one, the job FAILS rather than returning the plan: the
-error quotes what Workmate kept announcing and says what to change (a narrower
-question, a larger `timeoutSeconds`). That failure - like any failure after a
-turn has been dispatched - warns you to inspect Workmate and the project before
-repeating the request, because those turns had already run and their tools may
-have changed something.
+
+What comes back is the last text that was ACCEPTED as an answer: an announcement is never
+promoted to the result just because nothing better followed it, and a later empty turn never
+erases an answer already produced. If no turn ever produced an answer, the job FAILS rather
+than returning the plan - the error quotes what Workmate kept announcing and says what to
+change (a narrower question, a larger `timeoutSeconds`).
+
+Silence is the one case where that plan is handed back rather than dropped, because it says
+where Workmate stopped. It is then labelled **"Not an answer"** on top of the "Completion not
+confirmed" note: what you are reading is what Workmate said it was GOING to do, so treat that
+work as possibly half-done and inspect the project. Any failure after a turn has been
+dispatched carries the same warning - inspect Workmate and the project before repeating the
+request, because those turns had already run and their tools may have changed something.
 
 Workmate may contact its configured cloud service and its conversation loop may
 invoke Workmate's own tools. Review the question and selected project/skill with

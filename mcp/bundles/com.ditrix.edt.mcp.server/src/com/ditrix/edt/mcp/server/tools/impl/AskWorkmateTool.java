@@ -679,8 +679,12 @@ public class AskWorkmateTool implements IMcpTool
                 ? ", even after being asked " + continuations + " time(s) to continue the same " //$NON-NLS-1$ //$NON-NLS-2$
                     + "conversation" //$NON-NLS-1$
                 : "") //$NON-NLS-1$
-            + ". Open Workmate in EDT, verify that it is signed in and configured, then start a " //$NON-NLS-1$
-            + "new ask_workmate job."; //$NON-NLS-1$
+            // Empty is not the same as "nothing happened": the question HAD been dispatched, and
+            // Workmate's tool loop edits this project. A bare "start a new job" would invite a
+            // second run of work that may already be half-done.
+            + ". Those turns had already run, and Workmate's tools change this project: inspect " //$NON-NLS-1$
+            + "Workmate and the project first. Then, if the work was not done, verify that " //$NON-NLS-1$
+            + "Workmate is signed in and configured and start a new ask_workmate job."; //$NON-NLS-1$
     }
 
     private static String trimToNull(String value)

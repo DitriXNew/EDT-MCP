@@ -69,4 +69,28 @@ public class WorkmateFinalityNoteTest
         assertTrue("the reason matters: silence is not the same as running out of turns",
             rendered.contains("stopped answering"));
     }
+
+    @Test
+    public void testAPlanLeftBehindBySilenceIsNotCalledAnAnswer() throws Exception
+    {
+        // Review of #440: when the conversation goes quiet with nothing but an announcement in
+        // hand, the text is still worth reporting - it says where Workmate stopped - but it was
+        // never accepted as an answer, and "may be partial" is far too mild for that.
+        String rendered = renderAnswer(new WorkmateResponse(
+            "I will inspect the module and report back.", null, null, 5, false, true, false));
+        assertTrue(rendered.contains("Completion not confirmed"));
+        assertTrue("a plan must be named as a plan", rendered.contains("Not an answer"));
+        assertTrue("and the caller must be told the work may be half-done",
+            rendered.contains("inspect the project"));
+    }
+
+    @Test
+    public void testAnAcceptedAnswerIsNotCalledAPlan() throws Exception
+    {
+        // The same note must NOT appear over a real answer that merely lacks the marker.
+        String rendered = renderAnswer(new WorkmateResponse(
+            "ValueTable holds rows and typed columns.", null, null, 2, false, true));
+        assertTrue(rendered.contains("Completion not confirmed"));
+        assertFalse("this text WAS accepted as an answer", rendered.contains("Not an answer"));
+    }
 }

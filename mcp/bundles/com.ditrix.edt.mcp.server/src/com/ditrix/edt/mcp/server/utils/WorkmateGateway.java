@@ -22,7 +22,7 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
-import com.ditrix.edt.mcp.server.history.McpCallHistory;
+import com.ditrix.edt.mcp.server.bridge.BridgeActivity;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.IDocument;
@@ -141,9 +141,10 @@ public class WorkmateGateway
      * the result says the completion marker never arrived.
      *
      * <p>IDLE, not elapsed: a turn that is working - calling this plugin's tools through the
-     * bridge, which every call records in {@code McpCallHistory} - keeps the clock reset. Only
-     * silence counts, because a tool loop that legitimately runs for minutes must not be cut off
-     * (a project question measured 75 s here, and a bigger project takes longer).
+     * bridge, which reports both started calls and calls still running ({@link BridgeActivity}) -
+     * keeps the clock reset. Only silence counts, because a tool loop that legitimately runs for
+     * minutes must not be cut off (a project question measured 75 s here, and a bigger project
+     * takes longer).
      */
     private static final long IDLE_TURN_TIMEOUT_MS = 120_000L;
 
@@ -356,6 +357,7 @@ public class WorkmateGateway
         private final int continuations;
         private final boolean declaredFinal;
         private final boolean wentQuiet;
+        private final boolean answerAccepted;
 
         public WorkmateResponse(String text, String reasoning)
         {
@@ -373,8 +375,15 @@ public class WorkmateGateway
             this(text, reasoning, assistantMessageCount, continuations, true, false);
         }
 
-        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount, // NOSONAR the outcome needs every one of these to be reported honestly
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount,
             int continuations, boolean declaredFinal, boolean wentQuiet)
+        {
+            this(text, reasoning, assistantMessageCount, continuations, declaredFinal, wentQuiet,
+                true);
+        }
+
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount, // NOSONAR the outcome needs every one of these to be reported honestly
+            int continuations, boolean declaredFinal, boolean wentQuiet, boolean answerAccepted)
         {
             this.text = text;
             this.reasoning = reasoning;
@@ -382,6 +391,7 @@ public class WorkmateGateway
             this.continuations = continuations;
             this.declaredFinal = declaredFinal;
             this.wentQuiet = wentQuiet;
+            this.answerAccepted = answerAccepted;
         }
 
         public String getText()
@@ -440,6 +450,19 @@ public class WorkmateGateway
         public boolean wentQuiet()
         {
             return wentQuiet;
+        }
+
+        /**
+         * Whether this text was ever ACCEPTED as an answer. When it was not, it is the last
+         * thing Workmate announced it was going to do - kept rather than thrown away because a
+         * conversation that stopped mid-work still tells the caller where it stopped, but it is
+         * not a result and must never be read as one.
+         *
+         * @return {@code true} when the text is an accepted answer
+         */
+        public boolean isAnswerAccepted()
+        {
+            return answerAccepted;
         }
     }
 
@@ -646,7 +669,7 @@ public class WorkmateGateway
             progress.onProgress(declaredFinal ? "Received the Workmate response." //$NON-NLS-1$
                 : "Received a response that Workmate did not mark as final."); //$NON-NLS-1$
             return new WorkmateResponse(reported, reasoning, assistantMessages, continuations,
-                declaredFinal, wentQuiet);
+                declaredFinal, wentQuiet, answer != null);
         }
         catch (GatewayException e)
         {
@@ -705,19 +728,38 @@ public class WorkmateGateway
         {
             return null;
         }
+        // Only the TRAILING marker is protocol. One written inside the text is the model's own
+        // words - explaining the protocol, quoting an earlier answer - and cutting it would edit
+        // the answer this adapter is supposed to pass through.
+        //
         // Case-insensitive matching WITHOUT lowercasing the text: a character whose lowercase
         // mapping is longer (U+0130, say) shifts every later index, and deleting by an index taken
         // from the lowercased copy would then cut the answer instead of the marker.
         StringBuilder cleaned = new StringBuilder(text);
-        for (int at = cleaned.length() - FINAL_MARKER.length(); at >= 0; at--)
+        trimEnd(cleaned);
+        while (cleaned.length() >= FINAL_MARKER.length()
+            && regionMatchesIgnoreCase(cleaned, cleaned.length() - FINAL_MARKER.length()))
         {
-            if (regionMatchesIgnoreCase(cleaned, at))
-            {
-                cleaned.delete(at, at + FINAL_MARKER.length());
-            }
+            cleaned.setLength(cleaned.length() - FINAL_MARKER.length());
+            trimEnd(cleaned);
         }
         String result = cleaned.toString().trim();
         return result.isEmpty() ? null : result;
+    }
+
+    /**
+     * Drops trailing whitespace from {@code text} in place.
+     *
+     * @param text the buffer being cleaned
+     */
+    private static void trimEnd(StringBuilder text)
+    {
+        int end = text.length();
+        while (end > 0 && Character.isWhitespace(text.charAt(end - 1)))
+        {
+            end--;
+        }
+        text.setLength(end);
     }
 
     /**
@@ -786,11 +828,7 @@ public class WorkmateGateway
      */
     private static boolean startsWord(String text, int from, String[] words)
     {
-        int start = from;
-        while (start < text.length() && text.charAt(start) == ' ')
-        {
-            start++;
-        }
+        int start = skipWhitespaceForward(text, from);
         for (String word : words)
         {
             int end = start + word.length();
@@ -801,6 +839,44 @@ public class WorkmateGateway
             }
         }
         return false;
+    }
+
+    /**
+     * The first non-whitespace position at or after {@code from}.
+     *
+     * <p>ALL whitespace, not the space character: a model wraps its lines where it likes, and
+     * "I will\nnot edit generated files" must read as the refusal it is rather than as an
+     * announcement whose negation happens to sit on the next line.
+     *
+     * @param text the lowercased answer
+     * @param from where to start
+     * @return the index of the next non-whitespace character, or the text length
+     */
+    private static int skipWhitespaceForward(String text, int from)
+    {
+        int start = from;
+        while (start < text.length() && Character.isWhitespace(text.charAt(start)))
+        {
+            start++;
+        }
+        return start;
+    }
+
+    /**
+     * The position just past the last non-whitespace character before {@code at}.
+     *
+     * @param text the lowercased answer
+     * @param at where to start looking back from
+     * @return the index just after the preceding word, or {@code 0}
+     */
+    private static int skipWhitespaceBackward(String text, int at)
+    {
+        int end = at;
+        while (end > 0 && Character.isWhitespace(text.charAt(end - 1)))
+        {
+            end--;
+        }
+        return end;
     }
 
     /**
@@ -880,11 +956,7 @@ public class WorkmateGateway
      */
     private static boolean negatedBefore(String text, int at)
     {
-        int end = at;
-        while (end > 0 && text.charAt(end - 1) == ' ')
-        {
-            end--;
-        }
+        int end = skipWhitespaceBackward(text, at);
         return end >= NEGATION_PARTICLE.length()
             && text.startsWith(NEGATION_PARTICLE, end - NEGATION_PARTICLE.length())
             && (end == NEGATION_PARTICLE.length()
@@ -900,11 +972,7 @@ public class WorkmateGateway
      */
     private static boolean negatedAfter(String text, int after)
     {
-        int start = after;
-        while (start < text.length() && text.charAt(start) == ' ')
-        {
-            start++;
-        }
+        int start = skipWhitespaceForward(text, after);
         for (String adverb : NEGATING_ADVERBS)
         {
             int end = start + adverb.length();
@@ -1016,21 +1084,35 @@ public class WorkmateGateway
         }
         catch (ExecutionException e)
         {
-            throw firstTurn ? GatewayException.callFailed(rootCauseMessage(e))
-                : continuationFailed(rootCauseMessage(e));
+            // The turn ran and then failed - on the FIRST send as much as on a continuation. Its
+            // tools may already have changed the project, so neither may invite a blind retry.
+            throw dispatchedFailed(firstTurn, rootCauseMessage(e));
         }
 
         if (sendResult == null)
         {
-            throw GatewayException.callFailed("sendAsync completed without a result"); //$NON-NLS-1$
+            throw dispatchedFailed(firstTurn, "sendAsync completed without a result"); //$NON-NLS-1$
         }
-        String text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
-        String reasoning =
-            stringValue(invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
-        // null BEFORE integerValue: that helper rejects every non-Number, null included, so
-        // converting first would turn "the platform reported no count" into a failed job.
-        Object rawCount = invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult); //$NON-NLS-1$
-        Integer count = rawCount == null ? null : integerValue(rawCount);
+        String text;
+        String reasoning;
+        Integer count;
+        try
+        {
+            text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
+            reasoning = stringValue(invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
+            // null BEFORE integerValue: that helper rejects every non-Number, null included, so
+            // converting first would turn "the platform reported no count" into a failed job.
+            Object rawCount =
+                invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult); //$NON-NLS-1$
+            count = rawCount == null ? null : integerValue(rawCount);
+        }
+        catch (GatewayException e)
+        {
+            // An answer that cannot be READ is still an answer that was produced: the same reason
+            // the conversation-handle failure below carries the inspect-first warning.
+            throw dispatchedFailed(firstTurn,
+                "its answer could not be read - " + e.getDetail()); //$NON-NLS-1$
+        }
         Object session;
         try
         {
@@ -1047,6 +1129,25 @@ public class WorkmateGateway
                 + "inspect Workmate and the project before starting the same request again."); //$NON-NLS-1$
         }
         return new Turn(text, reasoning, count, session);
+    }
+
+    /**
+     * A failure that happened AFTER the request went out, phrased so it is not answered with a
+     * blind retry: the turn had already started, and Workmate runs its tools inside it.
+     *
+     * @param firstTurn whether this was the conversation's first send
+     * @param detail what went wrong
+     * @return the failure to throw
+     */
+    private static GatewayException dispatchedFailed(boolean firstTurn, String detail)
+    {
+        if (!firstTurn)
+        {
+            return continuationFailed(detail);
+        }
+        return GatewayException.callFailed("1C:Workmate failed after its turn had already " //$NON-NLS-1$
+            + "started (" + detail + "). That turn was running Workmate's tools, which change " //$NON-NLS-1$ //$NON-NLS-2$
+            + "this project: inspect Workmate and the project before repeating the request."); //$NON-NLS-1$
     }
 
     /**
@@ -1067,9 +1168,11 @@ public class WorkmateGateway
     /**
      * Waits for the turn, giving up early only when it has gone SILENT.
      *
-     * <p>Activity is counted as calls Workmate made back into this plugin (every one is recorded
-     * by {@code McpCallHistory}), so a working tool loop keeps its clock reset while a
-     * conversation that simply stopped is not waited out to the end of the job's budget.
+     * <p>Activity is the calls Workmate makes back into this plugin, read from
+     * {@link BridgeActivity}: calls STARTED since the last look, plus calls still executing. Both
+     * are needed - a single tool that runs for minutes starts once and would otherwise read as
+     * silence - and neither can stand still while work goes on, which is why the retained call
+     * history is not the signal (it is bounded, and it can be switched off).
      *
      * @param future the turn's future
      * @param budgetMillis what is left of the caller's total budget
@@ -1084,7 +1187,7 @@ public class WorkmateGateway
     {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMillis);
         long lastActivity = System.nanoTime();
-        int seenCalls = bridgeCallCount();
+        long seenCalls = BridgeActivity.ticks();
         while (true)
         {
             long leftMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
@@ -1098,8 +1201,11 @@ public class WorkmateGateway
             }
             catch (TimeoutException stillRunning)
             {
-                int calls = bridgeCallCount();
-                if (calls != seenCalls)
+                long calls = BridgeActivity.ticks();
+                // Either signal means "alive": a new call since the last look, or one that is
+                // still running now. Without the second, a single long tool call - the very case
+                // this timeout must not interrupt - would look like silence after its one tick.
+                if (calls != seenCalls || BridgeActivity.inFlight() > 0)
                 {
                     seenCalls = calls;
                     lastActivity = System.nanoTime();
@@ -1110,24 +1216,6 @@ public class WorkmateGateway
                     throw new IdleTimeoutException();
                 }
             }
-        }
-    }
-
-    /**
-     * How many calls Workmate has made back into this plugin so far, or {@code -1} when the
-     * history is unavailable - which only means "no activity signal", never an error.
-     *
-     * @return the recorded call count
-     */
-    private static int bridgeCallCount()
-    {
-        try
-        {
-            return McpCallHistory.getInstance().size();
-        }
-        catch (RuntimeException | LinkageError e) // NOSONAR an activity probe must never fail a turn
-        {
-            return -1;
         }
     }
 

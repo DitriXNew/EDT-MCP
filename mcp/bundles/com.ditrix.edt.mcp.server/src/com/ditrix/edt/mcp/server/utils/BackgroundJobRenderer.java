@@ -99,6 +99,16 @@ public final class BackgroundJobRenderer
                         : "Workmate never sent its end-of-answer marker") //$NON-NLS-1$
                     .append(", so this is the last text it produced rather than an answer " //$NON-NLS-1$
                         + "it called complete. It may be partial.\n"); //$NON-NLS-1$
+                if (!workmateResponse.isAnswerAccepted())
+                {
+                    // Stronger than "may be partial": nothing here was ever accepted as an
+                    // answer. Saying only "not confirmed" would let a plan be read as a result -
+                    // the very behaviour issue #427 reported.
+                    target.append("> **Not an answer.** What follows is what Workmate said it " //$NON-NLS-1$
+                        + "was GOING to do; it never produced a result. Whatever it announced " //$NON-NLS-1$
+                        + "may have been half-done, so inspect the project before asking " //$NON-NLS-1$
+                        + "again.\n"); //$NON-NLS-1$
+                }
             }
             target.append("\n## Answer\n\n").append(trimToNull(workmateResponse.getText())); //$NON-NLS-1$
             String reasoning = trimToNull(workmateResponse.getReasoning());

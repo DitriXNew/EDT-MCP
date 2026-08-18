@@ -229,4 +229,28 @@ public class WorkmateGatewayContinuationTest
         assertFalse("a long answer is an answer, marker or not",
             WorkmateGateway.needsContinuation(longAnswer.toString()));
     }
+
+    @Test
+    public void testALineBreakDoesNotHideTheNegation()
+    {
+        // Review of #440: the scan skipped literal spaces only, so a refusal the model wrapped
+        // onto the next line read as the announcement it denies - and was continued.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "I will\nnot edit generated files; change the source model instead."));
+        assertFalse(WorkmateGateway.needsContinuation(
+            "\u042F \u043D\u0435\n\u043F\u0440\u043E\u0432\u0435\u0440\u044E \u0437\u0430\u043A\u0440\u044B\u0442\u0443\u044E \u0431\u0430\u0437\u0443; \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u043F\u0440\u0430\u0432\u0430 \u0434\u043E\u0441\u0442\u0443\u043F\u0430.")); //$NON-NLS-1$
+        assertTrue("a wrapped affirmative is still an announcement",
+            WorkmateGateway.needsContinuation("I will\ncheck the module list."));
+    }
+
+    @Test
+    public void testOnlyTheTrailingMarkerIsProtocol()
+    {
+        // Review of #440: a marker the model WRITES ABOUT belongs to the answer. Deleting every
+        // occurrence edited the text; only the last line is this adapter's bookkeeping.
+        String answer = "End every final answer with " + WorkmateGateway.FINAL_MARKER
+            + " on its own line.";
+        assertEquals(answer,
+            WorkmateGateway.stripFinalMarker(answer + "\n" + WorkmateGateway.FINAL_MARKER));
+    }
 }
