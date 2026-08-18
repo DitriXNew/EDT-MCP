@@ -141,13 +141,19 @@ working keeps its clock reset, and "working" means a call it started through thi
 bridge or one still running there, so a tool loop that legitimately runs for minutes is never
 cut off.
 
-Two limits of that rule, both deliberate. It sees only what comes back through this plugin, so
+Three limits of that rule, all deliberate. It sees only what comes back through this plugin, so
 a turn busy in Workmate's own tools or in a long model request looks silent - it can be
 wound up while it was in fact working, which is why the report says "no sign of work" rather
 than claiming Workmate stopped. And while more than one `ask_workmate` job is in flight the
 rule STANDS DOWN entirely, because a bridge call cannot be attributed to a conversation:
 ending a turn on another job's silence would be worse than waiting. With several jobs, the
 `timeoutSeconds` budget is the only bound.
+
+The third follows from the same anonymity, in the other direction: a `mode="chat"` hand-off
+completes its job at once and Workmate keeps working in the panel, where it may call these same
+tools. That traffic is counted as activity, so an answer-mode turn that really has gone quiet
+can be kept alive by an unrelated chat and run to its `timeoutSeconds` budget. The error is on
+the safe side - a job waits rather than being cut short - and `cancel_job` ends it early.
 
 Whenever the marker never arrived - because the conversation went quiet, or because the
 continuations ran out - the result carries an explicit **"Completion not confirmed"** note

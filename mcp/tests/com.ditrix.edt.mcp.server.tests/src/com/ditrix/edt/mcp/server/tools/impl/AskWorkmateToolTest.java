@@ -355,6 +355,22 @@ public class AskWorkmateToolTest
     }
 
     @Test
+    public void testARejectedToolNameIsReportedAsItStands()
+    {
+        // Found on the stand, not in a unit test: wrapping this message produced "failed to
+        // answer: 1C:Workmate knows no tool named ... again.. Check Workmate sign-in, network,
+        // and settings" - a stutter, a doubled stop, and irrelevant advice for a typo.
+        String detail = "1C:Workmate knows no tool named 'Nope' and rejected the call " //$NON-NLS-1$
+            + "without running anything. Check the name and call ask_workmate again."; //$NON-NLS-1$
+        String result = executeWithFailure(GatewayException.unknownTool(detail));
+        assertJobFailedContains(result, "knows no tool named", "without running anything"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("no second, unrelated diagnosis is bolted on", //$NON-NLS-1$
+            result.contains("sign-in")); //$NON-NLS-1$
+        assertFalse("and no doubled full stop where the two used to meet", //$NON-NLS-1$
+            result.contains("again..")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAFailureAfterDispatchNeverAsksForARetry()
     {
         // The detail says the turn had already run; the wrapper must not undo that by

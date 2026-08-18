@@ -653,6 +653,12 @@ public class AskWorkmateTool implements IMcpTool
                     + "simply retry: check the Workmate chat panel and the project (" //$NON-NLS-1$
                     + "get_project_errors, git status) for what it already did, and only then " //$NON-NLS-1$
                     + "start a new ask_workmate job, with a larger timeoutSeconds."; //$NON-NLS-1$
+            case UNKNOWN_TOOL:
+                // Returned AS IT STANDS. Live check: wrapping it produced "1C:Workmate failed to
+                // answer: 1C:Workmate knows no tool named 'X' ... call ask_workmate again.. Check
+                // Workmate sign-in, network, and settings" - a stutter, a doubled stop, and
+                // sign-in advice for a mistyped name.
+                return error.getDetail();
             case FAILED_AFTER_DISPATCH:
                 // The detail already says the turn had run; what must NOT follow it is the
                 // "then retry ask_workmate" this method appends to an ordinary failure. The two

@@ -44,8 +44,8 @@ public class WorkmateUnknownToolTest
                 e.getDetail().contains("NoSuchTool"));
             assertTrue("and it must be clear that nothing ran",
                 e.getDetail().contains("without running anything"));
-            assertTrue("so this one IS safe to repeat",
-                e.getKind() == WorkmateGateway.FailureKind.CALL_FAILED);
+            assertTrue("a name is not a dispatch: this one IS safe to repeat",
+                e.getKind() == WorkmateGateway.FailureKind.UNKNOWN_TOOL);
         }
     }
 

@@ -291,6 +291,12 @@ public class WorkmateGateway
         TIMED_OUT_AFTER_DISPATCH,
         CALL_FAILED,
         /**
+         * Workmate rejected the requested tool NAME before entering anything. Its own message
+         * is complete and actionable, so the tool reports it as it stands rather than dressing
+         * it in sign-in and network advice that has nothing to do with a mistyped name.
+         */
+        UNKNOWN_TOOL,
+        /**
          * The call failed AFTER the request had reached Workmate. Same reason
          * {@link #TIMED_OUT_AFTER_DISPATCH} exists: that turn had already started and its
          * tools change this configuration, so the advice must not end in "retry".
@@ -363,6 +369,12 @@ public class WorkmateGateway
         public static GatewayException callFailed(String detail)
         {
             return new GatewayException(FailureKind.CALL_FAILED, detail);
+        }
+
+        /** @return rejection of a tool NAME, before anything ran */
+        public static GatewayException unknownTool(String detail)
+        {
+            return new GatewayException(FailureKind.UNKNOWN_TOOL, detail);
         }
 
         /** @return failure of a turn that had already been sent and may have run tools */
@@ -2209,10 +2221,10 @@ public class WorkmateGateway
         }
         if (unknown instanceof Collection && !((Collection<?>)unknown).isEmpty())
         {
-            throw GatewayException.callFailed("1C:Workmate knows no tool named '" + toolName //$NON-NLS-1$
-                + "' and rejected the call without running anything. Check the name (it is " //$NON-NLS-1$
-                + "case-insensitive but must match a Workmate tool, e.g. JShellSession, JShell " //$NON-NLS-1$
-                + "or JShellManual) and call ask_workmate again."); //$NON-NLS-1$
+            throw GatewayException.unknownTool("1C:Workmate knows no tool named '" + toolName //$NON-NLS-1$
+                + "' and rejected the call without running anything. Check the name - it is " //$NON-NLS-1$
+                + "case-insensitive but must match a Workmate tool, for example JShellSession, " //$NON-NLS-1$
+                + "JShell or JShellManual - and call ask_workmate again."); //$NON-NLS-1$
         }
     }
 
