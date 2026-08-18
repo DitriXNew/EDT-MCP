@@ -119,6 +119,9 @@ public class WorkmateGateway
      * decision NOT to act - the one shape that looks exactly like an intent marker and means the
      * opposite of one, so it is checked first and wins.
      */
+    /** The Russian negation particle that turns any of the verbs below into a refusal. */
+    private static final String NEGATION_PARTICLE = "\u043D\u0435"; // не
+
     private static final String[] NEGATED_INTENT = {
         "i will not", //$NON-NLS-1$
         "i won't", //$NON-NLS-1$
@@ -138,7 +141,6 @@ public class WorkmateGateway
         "\u043F\u0440\u043E\u0432\u0435\u0440\u044E", // проверю //$NON-NLS-1$
         "\u0441\u043E\u0437\u0434\u0430\u043C", // создам //$NON-NLS-1$
         "\u043D\u0430\u0447\u043D\u0443", // начну //$NON-NLS-1$
-        "\u0441\u0435\u0439\u0447\u0430\u0441 \u044F", // сейчас я //$NON-NLS-1$
         "i will", //$NON-NLS-1$
         "i'll", //$NON-NLS-1$
         // "let me" alone is a discourse marker ("let me clarify: ..."), so only the phrases
@@ -451,6 +453,7 @@ public class WorkmateGateway
             String message = question;
             String answer = null;
             String reasoning = null;
+            String lastAnnouncement = null;
             // Nullable on purpose: "the platform did not report a count" is not "zero", and the
             // renderer omits the field for the former. One turn without a count makes the whole
             // aggregate unknown, because a partial sum would be published as if it were the total.
@@ -498,15 +501,23 @@ public class WorkmateGateway
                         : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
                     progress);
                 assistantMessages = addMessages(assistantMessages, turn.messages);
-                // The LAST non-blank text wins, not simply the last one: a continuation that
-                // comes back empty must not erase the answer an earlier turn already produced.
-                if (trimToNull(turn.text) != null)
+                boolean isAnswer = !needsContinuation(turn.text);
+                // Two DIFFERENT things are remembered, and the difference is the whole point of
+                // this loop: an accepted answer, and the last announcement. A later empty turn
+                // must not erase an answer already produced - but an announcement must never be
+                // promoted to "the answer" just because nothing better followed it, which is the
+                // very behaviour issue #427 reported.
+                if (isAnswer)
                 {
                     answer = turn.text;
                     reasoning = turn.reasoning;
                 }
-                if (!needsContinuation(turn.text) || turn.session == null
-                    || continuations >= MAX_CONTINUATIONS || remainingMillis(deadlineNanos) <= 0)
+                else if (trimToNull(turn.text) != null)
+                {
+                    lastAnnouncement = turn.text;
+                }
+                if (isAnswer || turn.session == null || continuations >= MAX_CONTINUATIONS
+                    || remainingMillis(deadlineNanos) <= 0)
                 {
                     break;
                 }
@@ -516,6 +527,16 @@ public class WorkmateGateway
                 progress.onProgress("Workmate answered with an intention rather than a result; " //$NON-NLS-1$
                     + "continuing the same conversation (" + continuations + " of " //$NON-NLS-1$ //$NON-NLS-2$
                     + MAX_CONTINUATIONS + ")."); //$NON-NLS-1$
+            }
+            if (answer == null && lastAnnouncement != null)
+            {
+                // Workmate said something every time and never finished. Reporting its last
+                // announcement as the answer would be exactly the #427 behaviour; reporting
+                // "empty" would be untrue. So the call fails, quoting what it kept saying.
+                throw GatewayException.callFailed("1C:Workmate never produced a final answer: " //$NON-NLS-1$
+                    + "after " + continuations + " continuation(s) it was still announcing what " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "it intended to do (\"" + summarize(lastAnnouncement) + "\"). Ask a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "narrower question, or raise timeoutSeconds so its tool loop can finish."); //$NON-NLS-1$
             }
             progress.onProgress("Received the Workmate response."); //$NON-NLS-1$
             return new WorkmateResponse(answer, reasoning, assistantMessages, continuations);
@@ -583,6 +604,18 @@ public class WorkmateGateway
     }
 
     /**
+     * First line (or first 160 characters) of a message, for quoting inside an error.
+     *
+     * @param text the message (never {@code null})
+     * @return a single-line excerpt
+     */
+    private static String summarize(String text)
+    {
+        String oneLine = text.trim().replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$
+        return oneLine.length() <= 160 ? oneLine : oneLine.substring(0, 157) + "..."; //$NON-NLS-1$
+    }
+
+    /**
      * Whether {@code text} contains {@code marker} as a whole word.
      *
      * <p>A plain {@code contains} with a trailing space in the marker misses every announcement
@@ -605,13 +638,38 @@ public class WorkmateGateway
                 return false;
             }
             int after = at + marker.length();
-            if (after >= text.length() || !Character.isLetter(text.charAt(after)))
+            if ((after >= text.length() || !Character.isLetter(text.charAt(after)))
+                && !isNegated(text, at))
             {
                 return true;
             }
             from = at + 1;
         }
         return false;
+    }
+
+    /**
+     * Whether the marker occurrence at {@code at} is directly negated, as in "\u043D\u0435
+     * \u043F\u0440\u043E\u0432\u0435\u0440\u044E" ("I will not check").
+     *
+     * <p>Russian builds the negated future by putting "\u043D\u0435" in front of the very verb
+     * this list matches, so without this the refusal reads as the announcement it denies.
+     *
+     * @param text the lowercased answer
+     * @param at where the marker starts
+     * @return {@code true} when a negation particle immediately precedes it
+     */
+    private static boolean isNegated(String text, int at)
+    {
+        int end = at;
+        while (end > 0 && text.charAt(end - 1) == ' ')
+        {
+            end--;
+        }
+        return end >= NEGATION_PARTICLE.length()
+            && text.startsWith(NEGATION_PARTICLE, end - NEGATION_PARTICLE.length())
+            && (end == NEGATION_PARTICLE.length()
+                || !Character.isLetter(text.charAt(end - NEGATION_PARTICLE.length() - 1)));
     }
 
     /**
@@ -705,7 +763,22 @@ public class WorkmateGateway
         // converting first would turn "the platform reported no count" into a failed job.
         Object rawCount = invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult); //$NON-NLS-1$
         Integer count = rawCount == null ? null : integerValue(rawCount);
-        return new Turn(text, reasoning, count, sessionOf(resultClass, sendResult));
+        Object session;
+        try
+        {
+            session = sessionOf(resultClass, sendResult);
+        }
+        catch (GatewayException e)
+        {
+            // This turn has ALREADY run - possibly through Workmate's tools, which change this
+            // configuration. A bare "call failed" would be answered with a retry that performs
+            // the same work again, so the message says what happened and what to check first.
+            throw GatewayException.callFailed("1C:Workmate answered, but its conversation handle "
+                + "could not be read (" + e.getDetail() + "), so the conversation cannot be "
+                + "continued. That answer was already produced and its tools may have run: "
+                + "inspect Workmate and the project before starting the same request again."); //$NON-NLS-1$
+        }
+        return new Turn(text, reasoning, count, session);
     }
 
     /**

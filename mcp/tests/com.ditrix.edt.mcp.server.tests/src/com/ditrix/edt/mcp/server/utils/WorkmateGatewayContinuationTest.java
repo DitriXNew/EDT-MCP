@@ -110,6 +110,23 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testARussianRefusalBuiltFromTheVerbItselfIsNotAPlan()
+    {
+        // Review of #440, sixth round: Russian negates the future by putting the particle in
+        // front of the very verb this list matches, so the refusal contained its own marker.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "\u042F \u043D\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u044E \u0437\u0430\u043A\u0440\u044B\u0442\u0443\u044E \u0431\u0430\u0437\u0443; \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u043F\u0440\u0430\u0432\u0430 \u0434\u043E\u0441\u0442\u0443\u043F\u0430.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABarePresentTimeStatusIsNotAPlan()
+    {
+        // "Right now I am in debug mode" is a status, not an announcement of work.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "\u0421\u0435\u0439\u0447\u0430\u0441 \u044F \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 \u043E\u0442\u043B\u0430\u0434\u043A\u0438, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u0442\u043E\u0447\u043A\u0430 \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u0430 \u0430\u043A\u0442\u0438\u0432\u043D\u0430.")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word
