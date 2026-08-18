@@ -1419,20 +1419,16 @@ public class WorkmateGateway
      * @param future the tool's future
      * @param deadlineNanos when the caller's budget expires
      * @param cancelled the flag behind the token handed to Workmate
+     * @param finishedAtNanos when the future completed, armed at dispatch
      * @return the tool's result
      * @throws TimeoutException when the budget runs out first
      * @throws InterruptedException if the wait is interrupted
      * @throws ExecutionException if the tool failed
      */
     private static Object awaitToolResult(CompletableFuture<?> future, long deadlineNanos,
-        AtomicBoolean cancelled) throws TimeoutException, InterruptedException, ExecutionException
+        AtomicBoolean cancelled, AtomicLong finishedAtNanos)
+        throws TimeoutException, InterruptedException, ExecutionException
     {
-        // WHEN the future finished, not when this thread noticed. Everything below arbitrates
-        // against this stamp: a descheduled waiter must not turn a failure that beat the clock
-        // into a timeout, nor a timeout into a tool failure.
-        AtomicLong finishedAtNanos = new AtomicLong(Long.MIN_VALUE);
-        future.whenComplete(
-            (result, failure) -> finishedAtNanos.compareAndSet(Long.MIN_VALUE, System.nanoTime()));
         while (true)
         {
             // Expiry is decided in NANOSECONDS: remainingMillis truncates, so a remainder under
@@ -1683,6 +1679,12 @@ public class WorkmateGateway
                     + " instead of CompletableFuture"); //$NON-NLS-1$
             }
             CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
+            // Armed HERE, the instant the future exists: a stamp taken later would record when
+            // the waiter got round to looking, so a tool that failed early while this thread was
+            // descheduled past the deadline would be reported as our timeout.
+            AtomicLong finishedAtNanos = new AtomicLong(Long.MIN_VALUE);
+            future.whenComplete((toolResult, toolFailure) -> finishedAtNanos
+                .compareAndSet(Long.MIN_VALUE, System.nanoTime()));
 
             Object result;
             try
@@ -1691,7 +1693,7 @@ public class WorkmateGateway
                 // wait computed here would start late if this thread is descheduled, and then
                 // run its full length PAST the deadline. callTools also does synchronous work
                 // of its own, which the pre-invoke measurement cannot include.
-                result = awaitToolResult(future, deadlineNanos, cancelled);
+                result = awaitToolResult(future, deadlineNanos, cancelled, finishedAtNanos);
                 finished.set(true);
             }
             catch (TimeoutException e)
