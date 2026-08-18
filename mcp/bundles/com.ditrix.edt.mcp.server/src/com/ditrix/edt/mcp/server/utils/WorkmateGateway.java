@@ -160,6 +160,16 @@ public class WorkmateGateway
      */
     private static final long TOOL_WAIT_POLL_MS = 1_000L;
 
+    /** Completion stamp: the future has not finished yet. */
+    private static final long NOT_FINISHED = Long.MIN_VALUE;
+
+    /**
+     * Completion stamp: the future was ALREADY complete when this adapter received it, and
+     * {@code CompletableFuture} exposes no completion time to recover. Arbitration then reports
+     * that outcome as it stands rather than guessing whose deadline caused it.
+     */
+    private static final long UNDATABLE = Long.MAX_VALUE;
+
     /** Mutable only so a test can shrink the window; production never changes them. */
     private static volatile long idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
 
