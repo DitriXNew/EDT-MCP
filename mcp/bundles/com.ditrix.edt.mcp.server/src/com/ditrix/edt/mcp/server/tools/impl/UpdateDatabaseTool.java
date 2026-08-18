@@ -744,8 +744,13 @@ public class UpdateDatabaseTool implements IMcpTool
                 // from the application's display name — resolving the wrong one would leave every
                 // dialog unattributable and silently degrade override/import to cancel.
                 String infobaseName = LaunchLifecycleUtils.conflictAttributionName(application);
+                // Resolved once, for the window AND the arm below: a port-conflict event is routed
+                // by this name, so the window must know it or it records a concurrent server's
+                // failure as its own.
+                String armedServerName = LaunchLifecycleUtils.attributionServerName(appManager,
+                    project, applicationId);
                 try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
-                    LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName))
+                    LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, armedServerName))
                 {
                     // The port matcher is armed ONLY for a standalone-server target: a file or
                     // client-server application cannot raise that modal, and an arm held for the
@@ -755,9 +760,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         DebugServerTargetSupport.isServerApplicationId(applicationId)
                             ? portPolicy : null;
                     LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges,
-                        infobaseName, armedPortPolicy,
-                        LaunchLifecycleUtils.attributionServerName(appManager, project,
-                            applicationId));
+                        infobaseName, armedPortPolicy, armedServerName);
                     try
                     {
                         stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
@@ -792,7 +795,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         // rewritten, and a RuntimeException on the way out must not swallow that.
                         portsReassigned = watch.portsReassigned();
                         LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
-                            infobaseName, armedPortPolicy);
+                            infobaseName, armedPortPolicy, armedServerName);
                     }
                     // Same reasoning as the catch above, for the path where the cancelled server
                     // start lets update() return a (cached, therefore meaningless) state instead

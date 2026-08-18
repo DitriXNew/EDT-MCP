@@ -1206,8 +1206,12 @@ public class DebugLaunchTool implements IMcpTool
         ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         StandaloneServerPortConflictPolicy launchPortPolicy = standaloneServerPortPolicy(config,
             portPolicy);
+        // Resolved ONCE and reused for the disarm: reading it again later could return a
+        // different server if the configuration was rebound meanwhile, and the arm would then
+        // never be released by the value it was taken with.
+        String launchServer = launchServerName(config);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, launchPortPolicy, launchServerName(config));
+            launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -1224,7 +1228,8 @@ public class DebugLaunchTool implements IMcpTool
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy);
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+                launchServer);
         }
     }
 
@@ -1295,9 +1300,14 @@ public class DebugLaunchTool implements IMcpTool
         // Attach, which attaches to a running server and never starts one).
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
-            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
+            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase,
+                launchServerName(config));
+        // Resolved ONCE and reused for the disarm: reading it again later could return a
+        // different server if the configuration was rebound meanwhile, and the arm would then
+        // never be released by the value it was taken with.
+        String launchServer = launchServerName(config);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, launchPortPolicy, launchServerName(config));
+            launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
         // (#230). This launch is fire-and-forget: tool.execute() has already returned and
         // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no
@@ -1355,7 +1365,8 @@ public class DebugLaunchTool implements IMcpTool
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy);
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+                launchServer);
             if (conflicts != null)
             {
                 conflicts.close();

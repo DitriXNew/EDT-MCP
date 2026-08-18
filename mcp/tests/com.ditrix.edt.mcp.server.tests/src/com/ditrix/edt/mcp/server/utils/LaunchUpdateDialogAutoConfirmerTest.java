@@ -812,6 +812,59 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testAForeignPortConflictIsNotRecordedIntoThisWindow() throws Exception
+    {
+        // Review of #445: the press was already refused for a foreign dialog, but the ACCOUNTING
+        // still routed by the infobase suffix - so a concurrent launch of "My Base" was recorded
+        // into the window of "Base", and that operation reported a failure it never had.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch mine =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("Base",
+                "Standalone server for Base"))
+        {
+            LaunchUpdateDialogAutoConfirmer.notePortConflictForTest(
+                "Standalone server " + QUOTE + "Standalone server for My Base" + QUOTE
+                    + " cannot use port 8080.",
+                LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
+            assertFalse("another server's conflict must not fail this operation",
+                mine.portConflicted());
+
+            LaunchUpdateDialogAutoConfirmer.notePortConflictForTest(
+                "Standalone server " + QUOTE + "Standalone server for Base" + QUOTE
+                    + " cannot use port 8080.",
+                LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
+            assertTrue("its own conflict still lands", mine.portConflicted());
+        }
+    }
+
+    @Test
+    public void testTwoSameNamedInfobasesReleaseTheirOwnArm()
+    {
+        // Review of #445: the server name is part of the identity, so a release that matched
+        // only (policy, infobase) took the OTHER call arm - leaving one call unable to get
+        // the re-address it asked for, and an arm outstanding for a server already finished.
+        String serverA = "Standalone server for Base";
+        String serverB = "Other server for Base";
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverA);
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverB);
+
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverB);
+
+        String dialogA = "Standalone server " + QUOTE + serverA + QUOTE + " cannot use port.";
+        assertTrue("the arm that stayed is the one that was not released",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(dialogA));
+        String dialogB = "Standalone server " + QUOTE + serverB + QUOTE + " cannot use port.";
+        assertFalse("and the released one no longer authorises anything",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(dialogB));
+
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverA);
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
     public void testAnArmForBaseDoesNotAuthoriseTheDialogOfMyBase()
     {
         // THE #437 hole: EDT titles the server "<localized prefix> <infobase>", so matching by

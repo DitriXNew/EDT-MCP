@@ -1160,7 +1160,8 @@ public class RunYaxunitTestsTool implements IMcpTool
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
             launchPolicy == null && launchPortPolicy == null
                 ? null
-                : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
+                : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase,
+                    launchServer);
         LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
             launchInfobase, launchPortPolicy, launchServer);
         ILaunch launch;
@@ -1191,7 +1192,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         finally
         {
             LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
-                launchInfobase, launchPortPolicy);
+                launchInfobase, launchPortPolicy, launchServer);
             // Closed HERE, not after the check below: a launch() that throws must not leave the
             // window registered in the confirmer for the rest of the session.
             closeQuietly(conflicts);
@@ -1619,7 +1620,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
                 launchPolicy == null && launchPortPolicy == null
                     ? null
-                    : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
+                    : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase,
+                        launchServer);
             LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
                 launchInfobase, launchPortPolicy, launchServer);
             ILaunch[] spawned = new ILaunch[1];
@@ -1650,7 +1652,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             finally
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0],
-                    launchPolicy, launchInfobase, launchPortPolicy);
+                    launchPolicy, launchInfobase, launchPortPolicy, launchServer);
                 closeQuietly(conflicts);
             }
             String declined = declinedConflict(conflicts, launchPolicy);

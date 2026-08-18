@@ -1233,9 +1233,37 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param infobaseName the name passed to {@code arm} (may be {@code null})
      * @param portPolicy the port-conflict policy passed to {@code arm} (may be {@code null})
      */
-    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors arm(...)
+    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy)
+    {
+        disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+            portPolicy, null);
+    }
+
+    /**
+     * Disarms an arm made with the seven-argument
+     * {@link #arm(boolean, boolean, boolean, ExternalInfobaseChangesPolicy, String,
+     * StandaloneServerPortConflictPolicy, String)} — pass the SAME values, INCLUDING the server
+     * name.
+     *
+     * <p>The server name is part of the arm's identity, not decoration: two concurrent launches of
+     * same-named infobases in different projects differ only by it, and releasing "the first arm
+     * with this policy and infobase" would then take the other call's arm and leave its own behind
+     * — refusing the re-address the surviving call asked for, and authorising it for a server that
+     * has already finished (#437).
+     *
+     * @param updateDialog release one update-matcher arm
+     * @param sessionDialog release one session-matcher arm
+     * @param restructureDialog release one restructure-matcher arm
+     * @param conflictPolicy release one conflict-matcher arm of THIS policy, or {@code null}
+     * @param infobaseName the name passed to {@code arm} (may be {@code null})
+     * @param portPolicy the port-conflict policy passed to {@code arm} (may be {@code null})
+     * @param serverName the server name passed to {@code arm} (may be {@code null})
+     */
+    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors arm(...)
+        ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
+        StandaloneServerPortConflictPolicy portPolicy, String serverName)
     {
         // The port-conflict matcher counts as "something to arm": with all the other flags off —
         // run_yaxunit_tests(updateBeforeLaunch=false) reaches exactly that — the old condition
@@ -1265,7 +1293,8 @@ public final class LaunchUpdateDialogAutoConfirmer
             // Mirrors the add in arm(...): only an arm that took a port policy releases one.
             if (portPolicy != null)
             {
-                releasePortConflictArm(portPolicy, trimToNull(infobaseName));
+                releasePortConflictArm(portPolicy, trimToNull(infobaseName),
+                    trimToNull(serverName));
             }
             if (conflictPolicy != null)
             {
@@ -2444,8 +2473,16 @@ public final class LaunchUpdateDialogAutoConfirmer
      * {@code LOCK} held.
      */
     private static void releasePortConflictArm(StandaloneServerPortConflictPolicy portPolicy,
-        String infobaseName)
+        String infobaseName, String serverName)
     {
+        // The exact triple first: the server name is what tells two same-named infobases apart,
+        // and releasing by the pair alone would take the OTHER call's arm.
+        if (removeFirstPortArm(a -> a.policy == portPolicy
+            && Objects.equals(a.infobaseName, infobaseName)
+            && Objects.equals(a.serverName, serverName)))
+        {
+            return;
+        }
         if (removeFirstPortArm(a -> a.policy == portPolicy
             && Objects.equals(a.infobaseName, infobaseName)))
         {
@@ -2700,12 +2737,36 @@ public final class LaunchUpdateDialogAutoConfirmer
 
     private static List<ConflictWatch> portConflictTargets(String detail)
     {
+        // The SERVER name first, compared exactly: it is the only test that tells this window's
+        // server from another whose name merely ends the same way. A window that resolved one
+        // and does not match is demonstrably not this dialog's owner.
+        List<ConflictWatch> byServer = new ArrayList<>();
+        boolean anyServerNamed = false;
+        for (ConflictWatch watch : CONFLICT_WATCHES)
+        {
+            if (watch.serverName != null)
+            {
+                anyServerNamed = true;
+                if (namesThisServerExactly(detail, watch.serverName))
+                {
+                    byServer.add(watch);
+                }
+            }
+        }
+        if (!byServer.isEmpty())
+        {
+            return byServer;
+        }
+        // No window named the server this dialog is about. Fall back to the infobase matcher for
+        // the windows that could not name a server at all - dropping their diagnosis is the
+        // failure this accounting exists to prevent - but never for one that named a DIFFERENT
+        // server, which the exact test above has already ruled out.
         List<ConflictWatch> named = new ArrayList<>();
         if (detail != null)
         {
             for (ConflictWatch watch : CONFLICT_WATCHES)
             {
-                if (namesThisServer(detail, watch.infobaseName))
+                if (watch.serverName == null && namesThisServer(detail, watch.infobaseName))
                 {
                     named.add(watch);
                 }
@@ -2714,6 +2775,13 @@ public final class LaunchUpdateDialogAutoConfirmer
         if (!named.isEmpty())
         {
             return named;
+        }
+        if (anyServerNamed && detail != null)
+        {
+            // Every window that could name its server named a different one: this dialog belongs
+            // to none of them, and recording it would make a call that succeeded report someone
+            // else's port conflict.
+            return new ArrayList<>();
         }
         // Nothing matched by name. A window that could not name its own infobase still has to hear
         // about it — the dialog may well be its own, and losing the busy-port diagnosis there is the
@@ -2887,12 +2955,41 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * @param policy the policy the matching {@code arm} was taken with (may be {@code null})
      */
-    static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy, String infobaseName)
+    static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy,
+        String infobaseName)
+    {
+        disarmPortConflictForTest(policy, infobaseName, null);
+    }
+
+    /**
+     * Test seam: releases one port-conflict arm by its full identity, exactly as {@code disarm}
+     * does.
+     *
+     * @param policy the policy the matching {@code arm} was taken with (may be {@code null})
+     * @param infobaseName the infobase the matching {@code arm} named
+     * @param serverName the server the matching {@code arm} named
+     */
+    static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy,
+        String infobaseName, String serverName)
     {
         synchronized (LOCK)
         {
-            releasePortConflictArm(policy, infobaseName);
+            releasePortConflictArm(policy, infobaseName, serverName);
         }
+    }
+
+    /**
+     * Test seam: routes one port-conflict event exactly as the dialog handler does.
+     *
+     * <p>Needed because the handler itself runs off an SWT dialog, which a headless test cannot
+     * raise — and the ROUTING is the part that decides whose operation reports a failure.
+     *
+     * @param detail the dialog text
+     * @param reason why the dialog was refused
+     */
+    static void notePortConflictForTest(String detail, String reason)
+    {
+        notePortConflict(detail, reason);
     }
 
     /** Test seam: how many port-conflict arms are outstanding. */
@@ -2928,7 +3025,24 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static ConflictWatch beginConflictWatch(String infobaseName)
     {
-        ConflictWatch watch = new ConflictWatch(trimToNull(infobaseName));
+        return beginConflictWatch(infobaseName, null);
+    }
+
+    /**
+     * Opens a window that also knows the standalone server it covers.
+     *
+     * <p>The server name is what routes a port-conflict event correctly: EDT titles the server
+     * after the infobase, so recognising the dialog by the infobase alone records a CONCURRENT
+     * launch of a same-suffixed server into this window - and the operation then reports a
+     * failure that belongs to someone else (#437).
+     *
+     * @param infobaseName the infobase being worked on (may be {@code null})
+     * @param serverName the WST server name this call may start (may be {@code null})
+     * @return the open window, never {@code null}
+     */
+    public static ConflictWatch beginConflictWatch(String infobaseName, String serverName)
+    {
+        ConflictWatch watch = new ConflictWatch(trimToNull(infobaseName), trimToNull(serverName));
         synchronized (LOCK)
         {
             CONFLICT_WATCHES.add(watch);
@@ -2973,6 +3087,9 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static final class ConflictWatch implements AutoCloseable
     {
         private final String infobaseName;
+
+        /** The server this window covers, when the caller could resolve it. */
+        private final String serverName;
         private int cancels;
         private String reason;
         private boolean portConflict;
@@ -2983,7 +3100,13 @@ public final class LaunchUpdateDialogAutoConfirmer
 
         ConflictWatch(String infobaseName)
         {
+            this(infobaseName, null);
+        }
+
+        ConflictWatch(String infobaseName, String serverName)
+        {
             this.infobaseName = infobaseName;
+            this.serverName = serverName;
         }
 
         void record(String cancelReason)
