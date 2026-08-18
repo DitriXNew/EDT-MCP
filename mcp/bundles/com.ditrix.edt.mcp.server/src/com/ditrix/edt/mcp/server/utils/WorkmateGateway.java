@@ -585,8 +585,12 @@ public class WorkmateGateway
                 // The DECLARATION wins: a turn that marked itself final is final, whatever it
                 // sounds like. Only an undeclared turn is judged by phrasing.
                 boolean declared = declaresFinal(turn.text);
-                declaredFinal = declaredFinal || declared;
-                boolean isAnswer = declared || !needsContinuation(turn.text);
+                String stripped = stripFinalMarker(turn.text);
+                // A marker with no answer in front of it is not an answer: accepting it would
+                // report emptiness as a result, or fall back to an earlier announcement.
+                declaredFinal = declaredFinal || (declared && stripped != null);
+                boolean isAnswer =
+                    stripped != null && (declared || !needsContinuation(turn.text));
                 // Two DIFFERENT things are remembered, and the difference is the whole point of
                 // this loop: an accepted answer, and the last announcement. A later empty turn
                 // must not erase an answer already produced - but an announcement must never be
@@ -594,12 +598,12 @@ public class WorkmateGateway
                 // very behaviour issue #427 reported.
                 if (isAnswer)
                 {
-                    answer = stripFinalMarker(turn.text);
+                    answer = stripped;
                     reasoning = turn.reasoning;
                 }
-                else if (trimToNull(turn.text) != null)
+                else if (stripped != null)
                 {
-                    lastAnnouncement = turn.text;
+                    lastAnnouncement = stripped;
                 }
                 if (isAnswer || turn.session == null || continuations >= MAX_CONTINUATIONS
                     || remainingMillis(deadlineNanos) <= 0)
@@ -652,7 +656,10 @@ public class WorkmateGateway
      */
     static boolean declaresFinal(String text)
     {
-        return text != null && text.toLowerCase(Locale.ROOT).contains(FINAL_MARKER);
+        // ENDS with, not contains: the instruction asks for the marker as the last line, and a
+        // turn that merely mentions it - explaining the protocol, quoting an earlier answer -
+        // has not declared anything.
+        return text != null && text.trim().toLowerCase(Locale.ROOT).endsWith(FINAL_MARKER);
     }
 
     /**

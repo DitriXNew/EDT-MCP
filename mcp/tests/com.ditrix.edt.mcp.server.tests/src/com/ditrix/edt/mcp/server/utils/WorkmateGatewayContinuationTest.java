@@ -153,6 +153,7 @@ public class WorkmateGatewayContinuationTest
         assertFalse("the bare auxiliary also opens finished statements",
             WorkmateGateway.needsContinuation("\u042F \u0431\u0443\u0434\u0443 \u0440\u0430\u0434 \u043F\u043E\u043C\u043E\u0447\u044C \u0441 \u044D\u0442\u0438\u043C \u0437\u0430\u043F\u0440\u043E\u0441\u043E\u043C.")); //$NON-NLS-1$
     }
+
     @Test
     public void testNotOnlyIntensifiesRatherThanNegates()
     {
@@ -161,6 +162,7 @@ public class WorkmateGatewayContinuationTest
         assertTrue(WorkmateGateway.needsContinuation(
             "I will not only inspect the module, I will also fix the query."));
     }
+
     @Test
     public void testATypographicApostropheIsTheSameContraction()
     {
@@ -169,6 +171,7 @@ public class WorkmateGatewayContinuationTest
         assertTrue(WorkmateGateway.needsContinuation(
             "I’ll search the documentation for the exact method list."));
     }
+
     @Test
     public void testTheDeclaredMarkerIsWhatDecidesFinality()
     {
@@ -189,6 +192,18 @@ public class WorkmateGatewayContinuationTest
             WorkmateGateway.stripFinalMarker(WorkmateGateway.FINAL_MARKER));
         assertNull(WorkmateGateway.stripFinalMarker(null));
     }
+
+    @Test
+    public void testAMentionedMarkerIsNotADeclaration()
+    {
+        // Review of #440: the protocol asks for the marker as the LAST line. A turn that only
+        // talks about it - or quotes an earlier answer - has declared nothing.
+        assertFalse(WorkmateGateway.declaresFinal(
+            "I will add " + WorkmateGateway.FINAL_MARKER + " once the search is done."));
+        assertTrue("trailing whitespace still ends the turn",
+            WorkmateGateway.declaresFinal("Answer. " + WorkmateGateway.FINAL_MARKER + "  \n"));
+    }
+
     @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
