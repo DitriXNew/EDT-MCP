@@ -93,9 +93,13 @@ public final class BackgroundJobRenderer
             if (!workmateResponse.isDeclaredFinal())
             {
                 target.append("\n> **Completion not confirmed.** ") //$NON-NLS-1$
+                    // What was MEASURED, not what was inferred: this plugin sees only the calls
+                    // Workmate makes back into it, so "no sign of work" is honest where
+                    // "stopped answering" would claim knowledge of Workmate's own internals.
                     .append(workmateResponse.wentQuiet()
-                        ? "Workmate stopped answering and the conversation was wound up " //$NON-NLS-1$
-                            + "without its end-of-answer marker" //$NON-NLS-1$
+                        ? "Workmate showed no sign of work for two minutes - this plugin sees " //$NON-NLS-1$
+                            + "only the calls Workmate makes back into it - so the conversation " //$NON-NLS-1$
+                            + "was wound up without its end-of-answer marker" //$NON-NLS-1$
                         : "Workmate never sent its end-of-answer marker") //$NON-NLS-1$
                     .append(", so this is the last text it produced rather than an answer " //$NON-NLS-1$
                         + "it called complete. It may be partial.\n"); //$NON-NLS-1$

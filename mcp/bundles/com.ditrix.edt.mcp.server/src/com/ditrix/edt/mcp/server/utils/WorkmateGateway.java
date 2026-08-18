@@ -19,6 +19,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Collection;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -146,10 +147,21 @@ public class WorkmateGateway
      * minutes must not be cut off (a project question measured 75 s here, and a bigger project
      * takes longer).
      */
-    private static final long IDLE_TURN_TIMEOUT_MS = 120_000L;
+    static final long DEFAULT_IDLE_TURN_TIMEOUT_MS = 120_000L;
 
     /** How often the wait wakes up to see whether the turn is still doing anything. */
-    private static final long IDLE_POLL_MS = 5_000L;
+    static final long DEFAULT_IDLE_POLL_MS = 5_000L;
+
+    /** Mutable only so a test can shrink the window; production never changes them. */
+    private static volatile long idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
+
+    private static volatile long idlePollMs = DEFAULT_IDLE_POLL_MS;
+
+    /**
+     * How many Workmate turns this bundle is waiting on right now. The idle rule needs it because
+     * the activity it reads is process-wide: see {@link #isOnlyAwaitedTurn()}.
+     */
+    private static final AtomicInteger AWAITED_TURNS = new AtomicInteger();
 
     /**
      * Appended by THIS adapter to every request, so the caller's question stays their own and the
@@ -1069,8 +1081,9 @@ public class WorkmateGateway
                 // The TURN went quiet rather than the budget running out: wind the conversation
                 // up with what is already in hand, and let the caller see that Workmate never
                 // declared itself finished.
-                progress.onProgress("No answer for " + (IDLE_TURN_TIMEOUT_MS / 1000) //$NON-NLS-1$
-                    + "s; ending the conversation without a completion marker."); //$NON-NLS-1$
+                progress.onProgress("No sign of work for " + (idleTurnTimeoutMs / 1000) //$NON-NLS-1$
+                    + "s - no calls into this plugin, none running - so the conversation was " //$NON-NLS-1$
+                    + "wound up without a completion marker."); //$NON-NLS-1$
                 return null;
             }
             throw GatewayException.timedOutAfterDispatch();
@@ -1177,46 +1190,106 @@ public class WorkmateGateway
      * @param future the turn's future
      * @param budgetMillis what is left of the caller's total budget
      * @return the turn's result
-     * @throws IdleTimeoutException when nothing happened for {@link #IDLE_TURN_TIMEOUT_MS}
+     * @throws IdleTimeoutException when nothing happened for the idle window
      * @throws TimeoutException when the caller's budget ran out first
      * @throws InterruptedException if the wait is interrupted
      * @throws ExecutionException if the turn failed
      */
-    private static Object awaitTurn(CompletableFuture<?> future, long budgetMillis)
+    static Object awaitTurn(CompletableFuture<?> future, long budgetMillis)
         throws TimeoutException, InterruptedException, ExecutionException
     {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMillis);
         long lastActivity = System.nanoTime();
         long seenCalls = BridgeActivity.ticks();
-        while (true)
+        AWAITED_TURNS.incrementAndGet();
+        try
         {
-            long leftMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
-            if (leftMs <= 0)
+            while (true)
             {
-                throw new TimeoutException("the job's budget ran out"); //$NON-NLS-1$
-            }
-            try
-            {
-                return future.get(Math.min(leftMs, IDLE_POLL_MS), TimeUnit.MILLISECONDS);
-            }
-            catch (TimeoutException stillRunning)
-            {
-                long calls = BridgeActivity.ticks();
-                // Either signal means "alive": a new call since the last look, or one that is
-                // still running now. Without the second, a single long tool call - the very case
-                // this timeout must not interrupt - would look like silence after its one tick.
-                if (calls != seenCalls || BridgeActivity.inFlight() > 0)
+                long leftMs =
+                    Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+                if (leftMs <= 0)
                 {
-                    seenCalls = calls;
-                    lastActivity = System.nanoTime();
+                    throw new TimeoutException("the job's budget ran out"); //$NON-NLS-1$
                 }
-                else if (System.nanoTime() - lastActivity
-                    >= TimeUnit.MILLISECONDS.toNanos(IDLE_TURN_TIMEOUT_MS))
+                try
                 {
-                    throw new IdleTimeoutException();
+                    return future.get(Math.min(leftMs, idlePollMs), TimeUnit.MILLISECONDS);
+                }
+                catch (TimeoutException stillRunning)
+                {
+                    long calls = BridgeActivity.ticks();
+                    // Either signal means "alive": a new call since the last look, or one that is
+                    // still running now. Without the second, a single long tool call - the very
+                    // case this timeout must not interrupt - would look like silence after its
+                    // one tick.
+                    if (calls != seenCalls || BridgeActivity.inFlight() > 0)
+                    {
+                        seenCalls = calls;
+                        lastActivity = System.nanoTime();
+                    }
+                    else if (isOnlyAwaitedTurn() && System.nanoTime() - lastActivity
+                        >= TimeUnit.MILLISECONDS.toNanos(idleTurnTimeoutMs))
+                    {
+                        throw new IdleTimeoutException();
+                    }
                 }
             }
         }
+        finally
+        {
+            AWAITED_TURNS.decrementAndGet();
+        }
+    }
+
+    /**
+     * Whether this is the only Workmate turn being awaited right now.
+     *
+     * <p>The bridge counters are process-wide, and Workmate's API offers nothing to attribute a
+     * call to a conversation: {@code IEdtMcpBridge.callTool} carries a tool name and arguments,
+     * nothing else. So while two jobs run at once, activity proves only that SOMETHING is
+     * working - it cannot prove that THIS turn is. Cutting a turn on that evidence would end a
+     * live conversation because a different one went quiet, so the idle rule stands down and the
+     * job's own budget is the bound. With one job - the ordinary case - nothing changes.
+     *
+     * @return {@code true} when exactly one turn is waiting on Workmate
+     */
+    private static boolean isOnlyAwaitedTurn()
+    {
+        return AWAITED_TURNS.get() <= 1;
+    }
+
+    /**
+     * Whether this timeout means "the turn went silent" rather than "the budget ran out".
+     *
+     * @param e the timeout that ended a wait
+     * @return {@code true} for the idle kind
+     */
+    static boolean isIdleTimeout(TimeoutException e)
+    {
+        return e instanceof IdleTimeoutException;
+    }
+
+    /**
+     * @return how many Workmate turns are being awaited right now
+     */
+    static int awaitedTurns()
+    {
+        return AWAITED_TURNS.get();
+    }
+
+    /** Test seam: shrinks the idle window so a test does not wait two minutes. */
+    static void setIdleTimingsForTest(long timeoutMs, long pollMs)
+    {
+        idleTurnTimeoutMs = timeoutMs;
+        idlePollMs = pollMs;
+    }
+
+    /** Test seam: restores the production idle window. */
+    static void resetIdleTimingsForTest()
+    {
+        idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
+        idlePollMs = DEFAULT_IDLE_POLL_MS;
     }
 
     /** A turn that stopped doing anything, as opposed to one that ran out of budget. */

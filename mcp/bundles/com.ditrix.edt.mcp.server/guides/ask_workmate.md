@@ -141,6 +141,14 @@ working keeps its clock reset, and "working" means a call it started through thi
 bridge or one still running there, so a tool loop that legitimately runs for minutes is never
 cut off.
 
+Two limits of that rule, both deliberate. It sees only what comes back through this plugin, so
+a turn busy in Workmate's own tools or in a long model request looks silent - it can be
+wound up while it was in fact working, which is why the report says "no sign of work" rather
+than claiming Workmate stopped. And while more than one `ask_workmate` job is in flight the
+rule STANDS DOWN entirely, because a bridge call cannot be attributed to a conversation:
+ending a turn on another job's silence would be worse than waiting. With several jobs, the
+`timeoutSeconds` budget is the only bound.
+
 Whenever the marker never arrived - because the conversation went quiet, or because the
 continuations ran out - the result carries an explicit **"Completion not confirmed"** note
 above the answer. Read that as "this is the last thing it said", not as "this is the answer".

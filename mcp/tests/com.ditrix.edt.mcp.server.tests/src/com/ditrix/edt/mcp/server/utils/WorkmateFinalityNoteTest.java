@@ -67,7 +67,9 @@ public class WorkmateFinalityNoteTest
             new WorkmateResponse("Half an answer.", null, null, 2, false, true));
         assertTrue(rendered.contains("Completion not confirmed"));
         assertTrue("the reason matters: silence is not the same as running out of turns",
-            rendered.contains("stopped answering"));
+            rendered.contains("no sign of work"));
+        assertTrue("and the report must say what it actually measured",
+            rendered.contains("only the calls Workmate makes back into it"));
     }
 
     @Test
