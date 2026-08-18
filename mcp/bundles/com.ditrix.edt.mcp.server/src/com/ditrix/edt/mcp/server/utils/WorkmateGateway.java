@@ -1565,8 +1565,15 @@ public class WorkmateGateway
             }
             Class<?> cancellationTokenClass = requireClass(aiBundle, CANCELLATION_TOKEN);
             AtomicBoolean cancelled = new AtomicBoolean(false);
+            // Workmate may keep the token and poll it after the call is over. Without this,
+            // the deadline half of the predicate would eventually report a CANCELLED call that
+            // in fact finished in time, purely because the clock moved on.
+            AtomicBoolean finished = new AtomicBoolean(false);
+            // Nanoseconds, not remainingMillis(): that helper truncates a sub-millisecond
+            // remainder to zero, which would report the budget spent up to a millisecond early
+            // and abort a tool that was about to finish inside it.
             Object token = createCancellationToken(cancellationTokenClass, cancelled,
-                () -> remainingMillis(deadlineNanos) <= 0);
+                () -> !finished.get() && System.nanoTime() - deadlineNanos >= 0);
             Method callTools = requireMethod(toolsClass, "callTools", callsClass, //$NON-NLS-1$
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1615,6 +1622,7 @@ public class WorkmateGateway
                 // run its full length PAST the deadline. callTools also does synchronous work
                 // of its own, which the pre-invoke measurement cannot include.
                 result = awaitToolResult(future, deadlineNanos, cancelled);
+                finished.set(true);
             }
             catch (TimeoutException e)
             {
