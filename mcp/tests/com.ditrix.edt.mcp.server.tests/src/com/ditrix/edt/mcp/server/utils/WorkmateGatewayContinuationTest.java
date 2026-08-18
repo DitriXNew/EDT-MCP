@@ -65,6 +65,16 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testAnInclusiveRecommendationIsNotMistakenForAPlan()
+    {
+        // Review of #440: "let us use an index" is a FINISHED short recommendation, not an
+        // announcement of future work. Continuing it would run Workmate's tools again and let a
+        // later turn replace an answer that was already correct.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "\u0414\u0430\u0432\u0430\u0439\u0442\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C \u0438\u043D\u0434\u0435\u043A\u0441 \u043F\u043E \u043F\u043E\u043B\u044E \u0414\u0430\u0442\u0430 - \u0437\u0430\u043F\u0440\u043E\u0441 \u0441\u0442\u0430\u043D\u0435\u0442 \u0431\u044B\u0441\u0442\u0440\u0435\u0435.")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word

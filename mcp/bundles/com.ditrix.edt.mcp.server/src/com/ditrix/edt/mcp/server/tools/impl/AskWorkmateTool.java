@@ -146,7 +146,8 @@ public class AskWorkmateTool implements IMcpTool
                     + "Omit to use Workmate's default project context.") //$NON-NLS-1$
             .integerProperty(KEY_MAX_TOOL_ROUNDS,
                 "Optional positive limit for Workmate's internal tool-call " //$NON-NLS-1$
-                    + "rounds.") //$NON-NLS-1$
+                    + "rounds; it applies per assistant turn, so a conversation continued to " //$NON-NLS-1$
+                    + "reach a final answer spends it again on each turn.") //$NON-NLS-1$
             .stringProperty(KEY_SKILL_NAME,
                 "Optional Workmate skill name. Omit to use '" //$NON-NLS-1$
                     + WorkmateGateway.DEFAULT_SKILL + "', the skill under which Workmate runs " //$NON-NLS-1$

@@ -106,8 +106,13 @@ public class WorkmateGateway
     /**
      * First-person announcements of intent, lowercase. A SHORT answer containing one of these is
      * Workmate saying what it is about to do — the exact shape issue #427 reported ("For a full
-     * reference \u2026 I will use the 1C documentation search"), which the platform then never
+     * reference ... I will use the 1C documentation search"), which the platform then never
      * followed up on its own.
+     *
+     * <p>First person is the discipline of this list, and the reason an inclusive imperative
+     * ("let us use an index") is deliberately absent: a FINISHED short recommendation opens with
+     * one as readily as a plan does, and a continuation is not free - it can run Workmate's tools
+     * again, and its own answer then REPLACES the one already in hand.
      */
     private static final String[] INTENT_MARKERS = {
         "\u0432\u043E\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044E\u0441\u044C", // воспользуюсь //$NON-NLS-1$
@@ -119,7 +124,6 @@ public class WorkmateGateway
         "\u0441\u043E\u0437\u0434\u0430\u043C", // создам //$NON-NLS-1$
         "\u043D\u0430\u0447\u043D\u0443", // начну //$NON-NLS-1$
         "\u0441\u0435\u0439\u0447\u0430\u0441 \u044F", // сейчас я //$NON-NLS-1$
-        "\u0434\u0430\u0432\u0430\u0439\u0442\u0435", // давайте //$NON-NLS-1$
         "i will ", //$NON-NLS-1$
         "i'll ", //$NON-NLS-1$
         "let me " //$NON-NLS-1$
@@ -347,6 +351,10 @@ public class WorkmateGateway
     public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
         String skillName, int timeoutSeconds, ProgressListener progress) throws GatewayException
     {
+        // Taken BEFORE the reflective setup, not after it: bundle lookup, injector resolution
+        // and the authorization probe all spend the caller's budget, and a deadline started
+        // afterwards would hand the conversation a fresh full one on top of what setup used.
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
         try
         {
             Bundle aiBundle = requireBundle(AI_BUNDLE);
@@ -395,7 +403,6 @@ public class WorkmateGateway
             // exactly as it ends on a finished answer (issue #427). Workmate's own driver does not
             // treat the first turn as the result either - DevAutopilot re-sends into the SAME
             // conversation while the answer still looks like an announcement. So does this loop.
-            long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
             String effectiveSkill =
                 skillName == null || skillName.isEmpty() ? DEFAULT_SKILL : skillName;
             Object session = null;

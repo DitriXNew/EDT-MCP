@@ -8,7 +8,13 @@
   Workmate receives its `ProjectId.Default` context.
 - `maxToolRounds` applies only when starting and optionally limits Workmate's
   internal tool-call rounds. It must be a positive integer. Omit it to use
-  Workmate's own default.
+  Workmate's own default. The limit is **per assistant turn**, which is how the
+  platform itself uses it - Workmate's own autopilot passes the same value into
+  every turn of its conversation loop - so a conversation continued to reach a
+  final answer (see below) may spend the allowance again on each continuation.
+  Workmate reports no tool-round count back, only an assistant-message count, so
+  a remaining-rounds budget cannot be tracked across turns without inventing it;
+  bound the whole job with `timeoutSeconds` instead.
 - `skillName` applies only when starting and optionally selects a Workmate skill.
   Omit it: this tool then sends `custom`, the skill under which Workmate runs its
   own tool loop. Workmate's `raw` skill is NOT the default here and is worth

@@ -7,7 +7,7 @@ Start a background question to the 1C:Workmate plugin and return its jobId. Poll
 | --- | --- | --- | --- |
 | question | — | string | Non-empty question or instruction to send to 1C:Workmate. Required unless workmateTool selects direct tool mode. |
 | projectName | — | string | Optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context. |
-| maxToolRounds | — | integer | Optional positive limit for Workmate's internal tool-call rounds. |
+| maxToolRounds | — | integer | Optional positive limit for Workmate's internal tool-call rounds; it applies per assistant turn, so a conversation continued to reach a final answer spends it again on each turn. |
 | skillName | — | string | Optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing. |
 | timeoutSeconds | — | integer | Total wall-clock budget for the background job across all get_job_status polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job is failed - unless the request has already reached Workmate, which cannot be taken back: the job then reports Workmate's own outcome rather than a retryable timeout, because a retry would run the same work twice. This is not the per-call waitSeconds budget. |
 | waitSeconds | — | integer | Maximum time this start call may wait for completion before returning its job snapshot, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget. |
@@ -27,7 +27,13 @@ Start a background question to the 1C:Workmate plugin and return its jobId. Poll
   Workmate receives its `ProjectId.Default` context.
 - `maxToolRounds` applies only when starting and optionally limits Workmate's
   internal tool-call rounds. It must be a positive integer. Omit it to use
-  Workmate's own default.
+  Workmate's own default. The limit is **per assistant turn**, which is how the
+  platform itself uses it - Workmate's own autopilot passes the same value into
+  every turn of its conversation loop - so a conversation continued to reach a
+  final answer (see below) may spend the allowance again on each continuation.
+  Workmate reports no tool-round count back, only an assistant-message count, so
+  a remaining-rounds budget cannot be tracked across turns without inventing it;
+  bound the whole job with `timeoutSeconds` instead.
 - `skillName` applies only when starting and optionally selects a Workmate skill.
   Omit it: this tool then sends `custom`, the skill under which Workmate runs its
   own tool loop. Workmate's `raw` skill is NOT the default here and is worth
