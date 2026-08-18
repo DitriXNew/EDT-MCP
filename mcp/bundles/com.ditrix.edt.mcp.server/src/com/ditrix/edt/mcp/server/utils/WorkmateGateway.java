@@ -1513,14 +1513,26 @@ public class WorkmateGateway
      * completion recorded before that instant cannot be ours - however late this thread wakes
      * up to see it.
      *
-     * @param finishedAtNanos the completion stamp, or {@code Long.MIN_VALUE} if not finished
+     * <p>Three states, because the middle one is real: {@link #NOT_FINISHED} (the wait goes on,
+     * and an expiry there IS ours), a dated stamp (compared with the deadline), and
+     * {@link #UNDATABLE} — a future already complete when it reached this adapter, which
+     * {@code CompletableFuture} gives no way to date. An undatable outcome is reported AS IT
+     * STANDS: turning a real tool failure into "the budget ran out" destroys the diagnosis, while
+     * the reverse only loses the "raise timeoutSeconds" hint from a message that already tells the
+     * caller to inspect before repeating. Losing a hint beats losing a cause.
+     *
+     * @param finishedAtNanos the completion stamp
      * @param deadlineNanos when the budget expires
-     * @return {@code true} when the outcome predates the deadline
+     * @return {@code true} when the outcome must be reported as it stands
      */
     private static boolean finishedBeforeDeadline(AtomicLong finishedAtNanos, long deadlineNanos)
     {
         long finishedAt = finishedAtNanos.get();
-        return finishedAt != Long.MIN_VALUE && finishedAt - deadlineNanos < 0;
+        if (finishedAt == UNDATABLE)
+        {
+            return true;
+        }
+        return finishedAt != NOT_FINISHED && finishedAt - deadlineNanos < 0;
     }
 
     /**
@@ -1692,9 +1704,19 @@ public class WorkmateGateway
             // Armed HERE, the instant the future exists: a stamp taken later would record when
             // the waiter got round to looking, so a tool that failed early while this thread was
             // descheduled past the deadline would be reported as our timeout.
-            AtomicLong finishedAtNanos = new AtomicLong(Long.MIN_VALUE);
-            future.whenComplete((toolResult, toolFailure) -> finishedAtNanos
-                .compareAndSet(Long.MIN_VALUE, System.nanoTime()));
+            AtomicLong finishedAtNanos = new AtomicLong(NOT_FINISHED);
+            if (future.isDone())
+            {
+                // Already complete before this adapter ever saw it, and CompletableFuture keeps no
+                // completion time to recover: stamping "now" would record when WE looked, which
+                // can fall past the deadline and turn a genuine early failure into our timeout.
+                finishedAtNanos.set(UNDATABLE);
+            }
+            else
+            {
+                future.whenComplete((toolResult, toolFailure) -> finishedAtNanos
+                    .compareAndSet(NOT_FINISHED, System.nanoTime()));
+            }
 
             Object result;
             try
