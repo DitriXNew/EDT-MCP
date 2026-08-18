@@ -1054,9 +1054,30 @@ public class RunYaxunitTestsToolTest
         entry.phase = LaunchLifecycleUtils.PHASE_TERMINATE;
         assertEquals("prep:" + LaunchLifecycleUtils.PHASE_TERMINATE,
             RunYaxunitTestsTool.prepPhaseLabel(entry));
-        assertEquals("a missing entry must still name a phase, never null",
-            "prep:" + LaunchLifecycleUtils.PHASE_RECOMPUTE,
+        assertEquals("a missing entry must degrade to the FIRST stage a prep enters, never to "
+            + "one the change gate may skip entirely (#310)",
+            "prep:" + LaunchLifecycleUtils.PHASE_TERMINATE,
             RunYaxunitTestsTool.prepPhaseLabel(null));
+    }
+
+    @Test
+    public void testPrepPendingDoesNotClaimWorkTheGateMaySkip()
+    {
+        // #310: the Pending said "phase: recompute" AND "the server is rebuilding changed
+        // projects" on every preparation, including the ones whose scope was unchanged and whose
+        // recompute was therefore skipped. The prose must describe the PURPOSE; only the phase
+        // may name the stage, and the phase is published per stage.
+        //
+        // This is the INTERNAL wait marker - the text the issue quotes, produced by this builder.
+        // Since #417 the owning job consumes it and the caller sees the registry snapshot, so the
+        // pin is on the builder, which is where the sentence lives.
+        String pending = RunYaxunitTestsTool.buildPrepPendingMessage(
+            25, "prep:" + LaunchLifecycleUtils.PHASE_CHECK_CHANGES); //$NON-NLS-1$
+
+        assertTrue("the phase must be carried through verbatim: " + pending,
+            pending.contains("phase: `prep:" + LaunchLifecycleUtils.PHASE_CHECK_CHANGES + "`")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the body must not assert a rebuild that the gate may have skipped: "
+            + pending, pending.contains("rebuilding")); //$NON-NLS-1$
     }
 
     @Test
@@ -1088,7 +1109,13 @@ public class RunYaxunitTestsToolTest
         assertTrue("guide must state the clamped whole-call window",
             guide.contains("45")); //$NON-NLS-1$
         assertTrue("guide must list the phases a Pending can report",
-            guide.contains("prep:recompute") && guide.contains("prep:db-update")); //$NON-NLS-1$ //$NON-NLS-2$
+            guide.contains("prep:recompute") && guide.contains("prep:db-update") //$NON-NLS-1$ //$NON-NLS-2$
+                && guide.contains("prep:check-changes") && guide.contains("prep:settle")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must say that `prep:recompute` is CONDITIONAL - a reader who believes "
+            + "it always appears reads its absence as a failure, and its presence as proof that "
+            + "the tool rebuilds everything every time (#310)",
+            guide.contains("`prep:recompute` appears only when the gate found something to " //$NON-NLS-1$
+                + "recompute")); //$NON-NLS-1$
         assertTrue("guide must teach that an ADVANCING phase proves progress",
             guide.contains("phase that ADVANCES")); //$NON-NLS-1$
         assertTrue("guide must NOT claim a stalled phase proves a block — it cannot tell the two "
@@ -1108,6 +1135,31 @@ public class RunYaxunitTestsToolTest
         String schema = new RunYaxunitTestsTool().getInputSchema();
         assertTrue("the updateBeforeLaunch schema text must not promise more than the code does",
             schema.contains("unlikely, NOT impossible")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSchemaDoesNotPromiseAnUnconditionalRecompute()
+    {
+        // #310 had two sources for the same conclusion ("the tool always rebuilds the project"):
+        // the phase label, and this sentence. Since #377 the auto-chain recomputes only the
+        // projects whose sources differ from their last prepared state, so a schema promising a
+        // force-recompute of the project AND its extensions teaches the misconception the phase
+        // fix removes - and is simply false.
+        String schema = new RunYaxunitTestsTool().getInputSchema();
+
+        assertFalse("the auto-chain is selective since #377; the schema must not describe it as "
+            + "an unconditional recompute of the project and its extensions",
+            schema.contains("force-recompute the project + its extensions")); //$NON-NLS-1$
+        // Pinned per PARAMETER, not by a phrase they share: "whose sources" alone also matches
+        // updateScope, which InputSchemaCompactor strips from the wire - so that assertion could
+        // stay green while the one description a client actually receives regressed.
+        assertTrue("updateBeforeLaunch is the description that reaches the wire; it must say the "
+            + "recompute is selective and that the configuration goes through the same gate",
+            schema.contains("recompute only the projects whose sources changed " //$NON-NLS-1$
+                + "(the configuration is not exempt)")); //$NON-NLS-1$
+        assertTrue("and updateScope must say the gate applies WITHIN the scope it names",
+            schema.contains("Within that scope only the projects whose sources changed are " //$NON-NLS-1$
+                + "recomputed")); //$NON-NLS-1$
     }
 
     // ============ #230 — the async prep body brackets the auth-dialog suppressor ============

@@ -56,7 +56,7 @@ If they do not finish in that window, the reply is **Pending**, contains `jobId`
 
 with `get_job_status`. Do not reconstruct the start arguments to address a known run. An identical start attaches only while the job is live as a duplicate guard. The terminal job result is the same launch handle.
 
-Progress phases are `resolve`, `prep:terminate`, `prep:recompute`, `prep:db-update`, and `spawn`. A phase that stops advancing can mean slow work or an EDT modal dialog; inspect EDT.
+Progress phases are `resolve`, `prep:terminate`, `prep:check-changes`, `prep:recompute`, `prep:settle`, `prep:db-update`, and `spawn` — `prep:recompute` only when the gate found something to recompute. A phase that stops advancing can mean slow work or an EDT modal dialog; inspect EDT.
 
 ## Debug cycle
 

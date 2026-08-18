@@ -234,8 +234,9 @@ public class RunYaxunitTestsTool implements IMcpTool
                     + "no test carries is not an error, just an empty selection.") //$NON-NLS-1$
             .integerProperty("timeout", TIMEOUT_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
-                "Auto-chain (default: true): force-recompute the project + its extensions, terminate a " //$NON-NLS-1$
-                    + "live client and run a silent DB update first, so a freshly edited extension runs " //$NON-NLS-1$
+                "Auto-chain (default: true): recompute only the projects whose sources changed " //$NON-NLS-1$
+                    + "(the configuration is not exempt), terminate a live client and run a silent DB " //$NON-NLS-1$
+                    + "update first, so a freshly edited extension runs " //$NON-NLS-1$
                     + "fresh (not stale), auto-answering the platform's update dialogs. This makes a " //$NON-NLS-1$
                     + "blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's " //$NON-NLS-1$
                     + "own windows still waits for a human, and the tool reports it as a Pending whose " //$NON-NLS-1$
@@ -293,8 +294,9 @@ public class RunYaxunitTestsTool implements IMcpTool
     static final String UPDATE_SCOPE_DESCRIPTION =
         "Which projects to rebuild+update before the run: 'all' (configuration + dependent " //$NON-NLS-1$
             + "extensions, default), 'configuration', or 'extension:<ProjectName>' " //$NON-NLS-1$
-            + "(comma-separate several). Forces a derived-data recompute so a freshly edited " //$NON-NLS-1$
-            + "extension's .cfe is regenerated and loaded into the infobase before the run. " //$NON-NLS-1$
+            + "(comma-separate several). Within that scope only the projects whose sources " //$NON-NLS-1$
+            + "changed are recomputed, so a freshly edited extension's .cfe is regenerated and " //$NON-NLS-1$
+            + "loaded into the infobase before the run. " //$NON-NLS-1$
             + "Unknown extension names fail the call (the error lists the available names). " //$NON-NLS-1$
             + "Only applies when updateBeforeLaunch=true."; //$NON-NLS-1$
 
@@ -2018,13 +2020,19 @@ public class RunYaxunitTestsTool implements IMcpTool
      * name ("recompute" happens inside the preparation, never in the call) and confusing the
      * two would point a waiting caller at the wrong thing.
      *
+     * <p>With no entry to read, the fallback names the FIRST stage a preparation enters, for the
+     * same reason {@code PrepInFlight.phase} is initialised to it: a label we cannot observe must
+     * degrade to the stage every preparation begins with, never to one it may never reach. The
+     * fallback used to be "recompute" — a stage the change gate skips entirely on an
+     * unchanged scope (#310).
+     *
      * @param entry the in-flight preparation (may be {@code null})
      * @return the namespaced label
      */
     static String prepPhaseLabel(PrepInFlight entry)
     {
         String inner = entry != null ? entry.phase : null;
-        return "prep:" + (inner != null ? inner : LaunchLifecycleUtils.PHASE_RECOMPUTE); //$NON-NLS-1$
+        return "prep:" + (inner != null ? inner : LaunchLifecycleUtils.PHASE_TERMINATE); //$NON-NLS-1$
     }
 
     /** Shared "Pre-launch preparation failed" error payload (identical wording in both surfacing sites). */
@@ -2224,9 +2232,14 @@ public class RunYaxunitTestsTool implements IMcpTool
      * Builds the bounded internal wait marker for pre-launch preparation. The registry job
      * consumes this marker and keeps waiting; it is not the public addressing contract.
      *
+     * <p>The sentence under the phase says what the preparation is FOR, not what it is doing:
+     * only the phase names that, and it names it per stage. It used to claim the server was
+     * "rebuilding changed projects" in every Pending, which on an unchanged scope described work
+     * the change gate had just decided to skip (#310).
+     *
      * @param elapsedSeconds elapsed time since the background job started
-     * @param phase the current preparation phase label (e.g. {@code "recompute"} /
-     *            {@code "db-update"})
+     * @param phase the current preparation phase label (e.g. {@code "check-changes"} /
+     *            {@code "recompute"} / {@code "db-update"})
      * @return a Markdown pending response matching the shape of
      *         {@link #buildPendingMessage(Path)}
      */
@@ -2235,8 +2248,9 @@ public class RunYaxunitTestsTool implements IMcpTool
         return "**Pending:** Pre-launch preparation is still running " //$NON-NLS-1$
             + "(phase: `" + (phase != null ? phase : prepPhaseLabel(null)) + "`" //$NON-NLS-1$ //$NON-NLS-2$
             + ", elapsed: " + elapsedSeconds + "s).\n\n" //$NON-NLS-1$ //$NON-NLS-2$
-            + "The server is rebuilding changed projects and updating the infobase in the " //$NON-NLS-1$
-            + "background so the run starts against a fresh, up-to-date infobase.\n"; //$NON-NLS-1$
+            + "The server is preparing the infobase in the background so the run starts " //$NON-NLS-1$
+            + "against a fresh, up-to-date one; the phase above names the stage it had " //$NON-NLS-1$
+            + "reached when this reply was built.\n"; //$NON-NLS-1$
     }
 
     /**

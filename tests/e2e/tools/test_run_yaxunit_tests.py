@@ -83,8 +83,11 @@ a plausible-looking implementation that breaks every such caller.
 
 Whenever the call has not finished the work it returns **Pending** with a `jobId`, the
 `run_yaxunit_tests` owning-tool name, and progress naming the phase (`resolve` /
-`prep:terminate` / `prep:recompute` / `prep:db-update` / `spawn` / `run`). The job
-continues independently of this window and is polled by id, never by rebuilt arguments.
+`prep:terminate` / `prep:check-changes` / `prep:recompute` / `prep:settle` /
+`prep:db-update` / `spawn` / `run`). `prep:recompute` is CONDITIONAL - the change gate
+publishes it only for a scope it could not certify as unchanged, and a certified one goes
+`prep:check-changes` -> `prep:settle` instead (#310). The job continues
+independently of this window and is polled by id, never by rebuilt arguments.
 
 The named job declares a YAXUnit-specific destructive cancellation capability. A
 cancel_job preview does nothing and warns that a confirmed live-run stop kills the

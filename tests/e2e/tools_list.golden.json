@@ -3645,7 +3645,7 @@
           "type": "integer"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale), auto-answering the platform's update dialogs. This makes a blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's own windows still waits for a human, and the tool reports it as a Pending whose phase stops changing. false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are retained by jobId until registry eviction, while a new start after completion always executes a fresh run regardless of this flag.",
+          "description": "Auto-chain (default: true): recompute only the projects whose sources changed (the configuration is not exempt), terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale), auto-answering the platform's update dialogs. This makes a blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's own windows still waits for a human, and the tool reports it as a Pending whose phase stops changing. false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are retained by jobId until registry eviction, while a new start after completion always executes a fresh run regardless of this flag.",
           "type": "boolean"
         },
         "updateScope": {

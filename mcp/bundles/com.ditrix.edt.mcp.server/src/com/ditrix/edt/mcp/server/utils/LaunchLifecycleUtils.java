@@ -106,15 +106,50 @@ public final class LaunchLifecycleUtils
      * Phase label published while the prep is sweeping live / stale launches of the target
      * application.
      *
-     * <p>The three labels are the ONLY values {@link #prepareForFreshLaunch} publishes, and it
+     * <p>These five labels are the ONLY values {@link #prepareForFreshLaunch} publishes, and it
      * publishes each one as it ENTERS that stage. That direction matters: a label written after
      * a stage finished names work that is already over, which is exactly what a caller reading
      * "what is it doing right now?" must not be told.
+     *
+     * <p>The same rule forbids publishing a label BEFORE the work it names is known to run.
+     * {@link #PHASE_RECOMPUTE} used to be published before the change gate had decided anything,
+     * so the first Pending of every preparation announced a full recompute even when the gate
+     * went on to skip it entirely - the reading behind the "run_yaxunit_tests always rebuilds
+     * the project" report (#310). A stage that MAY be skipped is therefore published from inside
+     * the branch that runs it, never ahead of the decision.
      */
     public static final String PHASE_TERMINATE = "terminate"; //$NON-NLS-1$
 
-    /** Phase label published while the prep is force-recomputing the scoped projects. */
+    /**
+     * Phase label published while the prep is deciding which projects need the forced recompute:
+     * resolving the update scope, refreshing each project from disk once per session and
+     * fingerprinting its content against the state recorded by the last successful preparation
+     * (see {@link PreLaunchChangeTracker}).
+     *
+     * <p>On a large configuration this stage alone can outlive the Pending budget, and while it
+     * runs it is the honest answer to "what is it doing right now?": the recompute may still turn
+     * out to be unnecessary.
+     */
+    public static final String PHASE_CHECK_CHANGES = "check-changes"; //$NON-NLS-1$
+
+    /**
+     * Phase label published while the prep is force-recomputing the projects the gate found
+     * changed, and waiting for that rebuild to settle.
+     *
+     * <p>Published ONLY when the gate found at least one changed project, i.e. when this
+     * preparation is entering the recompute stage for real; a preparation whose whole scope is
+     * unchanged never publishes it. Like every label here it names the stage being ENTERED, not
+     * a guarantee about what the platform then does inside it: {@code recomputeAll()} can still
+     * be a no-op when an EDT service is missing, and that case is handled by marking the project
+     * dirty again, not by withdrawing the label.
+     */
     public static final String PHASE_RECOMPUTE = "recompute"; //$NON-NLS-1$
+
+    /**
+     * Phase label published while the prep is draining the derived data of the projects the gate
+     * found unchanged - the cheap pass that replaces the recompute for them.
+     */
+    public static final String PHASE_SETTLE = "settle"; //$NON-NLS-1$
 
     /** Phase label published while the prep is updating the infobase. */
     public static final String PHASE_DB_UPDATE = "db-update"; //$NON-NLS-1$
@@ -139,8 +174,8 @@ public final class LaunchLifecycleUtils
     {
         /**
          * Human-readable phase label, published by {@link #prepareForFreshLaunch} as it
-         * ENTERS each stage (see {@link #PHASE_TERMINATE} / {@link #PHASE_RECOMPUTE} /
-         * {@link #PHASE_DB_UPDATE}).
+         * ENTERS each stage (see {@link #PHASE_TERMINATE} / {@link #PHASE_CHECK_CHANGES} /
+         * {@link #PHASE_RECOMPUTE} / {@link #PHASE_SETTLE} / {@link #PHASE_DB_UPDATE}).
          *
          * <p>The initial value is the first stage the prep enters, so a reader that wins
          * the race with the job's own first publish still names a phase the prep is
@@ -868,6 +903,29 @@ public final class LaunchLifecycleUtils
      */
     public static PrepareSnapshot recomputeAndSettleIfDirty(Collection<IProject> projects)
     {
+        return recomputeAndSettleIfDirty(projects, phase -> {
+            // No sink: the caller does not report progress.
+        });
+    }
+
+    /**
+     * Same contract as {@link #recomputeAndSettleIfDirty(Collection)}, additionally publishing
+     * the stage it is entering to {@code phaseSink}.
+     *
+     * <p>The sink is fed from HERE, not from the caller, because this is where the gate decides.
+     * {@link #PHASE_RECOMPUTE} is published inside the dirty branch and {@link #PHASE_SETTLE}
+     * inside the clean one, so a label can only name work this call is really about to do. A
+     * caller publishing "recompute" before handing the scope over would be guessing, and it
+     * guessed wrong for every unchanged project — the whole of #310.
+     *
+     * @param projects scope after {@link #resolveUpdateScope} has been applied
+     *            (may be {@code null} or empty — returns empty snapshot, publishes nothing)
+     * @param phaseSink receives the label of each stage as it is entered; never {@code null}
+     * @return the snapshot taken before the recompute (see the single-argument overload)
+     */
+    public static PrepareSnapshot recomputeAndSettleIfDirty(Collection<IProject> projects,
+            Consumer<String> phaseSink)
+    {
         // Take the snapshot BEFORE the recompute so any change arriving during
         // the recompute stores a HIGHER generation in DIRTY; markPrepared's
         // conditional remove will then leave that entry in place.
@@ -903,6 +961,10 @@ public final class LaunchLifecycleUtils
             Activator.logInfo("Pre-launch: " + dirty.size() //$NON-NLS-1$
                 + " project(s) changed since last prepared launch -> forced recompute: [" //$NON-NLS-1$
                 + dirtyNames + "]; " + clean.size() + " unchanged -> skipped"); //$NON-NLS-1$ //$NON-NLS-2$
+            // The label is published HERE, after the gate said yes and before the work starts:
+            // a recompute is genuinely about to run. Published any earlier it would be a
+            // prediction, and on an unchanged scope a false one.
+            phaseSink.accept(PHASE_RECOMPUTE);
             // Full recompute+settle for the dirty subset.
             recomputeAndSettle(dirty);
         }
@@ -914,6 +976,12 @@ public final class LaunchLifecycleUtils
 
         // Cheap derived-data drain for clean projects (no recomputeAll, returns
         // immediately when nothing pending — the pre-regression fast path).
+        if (!clean.isEmpty())
+        {
+            // Its own label: leaving the reader on "check-changes" would name a stage that is
+            // over, and leaving them on "recompute" would name one that never ran.
+            phaseSink.accept(PHASE_SETTLE);
+        }
         for (IProject project : clean)
         {
             BuildUtils.waitForDerivedData(project);
@@ -1047,7 +1115,8 @@ public final class LaunchLifecycleUtils
         if (requested.isEmpty())
         {
             // Scope referenced no parseable extension name — degrade to just the
-            // configuration (which is always rebuilt) rather than the full scope.
+            // configuration (which is always in scope; whether it is recomputed is still the
+            // change gate's decision) rather than the full scope.
             // validateUpdateScope reports this as a hard error to callers that
             // go through prepareForFreshLaunch.
             return new ArrayList<>(projects);
@@ -2078,8 +2147,10 @@ public final class LaunchLifecycleUtils
      *   <li>Find every live launch matching {@code project + applicationId};</li>
      *   <li>Politely terminate each and wait — aborts on timeout (the IB would
      *       still be locked, defeating the purpose);</li>
-     *   <li>FORCE a derived-data recompute of the requested projects so a freshly
-     *       edited extension {@code .cfe} is regenerated, then wait for it to settle;</li>
+     *   <li>Ask the change gate which of the requested projects differ from the content
+     *       state of their last successful preparation, FORCE a derived-data recompute of
+     *       those so a freshly edited extension {@code .cfe} is regenerated, then wait for
+     *       it to settle; the unchanged ones get only the cheap derived-data drain;</li>
      *   <li>Run {@link #updateApplicationIfNeeded} to settle the IB in
      *       {@code UPDATED} state — the launch delegate then skips its dialog.
      *       EXCEPT for a STANDALONE-SERVER application
@@ -2099,8 +2170,9 @@ public final class LaunchLifecycleUtils
      * @param applicationId           target {@code ATTR_APPLICATION_ID}
      * @param appManager              EDT application manager
      * @param terminateTimeoutSeconds polite-wait window per live launch
-     * @param updateScope             which projects to force-recompute+update before
-     *            the launch (see {@link #resolveUpdateScope(IProject, String)}); pass
+     * @param updateScope             the outer scope the preparation may recompute+update
+     *            before the launch — within it the change gate still decides which projects
+     *            are recomputed (see {@link #resolveUpdateScope(IProject, String)}); pass
      *            {@code null} or {@code "all"} for the configuration plus its
      *            dependent extensions. Unknown extension names fail fast with
      *            {@code ok=false} BEFORE any live launch is terminated (see
@@ -2148,9 +2220,16 @@ public final class LaunchLifecycleUtils
      * <p>The prep runs for minutes on a real configuration while the caller can only hold the
      * MCP transport open for seconds, so "what is it doing right now?" is the one piece of
      * information a polling caller can act on. The sink is therefore called on ENTRY to each
-     * stage ({@link #PHASE_TERMINATE} → {@link #PHASE_RECOMPUTE} → {@link #PHASE_DB_UPDATE}),
+     * stage ({@link #PHASE_TERMINATE} → {@link #PHASE_CHECK_CHANGES} →
+     * {@link #PHASE_RECOMPUTE} and/or {@link #PHASE_SETTLE} → {@link #PHASE_DB_UPDATE}),
      * never after one completes: a label published on exit describes work that is already
      * finished and would have the reader waiting on the wrong thing.
+     *
+     * <p>Two of those stages are conditional, and that is why the sequence is not fixed: the
+     * change gate publishes {@link #PHASE_RECOMPUTE} only for a scope that really contains a
+     * changed project and {@link #PHASE_SETTLE} only for one that really contains an unchanged
+     * one. A preparation that finds nothing changed never says "recompute" — saying it
+     * anyway is what made callers report a permanent rebuild (#310).
      *
      * @param launchManager the debug-platform launch manager
      * @param project the launch (configuration) project
@@ -2337,8 +2416,9 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Final stage of {@link #prepareForFreshLaunch} after the terminate passes: forces the
-     * scoped derived-data recompute, then either defers the DB update to the launch
+     * Final stage of {@link #prepareForFreshLaunch} after the terminate passes: runs the change
+     * gate over the scope and forces a derived-data recompute of the projects it finds changed
+     * (the rest get the cheap drain), then either defers the DB update to the launch
      * delegate (standalone-server applications) or runs {@link #updateApplicationIfNeeded}
      * and gates on it, marking the scope prepared on the success paths only. Returns the
      * SAME {@link PreLaunchResult} (ok / error, with the supplied {@code terminated} count)
@@ -2366,9 +2446,13 @@ public final class LaunchLifecycleUtils
         // markPrepared on the success paths — a change arriving DURING the
         // recompute bumps the generation counter; the conditional remove in
         // markPrepared then fails and the project stays dirty (stale-.cfe fix).
-        phaseSink.accept(PHASE_RECOMPUTE);
+        //
+        // What this call enters is the CHANGE GATE, not the recompute: resolving the scope,
+        // syncing each project with disk and fingerprinting it. Whether a recompute follows is
+        // decided one call deeper, so the label for the recompute is published there.
+        phaseSink.accept(PHASE_CHECK_CHANGES);
         List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
-        PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects);
+        PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects, phaseSink);
 
         // A STANDALONE-SERVER application (literal
         // "ServerApplication." id prefix) must NOT be DB-updated out-of-band
