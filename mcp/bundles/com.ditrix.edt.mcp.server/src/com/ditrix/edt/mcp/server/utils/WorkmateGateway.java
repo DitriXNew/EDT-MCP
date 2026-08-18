@@ -1539,6 +1539,15 @@ public class WorkmateGateway
                 throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
                     + "before tool '" + toolName + "' could be invoked, so it was not invoked"); //$NON-NLS-1$ //$NON-NLS-2$
             }
+            // Again, after the handshake and not only before it: onTryCommit takes the job
+            // record's lock and can wait there, so the budget may run out between the two. The
+            // conversation path re-checks in the same place for the same reason. Still the
+            // retryable kind - the commit stops the registry from killing the job, but no tool
+            // has been entered, so nothing was left half-done.
+            if (remainingMillis(deadlineNanos) <= 0)
+            {
+                throw GatewayException.timedOut();
+            }
             Object futureValue = invoke(callTools, tools, calls, token);
             // The tool is RUNNING from here on - JShell executes arbitrary code, and other
             // Workmate tools change this project - so nothing below may advise a retry.
