@@ -12,6 +12,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -92,7 +93,9 @@ public class CodeReviewTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT_NAME, "EDT project name to review.", true) //$NON-NLS-1$
             .stringProperty(McpKeys.MODULE_PATH,
                 "Optional: narrow the review to a single module, path from src/ " //$NON-NLS-1$
-                    + "(e.g. 'CommonModules/Calc/Module.bsl'). Omit to review the whole configuration.") //$NON-NLS-1$
+                    + "(e.g. 'CommonModules/Calc/Module.bsl'); must be a .bsl module. Omit to review " //$NON-NLS-1$
+                    + "the whole configuration - a scoped run cannot see cross-module context, so " //$NON-NLS-1$
+                    + "rules like unused-export are only reliable without it.") //$NON-NLS-1$
             .enumProperty("severity", //$NON-NLS-1$
                 "Optional: minimum severity to report (error > warning > information > hint). Omit to report all.", //$NON-NLS-1$
                 "error", "warning", "information", "hint") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -141,6 +144,15 @@ public class CodeReviewTool implements IMcpTool
         {
             return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
         }
+        // A CLOSED project still answers exists() and still has its sources on disk, so without
+        // this the engine would analyse them and report findings as if the project were open - or
+        // fail later with a misleading "no src/ folder to review". Named separately from
+        // not-found because the remedy is different (open it, not check the name).
+        if (!ctx.isOpen())
+        {
+            return ToolResult.error("Project is closed: " + projectName //$NON-NLS-1$
+                + ". Open it in EDT, then retry code_review.").toJson(); //$NON-NLS-1$
+        }
         IProject project = ctx.project();
 
         IFolder srcFolder = project.getFolder("src"); //$NON-NLS-1$
@@ -178,6 +190,20 @@ public class CodeReviewTool implements IMcpTool
                     + projectName + "'s own src/ folder (" + srcRoot.getAbsolutePath() + "). Pass a path " //$NON-NLS-1$ //$NON-NLS-2$
                     + "relative to src/ that stays inside this project, e.g. 'CommonModules/Calc/Module.bsl' " //$NON-NLS-1$
                     + "— not an absolute path or one using '..' to escape src/.").toJson(); //$NON-NLS-1$
+            }
+            // The engine reports diagnostics for BSL modules only. Any OTHER existing file under
+            // src/ (Configuration.mdo, a template, a picture) passes the checks above, gets its
+            // containing folder analysed, and then matches nothing when findings are filtered to
+            // this exact path - so the tool would answer "no issues" for a file it could never have
+            // reviewed. Reject it by name rather than report a false clean.
+            if (!isBslModule(moduleOsFile.getName()))
+            {
+                return ToolResult.error("modulePath '" + modulePath + "' is not a BSL module. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "code_review analyses BSL sources (*.bsl); a metadata or template file has no " //$NON-NLS-1$
+                    + "code-quality diagnostics, so reviewing it would report 'no issues' for a file " //$NON-NLS-1$
+                    + "that was never checked. Pass a module path such as " //$NON-NLS-1$
+                    + "'CommonModules/Calc/Module.bsl', or omit modulePath to review the whole " //$NON-NLS-1$
+                    + "project.").toJson(); //$NON-NLS-1$
             }
             targetAbsPath = normalize(moduleOsFile.getAbsolutePath());
             scopeDir = moduleOsFile.getParentFile();
@@ -253,7 +279,10 @@ public class CodeReviewTool implements IMcpTool
     {
         int minRank = severityMin == null || severityMin.isEmpty() ? Integer.MIN_VALUE
             : rank(Severity.valueOf(severityMin.toUpperCase(Locale.ROOT)));
-        String ruleNeedle = rule == null ? null : rule.toLowerCase(Locale.ROOT);
+        // isEmpty() as well as null, matching excludeRule/severityMin above: a client that sends
+        // "" for an unset optional parameter meant "no filter". Without it, contains("") keeps every
+        // finding that HAS a code and silently drops the ones whose code the engine omitted.
+        String ruleNeedle = rule == null || rule.isEmpty() ? null : rule.toLowerCase(Locale.ROOT);
         String excludeNeedle = excludeRule == null || excludeRule.isEmpty() ? null : excludeRule.toLowerCase(Locale.ROOT);
 
         // Module scope FIRST: when modulePath narrows to one file, the engine still analyzed the
@@ -290,13 +319,22 @@ public class CodeReviewTool implements IMcpTool
             }
             filtered.add(f);
         }
+        // Relativize ONCE per finding, not once per comparison: modulePathOf normalizes two
+        // absolute paths, and a comparator key extractor is called O(n log n) times - on a
+        // whole-project review of a large configuration that is hundreds of thousands of path
+        // normalizations for a sort of a few thousand rows.
+        Map<Finding, String> modulePaths = new IdentityHashMap<>();
+        for (Finding f : filtered)
+        {
+            modulePaths.put(f, modulePathOf(srcRoot, f.path()));
+        }
         filtered.sort(Comparator.comparingInt((Finding f) -> rank(f.severity())).reversed()
-            .thenComparing(f -> modulePathOf(srcRoot, f.path()))
+            .thenComparing(modulePaths::get)
             .thenComparingInt(Finding::line));
 
         StringBuilder md = new StringBuilder();
         String scope = modulePath == null || modulePath.isEmpty() ? projectName : projectName + " / " + modulePath; //$NON-NLS-1$
-        md.append("# Code review — ").append(MarkdownUtils.escapeForTable(scope)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        md.append("# Code review — ").append(scope).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         md.append("**").append(scoped.size()).append("** finding(s): ") //$NON-NLS-1$ //$NON-NLS-2$
             .append(countBySeverity(scoped, Severity.ERROR)).append(" error, ") //$NON-NLS-1$
@@ -423,6 +461,23 @@ public class CodeReviewTool implements IMcpTool
         default:
             return "Hint"; //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Whether {@code fileName} names a BSL module — the only thing the engine produces diagnostics
+     * for.
+     * <p>
+     * Package-visible so the rule is pinned by a unit test rather than only by the live e2e: any
+     * other existing file under {@code src/} would otherwise pass the path checks, get its folder
+     * analysed, and match nothing when findings are filtered to it — answering "no issues" for a
+     * file that was never reviewed.
+     *
+     * @param fileName the resolved file's name
+     * @return {@code true} when it is a {@code .bsl} module
+     */
+    static boolean isBslModule(String fileName)
+    {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".bsl"); //$NON-NLS-1$
     }
 
     /**

@@ -143,10 +143,38 @@ public class BslLsReportTest
     }
 
     @Test
-    public void testMissingFileinfosKeyTolerated()
+    public void testMissingFileinfosKeyIsAReportFormatError()
     {
-        BslLsReport report = BslLsReport.parse("{}");
-        assertEquals(0, report.total());
+        // Deliberately the OPPOSITE of what this test used to assert. Tolerating a report with no
+        // `fileinfos` turned "the engine wrote JSON that is not an analysis report" - a wrong
+        // engine version, or a wrapper on EDT_MCP_BSL_LS_JAR writing its own status object - into
+        // "0 findings", i.e. a CLEAN project for a run that analysed nothing. An empty ARRAY is
+        // still a legitimate clean result (see testEmptyReportIsEmptyNotError); an absent key is not.
+        try
+        {
+            BslLsReport.parse("{}");
+            fail("a report without 'fileinfos' must not be reported as a clean project");
+        }
+        catch (IllegalArgumentException expected)
+        {
+            assertTrue("the error must name the missing field: " + expected.getMessage(),
+                expected.getMessage().contains("fileinfos"));
+        }
+    }
+
+    @Test
+    public void testFileinfosOfTheWrongTypeIsAReportFormatError()
+    {
+        try
+        {
+            BslLsReport.parse("{\"fileinfos\":{}}");
+            fail("a non-array 'fileinfos' must not be reported as a clean project");
+        }
+        catch (IllegalArgumentException expected)
+        {
+            assertTrue("the error must name the offending field: " + expected.getMessage(),
+                expected.getMessage().contains("fileinfos"));
+        }
     }
 
     @Test

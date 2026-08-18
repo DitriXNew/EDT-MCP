@@ -118,7 +118,12 @@ public class CodeReviewToolTest
         assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"severity\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"rule\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"excludeRule\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"limit\"")); //$NON-NLS-1$
+        // The .bsl-only rule is enforced in execute(); the schema must SAY so, or a client that
+        // never fetches the guide meets it as a surprise error (schema and guide state one contract).
+        assertTrue("the schema must state the .bsl-only constraint: " + schema, //$NON-NLS-1$
+            schema.contains(".bsl module")); //$NON-NLS-1$
     }
 
     @Test
@@ -350,5 +355,26 @@ public class CodeReviewToolTest
         assertFalse(CodeReviewTool.isWithinSrc(null, new File("C:/proj/src/Module.bsl"))); //$NON-NLS-1$
         assertFalse(CodeReviewTool.isWithinSrc(new File("C:/proj/src"), null)); //$NON-NLS-1$
         assertFalse(CodeReviewTool.isWithinSrc(null, null));
+    }
+
+    // ---- isBslModule: the engine only diagnoses .bsl, so anything else must be refused ----
+
+    @Test
+    public void testBslModulesAreAccepted()
+    {
+        assertTrue(CodeReviewTool.isBslModule("Module.bsl")); //$NON-NLS-1$
+        assertTrue("the check must not be case-sensitive", CodeReviewTool.isBslModule("MODULE.BSL")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNonBslFilesAreRejected()
+    {
+        // The false-clean this guard exists for: these all EXIST under src/, so every earlier path
+        // check passes, and only the extension separates "reviewed and clean" from "never reviewed".
+        assertFalse(CodeReviewTool.isBslModule("Configuration.mdo")); //$NON-NLS-1$
+        assertFalse(CodeReviewTool.isBslModule("Template.xml")); //$NON-NLS-1$
+        assertFalse(CodeReviewTool.isBslModule("Form.form")); //$NON-NLS-1$
+        assertFalse(CodeReviewTool.isBslModule("bsl")); //$NON-NLS-1$
+        assertFalse(CodeReviewTool.isBslModule(null));
     }
 }

@@ -15,7 +15,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+
+import com._1c.g5.v8.dt.common.FileUtil;
+
+import com.ditrix.edt.mcp.server.Activator;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Runs the external BSL Language Server engine ({@code bsl-language-server-*-exec.jar})
@@ -53,7 +61,16 @@ public final class BslLsRunner
     public static final String RELEASES_URL = "https://github.com/1c-syntax/bsl-language-server/releases"; //$NON-NLS-1$
 
     private static final String REPORT_FILE = "bsl-json.json"; //$NON-NLS-1$
-    private static final int DEFAULT_TIMEOUT_SECONDS = 180;
+    /**
+     * Subprocess deadline, deliberately UNDER the MCP transport's own ceiling.
+     * <p>
+     * A longer engine timeout is not a longer answer, it is no answer: the client cuts the call
+     * first and the caller gets a bare transport error instead of this tool's actionable one (the
+     * same physics {@code RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS} pins at 45s, for the same
+     * reason). A configuration too large to analyse inside this window cannot be reviewed whole
+     * through MCP at all - {@link #narrowingAdvice} says so, and says it in time to be delivered.
+     */
+    private static final int DEFAULT_TIMEOUT_SECONDS = 45;
 
     /**
      * Bound on the engine's captured stdout+stderr (merged via
@@ -238,7 +255,34 @@ public final class BslLsRunner
         {
             return Result.error(javaNotFoundMessage());
         }
+        String incompatible = incompatibleEngineMessage(jar, request.javaOverride);
+        if (incompatible != null)
+        {
+            // Before refusing, look for a runnable engine in the SAME folder: telling someone to
+            // "install the 0.28.x line" when they already did - it just lost the newest-wins scan -
+            // is advice they cannot act on. Only the scanned default folder is reconsidered; an
+            // explicitly pointed-at jar (override/env) is the caller's deliberate choice.
+            File compatible = isFile(request.jarOverride) || isFile(fileFromEnv(ENV_JAR))
+                ? null : newestRunnableJar(jar.getParentFile());
+            if (compatible == null)
+            {
+                return Result.error(incompatible);
+            }
+            Activator.logWarning("Engine " + jar.getName() + " needs a newer Java than EDT runs; " //$NON-NLS-1$ //$NON-NLS-2$
+                + "using " + compatible.getName() + " from the same folder instead."); //$NON-NLS-1$ //$NON-NLS-2$
+            jar = compatible;
+        }
+        // Also covers the config the engine would DISCOVER on its own. When nothing is passed via
+        // --configuration the engine searches its working directory - which is the project's own
+        // workspace root (see execute) - so a .bsl-language-server.json sitting there would be read
+        // without ever passing through withoutFileWritingKeys, and its traceLog would drop a log
+        // file into the project from a read-only tool. Resolving it here means it is always the
+        // SANITIZED copy that reaches the engine.
         File config = resolveConfig(request.configFile, jar);
+        if (!isFile(config))
+        {
+            config = discoverableConfig(resolveWorkspaceDir(request));
+        }
 
         Path outputDir;
         try
@@ -253,11 +297,99 @@ public final class BslLsRunner
 
         try
         {
-            return execute(java, jar, config, request, outputDir);
+            return execute(java, jar, withoutFileWritingKeys(config, outputDir), request, outputDir);
         }
         finally
         {
             deleteQuietly(outputDir);
+        }
+    }
+
+    /**
+     * The config the engine would find BY ITSELF when {@code --configuration} is omitted, so it can
+     * be sanitized instead of read behind our back.
+     * <p>
+     * The engine searches its working directory and then the user's home directory. Both are
+     * reachable here: the working directory is the project's own workspace root (see
+     * {@link #execute}), and a {@code traceLog} in EITHER would be written relative to that working
+     * directory - i.e. INTO the analysed project, from a tool annotated read-only. Naming the file
+     * explicitly is what lets {@link #withoutFileWritingKeys} strip it first.
+     *
+     * @param workspaceDir the directory the engine will run in
+     * @return the config the engine would otherwise discover, or {@code null} when there is none
+     */
+    private static File discoverableConfig(File workspaceDir)
+    {
+        if (workspaceDir != null)
+        {
+            File inCwd = new File(workspaceDir, ".bsl-language-server.json"); //$NON-NLS-1$
+            if (inCwd.isFile())
+            {
+                return inCwd;
+            }
+        }
+        File inHome = new File(System.getProperty("user.home", ""), ".bsl-language-server.json"); //$NON-NLS-1$ //$NON-NLS-2$
+        return inHome.isFile() ? inHome : null;
+    }
+
+    /**
+     * Keys in the engine's own configuration that make it WRITE a file. Verified against engine
+     * 1.0.3: with {@code "traceLog": "bsl-trace.log"} in the project's
+     * {@code .bsl-language-server.json}, an analyze run creates that file relative to the process
+     * working directory, i.e. inside the analysed project.
+     */
+    private static final String[] FILE_WRITING_CONFIG_KEYS = {"traceLog"}; //$NON-NLS-1$
+
+    /**
+     * Returns a config for the engine with every file-WRITING key removed, copied into
+     * {@code outputDir} — or {@code config} itself when it has none (the common case, no copy).
+     * <p>
+     * {@code code_review} is annotated READ-ONLY, and a read-only tool must not create files in the
+     * project just because the project's config asks the engine to. That is not hypothetical:
+     * running 1.0.3 with {@code traceLog} set drops the log into the project root. Stripping the
+     * key keeps the annotation honest without touching the diagnostics configuration the project
+     * actually cares about.
+     * <p>
+     * Best-effort by design: a config that cannot be read or parsed is passed through untouched, so
+     * a malformed file produces the ENGINE's own diagnostics rather than a wrapper-level failure.
+     *
+     * @param config the resolved engine config, or {@code null}
+     * @param outputDir the run's temp directory, where a sanitized copy is written
+     * @return the config file to pass as {@code --configuration}
+     */
+    static File withoutFileWritingKeys(File config, Path outputDir)
+    {
+        if (!isFile(config))
+        {
+            return config;
+        }
+        try
+        {
+            String text = new String(Files.readAllBytes(config.toPath()), StandardCharsets.UTF_8);
+            JsonElement rootEl = JsonParser.parseString(text);
+            if (!rootEl.isJsonObject())
+            {
+                return config;
+            }
+            JsonObject root = rootEl.getAsJsonObject();
+            boolean stripped = false;
+            for (String key : FILE_WRITING_CONFIG_KEYS)
+            {
+                stripped |= root.remove(key) != null;
+            }
+            if (!stripped)
+            {
+                return config;
+            }
+            Path sanitized = outputDir.resolve("bsl-language-server.json"); //$NON-NLS-1$
+            Files.write(sanitized, root.toString().getBytes(StandardCharsets.UTF_8));
+            return sanitized.toFile();
+        }
+        catch (IOException | RuntimeException e)
+        {
+            Activator.logWarning("Could not strip file-writing keys from " + config //$NON-NLS-1$
+                + "; passing it through unchanged: " + e.getMessage()); //$NON-NLS-1$
+            return config;
         }
     }
 
@@ -348,6 +480,10 @@ public final class BslLsRunner
         try
         {
             process = pb.start();
+            // Close the child's stdin immediately: we never write to it, and an engine build or an
+            // EDT_MCP_BSL_LS_JAR wrapper script that reads stdin would otherwise block on an open
+            // empty pipe instead of seeing EOF - burning the whole timeout for nothing.
+            closeQuietly(process.getOutputStream());
         }
         catch (IOException e)
         {
@@ -374,8 +510,11 @@ public final class BslLsRunner
         {
             process.destroyForcibly();
             join(drain);
+            // No "raise the timeout" advice: code_review exposes no timeout parameter and there is
+            // no env/preference override, so telling the caller to raise it would send them after
+            // a knob that does not exist. Name only what they can actually do.
             return Result.error("BSL Language Server timed out after " + request.timeoutSeconds //$NON-NLS-1$
-                + "s. Narrow the scope or raise the timeout."); //$NON-NLS-1$
+                + "s." + narrowingAdvice(request)); //$NON-NLS-1$
         }
         join(drain);
 
@@ -389,13 +528,13 @@ public final class BslLsRunner
         {
             return Result.error("BSL Language Server exited with status " + exit + " (a clean analyze run " //$NON-NLS-1$ //$NON-NLS-2$
                 + "exits 0 even when it reports diagnostics, so this is an operational failure, not " //$NON-NLS-1$
-                + "findings). Engine output: " + tail(captured.toString())); //$NON-NLS-1$
+                + "findings). Engine output: " + tail(snapshot(captured))); //$NON-NLS-1$
         }
         Path reportPath = outputDir.resolve(REPORT_FILE);
         if (!Files.isRegularFile(reportPath))
         {
             return Result.error("BSL Language Server produced no JSON report despite exiting 0. " //$NON-NLS-1$
-                + "Engine output: " + tail(captured.toString())); //$NON-NLS-1$
+                + "Engine output: " + tail(snapshot(captured))); //$NON-NLS-1$
         }
 
         // Checked BEFORE any read: a pathologically large report must not be pulled fully into
@@ -414,8 +553,7 @@ public final class BslLsRunner
         if (reportSize > MAX_REPORT_BYTES)
         {
             return Result.error("BSL Language Server report is " + reportSize + " bytes, over the " //$NON-NLS-1$ //$NON-NLS-2$
-                + MAX_REPORT_BYTES + "-byte limit; not read into memory. Narrow the scope (pass a " //$NON-NLS-1$
-                + "modulePath) and re-run."); //$NON-NLS-1$
+                + MAX_REPORT_BYTES + "-byte limit; not read into memory." + narrowingAdvice(request)); //$NON-NLS-1$
         }
 
         String json;
@@ -679,6 +817,148 @@ public final class BslLsRunner
     }
 
     /**
+     * Refuses a jar/runtime pair that provably cannot launch, BEFORE spawning the process — or
+     * {@code null} when the pair is fine (or cannot be judged).
+     * <p>
+     * The engine's {@code 1.x} line is compiled for Java 21; {@code 0.28.x} runs on Java 17. When
+     * both jars sit in the default folder, {@link #scanForExecJar} picks the NEWEST — correct on
+     * its own terms, but on an EDT running Java 17 that choice ends in an
+     * {@code UnsupportedClassVersionError} from the child, surfacing as an opaque "no report
+     * produced" even though a runnable engine is installed right next to it.
+     * <p>
+     * Judged only when the runtime is the JVM hosting EDT (no {@code javaOverride}, no
+     * {@link #ENV_JAVA}), because that is the one case whose version is known for free from
+     * {@code java.specification.version}. An explicitly pointed-at Java is the caller's deliberate
+     * choice and would cost a probe subprocess to inspect, so it is left alone — a wrong one still
+     * fails, just with the engine's own message.
+     *
+     * @param jar the resolved engine jar
+     * @param javaOverride the explicit Java from the request, or {@code null}
+     * @return an actionable error message, or {@code null} when there is no known incompatibility
+     */
+    static String incompatibleEngineMessage(File jar, File javaOverride)
+    {
+        if (jar == null || isFile(javaOverride) || isFile(fileFromEnv(ENV_JAVA)))
+        {
+            return null;
+        }
+        return incompatibleEngineMessage(jar.getName(), hostJavaMajor());
+    }
+
+    /**
+     * The remediation half of the "too big / too slow" errors, phrased for the scope the caller
+     * ACTUALLY used.
+     * <p>
+     * Telling someone to "pass a modulePath" when they already passed one is dead advice — and this
+     * runner is the only place that knows which it was: a scoped run narrows {@code srcDir} below
+     * {@code workspaceDir}, a whole-project run leaves them equal.
+     *
+     * @param request the run being reported on
+     * @return a sentence beginning with a space, ready to append to the error
+     */
+    private static String narrowingAdvice(Request request)
+    {
+        File workspace = resolveWorkspaceDir(request);
+        boolean alreadyScoped = workspace != null && request.srcDir != null
+            && !workspace.getAbsolutePath().equals(request.srcDir.getAbsolutePath());
+        if (alreadyScoped)
+        {
+            return " This run was already scoped to one module, so there is nothing left to narrow: " //$NON-NLS-1$
+                + "the module itself is too large for the engine to handle inside EDT. Split it, or " //$NON-NLS-1$
+                + "run the engine outside EDT for this one."; //$NON-NLS-1$
+        }
+        return " Review a single module with modulePath instead of the whole project, or run the " //$NON-NLS-1$
+            + "engine outside EDT for a configuration this large."; //$NON-NLS-1$
+    }
+
+    /**
+     * The newest jar in {@code dir} that the host Java can actually launch, or {@code null} when
+     * there is none (or the folder holds nothing else).
+     * <p>
+     * The fallback for the case {@link #incompatibleEngineMessage} detects: both engine lines
+     * installed side by side and the newest-wins scan picking the one this runtime cannot start.
+     * Rather than refuse a setup that DOES contain a runnable engine, drop back to the newest
+     * runnable one.
+     *
+     * @param dir the folder the incompatible jar was scanned from
+     * @return a launchable jar, or {@code null}
+     */
+    private static File newestRunnableJar(File dir)
+    {
+        if (dir == null || !dir.isDirectory())
+        {
+            return null;
+        }
+        File[] jars = dir.listFiles((d, name) -> name.startsWith("bsl-language-server") //$NON-NLS-1$
+            && name.endsWith("-exec.jar")); //$NON-NLS-1$
+        if (jars == null)
+        {
+            return null;
+        }
+        int runtime = hostJavaMajor();
+        File best = null;
+        for (File candidate : jars)
+        {
+            if (incompatibleEngineMessage(candidate.getName(), runtime) != null)
+            {
+                continue;
+            }
+            if (best == null || compareJarVersions(candidate.getName(), best.getName()) > 0)
+            {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * The pure half of {@link #incompatibleEngineMessage(File, File)}: decides on a jar NAME and a
+     * runtime major version alone, so the rule is unit-testable without depending on whichever Java
+     * happens to be running the tests.
+     *
+     * @param jarName the engine jar's file name
+     * @param runtimeMajor the major version of the Java that would launch it, or a non-positive
+     *            value when it is unknown
+     * @return an actionable error message, or {@code null} when there is no known incompatibility
+     */
+    static String incompatibleEngineMessage(String jarName, int runtimeMajor)
+    {
+        String version = extractVersion(jarName);
+        if (version == null || !version.startsWith("1.")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        if (runtimeMajor <= 0 || runtimeMajor >= 21)
+        {
+            return null;
+        }
+        return "The BSL Language Server engine " + jarName + " needs Java 21, but EDT runs on " //$NON-NLS-1$ //$NON-NLS-2$
+            + "Java " + runtimeMajor + " and no other Java was pointed at. Launching it would fail " //$NON-NLS-1$ //$NON-NLS-2$
+            + "with an UnsupportedClassVersionError. Either set " + ENV_JAVA + " to a Java 21+ " //$NON-NLS-1$ //$NON-NLS-2$
+            + "executable, or install the 0.28.x engine line (which runs on Java 17) and point " //$NON-NLS-1$
+            + ENV_JAR + " at it: " + RELEASES_URL; //$NON-NLS-1$
+    }
+
+    /** The major version of the JVM hosting EDT, or {@code -1} when it cannot be determined. */
+    private static int hostJavaMajor()
+    {
+        String spec = System.getProperty("java.specification.version", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        // "17", "21" on modern JDKs; "1.8" on 8 and older.
+        if (spec.startsWith("1.")) //$NON-NLS-1$
+        {
+            spec = spec.substring(2);
+        }
+        try
+        {
+            return Integer.parseInt(spec.trim());
+        }
+        catch (NumberFormatException e)
+        {
+            return -1;
+        }
+    }
+
+    /**
      * Resolves the Java launcher: explicit override, then {@link #ENV_JAVA}, then the
      * JRE running EDT ({@code java.home}). Returns {@code null} only if none resolves to
      * an existing file (practically never — {@code java.home} is always set).
@@ -817,6 +1097,51 @@ public final class BslLsRunner
         return "…" + trimmed.substring(trimmed.length() - max); //$NON-NLS-1$
     }
 
+    /**
+     * Reads {@code sink} under the SAME lock {@link #drainAsync} writes it with.
+     * <p>
+     * {@code join(drain)} is not a guarantee the drain has stopped: it swallows an interrupt and
+     * gives up after its own cap, so the daemon thread can still be inside
+     * {@code append}/{@code delete} when the caller wants the text. StringBuilder is not
+     * thread-safe, and an unsynchronised read can observe a shrunk length against a reallocated
+     * buffer — throwing out of a method this class documents as never throwing for an operational
+     * problem (and past {@code ToolResult.error}, CLAUDE.md don't #8).
+     *
+     * @param sink the drain's buffer
+     * @return a stable copy of its current contents
+     */
+    private static String snapshot(StringBuilder sink)
+    {
+        synchronized (sink)
+        {
+            return sink.toString();
+        }
+    }
+
+    /** Closes {@code closeable}, ignoring failure — used for the child's unused stdin pipe. */
+    private static void closeQuietly(java.io.Closeable closeable)
+    {
+        try
+        {
+            closeable.close();
+        }
+        catch (IOException ignored)
+        {
+            // best effort
+        }
+    }
+
+    /**
+     * Removes the run's temp directory, tolerating the Windows case where the just-exited engine
+     * still holds a handle on it.
+     * <p>
+     * Delegates to the platform helper the rest of this plugin already uses for exactly this
+     * problem ({@code DeleteInfobaseTool}): it retries a few times instead of giving up on the
+     * first failure. A single-shot delete loses the race often enough on Windows that every
+     * invocation could orphan a temp tree holding a multi-MB report.
+     *
+     * @param dir the temp directory to remove; {@code null} is ignored
+     */
     private static void deleteQuietly(Path dir)
     {
         if (dir == null)
@@ -825,22 +1150,11 @@ public final class BslLsRunner
         }
         try
         {
-            Files.walk(dir)
-                .sorted((a, b) -> b.getNameCount() - a.getNameCount())
-                .forEach(p -> {
-                    try
-                    {
-                        Files.deleteIfExists(p);
-                    }
-                    catch (IOException ignored)
-                    {
-                        // best effort
-                    }
-                });
+            FileUtil.deleteRecursivelyWithRetries(dir);
         }
-        catch (IOException ignored)
+        catch (IOException | RuntimeException ignored)
         {
-            // best effort
+            // best effort - a leftover temp dir is not worth failing a completed review over
         }
     }
 
@@ -861,6 +1175,6 @@ public final class BslLsRunner
 
     private static boolean isWindows()
     {
-        return System.getProperty("os.name", "").toLowerCase().contains("win"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 }

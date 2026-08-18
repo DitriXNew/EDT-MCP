@@ -271,27 +271,22 @@
     "inputSchema": {
       "properties": {
         "excludeRule": {
-          "description": "Optional: drop diagnostics whose rule id contains this substring — e.g. to exclude rules you already get from get_project_errors and avoid double-reporting the same issue.",
           "type": "string"
         },
         "limit": {
-          "description": "Max findings; default 100, max 1000 (optional).",
           "type": "integer"
         },
         "modulePath": {
-          "description": "Optional: narrow the review to a single module, path from src/ (e.g. 'CommonModules/Calc/Module.bsl'). Omit to review the whole configuration.",
+          "description": "Optional: narrow the review to a single module, path from src/ (e.g. 'CommonModules/Calc/Module.bsl'); must be a .bsl module. Omit to review the whole configuration - a scoped run cannot see cross-module context, so rules like unused-export are only reliable without it.",
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name to review.",
           "type": "string"
         },
         "rule": {
-          "description": "Optional: report only diagnostics whose rule id contains this substring (e.g. 'Magic', 'Complexity').",
           "type": "string"
         },
         "severity": {
-          "description": "Optional: minimum severity to report (error > warning > information > hint). Omit to report all.",
           "enum": [
             "error",
             "warning",
@@ -2804,6 +2799,56 @@
             "type": "object"
           },
           "type": "array"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Run a git command in a project's repository through the real git CLI, sent as a shell-style string. Only a whitelisted set of subcommands runs, and the write-capable ones (commit, push, checkout, stash) change the repository. DISABLED by default: enable it in Preferences -> MCP Server -> Tools; enable_toolset does not turn it on. Parameters, the whitelist and examples: get_tool_guide('git').",
+    "inputSchema": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "command"
+      ],
+      "type": "object"
+    },
+    "name": "git",
+    "outputSchema": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "output": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
         }
       },
       "required": [

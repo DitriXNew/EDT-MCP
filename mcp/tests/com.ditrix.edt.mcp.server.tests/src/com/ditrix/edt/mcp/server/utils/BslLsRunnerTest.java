@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -15,10 +16,12 @@ import static org.junit.Assert.assertTrue;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -64,8 +67,12 @@ public class BslLsRunnerTest
     {
         if (root != null && Files.exists(root))
         {
-            Files.walk(root)
-                .sorted(Comparator.reverseOrder())
+            // try-with-resources for the same reason BslLsRunner.deleteQuietly uses it: an
+            // unclosed Files.walk holds a directory handle, one per @Test adds up, and on Windows
+            // the retained handle also makes the delete below fail - orphaning every fixture tree.
+            try (Stream<Path> walk = Files.walk(root))
+            {
+                walk.sorted(Comparator.reverseOrder())
                 .forEach(p -> {
                     try
                     {
@@ -76,6 +83,7 @@ public class BslLsRunnerTest
                         // best effort
                     }
                 });
+            }
         }
     }
 
@@ -662,5 +670,89 @@ public class BslLsRunnerTest
         File f = new File(root.toFile(), name);
         assertTrue(f.mkdirs());
         return f;
+    }
+
+    // ---- engine/runtime compatibility: fail with a reason instead of an opaque child crash ----
+
+    @Test
+    public void testOneXEngineOnJava17IsRefusedWithAnActionableMessage()
+    {
+        String msg = BslLsRunner.incompatibleEngineMessage("bsl-language-server-1.0.3-exec.jar", 17); //$NON-NLS-1$
+
+        assertNotNull("a 1.x engine cannot start on Java 17 - refuse before launching", msg); //$NON-NLS-1$
+        assertTrue("must name the engine: " + msg, msg.contains("bsl-language-server-1.0.3-exec.jar")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must name the runtime it found: " + msg, msg.contains("Java 17")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must name the escape hatch: " + msg, msg.contains(BslLsRunner.ENV_JAVA)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOneXEngineOnJava21IsAccepted()
+    {
+        assertNull(BslLsRunner.incompatibleEngineMessage("bsl-language-server-1.0.3-exec.jar", 21)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLegacyEngineLineIsAcceptedOnJava17()
+    {
+        // 0.28.x is exactly the line that DOES run on 17 - refusing it would be the opposite error.
+        assertNull(BslLsRunner.incompatibleEngineMessage("bsl-language-server-0.28.1-exec.jar", 17)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownRuntimeVersionIsNotRefused()
+    {
+        // Cannot be judged -> let the engine speak for itself rather than block a workable setup.
+        assertNull(BslLsRunner.incompatibleEngineMessage("bsl-language-server-1.0.3-exec.jar", -1)); //$NON-NLS-1$
+    }
+
+    // ---- config sanitising: a read-only tool must not let the engine write into the project ----
+
+    @Test
+    public void testTraceLogIsStrippedFromTheConfigHandedToTheEngine() throws Exception
+    {
+        // Verified against engine 1.0.3: with "traceLog" set, an analyze run creates that file
+        // relative to the process working directory - i.e. inside the analysed project, from a tool
+        // annotated READ-ONLY. The key is removed; everything else is passed through untouched.
+        File dir = newFolder("cfg-tracelog"); //$NON-NLS-1$
+        File config = new File(dir, ".bsl-language-server.json"); //$NON-NLS-1$
+        Files.write(config.toPath(),
+            "{\"traceLog\":\"bsl-trace.log\",\"diagnostics\":{\"parameters\":{\"Typo\":false}}}" //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+        File outputDir = newFolder("cfg-tracelog-out"); //$NON-NLS-1$
+
+        File sanitized = BslLsRunner.withoutFileWritingKeys(config, outputDir.toPath());
+
+        assertNotEquals("a config carrying traceLog must not be handed to the engine as-is", //$NON-NLS-1$
+            config.getAbsolutePath(), sanitized.getAbsolutePath());
+        String text = new String(Files.readAllBytes(sanitized.toPath()), StandardCharsets.UTF_8);
+        assertFalse("traceLog must be gone: " + text, text.contains("traceLog")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the project's own diagnostics config must survive: " + text, //$NON-NLS-1$
+            text.contains("Typo")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfigWithoutFileWritingKeysIsPassedThroughUnchanged() throws Exception
+    {
+        // The common case: no copy, no temp write, the project's file used directly.
+        File dir = newFolder("cfg-plain"); //$NON-NLS-1$
+        File config = new File(dir, ".bsl-language-server.json"); //$NON-NLS-1$
+        Files.write(config.toPath(), "{\"diagnostics\":{\"parameters\":{}}}".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        File outputDir = newFolder("cfg-plain-out"); //$NON-NLS-1$
+
+        assertEquals(config.getAbsolutePath(),
+            BslLsRunner.withoutFileWritingKeys(config, outputDir.toPath()).getAbsolutePath());
+    }
+
+    @Test
+    public void testMalformedConfigIsPassedThroughSoTheEngineReportsIt() throws Exception
+    {
+        File dir = newFolder("cfg-broken"); //$NON-NLS-1$
+        File config = new File(dir, ".bsl-language-server.json"); //$NON-NLS-1$
+        Files.write(config.toPath(), "{ this is not json".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        File outputDir = newFolder("cfg-broken-out"); //$NON-NLS-1$
+
+        assertEquals("a malformed config must reach the engine, which diagnoses it better than we can", //$NON-NLS-1$
+            config.getAbsolutePath(),
+            BslLsRunner.withoutFileWritingKeys(config, outputDir.toPath()).getAbsolutePath());
     }
 }

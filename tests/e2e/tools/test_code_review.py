@@ -25,6 +25,7 @@ dir (cleaned up) and must never mutate the project on disk.
 from harness import (
     call, assert_ok, assert_contains, assert_not_contains, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, PROJECT, E2ESkip, _fail,
+    split_markdown_row,
 )
 
 # Substrings that identify the actionable "engine not installed" error
@@ -159,4 +160,61 @@ def test_nonexistent_module_is_rejected():
     err = assert_error(r, "non-existent modulePath")
     assert_contains(err, "Module not found", "the error must state the module was not found")
     assert_contains(err, bad_module, "the error must name the bad module path")
+    assert_no_diff("a rejected call must not touch the project on disk")
+
+
+def _rule_cells(text):
+    """The Rule column of every finding row, via the shared escape-aware parser.
+
+    Deliberately NOT a substring search over the whole response: the legend under the table
+    names MagicNumber as an EXAMPLE of a mechanically fixable rule, so a naive `"MagicNumber"
+    in text` reports a leftover row that does not exist. Only cells count as findings.
+    """
+    rules = []
+    for line in (text or "").splitlines():
+        cells = split_markdown_row(line)
+        if len(cells) < 3 or cells[0].lower() in ("severity", "---"):
+            continue
+        rules.extend(c.strip("`") for c in cells if "MagicNumber" in c)
+    return rules
+
+
+@e2e_test(tool="code_review", kind="read")
+def test_exclude_rule_drops_only_the_named_rule():
+    """excludeRule is the parameter the description leans on hardest (drop rules you already
+    get from get_project_errors), yet it was only covered headlessly against canned JSON.
+    This pins the WIRING: execute() reads it and render() applies it. Both filters are asked
+    of the same live scan, so the assertion is a real comparison rather than a self-check -
+    the excluded rule must vanish from the rows while the rest of the table survives."""
+    base = call("code_review", {"projectName": PROJECT})
+    assert_ok(base, "unfiltered project review")
+    if not _rule_cells(base.text):
+        raise E2ESkip("the fixture currently reports no MagicNumber finding to exclude")
+
+    filtered = call("code_review", {"projectName": PROJECT, "excludeRule": "MagicNumber"})
+    assert_ok(filtered, "review with excludeRule=MagicNumber")
+    leftover = _rule_cells(filtered.text)
+    if leftover:
+        raise AssertionError(
+            "excludeRule=MagicNumber must drop every MagicNumber row, but %d row(s) remain: %r "
+            "- the parameter is not reaching the filter" % (len(leftover), leftover[:3]))
+    # The filter must be a scalpel, not a mute button: other findings still have to come through,
+    # or "no MagicNumber rows" would also pass for a tool that returned nothing at all.
+    if not (filtered.text or "").strip():
+        raise AssertionError("excludeRule emptied the whole report instead of dropping one rule")
+    assert_no_diff("a read-only review must not touch the project on disk")
+
+
+@e2e_test(tool="code_review", kind="read")
+def test_non_bsl_module_path_is_rejected():
+    """A modulePath naming an EXISTING file that is not a BSL module must be refused, not
+    reviewed. The engine reports diagnostics for .bsl sources only, so scoping to (say)
+    Configuration.mdo would analyse its folder, match nothing when the findings are filtered
+    to that exact path, and answer 'no issues' for a file that was never checked - a false
+    clean, which is worse than an error."""
+    not_a_module = "Configuration/Configuration.mdo"
+    r = call("code_review", {"projectName": PROJECT, "modulePath": not_a_module})
+    err = assert_error(r, "modulePath pointing at a non-BSL file")
+    assert_contains(err, not_a_module, "the error must name the offending path")
+    assert_contains(err, ".bsl", "the error must say what IS accepted")
     assert_no_diff("a rejected call must not touch the project on disk")

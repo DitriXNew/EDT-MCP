@@ -302,11 +302,20 @@ public final class BslLsReport
             throw new IllegalArgumentException("BSL LS report is not a JSON object"); //$NON-NLS-1$
         }
         JsonObject root = rootEl.getAsJsonObject();
-        JsonArray fileInfos = asArray(root, "fileinfos"); //$NON-NLS-1$
-        if (fileInfos == null)
+        // `fileinfos` is REQUIRED, not optional-with-an-empty-default. An engine of the wrong
+        // version, or an EDT_MCP_BSL_LS_JAR wrapper, can exit 0 and still write a well-formed JSON
+        // object that is not a report at all ({} or a status/error object). Treating that as "zero
+        // findings" reports a CLEAN project for a run that never analysed anything - the same
+        // false-clean this class already refuses for a non-zero exit. Absent or wrongly typed, it
+        // is a report-format failure and must say so.
+        if (!root.has("fileinfos") || !root.get("fileinfos").isJsonArray()) //$NON-NLS-1$ //$NON-NLS-2$
         {
-            return new BslLsReport(findings, metrics);
+            throw new IllegalArgumentException("BSL LS report has no 'fileinfos' array - the engine " //$NON-NLS-1$
+                + "produced JSON that is not an analysis report (a wrong engine version, or a " //$NON-NLS-1$
+                + "wrapper writing its own output). Reporting it as 'no issues found' would hide " //$NON-NLS-1$
+                + "that nothing was actually analysed."); //$NON-NLS-1$
         }
+        JsonArray fileInfos = root.get("fileinfos").getAsJsonArray(); //$NON-NLS-1$
 
         for (JsonElement fiEl : fileInfos)
         {
