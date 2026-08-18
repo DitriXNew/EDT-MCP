@@ -122,14 +122,9 @@ public class WorkmateGateway
     /** The Russian negation particle that turns any of the verbs below into a refusal. */
     private static final String NEGATION_PARTICLE = "\u043D\u0435"; // не
 
-    private static final String[] NEGATED_INTENT = {
-        "i will not", //$NON-NLS-1$
-        "i won't", //$NON-NLS-1$
-        "i'll not", //$NON-NLS-1$
-        "i'll never", //$NON-NLS-1$
-        "i will never", //$NON-NLS-1$
-        "\u043D\u0435 \u0431\u0443\u0434\u0443", // не буду //$NON-NLS-1$
-        "\u043D\u0435 \u0441\u0442\u0430\u043D\u0443" // не стану //$NON-NLS-1$
+    private static final String[] NEGATING_ADVERBS = {
+        "not", //$NON-NLS-1$
+        "never" //$NON-NLS-1$
     };
 
     private static final String[] INTENT_MARKERS = {
@@ -141,6 +136,14 @@ public class WorkmateGateway
         "\u043F\u0440\u043E\u0432\u0435\u0440\u044E", // проверю //$NON-NLS-1$
         "\u0441\u043E\u0437\u0434\u0430\u043C", // создам //$NON-NLS-1$
         "\u043D\u0430\u0447\u043D\u0443", // начну //$NON-NLS-1$
+        // Analytic future, restricted to an action verb for the same reason "let me" is:
+        // the bare auxiliary also opens finished statements ("I will be glad to help").
+        "\u0431\u0443\u0434\u0443 \u0438\u0441\u043A\u0430\u0442\u044C", // буду искать //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0442\u044C", // буду проверять //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C", // буду смотреть //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0438\u0437\u0443\u0447\u0430\u0442\u044C", // буду изучать //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0441\u043E\u0437\u0434\u0430\u0432\u0430\u0442\u044C", // буду создавать //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0440\u0430\u0437\u0431\u0438\u0440\u0430\u0442\u044C\u0441\u044F", // буду разбираться //$NON-NLS-1$
         "i will", //$NON-NLS-1$
         "i'll", //$NON-NLS-1$
         // "let me" alone is a discourse marker ("let me clarify: ..."), so only the phrases
@@ -534,7 +537,9 @@ public class WorkmateGateway
                 // announcement as the answer would be exactly the #427 behaviour; reporting
                 // "empty" would be untrue. So the call fails, quoting what it kept saying.
                 throw GatewayException.callFailed("1C:Workmate never produced a final answer: " //$NON-NLS-1$
-                    + "after " + continuations + " continuation(s) it was still announcing what " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "after " + continuations + " continuation(s) - each of which had already " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "run, possibly through its tools, so inspect Workmate and the project " //$NON-NLS-1$
+                    + "before repeating the request - it was still announcing what " //$NON-NLS-1$
                     + "it intended to do (\"" + summarize(lastAnnouncement) + "\"). Ask a " //$NON-NLS-1$ //$NON-NLS-2$
                     + "narrower question, or raise timeoutSeconds so its tool loop can finish."); //$NON-NLS-1$
             }
@@ -583,19 +588,9 @@ public class WorkmateGateway
             return false;
         }
         String lower = trimmed.toLowerCase(Locale.ROOT);
-        for (String negation : NEGATED_INTENT)
-        {
-            if (mentions(lower, negation))
-            {
-                // "I will not touch generated files" is a DECISION, already final. Continuing it
-                // asks Workmate to do the thing it just refused, and the next turn's answer would
-                // replace the refusal.
-                return false;
-            }
-        }
         for (String marker : INTENT_MARKERS)
         {
-            if (mentions(lower, marker))
+            if (announcesAction(lower, marker))
             {
                 return true;
             }
@@ -627,7 +622,7 @@ public class WorkmateGateway
      * @param marker the lowercased marker
      * @return {@code true} when the marker appears as a whole word
      */
-    private static boolean mentions(String text, String marker)
+    private static boolean announcesAction(String text, String marker)
     {
         int from = 0;
         while (from <= text.length() - marker.length())
@@ -638,8 +633,12 @@ public class WorkmateGateway
                 return false;
             }
             int after = at + marker.length();
-            if ((after >= text.length() || !Character.isLetter(text.charAt(after)))
-                && !isNegated(text, at))
+            boolean wholeWord = (at == 0 || !Character.isLetter(text.charAt(at - 1)))
+                && (after >= text.length() || !Character.isLetter(text.charAt(after)));
+            // Negation is judged per OCCURRENCE, not per text: "I will not edit generated files;
+            // I will inspect the source model" refuses one thing and announces another, and the
+            // announcement is what decides whether the turn is finished.
+            if (wholeWord && !isNegated(text, at, after))
             {
                 return true;
             }
@@ -659,7 +658,20 @@ public class WorkmateGateway
      * @param at where the marker starts
      * @return {@code true} when a negation particle immediately precedes it
      */
-    private static boolean isNegated(String text, int at)
+    private static boolean isNegated(String text, int at, int after)
+    {
+        return negatedBefore(text, at) || negatedAfter(text, after);
+    }
+
+    /**
+     * Russian negation: the particle sits in front of the verb this list matches
+     * ("не проверю").
+     *
+     * @param text the lowercased answer
+     * @param at where the marker starts
+     * @return {@code true} when the particle immediately precedes it
+     */
+    private static boolean negatedBefore(String text, int at)
     {
         int end = at;
         while (end > 0 && text.charAt(end - 1) == ' ')
@@ -670,6 +682,32 @@ public class WorkmateGateway
             && text.startsWith(NEGATION_PARTICLE, end - NEGATION_PARTICLE.length())
             && (end == NEGATION_PARTICLE.length()
                 || !Character.isLetter(text.charAt(end - NEGATION_PARTICLE.length() - 1)));
+    }
+
+    /**
+     * English negation: the adverb follows the auxiliary ("I will NOT edit", "I'll NEVER touch").
+     *
+     * @param text the lowercased answer
+     * @param after the index just past the marker
+     * @return {@code true} when a negating adverb follows it
+     */
+    private static boolean negatedAfter(String text, int after)
+    {
+        int start = after;
+        while (start < text.length() && text.charAt(start) == ' ')
+        {
+            start++;
+        }
+        for (String adverb : NEGATING_ADVERBS)
+        {
+            if (text.startsWith(adverb, start)
+                && (start + adverb.length() >= text.length()
+                    || !Character.isLetter(text.charAt(start + adverb.length()))))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

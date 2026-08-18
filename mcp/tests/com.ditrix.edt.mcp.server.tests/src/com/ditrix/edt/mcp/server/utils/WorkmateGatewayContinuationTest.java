@@ -127,6 +127,31 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testMixedRefusalAndPromiseIsStillAPlan()
+    {
+        // Review of #440, seventh round: negation belongs to ITS occurrence, not to the whole
+        // turn - the sentence refuses one thing and announces another, and the announcement wins.
+        assertTrue(WorkmateGateway.needsContinuation(
+            "I will not edit generated files; I will inspect the source model instead."));
+    }
+
+    @Test
+    public void testAMarkerInsideAnotherWordIsNotAMarker()
+    {
+        // "api will" contains "i will": without a boundary BEFORE the match, a finished
+        // technical answer was continued.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "The API will return null when the project is closed."));
+    }
+
+    @Test
+    public void testTheAnalyticFutureAnnouncesWorkButPolitenessDoesNot()
+    {
+        assertTrue(WorkmateGateway.needsContinuation("\u042F \u0431\u0443\u0434\u0443 \u0438\u0441\u043A\u0430\u0442\u044C \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0430\u0446\u0438\u044E \u043F\u043E \u044D\u0442\u043E\u043C\u0443 \u043E\u0431\u044A\u0435\u043A\u0442\u0443.")); //$NON-NLS-1$
+        assertFalse("the bare auxiliary also opens finished statements",
+            WorkmateGateway.needsContinuation("\u042F \u0431\u0443\u0434\u0443 \u0440\u0430\u0434 \u043F\u043E\u043C\u043E\u0447\u044C \u0441 \u044D\u0442\u0438\u043C \u0437\u0430\u043F\u0440\u043E\u0441\u043E\u043C.")); //$NON-NLS-1$
+    }
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word
