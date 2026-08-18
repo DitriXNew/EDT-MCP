@@ -529,6 +529,9 @@ public class WorkmateGateway
         // and the authorization probe all spend the caller's budget, and a deadline started
         // afterwards would hand the conversation a fresh full one on top of what setup used.
         long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        // Declared outside the try because the catch at the bottom classifies by it: once a
+        // request is out, even an unexpected error must not be answered with a retry.
+        AtomicBoolean dispatched = new AtomicBoolean(false);
         try
         {
             Bundle aiBundle = requireBundle(AI_BUNDLE);
@@ -632,7 +635,7 @@ public class WorkmateGateway
                     resultClass, deadlineNanos, session == null,
                     session == null ? "Sent the request to Workmate." //$NON-NLS-1$
                         : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
-                    progress);
+                    progress, dispatched);
                 if (turn == null)
                 {
                     wentQuiet = true;
@@ -701,8 +704,22 @@ public class WorkmateGateway
         }
         catch (RuntimeException | LinkageError e)
         {
-            throw GatewayException.callFailed(rootCauseMessage(e));
+            throw dispatchedOrPlainFailure(dispatched.get(), rootCauseMessage(e));
         }
+    }
+
+    /**
+     * The right failure for something that escaped an outer catch: after a request has gone
+     * out, even an unexpected error must not be answered with a retry.
+     *
+     * @param dispatched whether a request had already been sent
+     * @param detail what went wrong
+     * @return the failure to throw
+     */
+    private static GatewayException dispatchedOrPlainFailure(boolean dispatched, String detail)
+    {
+        return dispatched ? GatewayException.failedAfterDispatch(detail)
+            : GatewayException.callFailed(detail);
     }
 
     /**
@@ -1028,7 +1045,8 @@ public class WorkmateGateway
      */
     private Turn sendTurn(Object facade, Method sendAsync, Object request, // NOSONAR one reflective send needs every piece of the reflective context
         Class<?> cancellationTokenClass, Class<?> resultClass, long deadlineNanos,
-        boolean firstTurn, String sentMessage, ProgressListener progress) throws GatewayException
+        boolean firstTurn, String sentMessage, ProgressListener progress, AtomicBoolean dispatched)
+        throws GatewayException
     {
         // Immediately before the send, because dispatching is what has consequences: Workmate's
         // tool loop can change this configuration, and a request let out after the advertised
@@ -1057,6 +1075,10 @@ public class WorkmateGateway
                 + ".sendAsync' returned " + typeName(futureValue) //$NON-NLS-1$
                 + " instead of CompletableFuture"); //$NON-NLS-1$
         }
+        // Raised HERE, not by the caller: everything from this point on runs with a request
+        // that is already out, so a failure escaping this method - even one this method does
+        // not classify itself - must not be answered with a retry.
+        dispatched.set(true);
         progress.onProgress(sentMessage);
 
         // Recomputed AFTER the dispatch returned: sendAsync does synchronous work of its own
@@ -1421,6 +1443,9 @@ public class WorkmateGateway
     public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
         ProgressListener progress) throws GatewayException
     {
+        // Outside the try, because the catch at the bottom classifies by it: a tool that has
+        // started may already have run code, and "retry" would run it twice.
+        AtomicBoolean invoked = new AtomicBoolean(false);
         try
         {
             Bundle aiBundle = requireBundle(AI_BUNDLE);
@@ -1485,6 +1510,9 @@ public class WorkmateGateway
                     + "before tool '" + toolName + "' could be invoked, so it was not invoked"); //$NON-NLS-1$ //$NON-NLS-2$
             }
             Object futureValue = invoke(callTools, tools, calls, token);
+            // The tool is RUNNING from here on - JShell executes arbitrary code, and other
+            // Workmate tools change this project - so nothing below may advise a retry.
+            invoked.set(true);
             if (!(futureValue instanceof CompletableFuture<?>))
             {
                 throw GatewayException.incompatible("method '" + MCP_TOOLS //$NON-NLS-1$
@@ -1511,19 +1539,32 @@ public class WorkmateGateway
                 cancelled.set(true);
                 future.cancel(true);
                 Thread.currentThread().interrupt();
-                throw GatewayException.callFailed("the waiting thread was interrupted"); //$NON-NLS-1$
+                throw GatewayException.failedAfterDispatch("the waiting thread was " //$NON-NLS-1$
+                    + "interrupted while tool '" + toolName + "' was already running."); //$NON-NLS-1$ //$NON-NLS-2$
             }
             catch (ExecutionException e)
             {
-                throw GatewayException.callFailed(rootCauseMessage(e.getCause() == null
-                    ? e : e.getCause()));
+                throw GatewayException.failedAfterDispatch("Workmate tool '" + toolName //$NON-NLS-1$
+                    + "' failed after it had been invoked (" //$NON-NLS-1$
+                    + rootCauseMessage(e.getCause() == null ? e : e.getCause())
+                    + "). It may already have changed this project."); //$NON-NLS-1$
             }
             progress.onProgress("Workmate tool '" + toolName + "' returned."); //$NON-NLS-1$ //$NON-NLS-2$
-            return extractToolText(result, toolName);
+            try
+            {
+                return extractToolText(result, toolName);
+            }
+            catch (GatewayException e)
+            {
+                // The tool RAN; only its answer could not be read. Reporting that as an ordinary
+                // failure would advertise a retry, and this tool may have executed code.
+                throw GatewayException.failedAfterDispatch("Workmate tool '" + toolName //$NON-NLS-1$
+                    + "' ran, but its result could not be read - " + e.getDetail()); //$NON-NLS-1$
+            }
         }
         catch (RuntimeException | LinkageError e)
         {
-            throw GatewayException.callFailed(rootCauseMessage(e));
+            throw dispatchedOrPlainFailure(invoked.get(), rootCauseMessage(e));
         }
     }
 

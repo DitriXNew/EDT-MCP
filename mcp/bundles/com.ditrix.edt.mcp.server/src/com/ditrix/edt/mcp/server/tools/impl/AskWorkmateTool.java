@@ -658,7 +658,10 @@ public class AskWorkmateTool implements IMcpTool
                 // "then retry ask_workmate" this method appends to an ordinary failure. The two
                 // sentences together would tell the caller to repeat work that may be half-done.
                 return "1C:Workmate failed after the request had been sent: " //$NON-NLS-1$
-                    + error.getDetail() + " Do NOT simply repeat the question: check the " //$NON-NLS-1$
+                    // The detail is a sentence in most paths and a bare cause message in the
+                    // catch-all one; punctuate it here so the two never run together.
+                    + endSentence(error.getDetail())
+                    + " Do NOT simply repeat the question: check the " //$NON-NLS-1$
                     + "Workmate chat panel and the project (get_project_errors, git status) " //$NON-NLS-1$
                     + "for what it already did, and only then start a new ask_workmate job."; //$NON-NLS-1$
             case CALL_FAILED:
@@ -667,6 +670,24 @@ public class AskWorkmateTool implements IMcpTool
                     + ". Check Workmate sign-in, network, and settings in EDT, then retry " //$NON-NLS-1$
                     + "ask_workmate."; //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Ends {@code detail} with a full stop unless it already ends in punctuation, so a detail and
+     * the advice that follows it never read as one run-on sentence.
+     *
+     * @param detail the failure detail (may be {@code null})
+     * @return the detail, terminated
+     */
+    private static String endSentence(String detail)
+    {
+        String text = detail == null ? "" : detail.trim(); //$NON-NLS-1$
+        if (text.isEmpty())
+        {
+            return "(no detail reported)."; //$NON-NLS-1$
+        }
+        char last = text.charAt(text.length() - 1);
+        return last == '.' || last == '!' || last == '?' ? text : text + "."; //$NON-NLS-1$
     }
 
     /**
