@@ -119,6 +119,37 @@ public class WorkmateGateway
      * decision NOT to act - the one shape that looks exactly like an intent marker and means the
      * opposite of one, so it is checked first and wins.
      */
+    /**
+     * The sentinel Workmate is asked to put at the end of a FINAL answer.
+     *
+     * <p>This is the signal the platform does not give us: {@code SendMessageResult} carries text,
+     * a session and counters, nothing that says "I am done". Asking for an explicit marker turns
+     * the question from guessing at phrasing - which is language- and idiom-bound, and never
+     * complete - into reading a declaration. The phrase list below stays as the fallback for a
+     * turn that did not declare anything.
+     */
+    static final String FINAL_MARKER = "<!end>"; //$NON-NLS-1$
+
+    /**
+     * How long ONE turn may stay silent before the conversation is wound up.
+     *
+     * <p>Separate from the job's total budget on purpose: a conversation that stopped moving is
+     * done in every sense that matters to the caller, and waiting out the whole budget only
+     * delays the answer already in hand. What is NOT done is pretending it finished cleanly -
+     * the result says the completion marker never arrived.
+     */
+    private static final long IDLE_TURN_TIMEOUT_MS = 120_000L;
+
+    /**
+     * Appended by THIS adapter to every request, so the caller's question stays their own and the
+     * protocol travels with the conversation rather than with the question.
+     */
+    private static final String FINALITY_INSTRUCTION =
+        " \u041A\u043E\u0433\u0434\u0430 \u043E\u0442\u0432\u0435\u0442 \u043E\u043A\u043E\u043D\u0447\u0430\u0442\u0435\u043B\u044C\u043D\u044B\u0439 \u0438 \u0440\u0430\u0431\u043E\u0442\u0430 " //$NON-NLS-1$
+        + "\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430, \u0437\u0430\u0432\u0435\u0440\u0448\u0438 \u0435\u0433\u043E \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u0439 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0439 " //$NON-NLS-1$
+        + "\u0441\u0442\u0440\u043E\u043A\u043E\u0439 <!end>. \u041F\u043E\u043A\u0430 \u0440\u0430\u0431\u043E\u0442\u0430 \u043D\u0435 \u0437\u0430\u043A\u043E\u043D\u0447\u0435\u043D\u0430, " //$NON-NLS-1$
+        + "\u044D\u0442\u043E\u0442 \u043C\u0430\u0440\u043A\u0435\u0440 \u043D\u0435 \u043F\u0438\u0448\u0438."; //$NON-NLS-1$
+
     /** The Russian negation particle that turns any of the verbs below into a refusal. */
     private static final String NEGATION_PARTICLE = "\u043D\u0435"; // не
 
@@ -313,6 +344,8 @@ public class WorkmateGateway
         private final String reasoning;
         private final Integer assistantMessageCount;
         private final int continuations;
+        private final boolean declaredFinal;
+        private final boolean wentQuiet;
 
         public WorkmateResponse(String text, String reasoning)
         {
@@ -327,10 +360,18 @@ public class WorkmateGateway
         public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount,
             int continuations)
         {
+            this(text, reasoning, assistantMessageCount, continuations, true, false);
+        }
+
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount, // NOSONAR the outcome needs every one of these to be reported honestly
+            int continuations, boolean declaredFinal, boolean wentQuiet)
+        {
             this.text = text;
             this.reasoning = reasoning;
             this.assistantMessageCount = assistantMessageCount;
             this.continuations = continuations;
+            this.declaredFinal = declaredFinal;
+            this.wentQuiet = wentQuiet;
         }
 
         public String getText()
@@ -366,6 +407,29 @@ public class WorkmateGateway
         public int getContinuations()
         {
             return continuations;
+        }
+
+        /**
+         * Whether Workmate itself marked the answer as final (the agreed end-of-answer marker).
+         * When it did not, this text is the last thing it said - which may be complete, but was
+         * not declared complete.
+         *
+         * @return {@code true} when the completion marker arrived
+         */
+        public boolean isDeclaredFinal()
+        {
+            return declaredFinal;
+        }
+
+        /**
+         * Whether the conversation was wound up because a turn stopped answering, rather than
+         * because Workmate finished.
+         *
+         * @return {@code true} when a turn timed out and ended the conversation
+         */
+        public boolean wentQuiet()
+        {
+            return wentQuiet;
         }
     }
 
@@ -463,6 +527,8 @@ public class WorkmateGateway
             String answer = null;
             String reasoning = null;
             String lastAnnouncement = null;
+            boolean declaredFinal = false;
+            boolean wentQuiet = false;
             // Nullable on purpose: "the platform did not report a count" is not "zero", and the
             // renderer omits the field for the former. One turn without a count makes the whole
             // aggregate unknown, because a partial sum would be published as if it were the total.
@@ -470,7 +536,8 @@ public class WorkmateGateway
             int continuations = 0;
             while (true)
             {
-                Object request = create(requestConstructor, projectId, message, session,
+                Object request = create(requestConstructor, projectId,
+                    message + FINALITY_INSTRUCTION, session,
                     session == null,
                     // chat = FALSE matches Workmate's OWN default (ConversationFacade maps a null
                     // getChat() to false), and it is NOT what decides whether Workmate works the
@@ -509,8 +576,17 @@ public class WorkmateGateway
                     session == null ? "Sent the request to Workmate." //$NON-NLS-1$
                         : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
                     progress);
+                if (turn == null)
+                {
+                    wentQuiet = true;
+                    break;
+                }
                 assistantMessages = addMessages(assistantMessages, turn.messages);
-                boolean isAnswer = !needsContinuation(turn.text);
+                // The DECLARATION wins: a turn that marked itself final is final, whatever it
+                // sounds like. Only an undeclared turn is judged by phrasing.
+                boolean declared = declaresFinal(turn.text);
+                declaredFinal = declaredFinal || declared;
+                boolean isAnswer = declared || !needsContinuation(turn.text);
                 // Two DIFFERENT things are remembered, and the difference is the whole point of
                 // this loop: an accepted answer, and the last announcement. A later empty turn
                 // must not erase an answer already produced - but an announcement must never be
@@ -518,7 +594,7 @@ public class WorkmateGateway
                 // very behaviour issue #427 reported.
                 if (isAnswer)
                 {
-                    answer = turn.text;
+                    answer = stripFinalMarker(turn.text);
                     reasoning = turn.reasoning;
                 }
                 else if (trimToNull(turn.text) != null)
@@ -537,7 +613,7 @@ public class WorkmateGateway
                     + "continuing the same conversation (" + continuations + " of " //$NON-NLS-1$ //$NON-NLS-2$
                     + MAX_CONTINUATIONS + ")."); //$NON-NLS-1$
             }
-            if (answer == null && lastAnnouncement != null)
+            if (answer == null && lastAnnouncement != null && !wentQuiet)
             {
                 // Workmate said something every time and never finished. Reporting its last
                 // announcement as the answer would be exactly the #427 behaviour; reporting
@@ -549,8 +625,14 @@ public class WorkmateGateway
                     + "it intended to do (\"" + summarize(lastAnnouncement) + "\"). Ask a " //$NON-NLS-1$ //$NON-NLS-2$
                     + "narrower question, or raise timeoutSeconds so its tool loop can finish."); //$NON-NLS-1$
             }
-            progress.onProgress("Received the Workmate response."); //$NON-NLS-1$
-            return new WorkmateResponse(answer, reasoning, assistantMessages, continuations);
+            // Quiet or exhausted, the caller still gets what Workmate produced - with the fact
+            // that it never said it was finished, which is the difference between an answer and
+            // the last thing it happened to say.
+            String reported = answer != null ? answer : stripFinalMarker(lastAnnouncement);
+            progress.onProgress(declaredFinal ? "Received the Workmate response." //$NON-NLS-1$
+                : "Received a response that Workmate did not mark as final."); //$NON-NLS-1$
+            return new WorkmateResponse(reported, reasoning, assistantMessages, continuations,
+                declaredFinal, wentQuiet);
         }
         catch (GatewayException e)
         {
@@ -560,6 +642,42 @@ public class WorkmateGateway
         {
             throw GatewayException.callFailed(rootCauseMessage(e));
         }
+    }
+
+    /**
+     * Whether the turn declared itself final by carrying {@link #FINAL_MARKER}.
+     *
+     * @param text the turn's text (may be {@code null})
+     * @return {@code true} when the marker is present
+     */
+    static boolean declaresFinal(String text)
+    {
+        return text != null && text.toLowerCase(Locale.ROOT).contains(FINAL_MARKER);
+    }
+
+    /**
+     * The answer without the protocol marker: it is this adapter's bookkeeping, not something the
+     * caller asked for.
+     *
+     * @param text the turn's text (may be {@code null})
+     * @return the text with every occurrence of the marker removed and trimmed
+     */
+    static String stripFinalMarker(String text)
+    {
+        if (text == null)
+        {
+            return null;
+        }
+        StringBuilder cleaned = new StringBuilder(text);
+        String lower = text.toLowerCase(Locale.ROOT);
+        int at = lower.lastIndexOf(FINAL_MARKER);
+        while (at >= 0)
+        {
+            cleaned.delete(at, at + FINAL_MARKER.length());
+            at = lower.lastIndexOf(FINAL_MARKER, at - 1);
+        }
+        String result = cleaned.toString().trim();
+        return result.isEmpty() ? null : result;
     }
 
     /**
@@ -823,12 +941,14 @@ public class WorkmateGateway
 
         Object sendResult;
         CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
+        boolean idleBound = IDLE_TURN_TIMEOUT_MS < waitMillis;
         try
         {
             // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
             // before the advertised budget ran out, and a floor of one second let an already
-            // spent budget overshoot by one more.
-            sendResult = future.get(waitMillis, TimeUnit.MILLISECONDS);
+            // spent budget overshoot by one more. The idle bound caps a SINGLE silent turn.
+            sendResult = future.get(Math.min(waitMillis, IDLE_TURN_TIMEOUT_MS),
+                TimeUnit.MILLISECONDS);
         }
         catch (TimeoutException e)
         {
@@ -837,6 +957,15 @@ public class WorkmateGateway
             // the difference is whether the caller may safely run the same request again.
             cancelled.set(true);
             future.cancel(true);
+            if (idleBound)
+            {
+                // The TURN went quiet rather than the budget running out: wind the conversation
+                // up with what is already in hand, and let the caller see that Workmate never
+                // declared itself finished.
+                progress.onProgress("No answer for " + (IDLE_TURN_TIMEOUT_MS / 1000) //$NON-NLS-1$
+                    + "s; ending the conversation without a completion marker."); //$NON-NLS-1$
+                return null;
+            }
             throw GatewayException.timedOutAfterDispatch();
         }
         catch (InterruptedException e)

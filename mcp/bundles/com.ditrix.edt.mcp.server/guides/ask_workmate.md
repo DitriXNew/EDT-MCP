@@ -125,6 +125,22 @@ continuations are bounded by the job's `timeoutSeconds` budget, count into
 `assistantMessages`, and are visible in the progress journal. A long answer is
 always taken at face value, so a finished reference answer is never re-asked.
 
+How a turn is judged finished, in order of authority:
+
+1. **Workmate says so.** This adapter appends one instruction to EVERY request it sends -
+   the caller's question and each continuation alike - asking Workmate to end a FINAL answer
+   with the marker `<!end>`. A turn carrying it is final whatever it sounds like, in any
+   language. The marker is stripped before the answer reaches you.
+2. **Phrasing, as a fallback.** A turn that declared nothing is judged by whether it reads as
+   an announcement of work ("I will search the documentation", «я воспользуюсь поиском»)
+   rather than a result. This is a heuristic and knows only Russian and English.
+
+A single turn that goes quiet for two minutes ends the conversation instead of holding the
+job open: you get whatever Workmate produced so far.
+
+Whenever the marker never arrived - because the conversation went quiet, or because the
+continuations ran out - the result carries an explicit **"Completion not confirmed"** note
+above the answer. Read that as "this is the last thing it said", not as "this is the answer".
 What comes back is the last text that was ACCEPTED as an answer - an
 announcement is never promoted to the result just because nothing better
 followed it, and a later empty turn never erases an answer already produced. If

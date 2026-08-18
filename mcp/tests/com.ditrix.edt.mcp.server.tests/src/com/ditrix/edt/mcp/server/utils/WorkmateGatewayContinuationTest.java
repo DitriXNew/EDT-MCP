@@ -6,7 +6,9 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -166,6 +168,26 @@ public class WorkmateGatewayContinuationTest
         // ASCII-only marker silently accepted the plan as the answer.
         assertTrue(WorkmateGateway.needsContinuation(
             "I’ll search the documentation for the exact method list."));
+    }
+    @Test
+    public void testTheDeclaredMarkerIsWhatDecidesFinality()
+    {
+        // The protocol this adapter adds to every request: an explicit end-of-answer marker
+        // beats phrasing, in any language, which is what the phrase lists cannot promise.
+        assertTrue(WorkmateGateway.declaresFinal("The table has 6 columns. " + WorkmateGateway.FINAL_MARKER));
+        assertFalse(WorkmateGateway.declaresFinal("The table has 6 columns."));
+        assertFalse(WorkmateGateway.declaresFinal(null));
+    }
+
+    @Test
+    public void testTheMarkerNeverReachesTheCaller()
+    {
+        assertEquals("Done.", WorkmateGateway.stripFinalMarker("Done. " + WorkmateGateway.FINAL_MARKER));
+        assertEquals("A\n\nB",
+            WorkmateGateway.stripFinalMarker("A\n\nB\n" + WorkmateGateway.FINAL_MARKER));
+        assertNull("a text that was ONLY the marker carries no answer",
+            WorkmateGateway.stripFinalMarker(WorkmateGateway.FINAL_MARKER));
+        assertNull(WorkmateGateway.stripFinalMarker(null));
     }
     @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()

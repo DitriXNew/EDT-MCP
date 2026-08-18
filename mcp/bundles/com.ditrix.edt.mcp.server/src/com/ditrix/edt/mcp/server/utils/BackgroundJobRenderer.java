@@ -88,6 +88,18 @@ public final class BackgroundJobRenderer
     {
         if (workmateResponse != null)
         {
+            // Said BEFORE the answer, not after it: whether Workmate declared itself finished
+            // changes how the text should be read, and a note under a long answer is missed.
+            if (!workmateResponse.isDeclaredFinal())
+            {
+                target.append("\n> **Completion not confirmed.** ") //$NON-NLS-1$
+                    .append(workmateResponse.wentQuiet()
+                        ? "Workmate stopped answering and the conversation was wound up " //$NON-NLS-1$
+                            + "without its end-of-answer marker" //$NON-NLS-1$
+                        : "Workmate never sent its end-of-answer marker") //$NON-NLS-1$
+                    .append(", so this is the last text it produced rather than an answer " //$NON-NLS-1$
+                        + "it called complete. It may be partial.\n"); //$NON-NLS-1$
+            }
             target.append("\n## Answer\n\n").append(trimToNull(workmateResponse.getText())); //$NON-NLS-1$
             String reasoning = trimToNull(workmateResponse.getReasoning());
             if (reasoning != null)
