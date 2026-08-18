@@ -20,7 +20,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -159,16 +158,6 @@ public class WorkmateGateway
      * job is to keep a descheduled thread from waking up past the deadline it was given.
      */
     private static final long TOOL_WAIT_POLL_MS = 1_000L;
-
-    /** Completion stamp: the future has not finished yet. */
-    private static final long NOT_FINISHED = Long.MIN_VALUE;
-
-    /**
-     * Completion stamp: the future was ALREADY complete when this adapter received it, and
-     * {@code CompletableFuture} exposes no completion time to recover. Arbitration then reports
-     * that outcome as it stands rather than guessing whose deadline caused it.
-     */
-    private static final long UNDATABLE = Long.MAX_VALUE;
 
     /** Mutable only so a test can shrink the window; production never changes them. */
     private static volatile long idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
@@ -1429,15 +1418,13 @@ public class WorkmateGateway
      * @param future the tool's future
      * @param deadlineNanos when the caller's budget expires
      * @param cancelled the flag behind the token handed to Workmate
-     * @param finishedAtNanos when the future completed, armed at dispatch
      * @return the tool's result
      * @throws TimeoutException when the budget runs out first
      * @throws InterruptedException if the wait is interrupted
      * @throws ExecutionException if the tool failed
      */
-    private static Object awaitToolResult(CompletableFuture<?> source, CompletableFuture<?> observed, // NOSONAR arbitration needs the source, the wait needs the stamped stage, both need the clock
-        long deadlineNanos, AtomicBoolean cancelled, AtomicLong finishedAtNanos)
-        throws TimeoutException, InterruptedException, ExecutionException
+    private static Object awaitToolResult(CompletableFuture<?> future, long deadlineNanos,
+        AtomicBoolean cancelled) throws TimeoutException, InterruptedException, ExecutionException
     {
         while (true)
         {
@@ -1446,13 +1433,15 @@ public class WorkmateGateway
             // given - cancelling a tool that was about to finish inside it.
             if (budgetSpent(deadlineNanos))
             {
-                // Decided on the SOURCE, never on the stamped stage: the thread completing the
-                // source can be preempted before the stamping action runs, and judging by the
-                // stage would then cancel a tool that had already finished and throw its result
-                // away.
-                if (source.isDone() && reportAsItStands(source, finishedAtNanos, deadlineNanos))
+                // THE rule, and the only one this side can prove: a timeout is a budget that ran
+                // out while the tool had NOT finished. Once the future is terminal its outcome is
+                // handed over as it stands - result or failure alike - because nothing here can
+                // establish whether our cancellation caused it. Review of #444 walked that to the
+                // end: a completion stamp records when a dependent action RAN, never when the
+                // source completed, and the producer side belongs to Workmate.
+                if (future.isDone())
                 {
-                    return source.get();
+                    return future.get();
                 }
                 cancelled.set(true);
                 throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
@@ -1462,7 +1451,7 @@ public class WorkmateGateway
             long leftMs = Math.max(1L, remainingMillis(deadlineNanos));
             try
             {
-                return observed.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
+                return future.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
             }
             catch (TimeoutException stillRunning)
             {
@@ -1471,17 +1460,9 @@ public class WorkmateGateway
             }
             catch (ExecutionException failed)
             {
-                // The token handed to Workmate reports "cancelled" the moment the budget is spent,
-                // and Workmate answers that by completing the future EXCEPTIONALLY - waking this
-                // blocking get with a failure that is really our own timeout in disguise.
-                // Re-arbitrated against the clock, so the caller gets the timeout diagnosis and
-                // its "raise timeoutSeconds" advice instead of "the tool failed".
-                if (budgetSpent(deadlineNanos)
-                    && !reportAsItStands(source, finishedAtNanos, deadlineNanos))
-                {
-                    cancelled.set(true);
-                    throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
-                }
+                // Terminal is terminal: the tool answered, and its own answer - a failure
+                // included - carries more for the caller than a timeout label this side cannot
+                // justify. Relabelling it would hide the cause behind "the budget ran out".
                 throw failed;
             }
         }
@@ -1505,35 +1486,15 @@ public class WorkmateGateway
     }
 
     /**
-     * Whether the future finished BEFORE the deadline, by the stamp taken when it completed.
+     * Whether the directly invoked tool has reached a terminal state.
      *
-     * <p>The stamp is what separates "the tool failed on its own" from "our own cancellation
-     * came back as a failure": the token only reports cancelled once the budget is spent, so a
-     * completion recorded before that instant cannot be ours - however late this thread wakes
-     * up to see it.
-     *
-     * <p>Three states, because the middle one is real: {@link #NOT_FINISHED} (the wait goes on,
-     * and an expiry there IS ours), a dated stamp (compared with the deadline), and
-     * {@link #UNDATABLE} — a future already complete when it reached this adapter, which
-     * {@code CompletableFuture} gives no way to date. An undatable outcome is reported AS IT
-     * STANDS: turning a real tool failure into "the budget ran out" destroys the diagnosis, while
-     * the reverse only loses the "raise timeoutSeconds" hint from a message that already tells the
-     * caller to inspect before repeating. Losing a hint beats losing a cause.
-     *
-     * @param finishedAtNanos the completion stamp
-     * @param deadlineNanos when the budget expires
-     * @return {@code true} when the outcome must be reported as it stands
+     * @param toolFuture holder filled when {@code callTools} hands its future over
+     * @return {@code true} once that future is done; {@code false} while it is absent or running
      */
-    private static boolean reportAsItStands(CompletableFuture<?> source, AtomicLong finishedAtNanos,
-        long deadlineNanos)
+    private static boolean toolFinished(AtomicReference<CompletableFuture<?>> toolFuture)
     {
-        if (!source.isCompletedExceptionally())
-        {
-            return true;
-        }
-        long finishedAt = finishedAtNanos.get();
-        return finishedAt == UNDATABLE || finishedAt == NOT_FINISHED
-            || finishedAt - deadlineNanos < 0;
+        CompletableFuture<?> future = toolFuture.get();
+        return future != null && future.isDone();
     }
 
     /**
@@ -1654,15 +1615,20 @@ public class WorkmateGateway
             }
             Class<?> cancellationTokenClass = requireClass(aiBundle, CANCELLATION_TOKEN);
             AtomicBoolean cancelled = new AtomicBoolean(false);
-            // Workmate may keep the token and poll it after the call is over. Without this,
-            // the deadline half of the predicate would eventually report a CANCELLED call that
-            // in fact finished in time, purely because the clock moved on.
-            AtomicBoolean finished = new AtomicBoolean(false);
+            // The future the deadline half of the token judges. Filled in the moment callTools
+            // hands it over; until then there is nothing running that could be cancelled.
+            AtomicReference<CompletableFuture<?>> toolFuture = new AtomicReference<>();
+            // Two halves. Our own give-up, and the budget - but the budget stops mattering the
+            // instant the future is TERMINAL: Workmate may keep polling this token during its
+            // cleanup, and a call that finished in time must not be told it was cancelled just
+            // because the clock moved on afterwards. Judged by the future's own state rather than
+            // by a flag this side sets after the fact, which scheduler delay could postpone.
+            //
             // Nanoseconds, not remainingMillis(): that helper truncates a sub-millisecond
             // remainder to zero, which would report the budget spent up to a millisecond early
             // and abort a tool that was about to finish inside it.
             Object token = createCancellationToken(cancellationTokenClass, cancelled,
-                () -> !finished.get() && budgetSpent(deadlineNanos));
+                () -> !toolFinished(toolFuture) && budgetSpent(deadlineNanos));
             Method callTools = requireMethod(toolsClass, "callTools", callsClass, //$NON-NLS-1$
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1702,29 +1668,7 @@ public class WorkmateGateway
                     + " instead of CompletableFuture"); //$NON-NLS-1$
             }
             CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
-            // Armed HERE, the instant the future exists: a stamp taken later would record when
-            // the waiter got round to looking, so a tool that failed early while this thread was
-            // descheduled past the deadline would be reported as our timeout.
-            AtomicLong finishedAtNanos = new AtomicLong(NOT_FINISHED);
-            // What the WAIT observes. Not the raw future: whenComplete is a DEPENDENT stage, run
-            // after the outcome is published, so a waiter watching the raw future can see it
-            // finished while the stamp is still unwritten - and then read "not finished" as "our
-            // deadline won". Waiting on the dependent stage orders the two: it cannot complete
-            // before its own action has stamped.
-            CompletableFuture<?> observed;
-            if (future.isDone())
-            {
-                // Already complete before this adapter ever saw it, and CompletableFuture keeps no
-                // completion time to recover: stamping "now" would record when WE looked, which
-                // can fall past the deadline and turn a genuine early failure into our timeout.
-                finishedAtNanos.set(UNDATABLE);
-                observed = future;
-            }
-            else
-            {
-                observed = future.whenComplete((toolResult, toolFailure) -> finishedAtNanos
-                    .compareAndSet(NOT_FINISHED, System.nanoTime()));
-            }
+            toolFuture.set(future);
 
             Object result;
             try
@@ -1733,10 +1677,7 @@ public class WorkmateGateway
                 // wait computed here would start late if this thread is descheduled, and then
                 // run its full length PAST the deadline. callTools also does synchronous work
                 // of its own, which the pre-invoke measurement cannot include.
-                // The dependent stage is what is WAITED on; cancellation below still goes to
-                // the original future, since cancelling a derived stage would not stop the tool.
-                result = awaitToolResult(future, observed, deadlineNanos, cancelled, finishedAtNanos);
-                finished.set(true);
+                result = awaitToolResult(future, deadlineNanos, cancelled);
             }
             catch (TimeoutException e)
             {
