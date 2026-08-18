@@ -459,10 +459,20 @@ public final class LaunchUpdateDialogAutoConfirmer
         final StandaloneServerPortConflictPolicy policy;
         final String infobaseName;
 
-        PortConflictArm(StandaloneServerPortConflictPolicy policy, String infobaseName)
+        /**
+         * The WST server's OWN name, resolved from the application rather than parsed out of
+         * the dialog. The writing answer requires this to match exactly - see
+         * {@link LaunchUpdateDialogAutoConfirmer#reassignAskedFor}. {@code null} when it could
+         * not be resolved, which refuses the write rather than guessing.
+         */
+        final String serverName;
+
+        PortConflictArm(StandaloneServerPortConflictPolicy policy, String infobaseName,
+            String serverName)
         {
             this.policy = policy;
             this.infobaseName = infobaseName;
+            this.serverName = serverName;
         }
     }
 
@@ -1068,9 +1078,33 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            reassign answer requires UNANIMITY across the outstanding arms — see
      *            {@link #PORT_CONFLICT_ARMS}
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy)
+    {
+        // No server name: a reassign armed this way can answer nothing, by design. Callers that
+        // can start a standalone server resolve the name and use the overload below.
+        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+            portPolicy, null);
+    }
+
+    /**
+     * Arms the matchers, naming the standalone server this call may start.
+     *
+     * @param updateDialog arm the "Update database configuration" TITLE matcher
+     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     * @param conflictPolicy the button to press on the external-changes conflict modal, or
+     *            {@code null} to leave that modal alone
+     * @param infobaseName the infobase this call targets, as EDT names it (may be {@code null})
+     * @param portPolicy how to answer the port-conflict modal; {@code null} leaves it alone
+     * @param serverName the WST server's own name, resolved from the application. The
+     *            {@code REASSIGN} answer is pressed only on a dialog quoting exactly this name;
+     *            {@code null} means the write is refused rather than aimed by guesswork
+     */
+    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+        ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
+        StandaloneServerPortConflictPolicy portPolicy, String serverName)
     {
         // The port-conflict matcher counts as "something to arm": with all the other flags off —
         // run_yaxunit_tests(updateBeforeLaunch=false) reaches exactly that — the old condition
@@ -1106,7 +1140,8 @@ public final class LaunchUpdateDialogAutoConfirmer
             // anyway would let that window answer another operation's dialog.
             if (portPolicy != null)
             {
-                PORT_CONFLICT_ARMS.add(new PortConflictArm(portPolicy, trimToNull(infobaseName)));
+                PORT_CONFLICT_ARMS.add(new PortConflictArm(portPolicy, trimToNull(infobaseName),
+                    trimToNull(serverName)));
             }
             if (conflictPolicy != null)
             {
@@ -2310,7 +2345,41 @@ public final class LaunchUpdateDialogAutoConfirmer
         return attributed;
     }
 
-    /** Whether any arm this dialog is attributable to asked for {@code reassign}. */
+    /**
+     * The arms whose SERVER this dialog quotes verbatim — the attribution the WRITING answer uses.
+     * Must be called with {@code LOCK} held.
+     *
+     * <p>By the server's own name, compared exactly, and never by the infobase name inside it: EDT
+     * titles the server {@code "<localized prefix> <infobase>"}, so an infobase test accepts a
+     * different server whose name merely ends the same way — an arm for {@code Base} would
+     * authorise the dialog of {@code My Base}, and the press rewrites whichever server the dialog
+     * belongs to (#437).
+     *
+     * @param detail the dialog text
+     * @return the arms demonstrably about this server
+     */
+    private static List<PortConflictArm> portArmsForServer(String detail)
+    {
+        List<PortConflictArm> attributed = new ArrayList<>();
+        for (PortConflictArm arm : PORT_CONFLICT_ARMS)
+        {
+            if (namesThisServerExactly(detail, arm.serverName))
+            {
+                attributed.add(arm);
+            }
+        }
+        return attributed;
+    }
+
+    /**
+     * Whether any arm this dialog is attributable to asked for {@code reassign}. This decides the
+     * WORDING of a refusal — "you asked and were outvoted" versus "your own policy declined" — so
+     * it stays on the infobase matcher; the press itself is gated by {@link #reassignRequested},
+     * which is stricter.
+     *
+     * @param detail the dialog text
+     * @return {@code true} when some attributable arm asked for the re-address
+     */
     private static boolean reassignAskedFor(String detail)
     {
         synchronized (LOCK)
@@ -2324,6 +2393,29 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
             return false;
         }
+    }
+
+    /**
+     * Whether {@code detail} quotes {@code serverName} verbatim.
+     *
+     * @param detail the dialog text (may be {@code null})
+     * @param serverName the arm's resolved server name (may be {@code null})
+     * @return {@code true} when some quoted segment IS that name
+     */
+    static boolean namesThisServerExactly(String detail, String serverName)
+    {
+        if (detail == null || serverName == null || serverName.isEmpty())
+        {
+            return false;
+        }
+        for (String quoted : quotedSegments(detail))
+        {
+            if (quoted.equals(serverName))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Best-effort close of a still-open dialog shell; never throws. */
@@ -2403,12 +2495,15 @@ public final class LaunchUpdateDialogAutoConfirmer
             // one that asked for it.
             for (PortConflictArm arm : PORT_CONFLICT_ARMS)
             {
-                if (arm.infobaseName == null)
+                // Its infobase OR its server: both names are best-effort, and an arm missing
+                // either may be the one starting THIS server. Dropping it from the vote would let
+                // a caller that declined the re-address be overruled by one that asked for it.
+                if (arm.infobaseName == null || arm.serverName == null)
                 {
                     return false;
                 }
             }
-            List<PortConflictArm> attributed = portArmsFor(detail);
+            List<PortConflictArm> attributed = portArmsForServer(detail);
             if (attributed.isEmpty())
             {
                 // Not attributable to any armed call: never perform the WRITING answer on a dialog
@@ -2763,12 +2858,27 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * @param policy the answer this arm chose (may be {@code null} = default)
      */
-    static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy, String infobaseName)
+    static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy,
+        String infobaseName)
+    {
+        armPortConflictForTest(policy, infobaseName, null);
+    }
+
+    /**
+     * Test seam: takes one port-conflict arm that also names its server.
+     *
+     * @param policy the answer this arm chose (may be {@code null} = default)
+     * @param infobaseName the infobase the arm covers
+     * @param serverName the WST server name the writing answer must match exactly
+     */
+    static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy,
+        String infobaseName, String serverName)
     {
         synchronized (LOCK)
         {
             PORT_CONFLICT_ARMS.add(new PortConflictArm(
-                policy == null ? StandaloneServerPortConflictPolicy.DEFAULT : policy, infobaseName));
+                policy == null ? StandaloneServerPortConflictPolicy.DEFAULT : policy, infobaseName,
+                serverName));
         }
     }
 

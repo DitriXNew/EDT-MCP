@@ -1054,6 +1054,33 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     /**
+     * The WST server name behind a launch configuration - what the port-conflict dialog quotes.
+     * Best-effort: {@code null} simply refuses the writing answer.
+     *
+     * @param config the launch configuration
+     * @return the server name, or {@code null}
+     */
+    private static String launchServerName(ILaunchConfiguration config)
+    {
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String applicationId = LaunchConfigUtils.getApplicationIdFor(config);
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.isOpen())
+            {
+                return null;
+            }
+            return LaunchLifecycleUtils.attributionServerName(
+                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break the launch
+        {
+            return null;
+        }
+    }
+
+    /**
      * Launches the given configuration in debug mode, asynchronously.
      *
      * <p>Uses a direct {@code config.launch(DEBUG_MODE, monitor)} — not
@@ -1180,7 +1207,7 @@ public class DebugLaunchTool implements IMcpTool
         StandaloneServerPortConflictPolicy launchPortPolicy = standaloneServerPortPolicy(config,
             portPolicy);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, launchPortPolicy);
+            launchPolicy, launchInfobase, launchPortPolicy, launchServerName(config));
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -1270,7 +1297,7 @@ public class DebugLaunchTool implements IMcpTool
             ? null
             : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, launchPortPolicy);
+            launchPolicy, launchInfobase, launchPortPolicy, launchServerName(config));
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
         // (#230). This launch is fire-and-forget: tool.execute() has already returned and
         // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no

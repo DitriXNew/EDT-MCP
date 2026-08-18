@@ -1134,6 +1134,12 @@ public class RunYaxunitTestsTool implements IMcpTool
         String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(
             Activator.getDefault().getApplicationManager(),
             launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
+        // The server's OWN name, which is what the port-conflict dialog quotes: the infobase
+        // name inside it is not enough to tell "Base" from "My Base", and the answer rewrites
+        // whichever server the dialog belongs to.
+        String launchServer = LaunchLifecycleUtils.attributionServerName(
+            Activator.getDefault().getApplicationManager(),
+            launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
         // Armed even without a resolved name: the confirmer degrades such an arm to 'cancel', so
         // the modal is answered (no hang) but nothing is written on an unattributable dialog.
         ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
@@ -1156,7 +1162,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 ? null
                 : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
-            launchInfobase, launchPortPolicy);
+            launchInfobase, launchPortPolicy, launchServer);
         ILaunch launch;
         try
         {
@@ -1597,6 +1603,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             // around a standalone-server application's delegate-performed update.
             String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
                 applicationId);
+            String launchServer = LaunchLifecycleUtils.attributionServerName(appManager,
+                project, applicationId);
             ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
             // The port matcher is armed only for a STANDALONE-SERVER target: a file or client-server
             // application cannot raise that modal, and an arm held for the whole run would claim a
@@ -1613,7 +1621,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                     ? null
                     : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
             LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
-                launchInfobase, launchPortPolicy);
+                launchInfobase, launchPortPolicy, launchServer);
             ILaunch[] spawned = new ILaunch[1];
             try
             {

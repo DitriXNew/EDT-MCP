@@ -1669,6 +1669,76 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * Resolves the WST server's own name for {@code applicationId} — the string EDT quotes in its
+     * standalone-server port-conflict modal.
+     *
+     * <p>Read from the server, never parsed out of the dialog. EDT builds that title as
+     * {@code "<localized prefix> <infobase>"}, so recognising it by the infobase alone accepts a
+     * DIFFERENT server whose name merely ends the same way ("Base" matches "… for My Base") - and
+     * the answer this name authorises REWRITES the named server's configuration.
+     *
+     * @param appManager the EDT application manager (may be {@code null})
+     * @param project the project the application belongs to (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return the server name, or {@code null} when it cannot be resolved
+     */
+    public static String attributionServerName(IApplicationManager appManager, IProject project,
+        String applicationId)
+    {
+        if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            return appManager.getApplication(project, applicationId)
+                .map(LaunchLifecycleUtils::serverNameOf)
+                .orElse(null);
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break a launch
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Reflective {@code IServerApplication.getServer().getName()}. Reflective because the WST
+     * server types are not on this bundle's classpath, and best-effort because a name that will
+     * not resolve must degrade to "cannot attribute", never to a failed launch.
+     *
+     * @param application the application (may be {@code null})
+     * @return the backing server's name, or {@code null}
+     */
+    private static String serverNameOf(IApplication application)
+    {
+        if (application == null)
+        {
+            return null;
+        }
+        try
+        {
+            Object server = application.getClass().getMethod("getServer").invoke(application); //$NON-NLS-1$
+            if (server == null)
+            {
+                return null;
+            }
+            Object name = server.getClass().getMethod("getName").invoke(server); //$NON-NLS-1$
+            return name == null ? null : trimToNullName(name.toString());
+        }
+        catch (Exception | LinkageError e) // NOSONAR not a server application, or an older API
+        {
+            return null;
+        }
+    }
+
+    /** {@code null} for a blank name, the trimmed value otherwise. */
+    private static String trimToNullName(String value)
+    {
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
      * Resolves the name EDT interpolates into its "Infobase \"<name>\" configuration was
      * changed…" conflict modal: the bound {@link com._1c.g5.v8.dt.platform.services.model
      * .InfobaseReference}'s name, since an application's own (localized) name can differ from

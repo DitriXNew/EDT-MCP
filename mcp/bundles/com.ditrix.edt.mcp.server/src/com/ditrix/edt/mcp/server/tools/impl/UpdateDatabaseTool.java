@@ -755,7 +755,9 @@ public class UpdateDatabaseTool implements IMcpTool
                         DebugServerTargetSupport.isServerApplicationId(applicationId)
                             ? portPolicy : null;
                     LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges,
-                        infobaseName, armedPortPolicy);
+                        infobaseName, armedPortPolicy,
+                        LaunchLifecycleUtils.attributionServerName(appManager, project,
+                            applicationId));
                     try
                     {
                         stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
