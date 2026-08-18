@@ -102,7 +102,9 @@ public final class BackgroundJobRenderer
                             + "was wound up without its end-of-answer marker" //$NON-NLS-1$
                         : "Workmate never sent its end-of-answer marker") //$NON-NLS-1$
                     .append(", so this is the last text it produced rather than an answer " //$NON-NLS-1$
-                        + "it called complete. It may be partial.\n"); //$NON-NLS-1$
+                        + "it called complete. It may be partial: use it only after checking " //$NON-NLS-1$
+                        + "what it claims against the project, and ask a narrower question " //$NON-NLS-1$
+                        + "rather than repeating this one.\n"); //$NON-NLS-1$
                 if (!workmateResponse.isAnswerAccepted())
                 {
                     // Stronger than "may be partial": nothing here was ever accepted as an

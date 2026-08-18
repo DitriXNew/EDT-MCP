@@ -253,4 +253,28 @@ public class WorkmateGatewayContinuationTest
         assertEquals(answer,
             WorkmateGateway.stripFinalMarker(answer + "\n" + WorkmateGateway.FINAL_MARKER));
     }
+
+    @Test
+    public void testTheGoingToFutureIsAnAnnouncementToo()
+    {
+        // Review of #440: the phrase fallback knew "I will" but not the equally common
+        // "I am going to", so that turn was accepted as a finished answer.
+        assertTrue(WorkmateGateway.needsContinuation(
+            "I\u2019m going to inspect the module and report back."));
+        assertTrue(WorkmateGateway.needsContinuation(
+            "I am going to search the documentation first."));
+        assertFalse("bare \"going to\" is a preposition, not a promise",
+            WorkmateGateway.needsContinuation(
+                "The value going to the register is rounded to two places."));
+    }
+
+    @Test
+    public void testTheFinalityInstructionCannotBeSwallowedByACodeFence()
+    {
+        // Review of #440: appended after a single space, the instruction landed on the same
+        // line as a closing ``` and became part of the sample - so the marker was never asked
+        // for. It must start on a line of its own.
+        assertTrue("the instruction has to begin with a hard break",
+            WorkmateGateway.FINALITY_INSTRUCTION.startsWith("\n\n"));
+    }
 }

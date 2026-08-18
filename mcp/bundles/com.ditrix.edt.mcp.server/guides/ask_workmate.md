@@ -153,7 +153,10 @@ The third follows from the same anonymity, in the other direction: a `mode="chat
 completes its job at once and Workmate keeps working in the panel, where it may call these same
 tools. That traffic is counted as activity, so an answer-mode turn that really has gone quiet
 can be kept alive by an unrelated chat and run to its `timeoutSeconds` budget. The error is on
-the safe side - a job waits rather than being cut short - and `cancel_job` ends it early.
+the safe side - a job waits rather than being cut short - but it cannot be cut short by hand
+either: an answer-mode job commits before its first request goes out, so `cancel_job` reports
+`alreadyCommitted` and the job runs until Workmate answers or the budget ends it. Stop polling
+and read the result later; the slot frees itself.
 
 Whenever the marker never arrived - because the conversation went quiet, or because the
 continuations ran out - the result carries an explicit **"Completion not confirmed"** note
