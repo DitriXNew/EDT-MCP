@@ -1705,16 +1705,23 @@ public class WorkmateGateway
             // the waiter got round to looking, so a tool that failed early while this thread was
             // descheduled past the deadline would be reported as our timeout.
             AtomicLong finishedAtNanos = new AtomicLong(NOT_FINISHED);
+            // What the WAIT observes. Not the raw future: whenComplete is a DEPENDENT stage, run
+            // after the outcome is published, so a waiter watching the raw future can see it
+            // finished while the stamp is still unwritten - and then read "not finished" as "our
+            // deadline won". Waiting on the dependent stage orders the two: it cannot complete
+            // before its own action has stamped.
+            CompletableFuture<?> observed;
             if (future.isDone())
             {
                 // Already complete before this adapter ever saw it, and CompletableFuture keeps no
                 // completion time to recover: stamping "now" would record when WE looked, which
                 // can fall past the deadline and turn a genuine early failure into our timeout.
                 finishedAtNanos.set(UNDATABLE);
+                observed = future;
             }
             else
             {
-                future.whenComplete((toolResult, toolFailure) -> finishedAtNanos
+                observed = future.whenComplete((toolResult, toolFailure) -> finishedAtNanos
                     .compareAndSet(NOT_FINISHED, System.nanoTime()));
             }
 
@@ -1725,7 +1732,9 @@ public class WorkmateGateway
                 // wait computed here would start late if this thread is descheduled, and then
                 // run its full length PAST the deadline. callTools also does synchronous work
                 // of its own, which the pre-invoke measurement cannot include.
-                result = awaitToolResult(future, deadlineNanos, cancelled, finishedAtNanos);
+                // The dependent stage is what is WAITED on; cancellation below still goes to
+                // the original future, since cancelling a derived stage would not stop the tool.
+                result = awaitToolResult(observed, deadlineNanos, cancelled, finishedAtNanos);
                 finished.set(true);
             }
             catch (TimeoutException e)
