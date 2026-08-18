@@ -646,7 +646,7 @@ public class WorkmateGateway
                 // Checked BEFORE the commit handshake, not only inside the send: a request that
                 // has not gone out yet leaves nothing behind, so an expired budget here is an
                 // ordinary retryable timeout rather than the "already dispatched" kind.
-                if (session == null && remainingMillis(deadlineNanos) <= 0)
+                if (session == null && budgetSpent(deadlineNanos))
                 {
                     throw GatewayException.timedOut();
                 }
@@ -690,7 +690,7 @@ public class WorkmateGateway
                     lastAnnouncement = stripped;
                 }
                 if (isAnswer || turn.session == null || continuations >= MAX_CONTINUATIONS
-                    || remainingMillis(deadlineNanos) <= 0)
+                    || budgetSpent(deadlineNanos))
                 {
                     break;
                 }
@@ -1075,8 +1075,7 @@ public class WorkmateGateway
         // Immediately before the send, because dispatching is what has consequences: Workmate's
         // tool loop can change this configuration, and a request let out after the advertised
         // budget spends time the caller was never promised. A later wait-timeout does not undo it.
-        long remainingMillis = remainingMillis(deadlineNanos);
-        if (remainingMillis <= 0)
+        if (budgetSpent(deadlineNanos))
         {
             throw firstTurn ? GatewayException.timedOut() : GatewayException.timedOutAfterDispatch();
         }
@@ -1108,8 +1107,7 @@ public class WorkmateGateway
         // Recomputed AFTER the dispatch returned: sendAsync does synchronous work of its own
         // (it creates the conversation), and waiting on the budget measured before it would add
         // that duration back on top of the absolute deadline, once per turn.
-        long waitMillis = remainingMillis(deadlineNanos);
-        if (waitMillis <= 0)
+        if (budgetSpent(deadlineNanos))
         {
             // The request is already out, so this is never the retryable kind of timeout.
             cancelled.set(true);
@@ -1124,7 +1122,8 @@ public class WorkmateGateway
             // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
             // before the advertised budget ran out, and a floor of one second let an already
             // spent budget overshoot by one more.
-            sendResult = awaitTurn(future, waitMillis);
+            // The length may round; only "is there still time" must not (budgetSpent above).
+            sendResult = awaitTurn(future, Math.max(1L, remainingMillis(deadlineNanos)));
         }
         catch (TimeoutException e)
         {
@@ -1432,7 +1431,7 @@ public class WorkmateGateway
             // Expiry is decided in NANOSECONDS: remainingMillis truncates, so a remainder under
             // one millisecond would read as zero and end the wait before the deadline it was
             // given - cancelling a tool that was about to finish inside it.
-            if (System.nanoTime() - deadlineNanos >= 0)
+            if (budgetSpent(deadlineNanos))
             {
                 cancelled.set(true);
                 throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
@@ -1450,6 +1449,23 @@ public class WorkmateGateway
                 continue;
             }
         }
+    }
+
+    /**
+     * Whether a budget is spent.
+     *
+     * <p>The ONE place this question is answered, and it is answered in nanoseconds:
+     * {@link #remainingMillis} truncates, so a remainder under a millisecond reads as zero and
+     * a caller asking "<= 0" would declare the budget gone up to a millisecond early - early
+     * enough to refuse a dispatch, or cancel a tool, that still had time. Milliseconds are for
+     * how LONG to wait; nanoseconds decide WHETHER there is still time.
+     *
+     * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
+     * @return {@code true} once the deadline has been reached
+     */
+    private static boolean budgetSpent(long deadlineNanos)
+    {
+        return System.nanoTime() - deadlineNanos >= 0;
     }
 
     /**
@@ -1578,7 +1594,7 @@ public class WorkmateGateway
             // remainder to zero, which would report the budget spent up to a millisecond early
             // and abort a tool that was about to finish inside it.
             Object token = createCancellationToken(cancellationTokenClass, cancelled,
-                () -> !finished.get() && System.nanoTime() - deadlineNanos >= 0);
+                () -> !finished.get() && budgetSpent(deadlineNanos));
             Method callTools = requireMethod(toolsClass, "callTools", callsClass, //$NON-NLS-1$
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1587,7 +1603,7 @@ public class WorkmateGateway
             // a Workmate tool can run arbitrary code (JShell) or change this configuration, and a
             // call let out after the advertised budget spends time the caller was never promised.
             // Nothing has been dispatched yet, so this is the ordinary retryable timeout.
-            if (remainingMillis(deadlineNanos) <= 0)
+            if (budgetSpent(deadlineNanos))
             {
                 throw GatewayException.timedOut();
             }
@@ -1603,7 +1619,7 @@ public class WorkmateGateway
             // conversation path re-checks in the same place for the same reason. Still the
             // retryable kind - the commit stops the registry from killing the job, but no tool
             // has been entered, so nothing was left half-done.
-            if (remainingMillis(deadlineNanos) <= 0)
+            if (budgetSpent(deadlineNanos))
             {
                 throw GatewayException.timedOut();
             }
