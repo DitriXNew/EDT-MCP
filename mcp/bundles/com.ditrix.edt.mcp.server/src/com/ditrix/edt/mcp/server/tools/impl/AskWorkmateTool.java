@@ -501,7 +501,8 @@ public class AskWorkmateTool implements IMcpTool
                             maxToolRounds, skillName, jobTimeoutSeconds, listener);
                         if (response == null || trimToNull(response.getText()) == null)
                         {
-                            throw new WorkmateJobException(emptyAnswerMessage());
+                            throw new WorkmateJobException(emptyAnswerMessage(
+                                response == null ? 0 : response.getContinuations()));
                         }
                         return response;
                     }
@@ -638,15 +639,26 @@ public class AskWorkmateTool implements IMcpTool
         }
     }
 
-    private static String emptyAnswerMessage()
+    /**
+     * Reports that Workmate said nothing at all.
+     *
+     * <p>The sentence turns on whether the conversation was actually continued (#427): saying
+     * "even after being asked to continue" when no continuation was sent - which happens when the
+     * installed Workmate exposes no conversation handle to continue WITH - would send the reader
+     * after a sign-in problem that is not there.
+     *
+     * @param continuations how many continuations the adapter actually sent
+     * @return the actionable message
+     */
+    private static String emptyAnswerMessage(int continuations)
     {
-        // "Even after" matters: the adapter no longer takes the first turn as the result - it
-        // pushes a plan-shaped or empty turn to continue in the same conversation several times
-        // (#427). Reaching this message therefore means Workmate stayed silent throughout, which
-        // points at its setup rather than at a question that needed more time.
-        return "1C:Workmate returned an empty answer, even after being asked to continue the " //$NON-NLS-1$
-            + "same conversation. Open Workmate in EDT, verify that it is signed in and " //$NON-NLS-1$
-            + "configured, then start a new ask_workmate job."; //$NON-NLS-1$
+        return "1C:Workmate returned an empty answer" //$NON-NLS-1$
+            + (continuations > 0
+                ? ", even after being asked " + continuations + " time(s) to continue the same " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "conversation" //$NON-NLS-1$
+                : "") //$NON-NLS-1$
+            + ". Open Workmate in EDT, verify that it is signed in and configured, then start a " //$NON-NLS-1$
+            + "new ask_workmate job."; //$NON-NLS-1$
     }
 
     private static String trimToNull(String value)

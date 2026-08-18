@@ -126,7 +126,13 @@ public class WorkmateGateway
         "\u0441\u0435\u0439\u0447\u0430\u0441 \u044F", // сейчас я //$NON-NLS-1$
         "i will ", //$NON-NLS-1$
         "i'll ", //$NON-NLS-1$
-        "let me " //$NON-NLS-1$
+        // "let me" alone is a discourse marker ("let me clarify: ..."), so only the phrases
+        // that announce an ACTION are markers of intent.
+        "let me search", //$NON-NLS-1$
+        "let me check", //$NON-NLS-1$
+        "let me look", //$NON-NLS-1$
+        "let me find", //$NON-NLS-1$
+        "let me run" //$NON-NLS-1$
     };
 
     /**
@@ -280,6 +286,7 @@ public class WorkmateGateway
         private final String text;
         private final String reasoning;
         private final Integer assistantMessageCount;
+        private final int continuations;
 
         public WorkmateResponse(String text, String reasoning)
         {
@@ -288,9 +295,16 @@ public class WorkmateGateway
 
         public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount)
         {
+            this(text, reasoning, assistantMessageCount, 0);
+        }
+
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount,
+            int continuations)
+        {
             this.text = text;
             this.reasoning = reasoning;
             this.assistantMessageCount = assistantMessageCount;
+            this.continuations = continuations;
         }
 
         public String getText()
@@ -313,6 +327,19 @@ public class WorkmateGateway
         public Integer getAssistantMessageCount()
         {
             return assistantMessageCount;
+        }
+
+        /**
+         * How many times the conversation was pushed to continue before this answer. Zero means
+         * the first turn WAS the answer - or that it could not be continued at all, e.g. because
+         * the installed Workmate exposes no conversation handle. A caller that phrases "still
+         * empty even after continuing" must consult this rather than assume it happened.
+         *
+         * @return the number of continuations actually sent, never negative
+         */
+        public int getContinuations()
+        {
+            return continuations;
         }
     }
 
@@ -441,7 +468,7 @@ public class WorkmateGateway
                         + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
                 }
                 Turn turn = sendTurn(facade, sendAsync, request, cancellationTokenClass,
-                    resultClass, remainingSeconds(deadlineNanos),
+                    resultClass, remainingMillis(deadlineNanos),
                     session == null ? "Sent the request to Workmate." //$NON-NLS-1$
                         : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
                     progress);
@@ -454,7 +481,7 @@ public class WorkmateGateway
                     reasoning = turn.reasoning;
                 }
                 if (!needsContinuation(turn.text) || turn.session == null
-                    || continuations >= MAX_CONTINUATIONS || remainingSeconds(deadlineNanos) <= 0)
+                    || continuations >= MAX_CONTINUATIONS || remainingMillis(deadlineNanos) <= 0)
                 {
                     break;
                 }
@@ -466,7 +493,8 @@ public class WorkmateGateway
                     + MAX_CONTINUATIONS + ")."); //$NON-NLS-1$
             }
             progress.onProgress("Received the Workmate response."); //$NON-NLS-1$
-            return new WorkmateResponse(answer, reasoning, Integer.valueOf(assistantMessages));
+            return new WorkmateResponse(answer, reasoning, Integer.valueOf(assistantMessages),
+                continuations);
         }
         catch (GatewayException e)
         {
@@ -528,14 +556,14 @@ public class WorkmateGateway
      * @param request the prepared {@code SendUserMessageRequest}
      * @param cancellationTokenClass the token interface to implement for this send
      * @param resultClass the {@code SendMessageResult} class to read the turn from
-     * @param remainingSeconds what is left of the caller's total budget
+     * @param remainingMillis what is left of the caller's total budget
      * @param sentMessage the progress milestone to report once the request is away
      * @param progress milestone listener
      * @return the turn Workmate answered with
      * @throws GatewayException categorized runtime/compatibility failure
      */
     private Turn sendTurn(Object facade, Method sendAsync, Object request, // NOSONAR one reflective send needs every piece of the reflective context
-        Class<?> cancellationTokenClass, Class<?> resultClass, long remainingSeconds,
+        Class<?> cancellationTokenClass, Class<?> resultClass, long remainingMillis,
         String sentMessage, ProgressListener progress) throws GatewayException
     {
         AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -553,7 +581,10 @@ public class WorkmateGateway
         CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
         try
         {
-            sendResult = future.get(Math.max(1L, remainingSeconds), TimeUnit.SECONDS);
+            // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
+            // before the advertised budget ran out, and a floor of one second let an already
+            // spent budget overshoot by one more.
+            sendResult = future.get(Math.max(0L, remainingMillis), TimeUnit.MILLISECONDS);
         }
         catch (TimeoutException e)
         {
@@ -599,26 +630,32 @@ public class WorkmateGateway
      * @return the {@code ConversationSession}, or {@code null}
      */
     private static Object sessionOf(Class<?> resultClass, Object sendResult)
+        throws GatewayException
     {
+        Method getSession;
         try
         {
-            return invoke(resultClass.getMethod("getSession"), sendResult); //$NON-NLS-1$
+            getSession = resultClass.getMethod("getSession"); //$NON-NLS-1$
         }
-        catch (NoSuchMethodException | SecurityException | GatewayException e) // NOSONAR absence only costs the continuation
+        catch (NoSuchMethodException | SecurityException e) // NOSONAR an ABSENT method only costs the continuation
         {
             return null;
         }
+        // Only the LOOKUP is optional. A getter that exists and throws is a real Workmate failure,
+        // and swallowing it here would quietly turn a broken conversation into "cannot continue",
+        // reporting a plan as the answer.
+        return invoke(getSession, sendResult);
     }
 
     /**
-     * Seconds left of a total budget, never negative.
+     * Milliseconds left of a total budget, never negative.
      *
      * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
-     * @return remaining whole seconds
+     * @return remaining whole milliseconds
      */
-    private static long remainingSeconds(long deadlineNanos)
+    private static long remainingMillis(long deadlineNanos)
     {
-        return Math.max(0L, TimeUnit.NANOSECONDS.toSeconds(deadlineNanos - System.nanoTime()));
+        return Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
     }
 
     /** {@code null} for a {@code null}/blank string, the trimmed value otherwise. */

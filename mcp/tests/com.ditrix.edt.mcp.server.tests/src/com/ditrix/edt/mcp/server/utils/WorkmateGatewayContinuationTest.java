@@ -75,6 +75,17 @@ public class WorkmateGatewayContinuationTest
     }
 
     @Test
+    public void testARhetoricalLetMeIsNotAnAnnouncement()
+    {
+        // Review of #440, second round: "let me" on its own is a discourse marker. Only the
+        // phrases that name an ACTION (search, check, look, find, run) announce future work.
+        assertFalse(WorkmateGateway.needsContinuation(
+            "Let me clarify: ValueTable is an in-memory collection, not a database table."));
+        assertTrue(WorkmateGateway.needsContinuation(
+            "Let me search the 1C documentation for the exact method list."));
+    }
+
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word
