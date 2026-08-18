@@ -371,6 +371,22 @@ public class AskWorkmateToolTest
     }
 
     @Test
+    public void testAVerbatimDetailIsStillMadeWholeBeforeItIsReported()
+    {
+        // Passing a detail through unwrapped puts the burden of it being a sentence HERE, not
+        // on whoever raised it: a blank one would otherwise surface as a class name.
+        String blank = executeWithFailure(GatewayException.unknownTool("   ")); //$NON-NLS-1$
+        assertJobFailedContains(blank, "rejected the requested tool name", //$NON-NLS-1$
+            "call ask_workmate again"); //$NON-NLS-1$
+        assertFalse("a blank detail must never degrade to an exception class name", //$NON-NLS-1$
+            blank.contains("WorkmateJobException")); //$NON-NLS-1$
+
+        String unpunctuated =
+            executeWithFailure(GatewayException.unknownTool("no such tool here")); //$NON-NLS-1$
+        assertJobFailedContains(unpunctuated, "no such tool here."); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAFailureAfterDispatchNeverAsksForARetry()
     {
         // The detail says the turn had already run; the wrapper must not undo that by

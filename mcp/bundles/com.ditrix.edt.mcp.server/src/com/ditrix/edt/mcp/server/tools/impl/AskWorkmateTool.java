@@ -658,7 +658,15 @@ public class AskWorkmateTool implements IMcpTool
                 // answer: 1C:Workmate knows no tool named 'X' ... call ask_workmate again.. Check
                 // Workmate sign-in, network, and settings" - a stutter, a doubled stop, and
                 // sign-in advice for a mistyped name.
-                return error.getDetail();
+                //
+                // Passing a detail through verbatim makes THIS method responsible for it being a
+                // whole sentence, rather than trusting whoever raised it: a blank one would reach
+                // the caller as an exception class name.
+                String rejected = trimToNull(error.getDetail());
+                return rejected == null
+                    ? "1C:Workmate rejected the requested tool name without running anything. " //$NON-NLS-1$
+                        + "Check the workmateTool value and call ask_workmate again." //$NON-NLS-1$
+                    : endSentence(rejected);
             case FAILED_AFTER_DISPATCH:
                 // The detail already says the turn had run; what must NOT follow it is the
                 // "then retry ask_workmate" this method appends to an ordinary failure. The two
