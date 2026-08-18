@@ -1460,6 +1460,11 @@ public class WorkmateGateway
     public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
         ProgressListener progress) throws GatewayException
     {
+        // Taken BEFORE the reflective setup, not after it: bundle lookup, injector resolution,
+        // the authorization probe and building the call all spend the caller's budget, and a
+        // wait measured afterwards would hand the tool a fresh full budget on top of what setup
+        // already used - so the job could outlive the timeoutSeconds it advertised (#442).
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         // Outside the try, because the catch at the bottom classifies by it: a tool that has
         // started may already have run code, and "retry" would run it twice.
         AtomicBoolean invoked = new AtomicBoolean(false);
@@ -1519,6 +1524,14 @@ public class WorkmateGateway
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
 
+            // Checked immediately before the invoke, because invoking is what has consequences:
+            // a Workmate tool can run arbitrary code (JShell) or change this configuration, and a
+            // call let out after the advertised budget spends time the caller was never promised.
+            // Nothing has been dispatched yet, so this is the ordinary retryable timeout.
+            if (remainingMillis(deadlineNanos) <= 0)
+            {
+                throw GatewayException.timedOut();
+            }
             // Same reason as the facade above: a Workmate tool can run arbitrary code (JShell)
             // or change the configuration, and cancelling the wait does not undo that.
             if (!progress.onTryCommit())
@@ -1537,10 +1550,22 @@ public class WorkmateGateway
                     + " instead of CompletableFuture"); //$NON-NLS-1$
             }
             CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
+
+            // Recomputed AFTER the invoke returned: callTools does synchronous work of its own
+            // (it looks the tool up and starts it), and waiting on the budget measured before it
+            // would add that duration back on top of the absolute deadline.
+            long waitMillis = remainingMillis(deadlineNanos);
+            if (waitMillis <= 0)
+            {
+                // The tool is already running, so this is never the retryable kind of timeout.
+                cancelled.set(true);
+                future.cancel(true);
+                throw GatewayException.timedOutAfterDispatch();
+            }
             Object result;
             try
             {
-                result = future.get(timeoutMillis, TimeUnit.MILLISECONDS);
+                result = future.get(waitMillis, TimeUnit.MILLISECONDS);
             }
             catch (TimeoutException e)
             {
