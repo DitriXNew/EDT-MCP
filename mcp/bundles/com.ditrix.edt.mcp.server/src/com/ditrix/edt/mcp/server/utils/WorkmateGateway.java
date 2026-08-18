@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -1426,6 +1427,12 @@ public class WorkmateGateway
     private static Object awaitToolResult(CompletableFuture<?> future, long deadlineNanos,
         AtomicBoolean cancelled) throws TimeoutException, InterruptedException, ExecutionException
     {
+        // WHEN the future finished, not when this thread noticed. Everything below arbitrates
+        // against this stamp: a descheduled waiter must not turn a failure that beat the clock
+        // into a timeout, nor a timeout into a tool failure.
+        AtomicLong finishedAtNanos = new AtomicLong(Long.MIN_VALUE);
+        future.whenComplete(
+            (result, failure) -> finishedAtNanos.compareAndSet(Long.MIN_VALUE, System.nanoTime()));
         while (true)
         {
             // Expiry is decided in NANOSECONDS: remainingMillis truncates, so a remainder under
@@ -1433,11 +1440,12 @@ public class WorkmateGateway
             // given - cancelling a tool that was about to finish inside it.
             if (budgetSpent(deadlineNanos))
             {
-                // A RESULT beats the clock - but only a real one. If this thread was descheduled
-                // at the boundary while the tool finished, the work is done and its answer is in hand: reporting a
-                // timeout would throw away a real result and, worse, tell the caller its tool may
-                // still be running when it demonstrably is not.
-                if (future.isDone() && !future.isCompletedExceptionally())
+                // An OUTCOME that beat the clock wins, whichever kind it is. A result would
+                // otherwise be thrown away, and a genuine tool failure would be reported as
+                // "may still be running" when it demonstrably finished - both of them because
+                // this thread happened to wake up late.
+                if (future.isDone() && (!future.isCompletedExceptionally()
+                    || finishedBeforeDeadline(finishedAtNanos, deadlineNanos)))
                 {
                     return future.get();
                 }
@@ -1463,7 +1471,8 @@ public class WorkmateGateway
                 // blocking get with a failure that is really our own timeout in disguise.
                 // Re-arbitrated against the clock, so the caller gets the timeout diagnosis and
                 // its "raise timeoutSeconds" advice instead of "the tool failed".
-                if (budgetSpent(deadlineNanos))
+                if (budgetSpent(deadlineNanos)
+                    && !finishedBeforeDeadline(finishedAtNanos, deadlineNanos))
                 {
                     cancelled.set(true);
                     throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
@@ -1488,6 +1497,24 @@ public class WorkmateGateway
     private static boolean budgetSpent(long deadlineNanos)
     {
         return System.nanoTime() - deadlineNanos >= 0;
+    }
+
+    /**
+     * Whether the future finished BEFORE the deadline, by the stamp taken when it completed.
+     *
+     * <p>The stamp is what separates "the tool failed on its own" from "our own cancellation
+     * came back as a failure": the token only reports cancelled once the budget is spent, so a
+     * completion recorded before that instant cannot be ours - however late this thread wakes
+     * up to see it.
+     *
+     * @param finishedAtNanos the completion stamp, or {@code Long.MIN_VALUE} if not finished
+     * @param deadlineNanos when the budget expires
+     * @return {@code true} when the outcome predates the deadline
+     */
+    private static boolean finishedBeforeDeadline(AtomicLong finishedAtNanos, long deadlineNanos)
+    {
+        long finishedAt = finishedAtNanos.get();
+        return finishedAt != Long.MIN_VALUE && finishedAt - deadlineNanos < 0;
     }
 
     /**
