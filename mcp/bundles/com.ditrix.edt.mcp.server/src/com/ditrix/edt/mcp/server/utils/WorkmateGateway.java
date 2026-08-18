@@ -1550,6 +1550,10 @@ public class WorkmateGateway
                     + "). It may already have changed this project."); //$NON-NLS-1$
             }
             progress.onProgress("Workmate tool '" + toolName + "' returned."); //$NON-NLS-1$ //$NON-NLS-2$
+            // BEFORE the post-dispatch wrapper below, because a name Workmate does not know is
+            // rejected by its dispatch loop without any tool being entered: that call is safe to
+            // correct and repeat, and warning "the project may have changed" would be a lie.
+            rejectUnknownTool(result, toolName);
             try
             {
                 return extractToolText(result, toolName);
@@ -2173,6 +2177,45 @@ public class WorkmateGateway
      * @return the tool's text, never {@code null}
      * @throws GatewayException when the result carries no message at all
      */
+    /**
+     * Fails RETRYABLY when Workmate rejected the call because it knows no tool by that name.
+     *
+     * <p>Its dispatch loop looks the name up before entering anything: an unknown one is put
+     * aside in {@code unknownCalls} and the result completes normally with no messages at all.
+     * Told apart from a tool that ran and answered badly, this is the difference between "fix
+     * the name and call again" and "something may have changed, look first".
+     *
+     * <p>Tolerant by design: a Workmate build without that field simply yields no verdict here,
+     * and the call falls through to the ordinary reading of the result.
+     *
+     * @param result the {@code McpCallToolsResult} Workmate returned
+     * @param toolName the name that was asked for
+     * @throws GatewayException when the name was rejected
+     */
+    static void rejectUnknownTool(Object result, String toolName) throws GatewayException
+    {
+        if (result == null)
+        {
+            return;
+        }
+        Object unknown;
+        try
+        {
+            unknown = readField(result.getClass().getField("unknownCalls"), result); //$NON-NLS-1$
+        }
+        catch (NoSuchFieldException | SecurityException e) // NOSONAR absence is not a verdict
+        {
+            return;
+        }
+        if (unknown instanceof Collection && !((Collection<?>)unknown).isEmpty())
+        {
+            throw GatewayException.callFailed("1C:Workmate knows no tool named '" + toolName //$NON-NLS-1$
+                + "' and rejected the call without running anything. Check the name (it is " //$NON-NLS-1$
+                + "case-insensitive but must match a Workmate tool, e.g. JShellSession, JShell " //$NON-NLS-1$
+                + "or JShellManual) and call ask_workmate again."); //$NON-NLS-1$
+        }
+    }
+
     private static String extractToolText(Object result, String toolName) throws GatewayException
     {
         if (result == null)
