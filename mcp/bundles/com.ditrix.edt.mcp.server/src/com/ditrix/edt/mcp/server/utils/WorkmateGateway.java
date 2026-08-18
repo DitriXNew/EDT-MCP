@@ -21,6 +21,7 @@ import java.util.Collection;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import com.ditrix.edt.mcp.server.bridge.BridgeActivity;
@@ -151,6 +152,12 @@ public class WorkmateGateway
 
     /** How often the wait wakes up to see whether the turn is still doing anything. */
     static final long DEFAULT_IDLE_POLL_MS = 5_000L;
+
+    /**
+     * How often a directly invoked tool's wait re-reads the clock. Short, because its only
+     * job is to keep a descheduled thread from waking up past the deadline it was given.
+     */
+    private static final long TOOL_WAIT_POLL_MS = 1_000L;
 
     /** Mutable only so a test can shrink the window; production never changes them. */
     private static volatile long idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
@@ -1402,6 +1409,45 @@ public class WorkmateGateway
     }
 
     /**
+     * Waits for a directly invoked Workmate tool, bounded by an ABSOLUTE deadline.
+     *
+     * <p>Every wake re-reads the clock instead of trusting one relative measurement: a thread
+     * descheduled after computing "how long is left" would otherwise begin that full wait
+     * whenever it resumes, and overrun the budget by however long it was away. The token is
+     * marked as soon as the deadline passes, so the tool learns it too.
+     *
+     * @param future the tool's future
+     * @param deadlineNanos when the caller's budget expires
+     * @param cancelled the flag behind the token handed to Workmate
+     * @return the tool's result
+     * @throws TimeoutException when the budget runs out first
+     * @throws InterruptedException if the wait is interrupted
+     * @throws ExecutionException if the tool failed
+     */
+    private static Object awaitToolResult(CompletableFuture<?> future, long deadlineNanos,
+        AtomicBoolean cancelled) throws TimeoutException, InterruptedException, ExecutionException
+    {
+        while (true)
+        {
+            long leftMs = remainingMillis(deadlineNanos);
+            if (leftMs <= 0)
+            {
+                cancelled.set(true);
+                throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
+            }
+            try
+            {
+                return future.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
+            }
+            catch (TimeoutException stillRunning)
+            {
+                // Deliberately swallowed: only the absolute deadline above ends this wait.
+                continue;
+            }
+        }
+    }
+
+    /**
      * Milliseconds left of a total budget, never negative.
      *
      * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
@@ -1519,7 +1565,8 @@ public class WorkmateGateway
             }
             Class<?> cancellationTokenClass = requireClass(aiBundle, CANCELLATION_TOKEN);
             AtomicBoolean cancelled = new AtomicBoolean(false);
-            Object token = createCancellationToken(cancellationTokenClass, cancelled);
+            Object token = createCancellationToken(cancellationTokenClass, cancelled,
+                () -> remainingMillis(deadlineNanos) <= 0);
             Method callTools = requireMethod(toolsClass, "callTools", callsClass, //$NON-NLS-1$
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1560,21 +1607,14 @@ public class WorkmateGateway
             }
             CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
 
-            // Recomputed AFTER the invoke returned: callTools does synchronous work of its own
-            // (it looks the tool up and starts it), and waiting on the budget measured before it
-            // would add that duration back on top of the absolute deadline.
-            long waitMillis = remainingMillis(deadlineNanos);
-            if (waitMillis <= 0)
-            {
-                // The tool is already running, so this is never the retryable kind of timeout.
-                cancelled.set(true);
-                future.cancel(true);
-                throw GatewayException.timedOutAfterDispatch();
-            }
             Object result;
             try
             {
-                result = future.get(waitMillis, TimeUnit.MILLISECONDS);
+                // Driven by the ABSOLUTE deadline, re-read on every wake: a single relative
+                // wait computed here would start late if this thread is descheduled, and then
+                // run its full length PAST the deadline. callTools also does synchronous work
+                // of its own, which the pre-invoke measurement cannot include.
+                result = awaitToolResult(future, deadlineNanos, cancelled);
             }
             catch (TimeoutException e)
             {
@@ -2363,11 +2403,31 @@ public class WorkmateGateway
 
     private static Object createCancellationToken(Class<?> tokenClass, AtomicBoolean cancelled)
     {
+        return createCancellationToken(tokenClass, cancelled, () -> false);
+    }
+
+    /**
+     * A cancellation token that is ALSO cancelled once {@code expired} says the budget is gone.
+     *
+     * <p>A check placed before the dispatch can only ever be check-then-act: the thread may be
+     * preempted between the two, and no placement fixes that. What does is making the token
+     * itself deadline-aware - Workmate polls it inside its own loop, so a tool entered late,
+     * or still running when the budget ends, sees the cancellation at its next check instead of
+     * depending on this side of the call at all.
+     *
+     * @param tokenClass Workmate's cancellation-token interface
+     * @param cancelled set when this side gives up waiting
+     * @param expired reports whether the caller's budget is spent
+     * @return the proxy to hand to Workmate
+     */
+    private static Object createCancellationToken(Class<?> tokenClass, AtomicBoolean cancelled,
+        BooleanSupplier expired)
+    {
         return Proxy.newProxyInstance(tokenClass.getClassLoader(), new Class<?>[] {tokenClass},
             (proxy, method, args) -> {
                 if ("isCanceled".equals(method.getName())) //$NON-NLS-1$
                 {
-                    return cancelled.get();
+                    return cancelled.get() || expired.getAsBoolean();
                 }
                 if ("toString".equals(method.getName())) //$NON-NLS-1$
                 {
