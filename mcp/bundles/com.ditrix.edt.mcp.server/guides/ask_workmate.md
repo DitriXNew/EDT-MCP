@@ -123,8 +123,17 @@ search over and over. Continuing the conversation is exactly what Workmate's own
 autopilot does with this facade. The
 continuations are bounded by the job's `timeoutSeconds` budget, count into
 `assistantMessages`, and are visible in the progress journal. A long answer is
-always taken at face value, so a finished reference answer is never re-asked;
-the last non-empty text is what the caller receives.
+always taken at face value, so a finished reference answer is never re-asked.
+
+What comes back is the last text that was ACCEPTED as an answer - an
+announcement is never promoted to the result just because nothing better
+followed it, and a later empty turn never erases an answer already produced. If
+no turn ever produced one, the job FAILS rather than returning the plan: the
+error quotes what Workmate kept announcing and says what to change (a narrower
+question, a larger `timeoutSeconds`). That failure - like any failure after a
+turn has been dispatched - warns you to inspect Workmate and the project before
+repeating the request, because those turns had already run and their tools may
+have changed something.
 
 Workmate may contact its configured cloud service and its conversation loop may
 invoke Workmate's own tools. Review the question and selected project/skill with

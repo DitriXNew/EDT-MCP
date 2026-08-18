@@ -160,6 +160,14 @@ public class WorkmateGatewayContinuationTest
             "I will not only inspect the module, I will also fix the query."));
     }
     @Test
+    public void testATypographicApostropheIsTheSameContraction()
+    {
+        // Review of #440, ninth round: models punctuate with the curly apostrophe, and an
+        // ASCII-only marker silently accepted the plan as the answer.
+        assertTrue(WorkmateGateway.needsContinuation(
+            "I’ll search the documentation for the exact method list."));
+    }
+    @Test
     public void testALongAnswerIsTakenAtFaceValueEvenWithAMarkerInIt()
     {
         // THE guard against over-eagerness: a finished reference answer may well contain the word

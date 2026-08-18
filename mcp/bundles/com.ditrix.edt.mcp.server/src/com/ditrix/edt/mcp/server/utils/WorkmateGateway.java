@@ -593,7 +593,8 @@ public class WorkmateGateway
         {
             return false;
         }
-        String lower = trimmed.toLowerCase(Locale.ROOT);
+        // Apostrophes are normalized first: the markers are written with the ASCII one.
+        String lower = normalizeApostrophes(trimmed.toLowerCase(Locale.ROOT));
         for (String marker : INTENT_MARKERS)
         {
             if (announcesAction(lower, marker))
@@ -642,6 +643,20 @@ public class WorkmateGateway
             }
         }
         return false;
+    }
+
+    /**
+     * Replaces typographic apostrophes with the ASCII one.
+     *
+     * <p>Models punctuate contractions with U+2019 ("I\u2019ll"), while the markers are
+     * written with the plain apostrophe. Normalizing the TEXT keeps one spelling per marker.
+     *
+     * @param text the lowercased answer
+     * @return the same text with apostrophe variants unified
+     */
+    private static String normalizeApostrophes(String text)
+    {
+        return text.replace('\u2019', '\'').replace('\u02BC', '\'');
     }
 
     /**
@@ -775,7 +790,17 @@ public class WorkmateGateway
         }
         AtomicBoolean cancelled = new AtomicBoolean(false);
         Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
-        Object futureValue = invoke(sendAsync, facade, request, cancellationToken);
+        Object futureValue;
+        try
+        {
+            futureValue = invoke(sendAsync, facade, request, cancellationToken);
+        }
+        catch (GatewayException e)
+        {
+            // sendAsync can also fail BEFORE it returns a future. On a continuation the earlier
+            // turns have already run, so this failure carries the same warning as a later one.
+            throw firstTurn ? e : continuationFailed(e.getDetail());
+        }
         if (!(futureValue instanceof CompletableFuture<?>))
         {
             throw GatewayException.incompatible("method '" + CONVERSATION_FACADE //$NON-NLS-1$
@@ -823,12 +848,8 @@ public class WorkmateGateway
         }
         catch (ExecutionException e)
         {
-            // A CONTINUATION failing means earlier turns already ran - possibly through Workmate's
-            // tools. Repeating the whole request would repeat those, so the message says so.
-            throw GatewayException.callFailed(firstTurn ? rootCauseMessage(e)
-                : "1C:Workmate failed while continuing the conversation (" + rootCauseMessage(e) //$NON-NLS-1$
-                    + "). Earlier turns had already run and their tools may have changed the " //$NON-NLS-1$
-                    + "project: inspect Workmate and the project before repeating the request."); //$NON-NLS-1$
+            throw firstTurn ? GatewayException.callFailed(rootCauseMessage(e))
+                : continuationFailed(rootCauseMessage(e));
         }
 
         if (sendResult == null)
@@ -858,6 +879,21 @@ public class WorkmateGateway
                 + "inspect Workmate and the project before starting the same request again."); //$NON-NLS-1$
         }
         return new Turn(text, reasoning, count, session);
+    }
+
+    /**
+     * A failure of a CONTINUATION, phrased so it is not answered with a blind retry: the turns
+     * before it have already run, possibly through Workmate's tools.
+     *
+     * @param detail what went wrong
+     * @return the failure to throw
+     */
+    private static GatewayException continuationFailed(String detail)
+    {
+        return GatewayException.callFailed("1C:Workmate failed while continuing the " //$NON-NLS-1$
+            + "conversation (" + detail + "). Earlier turns had already run and their tools may " //$NON-NLS-1$ //$NON-NLS-2$
+            + "have changed the project: inspect Workmate and the project before repeating the " //$NON-NLS-1$
+            + "request."); //$NON-NLS-1$
     }
 
     /**
