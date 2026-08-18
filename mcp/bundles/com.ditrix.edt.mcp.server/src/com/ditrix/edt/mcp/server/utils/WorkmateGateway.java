@@ -436,7 +436,10 @@ public class WorkmateGateway
             String message = question;
             String answer = null;
             String reasoning = null;
-            int assistantMessages = 0;
+            // Nullable on purpose: "the platform did not report a count" is not "zero", and the
+            // renderer omits the field for the former. One turn without a count makes the whole
+            // aggregate unknown, because a partial sum would be published as if it were the total.
+            Integer assistantMessages = Integer.valueOf(0);
             int continuations = 0;
             while (true)
             {
@@ -472,7 +475,7 @@ public class WorkmateGateway
                     session == null ? "Sent the request to Workmate." //$NON-NLS-1$
                         : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
                     progress);
-                assistantMessages += turn.messages;
+                assistantMessages = addMessages(assistantMessages, turn.messages);
                 // The LAST non-blank text wins, not simply the last one: a continuation that
                 // comes back empty must not erase the answer an earlier turn already produced.
                 if (trimToNull(turn.text) != null)
@@ -493,8 +496,7 @@ public class WorkmateGateway
                     + MAX_CONTINUATIONS + ")."); //$NON-NLS-1$
             }
             progress.onProgress("Received the Workmate response."); //$NON-NLS-1$
-            return new WorkmateResponse(answer, reasoning, Integer.valueOf(assistantMessages),
-                continuations);
+            return new WorkmateResponse(answer, reasoning, assistantMessages, continuations);
         }
         catch (GatewayException e)
         {
@@ -616,8 +618,7 @@ public class WorkmateGateway
             stringValue(invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
         Integer count = integerValue(
             invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult)); //$NON-NLS-1$
-        return new Turn(text, reasoning, count == null ? 0 : count.intValue(),
-            sessionOf(resultClass, sendResult));
+        return new Turn(text, reasoning, count, sessionOf(resultClass, sendResult));
     }
 
     /**
@@ -648,6 +649,22 @@ public class WorkmateGateway
     }
 
     /**
+     * Adds one turn's assistant-message count to the running total, keeping "unknown" unknown.
+     *
+     * @param total the total so far, or {@code null} once any turn failed to report one
+     * @param turnCount this turn's count, or {@code null} when the platform did not report it
+     * @return the new total, or {@code null}
+     */
+    private static Integer addMessages(Integer total, Integer turnCount)
+    {
+        if (total == null || turnCount == null)
+        {
+            return null;
+        }
+        return Integer.valueOf(total.intValue() + turnCount.intValue());
+    }
+
+    /**
      * Milliseconds left of a total budget, never negative.
      *
      * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
@@ -674,10 +691,10 @@ public class WorkmateGateway
     {
         private final String text;
         private final String reasoning;
-        private final int messages;
+        private final Integer messages;
         private final Object session;
 
-        Turn(String text, String reasoning, int messages, Object session)
+        Turn(String text, String reasoning, Integer messages, Object session)
         {
             this.text = text;
             this.reasoning = reasoning;

@@ -266,7 +266,8 @@ public class AskWorkmateTool implements IMcpTool
                         // Commit-capable, not progress::add: a Workmate tool can run arbitrary
                         // code, and once it is invoked no timeout can take that back.
                         String out = gateway.callWorkmateTool(workmateTool, workmateArgs,
-                            jobTimeoutSeconds, jobProgress(progress));
+                            remainingBudgetSeconds(progress, jobTimeoutSeconds),
+                            jobProgress(progress));
                         return new WorkmateResponse(out == null || out.isEmpty()
                             ? "(the tool returned no text)" : out, null); //$NON-NLS-1$
                     }
@@ -300,6 +301,27 @@ public class AskWorkmateTool implements IMcpTool
      * @param progress the running job's reporter
      * @return a listener bound to that job
      */
+    /**
+     * What is left of the JOB's budget, in whole seconds, for the platform call about to run.
+     *
+     * <p>The job's budget starts at submission and the shared worker pool can hold the work in
+     * its queue first, so handing the platform the full {@code timeoutSeconds} would grant it the
+     * queue delay on top of the total the caller was promised - and this tool's conversation can
+     * spend that extra time on further continuations with tool side effects.
+     *
+     * @param progress the job's reporter, which knows the remaining budget
+     * @param jobTimeoutSeconds the job's total budget, the ceiling of the result
+     * @return at least one second, never more than the total budget
+     */
+    private static int remainingBudgetSeconds(ProgressReporter progress, int jobTimeoutSeconds)
+    {
+        long remainingMs = progress.remainingMillis();
+        // One second is the floor on purpose: a budget already spent still has to make ONE
+        // attempt, whose own timeout then reports the honest "sent and not answered in time".
+        long seconds = Math.max(1L, remainingMs / 1000L);
+        return (int)Math.min(jobTimeoutSeconds, seconds);
+    }
+
     private static ProgressListener jobProgress(ProgressReporter progress)
     {
         return new ProgressListener()
@@ -498,7 +520,8 @@ public class AskWorkmateTool implements IMcpTool
                             return new WorkmateResponse(chatHandoffAnswer(), null);
                         }
                         WorkmateResponse response = gateway.ask(jobProject, jobQuestion,
-                            maxToolRounds, skillName, jobTimeoutSeconds, listener);
+                            maxToolRounds, skillName,
+                            remainingBudgetSeconds(progress, jobTimeoutSeconds), listener);
                         if (response == null || trimToNull(response.getText()) == null)
                         {
                             throw new WorkmateJobException(emptyAnswerMessage(
