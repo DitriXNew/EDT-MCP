@@ -837,6 +837,23 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testAnExactServerMatchStandsWithoutTheInfobaseName()
+    {
+        // Review of #445: the two lookups are independent, and the weaker one failing must not
+        // cancel a re-address the caller asked for. An exact server match already proves the
+        // dialog belongs to this arm; only a missing SERVER name still vetoes.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, null,
+            "Standalone server for TestConfiguration #1");
+        assertTrue("an exact server match authorises the press on its own",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, null,
+            "Standalone server for TestConfiguration #1");
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
     public void testTwoSameNamedInfobasesReleaseTheirOwnArm()
     {
         // Review of #445: the server name is part of the identity, so a release that matched

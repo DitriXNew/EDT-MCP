@@ -2546,10 +2546,13 @@ public final class LaunchUpdateDialogAutoConfirmer
             // one that asked for it.
             for (PortConflictArm arm : PORT_CONFLICT_ARMS)
             {
-                // Its infobase OR its server: both names are best-effort, and an arm missing
-                // either may be the one starting THIS server. Dropping it from the vote would let
-                // a caller that declined the re-address be overruled by one that asked for it.
-                if (arm.infobaseName == null || arm.serverName == null)
+                // Only the SERVER name. An arm that could not resolve one may be starting this
+                // very server, and dropping it from the vote would let a caller that declined the
+                // re-address be overruled by one that asked for it. The infobase name does not
+                // enter this: an arm whose server name matches the dialog exactly has already
+                // PROVED the dialog is its own, and vetoing it because a second, weaker lookup
+                // happened to fail would cancel a re-address the caller explicitly asked for.
+                if (arm.serverName == null)
                 {
                     return false;
                 }
