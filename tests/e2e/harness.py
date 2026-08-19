@@ -1502,6 +1502,41 @@ def poll_diff_contains(substr, timeout=10, ctx=""):
     assert_diff_contains(substr, ctx)  # final attempt raises with detail
 
 
+def assert_diff_contains_rel(rel, substr, ctx=""):
+    """assert_diff_contains for a fixture path other than the base project.
+
+    Searches the tracked diff of that path AND every untracked file under it, so a change that
+    landed in a brand-new file counts too - the same two channels assert_diff_contains reads."""
+    if substr in diff_rel(rel):
+        return
+    status = _git("status", "--porcelain", "--untracked-files=all", "--", rel).stdout
+    for line in status.splitlines():
+        path = line[3:].strip()
+        full = os.path.join(REPO_ROOT, path)
+        if os.path.isfile(full):
+            try:
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    if substr in f.read():
+                        return
+            except OSError:
+                continue
+    _fail("expected the on-disk change under %s to contain %r [%s]; status was: %s"
+          % (rel, substr, ctx, status_porcelain_rel(rel)[:500]))
+
+
+def poll_diff_contains_rel(rel, substr, timeout=10, ctx=""):
+    """poll_diff_contains for a fixture path other than the base project: the export is async,
+    so poll instead of sleeping blindly."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            assert_diff_contains_rel(rel, substr, ctx)
+            return
+        except E2EAssertion:
+            time.sleep(0.5)
+    assert_diff_contains_rel(rel, substr, ctx)  # final attempt raises with detail
+
+
 def poll_disk_path_gone(rel_path, timeout=10, ctx=""):
     """Poll until a path under the fixture is REMOVED from disk (for delete tools — the
     removal can lag a beat after the call returns, like the write export). rel_path is

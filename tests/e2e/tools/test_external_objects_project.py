@@ -26,8 +26,8 @@ touch the base project, so assert_no_diff() (which is scoped to it) holds throug
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality, assert_contains,
-    assert_not_contains, assert_no_diff, assert_no_diff_rel, reset_fixture_rel, e2e_test,
-    PROJECT, EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL,
+    assert_not_contains, assert_no_diff, assert_no_diff_rel, poll_diff_contains_rel,
+    reset_fixture_rel, e2e_test, PROJECT, EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL,
 )
 
 # The Russian TYPE tokens for the two external-objects types. The bilingual token catalogue
@@ -165,6 +165,10 @@ def test_extobj_create_and_delete_a_form_element():
                       "objectFqns": ["ExternalDataProcessor.ExtProc.Form.MainForm"]})
         assert_ok(after, "re-read the form")
         assert_contains(after.text, "E2eGroup", "the new group must be in the form structure")
+        # …and on DISK, in the form's own content file - a model-only change would pass the
+        # read-back above and still leave the project unchanged for everyone else.
+        poll_diff_contains_rel(EXT_OBJECTS_REL, "E2eGroup",
+                               ctx="the group must reach Form.form on disk")
     finally:
         removed = call("delete_metadata",
                        {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn, "confirm": True})
@@ -190,6 +194,8 @@ def test_extobj_create_and_delete_an_attribute():
                       "objectFqns": ["ExternalDataProcessor.ExtProc"]})
         assert_ok(after, "re-read the object")
         assert_contains(after.text, "E2eAttr", "the new attribute must be listed")
+        poll_diff_contains_rel(EXT_OBJECTS_REL, "E2eAttr",
+                               ctx="the attribute must reach the .mdo on disk")
     finally:
         removed = call("delete_metadata",
                        {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn, "confirm": True})
@@ -242,6 +248,8 @@ def test_extobj_modify_a_form_member_title():
                       "objectFqns": ["ExternalDataProcessor.ExtProc.Form.MainForm"]})
         assert_ok(after, "re-read the form")
         assert_contains(after.text, "E2e note", "the new title must be in the form structure")
+        poll_diff_contains_rel(EXT_OBJECTS_REL, "E2e note",
+                               ctx="the title must reach Form.form on disk")
     finally:
         reset_fixture_rel(EXT_OBJECTS_REL)
         call("clean_project", {"projectName": EXT_OBJECTS_PROJECT})
