@@ -420,6 +420,10 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Table", "Tables", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430),
             cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b));
+        // Parameter (ru: parametr / parametry) - the form PARAMETER member, issue #396.
+        putNestedKind(m, "Parameter", "Parameters", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440),
+            cp(0x041f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440, 0x044b));
         // Handler (ru: obrabotchik / obrabotchiki)
         putNestedKind(m, "Handler", "Handlers", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a),

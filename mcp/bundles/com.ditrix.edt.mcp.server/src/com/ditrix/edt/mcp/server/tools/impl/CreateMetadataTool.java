@@ -1582,9 +1582,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (kind == null)
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
-                + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration, Field, " //$NON-NLS-1$
-                + "Button, Table, Column (a collection attribute's column, addressed as " //$NON-NLS-1$
-                + "'...Attribute.AttrName.Column.ColName') and Handler for events.").toJson(); //$NON-NLS-1$
+                + normFqn + "'. Supported form kinds: Attribute, Command, Parameter, Group, " //$NON-NLS-1$
+                + "Decoration, Field, Button, Table, Column (a collection attribute's column, " //$NON-NLS-1$
+                + "addressed as '...Attribute.AttrName.Column.ColName') and Handler for events.") //$NON-NLS-1$
+                .toJson();
         }
         if (!isValidIdentifier(ref.name))
         {
@@ -1807,6 +1808,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "attribute column. A column takes only 'title': its owner is the attribute " //$NON-NLS-1$
                     + "named in the FQN, and its data type is set afterwards with modify_metadata.") //$NON-NLS-1$
                     .toJson();
+            }
+            // A PARAMETER takes NOTHING at creation, for the same reason a column takes only a
+            // title: the platform type has exactly name / valueType / keyParameter / comment, it
+            // nests under nothing and binds to nothing, so every property here would be parsed,
+            // stored and then never applied - a success reported for a discarded request.
+            if (kind == FormElementWriter.Kind.PARAMETER)
+            {
+                return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' does not apply to a form " //$NON-NLS-1$
+                    + "parameter at creation. Create it bare, then set 'valueType' (the same " //$NON-NLS-1$
+                    + "{types:[...]} vocabulary an attribute takes), 'keyParameter' or 'comment' " //$NON-NLS-1$
+                    + "with modify_metadata. A parameter has no title and no parent.").toJson(); //$NON-NLS-1$
             }
             switch (pName.toLowerCase())
             {

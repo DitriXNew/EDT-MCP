@@ -966,8 +966,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 ctx.scope, ref.formPath,
                 "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
-                    + "Column on a collection attribute / " //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Parameter / Field / Button / Group / " //$NON-NLS-1$
+                    + "Decoration / Table / Column on a collection attribute / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
             // The #343 advice may quote a corrected handler address, and whether the corrected
             // owner really carries that event is a question only the platform type can answer.

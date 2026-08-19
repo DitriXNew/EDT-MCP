@@ -25,7 +25,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
  * Shared READER for a 1C managed form's structure: it resolves the {@code BasicForm} mdo from a form
  * FQN path and renders the editable form content model ({@code com._1c.g5.v8.dt.form.model.Form}) to a
  * full enriched Markdown document - the nested items tree (with per-element synonym/visibility/dataPath
- * and per-kind extras), an Attributes table (Name/Synonym/Type/Main/SavedData), a Commands table and an
+ * and per-kind extras), an Attributes table (Name/Synonym/Type/Main/SavedData), a Commands table,
+ * a Parameters table (only when the form declares parameters) and an
  * Event handlers section. The form model is read entirely through EMF reflection ({@code EObject} /
  * {@code eGet}), so this bundle needs no compile-time dependency on the form-model package (mirroring
  * {@link FormElementWriter}, the form WRITER).
@@ -45,6 +46,15 @@ public final class FormStructureReader
     private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
     /** EReference name holding the {@code FormCommand}s on a {@code Form}. */
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
+
+    /** The form's {@code parameters} containment - FormParameter, issue #396. */
+    private static final String FEATURE_PARAMETERS = "parameters"; //$NON-NLS-1$
+
+    /** A form parameter's "key parameter" flag. */
+    private static final String FEATURE_KEY_PARAMETER = "keyParameter"; //$NON-NLS-1$
+
+    /** A form parameter's free-text comment - it has no title. */
+    private static final String FEATURE_COMMENT = "comment"; //$NON-NLS-1$
     /** EAttribute name carrying the programmatic name on a {@code NamedElement}. */
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
     /** EAttribute name carrying the per-item integer id on a {@code FormItem}. */
@@ -246,6 +256,7 @@ public final class FormStructureReader
         renderAttributes(sb, formModel, language);
         renderAttributeColumns(sb, formModel, language);
         renderCommands(sb, formModel, language);
+        renderParameters(sb, formModel);
         renderEventHandlers(sb, formModel, language);
         return sb.toString();
     }
@@ -306,6 +317,34 @@ public final class FormStructureReader
             sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
                 valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
                 Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
+        }
+        sb.append('\n');
+    }
+
+    /**
+     * Renders the {@code ## Parameters} table (Name / Type / Key / Comment) - the form's
+     * {@code FormParameter} members - and NOTHING when the form declares none.
+     *
+     * <p>Conditional like {@code ## Attribute columns} rather than always-present like
+     * {@code ## Attributes}: most forms declare no parameters, and an empty section would be
+     * paid for on every form read. No language argument - a parameter has no title, only a
+     * comment (issue #396).</p>
+     */
+    private static void renderParameters(StringBuilder sb, EObject formModel)
+    {
+        List<EObject> parameters = getReferenceList(formModel, FEATURE_PARAMETERS);
+        if (parameters.isEmpty())
+        {
+            return;
+        }
+        sb.append("## Parameters\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Name", "Type", "Key", "Comment")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (EObject parameter : parameters)
+        {
+            Object comment = getValue(parameter, FEATURE_COMMENT);
+            sb.append(MarkdownUtils.tableRow(nameOf(parameter), valueTypeOf(parameter),
+                Boolean.toString(booleanFeature(parameter, FEATURE_KEY_PARAMETER)),
+                comment instanceof String ? (String)comment : "")); //$NON-NLS-1$
         }
         sb.append('\n');
     }
