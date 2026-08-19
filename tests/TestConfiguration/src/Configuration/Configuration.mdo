@@ -40,7 +40,7 @@
   <subsystems>Subsystem.Subsystem</subsystems>
   <sessionParameters>SessionParameter.SessionParameter</sessionParameters>
   <commonTemplates>CommonTemplate.PrintForm</commonTemplates>
-  <commonModules>CommonModule.Calc</commonModules>
+  <commonModules>CommonModule.Compute</commonModules>
   <commonModules>CommonModule.CascadeEn</commonModules>
   <commonModules>CommonModule.CascadeUser</commonModules>
   <commonModules>CommonModule.Error</commonModules>

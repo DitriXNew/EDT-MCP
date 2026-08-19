@@ -5790,6 +5790,25 @@ public final class FormElementWriter
     }
 
     /**
+     * Whether {@code member} is a form PARAMETER.
+     *
+     * <p>Asked by the retype guards that are about DATA BINDING - orphaned columns, tables
+     * bound to a collection attribute. Those identify their subject by its data path, which is
+     * built from the NAME alone, and a parameter shares no namespace with an attribute: a
+     * parameter named {@code Rows} therefore answered for the ATTRIBUTE {@code Rows} and its
+     * bound table, refusing a perfectly legal retype with a message about a different member
+     * (issue #396 review). Nothing binds to a parameter by data path, so those guards simply do
+     * not apply to one.</p>
+     *
+     * @param member the resolved form member, may be {@code null}
+     * @return {@code true} for a FormParameter
+     */
+    public static boolean isFormParameter(EObject member)
+    {
+        return member != null && isOrInherits(member.eClass(), ECLASS_FORM_PARAMETER);
+    }
+
+    /**
      * Finds a form PARAMETER by programmatic name, or {@code null}. Call on the tx-bound form
      * model. A parameter lives in the form's own {@code parameters} containment, so - like an
      * attribute and a command, and unlike every visual kind - it is never found in the items tree.
@@ -6111,13 +6130,28 @@ public final class FormElementWriter
         String normFqn, boolean ownerPosition, Version version)
     {
         Kind requested = kindForToken(kindToken);
-        Kind actual = actualKindOf(formModel, name);
+        // The member the caller NAMED wins over the first namespace that happens to hold the
+        // name. Attributes, commands and parameters have INDEPENDENT namespaces, so one name can
+        // denote two members; answering about the other one is a true sentence about the wrong
+        // thing ('...Parameter.Rows.Handler.X' explained the ATTRIBUTE Rows). Only these three are
+        // asked - the visual kinds share the one item tree, where actualKindOf is already exact.
+        Kind named = ownNamespaceMemberOf(formModel, requested, name) == null ? null : requested;
+        Kind actual = named != null ? named : actualKindOf(formModel, name);
         if (actual == Kind.ATTRIBUTE && ownerPosition)
         {
             // Honest, and NOT a corrected address: an attribute has no handlers containment, so
             // '...Attribute.<name>.Handler.<event>' would be just as unresolvable.
             return " - there IS a form ATTRIBUTE with this name, but an event handler attaches to a " //$NON-NLS-1$
                 + "form ITEM or a form COMMAND, never to an attribute."; //$NON-NLS-1$
+        }
+        if (actual == Kind.PARAMETER && ownerPosition)
+        {
+            // Same shape, same honesty: a FormParameter has name / valueType / keyParameter /
+            // comment and no handlers containment at all. Without this the owner lookup falls
+            // through to the ITEMS tree and reports an existing parameter as a missing item
+            // (issue #396 review).
+            return " - there IS a form PARAMETER with this name, but an event handler attaches " //$NON-NLS-1$
+                + "to a form ITEM or a form COMMAND; a parameter carries no events."; //$NON-NLS-1$
         }
         EObject tokenless = actual == null ? findFormItem(formModel, name) : null;
         if (tokenless != null)
@@ -6153,7 +6187,7 @@ public final class FormElementWriter
         if (requested == null)
         {
             return " - '" + kindToken + "' is not a form element kind. Use one of: Attribute / " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Command / Field / Button / Group / Decoration / Table."; //$NON-NLS-1$
+                + "Command / Parameter / Field / Button / Group / Decoration / Table."; //$NON-NLS-1$
         }
         return ""; //$NON-NLS-1$
     }
@@ -6299,6 +6333,28 @@ public final class FormElementWriter
             return Kind.COMMAND;
         }
         return findFormParameter(formModel, name) != null ? Kind.PARAMETER : null;
+    }
+
+    /**
+     * The member of exactly {@code kind} bearing {@code name}, for the three kinds that own a
+     * containment of their own ({@code attributes} / {@code formCommands} / {@code parameters}),
+     * or {@code null} for any other kind - the visual ones all live in the single items tree.
+     */
+    private static EObject ownNamespaceMemberOf(EObject formModel, Kind kind, String name)
+    {
+        if (kind == Kind.ATTRIBUTE)
+        {
+            return findFormAttribute(formModel, name);
+        }
+        if (kind == Kind.COMMAND)
+        {
+            return findFormCommand(formModel, name);
+        }
+        if (kind == Kind.PARAMETER)
+        {
+            return findFormParameter(formModel, name);
+        }
+        return null;
     }
 
     /** The canonical English FQN token for a kind (what the corrected address is spelled with). */

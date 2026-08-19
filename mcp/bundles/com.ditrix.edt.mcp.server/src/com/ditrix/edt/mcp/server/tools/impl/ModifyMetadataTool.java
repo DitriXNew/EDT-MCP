@@ -4311,20 +4311,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
         JsonObject normProp = normalizeFormProperty(member, prop);
-        String orphanErr = refuseRetypeThatOrphansColumns(member, normProp);
-        if (orphanErr != null)
+        // The three retype guards below are about DATA BINDING - columns hanging off the member,
+        // tables and fields bound to its data path. They identify their subject by NAME, and a
+        // parameter shares no namespace with an attribute, so a parameter named like one answered
+        // for the ATTRIBUTE and refused a legal retype with a message about a different member.
+        // Nothing binds to a parameter by data path, so none of them applies (issue #396 review).
+        if (!FormElementWriter.isFormParameter(member))
         {
-            throw new FormValidationException(orphanErr);
-        }
-        String listErr = refuseCollectionRetypeOnADynamicList(member, normProp);
-        if (listErr != null)
-        {
-            throw new FormValidationException(listErr);
-        }
-        String boundItemsErr = refuseRetypeThatOrphansItems(member, normProp);
-        if (boundItemsErr != null)
-        {
-            throw new FormValidationException(boundItemsErr);
+            String orphanErr = refuseRetypeThatOrphansColumns(member, normProp);
+            if (orphanErr != null)
+            {
+                throw new FormValidationException(orphanErr);
+            }
+            String listErr = refuseCollectionRetypeOnADynamicList(member, normProp);
+            if (listErr != null)
+            {
+                throw new FormValidationException(listErr);
+            }
+            String boundItemsErr = refuseRetypeThatOrphansItems(member, normProp);
+            if (boundItemsErr != null)
+            {
+                throw new FormValidationException(boundItemsErr);
+            }
         }
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
@@ -4859,7 +4867,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // tree and have no position / parent).
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
         if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND
-            || kind == FormElementWriter.Kind.COLUMN)
+            || kind == FormElementWriter.Kind.COLUMN
+            || kind == FormElementWriter.Kind.PARAMETER)
         {
             return ToolResult.error("'parent' / 'position' move a form ITEM (field / group / " //$NON-NLS-1$
                 + "decoration / button / table); a form " + ref.kindToken + " is not positioned. " //$NON-NLS-1$ //$NON-NLS-2$
