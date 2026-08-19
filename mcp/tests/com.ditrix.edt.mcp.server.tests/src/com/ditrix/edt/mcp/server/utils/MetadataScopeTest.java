@@ -282,6 +282,31 @@ public class MetadataScopeTest
     }
 
     /**
+     * The base project is a POINTER, never a root. An external-objects project's answer must
+     * not contain the base configuration's objects - but a refusal may NAME the project that
+     * does hold them, which is the difference between a dead end and the next call
+     * (issue #309 review round 3).
+     */
+    @Test
+    public void testBaseProjectNameIsAPointerAndOnlyWhenThereIsOne()
+    {
+        IProject base = mock(IProject.class);
+        when(base.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        IExternalObjectProject linked = mock(IExternalObjectProject.class);
+        when(linked.getParentProject()).thenReturn(base);
+        assertEquals("TestConfiguration", //$NON-NLS-1$
+            MetadataScope.ofExternalObjectProject(null, null, linked).baseProjectName());
+
+        // Unlinked, not started, or a plain configuration scope: no pointer to give.
+        IExternalObjectProject unlinked = mock(IExternalObjectProject.class);
+        when(unlinked.getParentProject()).thenReturn(null);
+        assertNull(MetadataScope.ofExternalObjectProject(null, null, unlinked).baseProjectName());
+        assertNull(MetadataScope.ofExternalObjectProject(null, null, null).baseProjectName());
+        assertNull(MetadataScope.ofConfiguration(
+            MdClassFactory.eINSTANCE.createConfiguration()).baseProjectName());
+    }
+
+    /**
      * A FAILED read of the external root must TRAVEL, not be flattened into "this project holds
      * nothing": swallowed, an unavailable BM model turns every real object into a plausible
      * "not found" - exactly the class of lie this scope exists to stop (review round 2).

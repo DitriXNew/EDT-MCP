@@ -274,6 +274,37 @@ public final class MetadataScope
     }
 
     /**
+     * The name of the BASE configuration project an external-objects project is linked to, or
+     * {@code null} when there is none - or when this is not an external-objects scope.
+     *
+     * <p>Used only to POINT a caller at the project that really holds what they asked for: an
+     * external data processor's BSL may call the base configuration's common modules, but those
+     * modules are not in this project and must never be answered under its name. A failure to
+     * read it costs the hint, not the answer - so unlike {@link #externalObjects()} this one
+     * degrades quietly.</p>
+     *
+     * @return the base project name, or {@code null}
+     */
+    public String baseProjectName()
+    {
+        if (externalObjectProject == null)
+        {
+            return null;
+        }
+        try
+        {
+            IProject parent = externalObjectProject.getParentProject();
+            return parent == null ? null : parent.getName();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not read the base project of an external-objects project", //$NON-NLS-1$
+                e);
+            return null;
+        }
+    }
+
+    /**
      * Top-level objects of one TYPE whose Name is similar to {@code name} - the "did you mean?"
      * list, answered from whichever root this scope has.
      *

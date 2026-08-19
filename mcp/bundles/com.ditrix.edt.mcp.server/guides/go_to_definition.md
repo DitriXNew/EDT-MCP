@@ -31,7 +31,7 @@ The metadata type token is dialect-aware: the FQN may use the Russian type name 
 
 ## External-objects projects
 
-On a project with `V8ExternalObjectsNature`, a metadata FQN resolves against THAT project - its own `ExternalDataProcessor` / `ExternalReport` roots (`ExternalDataProcessor.MyProc`, or the Russian `ВнешняяОбработка.MyProc`) - never against the base configuration the project is linked to. Such a project holds no common modules, so the `ModuleName.MethodName` form finds nothing there, and the suggestion list is drawn from the project's own objects. A project EDT has not started is refused by name rather than answered with "not found".
+On a project with `V8ExternalObjectsNature`, a metadata FQN resolves against THAT project - its own `ExternalDataProcessor` / `ExternalReport` roots (`ExternalDataProcessor.MyProc`, or the Russian `ВнешняяОбработка.MyProc`) - never against the base configuration the project is linked to. Such a project holds no common modules of its own, and the base configuration's are NOT searched under its name - the `ModuleName.MethodName` form finds nothing here, and the answer names the base project to ask instead. Suggestions are drawn from the project's own objects. A project EDT has not started is refused by name rather than answered with "not found".
 
 ## Examples
 

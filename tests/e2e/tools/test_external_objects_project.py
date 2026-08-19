@@ -312,6 +312,29 @@ def test_extobj_go_to_definition_resolves_the_projects_own_object():
 
 
 @e2e_test(tool="go_to_definition", kind="read")
+def test_extobj_go_to_definition_never_reaches_the_base_common_modules():
+    """A base common module must not be answered under the external project's name.
+
+    The base configuration holds `Calc`; this project holds no common modules at all. The
+    tool used to find the base one and then load `src/CommonModules/Calc/Module.bsl` from
+    HERE, failing with "Module not found" about a path the caller never named — an error
+    blaming the wrong project. Worse, had such a path existed here it would have served an
+    unrelated local file under the base module's identity.
+    """
+    r = call("go_to_definition",
+             {"projectName": EXT_OBJECTS_PROJECT, "symbol": "Calc.Add"})
+    assert_ok(r, "a base common module name asked of an external-objects project")
+    assert_not_contains(r.text, "CommonModules/Calc/Module.bsl",
+                        "the answer must not blame a path in the project the caller named")
+    assert_contains(r.text, "Symbol not found", "the symbol is not in this project")
+    # A dead end would be truthful but useless: the refusal names where common modules live.
+    assert_contains(r.text, PROJECT,
+                    "the refusal must name the base project that does hold common modules")
+    assert_no_diff("a read tool must not touch the base project on disk")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
+
+
+@e2e_test(tool="go_to_definition", kind="read")
 def test_extobj_go_to_definition_never_suggests_from_the_base_configuration():
     """A miss on the external project suggests from ITS root, never from the base config.
 

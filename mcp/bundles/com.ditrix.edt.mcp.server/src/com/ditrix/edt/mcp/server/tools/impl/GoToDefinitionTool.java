@@ -214,8 +214,14 @@ public class GoToDefinitionTool implements IMcpTool
         }
 
         // 1. Try as CommonModule method: firstPart = module name, secondPart = method name.
-        // Skipped without a configuration - an external-objects project holds no common modules.
-        CommonModule commonModule = config == null ? null : findCommonModuleByName(config, firstPart);
+        // NOT for an external-objects project, linked or not. It holds no common modules of its
+        // own, and there `config` is the BASE configuration: searching it would find the base's
+        // module and then look for that module's .bsl inside THIS project - answering "Module
+        // not found: src/CommonModules/X/Module.bsl" about a path the caller never named, or, if
+        // such a path happened to exist here, serving an unrelated local file under the base
+        // module's identity. No parent object takes part in this project's answer (issue #309).
+        CommonModule commonModule = scope.isExternalObjects() || config == null
+            ? null : findCommonModuleByName(config, firstPart);
         if (commonModule != null)
         {
             String cmModulePath = "CommonModules/" + commonModule.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -617,6 +623,25 @@ public class GoToDefinitionTool implements IMcpTool
                     sb.append("- ").append(name).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
                 sb.append("\n"); //$NON-NLS-1$
+            }
+            if (scope.isExternalObjects())
+            {
+                // A dead end otherwise: this project has no common modules to suggest, and the
+                // one the caller means is very likely in the base configuration. Name the project
+                // that holds it so the answer carries the next call instead of just a refusal.
+                sb.append("This is an external-objects project: it holds no common modules. "); //$NON-NLS-1$
+                String baseProject = scope.baseProjectName();
+                if (baseProject != null)
+                {
+                    sb.append("`").append(firstPart).append("` may be a common module of the ") //$NON-NLS-1$ //$NON-NLS-2$
+                      .append("base configuration project '").append(baseProject) //$NON-NLS-1$
+                      .append("' - ask go_to_definition there.\n\n"); //$NON-NLS-1$
+                }
+                else
+                {
+                    sb.append("It is not linked to a base configuration either, so there is no ") //$NON-NLS-1$
+                      .append("project here that could hold `").append(firstPart).append("`.\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
             }
         }
 
