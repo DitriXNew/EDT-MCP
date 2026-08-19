@@ -24,6 +24,14 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 - `ObjectModule` - `Yes` if the object has an object/record-set/value-manager module, else `-`.
 - `ManagerModule` - `Yes` if the object has a manager module, else `-`.
 
+## External-objects projects
+A project with the external-objects nature holds no configuration: its roots are its own
+external data processors and reports. This tool answers about THAT project, with its own
+two-entry vocabulary - `all`, `externalDataProcessors`, `externalReports`, or the type name
+itself (`ExternalDataProcessor` / `ExternalReport`, English or Russian). A configuration
+category asked of such a project is refused, naming what the project does hold, rather than
+answered from the base configuration it is linked to.
+
 ## Examples
 - Everything: `{projectName: "MyProject"}`.
 - Only documents: `{projectName: "MyProject", metadataType: "documents"}`.

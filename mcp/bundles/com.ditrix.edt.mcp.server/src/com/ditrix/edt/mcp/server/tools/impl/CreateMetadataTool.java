@@ -182,7 +182,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata). XDTO PACKAGE MEMBERS " //$NON-NLS-1$
+                + "property names are rejected (set them via modify_metadata). A FORM CONTENT member " //$NON-NLS-1$
+                + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
+                + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
+                + "'attribute' (the bound attribute of a Field / Table), 'command' (a Button's " //$NON-NLS-1$
+                + "command) and 'type' (a Group's kind). XDTO PACKAGE MEMBERS " //$NON-NLS-1$
                 + "('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
                 + "'...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an " //$NON-NLS-1$
                 + "ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / " //$NON-NLS-1$
@@ -399,7 +403,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -681,7 +685,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String createXdtoMember(String projectName, String normFqn, XdtoWriter.MemberRef ref,
         List<JsonObject> properties)
     {
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -929,7 +933,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             props.parentName = normReport.apply("parent", props.parentName); //$NON-NLS-1$
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -1595,7 +1599,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -1875,7 +1879,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         List<String> objectFields = JsonUtils.extractArrayArgument(params, KEY_OBJECT_FIELDS);
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -2141,7 +2145,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         String procName = procNameHolder[0];
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;

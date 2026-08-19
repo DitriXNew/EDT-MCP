@@ -95,6 +95,16 @@ The synonym EMap is keyed by the language CODE (`ru`/`en`), never the language n
 
 A `language` CODE must be one the configuration DECLARES (`get_configuration_properties` lists them all under `languages`). An undeclared code is REJECTED with the declared list: the platform has no fallback between locale codes, so a value stored under a code nothing declares is simply never displayed - a blank label whose cause is invisible until someone opens the form. A declared code given in a different case is accepted and stored under the configuration's own spelling. After a localized write the result echoes the `language` used and `localesMissing` - the languages the configuration USES that still have no translation. A language is "in use" when the configuration's OWN synonym is filled in for it: a multilingual configuration worked on in a single-language branch declares the others but is not translated into them, and nobody wants to be nagged about those. Writing a value UNDER such a language is legal (it is declared, so it will display) but comes back with `localeUnusedInConfiguration: true` - ASK the user whether translating into it is really wanted before filling in more: it may be a single-language build, or a language this configuration does not support yet.
 
+## External-objects projects
+Members of an external data processor / report are created the same way as a configuration
+object's - `ExternalDataProcessor.<Name>.Attribute.<Attr>`, `....Form.<F>`, and the
+form content under it. Two limits are structural, not gaps in addressing:
+- the ROOT object itself cannot be created here (it is created with its project, in EDT or by
+  importing an .epf/.erf; `create_project` with `projectKind=externalObjects` makes the empty
+  project only);
+- an external data processor / report has no `Command` collection in the platform model, so
+  `....Command.<Name>` is refused with the list of kinds the object does accept.
+
 ## Examples
 - Top object: `{projectName: 'P', fqn: 'Catalog.Products'}`
 - With synonym: `{projectName: 'P', fqn: 'Document.Invoice', properties: [{name: 'synonym', value: 'Invoice', language: 'en'}]}`

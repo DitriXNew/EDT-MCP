@@ -385,7 +385,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName);
         if (ctx.hasError())
         {
             return ctx.error;

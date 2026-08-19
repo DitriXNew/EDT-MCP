@@ -441,7 +441,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return args.error;
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(args.projectName);
+        ProjectContext ctx = resolveProjectAndScope(args.projectName);
         if (ctx.hasError())
         {
             return ctx.error;

@@ -238,6 +238,29 @@ public final class ProjectContext
      */
     public ConfigurationResult resolveConfiguration()
     {
+        return resolveRoot(false);
+    }
+
+    /**
+     * Resolves the ROOT a metadata FQN resolves against for THIS project - the configuration, or an
+     * external-objects project's own root objects (issue #309).
+     *
+     * <p>The difference from {@link #resolveConfiguration()} is one case: an external-objects
+     * project linked to NO base configuration resolves successfully here, with a null
+     * {@link ConfigurationResult#configuration()} and a usable {@link ConfigurationResult#scope()}.
+     * Only a caller that resolves everything through the scope may use this entry; a caller that
+     * dereferences the configuration must keep {@link #resolveConfiguration()}, which still refuses
+     * that case rather than handing it a null.</p>
+     *
+     * @return a result carrying the project, the scope and (when there is one) the configuration
+     */
+    public ConfigurationResult resolveMetadataRoot()
+    {
+        return resolveRoot(true);
+    }
+
+    private ConfigurationResult resolveRoot(boolean allowNoConfiguration)
+    {
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
@@ -247,17 +270,40 @@ public final class ProjectContext
 
         Configuration config = configProvider.getConfiguration(project);
         MetadataScope scope = MetadataScope.of(project, config);
-        // An EXTERNAL-OBJECTS project legitimately has no configuration of its own: its root objects
-        // are its external data processors / reports, and the configuration the provider answers with
-        // is the linked BASE one (null when it is linked to none). Refusing on a null configuration
-        // there would refuse the very project the caller named. Issue #309.
-        if (config == null && !scope.isExternalObjects())
+        if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
         {
             return new ConfigurationResult(project, null, null,
-                ToolResult.error("Could not get configuration for project: " + projectName).toJson()); //$NON-NLS-1$
+                ToolResult.error(noConfigurationMessage(projectName, scope.isExternalObjects()))
+                    .toJson());
         }
 
         return new ConfigurationResult(project, config, scope, null);
+    }
+
+    /**
+     * The "no configuration" refusal, told apart by WHY there is none.
+     *
+     * <p>An external-objects project has no configuration by construction - its roots are its own
+     * external data processors / reports - so the generic wording sounds like a transient failure
+     * of a project that should have had one. Naming the project kind, and the tools that DO work
+     * there, is the difference between "something broke" and "ask a different question"
+     * (issue #309).</p>
+     *
+     * @param projectName the project the caller named
+     * @param externalObjects whether the project is an external-objects one
+     * @return the message
+     */
+    public static String noConfigurationMessage(String projectName, boolean externalObjects)
+    {
+        if (externalObjects)
+        {
+            return "Project '" + projectName + "' is an EXTERNAL-OBJECTS project with no base " //$NON-NLS-1$ //$NON-NLS-2$
+                + "configuration, and this operation needs one. Its OWN external data processors / " //$NON-NLS-1$
+                + "reports are reachable through get_metadata_objects / get_metadata_details / " //$NON-NLS-1$
+                + "create_metadata / modify_metadata / delete_metadata; link the project to a " //$NON-NLS-1$
+                + "configuration project to use the rest."; //$NON-NLS-1$
+        }
+        return "Could not get configuration for project: " + projectName; //$NON-NLS-1$
     }
 
     /**
@@ -278,6 +324,25 @@ public final class ProjectContext
                 ToolResult.error(notFoundMessage(projectName)).toJson());
         }
         return ctx.resolveConfiguration();
+    }
+
+    /**
+     * The {@link #resolveConfiguration(String)} twin that resolves the metadata ROOT instead of
+     * insisting on a configuration - see {@link #resolveMetadataRoot()} for which caller may use
+     * which (issue #309). The project not-found check is identical.
+     *
+     * @param projectName the MCP project name argument
+     * @return a result carrying the project + scope on success, or the first matching error JSON
+     */
+    public static ConfigurationResult resolveMetadataRoot(String projectName)
+    {
+        ProjectContext ctx = of(projectName);
+        if (!ctx.exists())
+        {
+            return new ConfigurationResult(null, null, null,
+                ToolResult.error(notFoundMessage(projectName)).toJson());
+        }
+        return ctx.resolveMetadataRoot();
     }
 
     /**

@@ -202,7 +202,7 @@ public class GetMetadataDetailsTool implements IMcpTool
                                                int roleObjectOffset)
     {
         // Resolve the project and its configuration
-        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
         if (!resolved.ok())
         {
             return resolved.errorJson();
@@ -237,7 +237,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         List<String[]> failures = new ArrayList<>();
 
         // Per-request render context, constant across every FQN in the loop.
-        RenderContext ctx = new RenderContext(config, resolved.scope(), bmModel, effectiveLanguage,
+        RenderContext ctx = new RenderContext(resolved.scope(), bmModel, effectiveLanguage,
             full, assignable, isExtensionProject, roleObjectOffset);
 
         // Process each FQN
@@ -634,15 +634,14 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /**
-     * Immutable per-request render context threaded through {@link #processFqn}: the resolved
-     * configuration, the (best-effort) BM model used only for a form's cross-model hop, the
+     * Immutable per-request render context threaded through {@link #processFqn}: the resolution
+     * ROOT, the (best-effort) BM model used only for a form's cross-model hop, the
      * effective synonym language code and the three rendering flags. Computed once in
      * {@link #getMetadataDetailsInternal} and constant across every FQN. Bundles the parameters
      * without changing any value or rendering behaviour.
      */
     static final class RenderContext
     {
-        final Configuration config;
         /** The ROOT an FQN resolves against: the configuration, or an external-objects project's roots. */
         final MetadataScope scope;
         final IBmModel bmModel;
@@ -653,12 +652,11 @@ public class GetMetadataDetailsTool implements IMcpTool
         /** 0-based object offset for a Role FQN's paginated rights matrix (ignored in {@code full} mode). */
         final int roleObjectOffset;
 
-        RenderContext(Configuration config, MetadataScope scope, IBmModel bmModel, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        RenderContext(MetadataScope scope, IBmModel bmModel, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String effectiveLanguage, boolean full, boolean assignable, boolean isExtensionProject,
             int roleObjectOffset)
         {
-            this.config = config;
-            this.scope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
+            this.scope = scope;
             this.bmModel = bmModel;
             this.effectiveLanguage = effectiveLanguage;
             this.full = full;

@@ -1,13 +1,13 @@
 # create_metadata
 
-Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Also creates an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), 'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or 'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with owner-specific 'properties'). Also creates a NESTED SUBSYSTEM at any depth ('Subsystem.Sales.Subsystem.Orders'); the parent subsystem must already exist. Full parameters and examples: call get_tool_guide('create_metadata').
+Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name (required). |
 | fqn | yes | string | Full-name FQN of the node to create (required). Top object: 'Type.Name' (e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' (e.g. 'Catalog.Products.Attribute.Weight'). Nested subsystem: 'Subsystem.<Parent>.Subsystem.<Child>', repeatable to any depth - the parent chain must already exist. The trailing Name is the new node's programmatic Name; type / kind tokens may be English or Russian. |
-| properties | — | array | Optional properties to apply at creation, as [{name, value, language?}]. For most kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata). XDTO PACKAGE MEMBERS ('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like 'string', the EXACT name of an ObjectType already in the same package for a same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED item ('...Predefined.<Item>') uses yet another vocabulary: 'description' / 'code' on every owner, 'isFolder' / 'parent' on a Catalog / ChartOfCharacteristicTypes (a ChartOfAccounts nests through 'parent' too; a ChartOfCalculationTypes takes neither), plus owner-specific properties - 'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see the guide for which apply to each owner). |
+| properties | — | array | Optional properties to apply at creation, as [{name, value, language?}]. For most kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata). A FORM CONTENT member ('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional 'language'), 'parent' (the group to nest a visual item under), 'dataPath' / 'attribute' (the bound attribute of a Field / Table), 'command' (a Button's command) and 'type' (a Group's kind). XDTO PACKAGE MEMBERS ('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like 'string', the EXACT name of an ObjectType already in the same package for a same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED item ('...Predefined.<Item>') uses yet another vocabulary: 'description' / 'code' on every owner, 'isFolder' / 'parent' on a Catalog / ChartOfCharacteristicTypes (a ChartOfAccounts nests through 'parent' too; a ChartOfCalculationTypes takes neither), plus owner-specific properties - 'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see the guide for which apply to each owner). |
 | expectedNotExists | — | boolean | Optional stale-intent guard (default false): assert the node does not yet exist for a sharper precondition error. A real duplicate is always rejected anyway. |
 | normalizeYo | — | boolean | Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing FQN segment) and in any synonym / comment / predefined-item description value (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied. |
 | setAsDefault | — | boolean | Form OBJECT create only (FQN 'Type.Object.Form.FormName'). When true, registers the new form as the owner's default object form (default: false). Ignored for other create kinds. |
@@ -118,6 +118,16 @@ The synonym EMap is keyed by the language CODE (`ru`/`en`), never the language n
 
 A `language` CODE must be one the configuration DECLARES (`get_configuration_properties` lists them all under `languages`). An undeclared code is REJECTED with the declared list: the platform has no fallback between locale codes, so a value stored under a code nothing declares is simply never displayed - a blank label whose cause is invisible until someone opens the form. A declared code given in a different case is accepted and stored under the configuration's own spelling. After a localized write the result echoes the `language` used and `localesMissing` - the languages the configuration USES that still have no translation. A language is "in use" when the configuration's OWN synonym is filled in for it: a multilingual configuration worked on in a single-language branch declares the others but is not translated into them, and nobody wants to be nagged about those. Writing a value UNDER such a language is legal (it is declared, so it will display) but comes back with `localeUnusedInConfiguration: true` - ASK the user whether translating into it is really wanted before filling in more: it may be a single-language build, or a language this configuration does not support yet.
 
+## External-objects projects
+Members of an external data processor / report are created the same way as a configuration
+object's - `ExternalDataProcessor.<Name>.Attribute.<Attr>`, `....Form.<F>`, and the
+form content under it. Two limits are structural, not gaps in addressing:
+- the ROOT object itself cannot be created here (it is created with its project, in EDT or by
+  importing an .epf/.erf; `create_project` with `projectKind=externalObjects` makes the empty
+  project only);
+- an external data processor / report has no `Command` collection in the platform model, so
+  `....Command.<Name>` is refused with the list of kinds the object does accept.
+
 ## Examples
 - Top object: `{projectName: 'P', fqn: 'Catalog.Products'}`
 - With synonym: `{projectName: 'P', fqn: 'Document.Invoice', properties: [{name: 'synonym', value: 'Invoice', language: 'en'}]}`
@@ -140,6 +150,19 @@ JSON with `action='created'`, the normalized `fqn`, `kind` (the EClass - `EventH
 - `persisted=false` means the in-memory change committed but the `.mdo` export did not confirm - re-check before relying on it on disk.
 - No automatic undo: to revert a create, delete the node with delete_metadata (same FQN). create_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.
 - A NESTED SUBSYSTEM is the one exception to that undo route: delete_metadata does not address a nested-subsystem chain yet, so it cannot remove one. Remove it in the EDT UI (or drop the parent) until delete_metadata learns the chain.
+
+## ObjectType members
+
+`ObjectType` is an XDTO segment only — it addresses a type inside an XDTO package, as
+`XDTOPackage.<Package>.ObjectType.<Name>`. There is no `ObjectType` child kind on an
+mdclass object: an FQN like `ChartOfCharacteristicTypes.Properties.ObjectType.Products`
+falls through to `MetadataNodeResolver`, whose child-kind map has no such token, and the
+call fails with "Cannot resolve a create target".
+
+## Nested XDTO member addresses
+
+A nested XDTO property is addressed through the full member chain:
+`XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>`.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

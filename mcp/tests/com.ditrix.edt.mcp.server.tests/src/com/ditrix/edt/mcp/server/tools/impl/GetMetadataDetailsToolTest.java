@@ -807,7 +807,7 @@ public class GetMetadataDetailsToolTest
         PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
 
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, MetadataScope.ofConfiguration(config), null,
+            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
                 "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
@@ -829,7 +829,7 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, MetadataScope.ofConfiguration(config), null,
+            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
                 "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
@@ -849,7 +849,7 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, MetadataScope.ofConfiguration(config), null,
+            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
                 "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();

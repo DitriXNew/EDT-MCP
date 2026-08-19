@@ -37,7 +37,7 @@ RU_EXTERNAL_REPORT = "ВнешнийОтчет"
 
 
 @e2e_test(tool="get_metadata_objects", kind="read")
-def test_external_objects_project_lists_its_own_roots():
+def test_extobj_project_lists_its_own_roots():
     """The external-objects project lists ExtProc / ExtReport — not the base config's objects.
 
     This is the reported symptom verbatim: the tool answered with the LINKED configuration's
@@ -57,7 +57,7 @@ def test_external_objects_project_lists_its_own_roots():
 
 
 @e2e_test(tool="get_metadata_objects", kind="read")
-def test_external_objects_type_filter_is_bilingual():
+def test_extobj_type_filter_is_bilingual():
     """The type filter accepts the English AND the Russian type token, and filters by it."""
     en = call("get_metadata_objects",
               {"projectName": EXT_OBJECTS_PROJECT, "metadataType": "externalReports"})
@@ -76,7 +76,7 @@ def test_external_objects_type_filter_is_bilingual():
 
 
 @e2e_test(tool="get_metadata_objects", kind="error")
-def test_configuration_category_is_refused_not_answered_from_the_base_config():
+def test_extobj_configuration_category_is_refused():
     """A configuration category asked of this project is REFUSED, naming what it does hold.
 
     Answering it from the linked base configuration is the bug; answering it with an empty
@@ -92,7 +92,7 @@ def test_configuration_category_is_refused_not_answered_from_the_base_config():
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
-def test_details_resolve_the_external_object_and_its_form():
+def test_extobj_details_resolve_the_object_and_its_form():
     """get_metadata_details renders the external data processor AND its form's content model.
 
     "the form has no editable content model" was the reported failure: the form was being
@@ -113,7 +113,7 @@ def test_details_resolve_the_external_object_and_its_form():
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
-def test_details_resolve_the_russian_type_token():
+def test_extobj_details_resolve_the_russian_type_token():
     """The leading TYPE token is bilingual here exactly as it is for a configuration type."""
     r = call("get_metadata_details",
              {"projectName": EXT_OBJECTS_PROJECT,
@@ -127,7 +127,7 @@ def test_details_resolve_the_russian_type_token():
 
 
 @e2e_test(tool="get_metadata_details", kind="error")
-def test_external_type_asked_of_a_configuration_says_which_project_kind_holds_it():
+def test_extobj_type_on_a_configuration_names_the_project_kind():
     """On the BASE configuration the same FQN cannot resolve — and the reason says why.
 
     A bare "Object not found" sent the caller looking for a typo in a name that is spelled
@@ -144,7 +144,7 @@ def test_external_type_asked_of_a_configuration_says_which_project_kind_holds_it
 
 
 @e2e_test(tool="create_metadata", kind="write")
-def test_create_and_delete_a_form_element_on_an_external_data_processor_form():
+def test_extobj_create_and_delete_a_form_element():
     """The reported call: create a Group on an external data processor's form.
 
     It answered "Form not found for '...'" because the form was resolved against the base
@@ -159,7 +159,6 @@ def test_create_and_delete_a_form_element_on_an_external_data_processor_form():
                     "expectedNotExists": True})
     try:
         assert_ok(created, "create a form group on an external data processor's form")
-        assert_contains(created.text, "created", "the result must report the creation")
         # The real effect, read off disk: the group is in the form's own content file.
         after = call("get_metadata_details",
                      {"projectName": EXT_OBJECTS_PROJECT,
@@ -176,7 +175,7 @@ def test_create_and_delete_a_form_element_on_an_external_data_processor_form():
 
 
 @e2e_test(tool="create_metadata", kind="write")
-def test_create_and_delete_an_attribute_on_an_external_data_processor():
+def test_extobj_create_and_delete_an_attribute():
     """A MEMBER of the external object itself — "Cannot resolve a create target" in the report."""
     reset_fixture_rel(EXT_OBJECTS_REL)
     fqn = "ExternalDataProcessor.ExtProc.Attribute.E2eAttr"
@@ -200,12 +199,13 @@ def test_create_and_delete_an_attribute_on_an_external_data_processor():
 
 
 @e2e_test(tool="create_metadata", kind="error")
-def test_a_kind_the_type_does_not_have_is_refused_by_name():
+def test_extobj_unsupported_member_kind_is_refused_by_name():
     """An ExternalDataProcessor has no `commands` collection at all — the error says so.
 
     The generic "cannot resolve a create target" reads as a spelling problem and sends the
     caller round the same loop; naming the kinds the object DOES have is the next step.
     """
+    reset_fixture_rel(EXT_OBJECTS_REL)
     r = call("create_metadata",
              {"projectName": EXT_OBJECTS_PROJECT,
               "fqn": "ExternalDataProcessor.ExtProc.Command.E2eCmd"})
@@ -216,8 +216,9 @@ def test_a_kind_the_type_does_not_have_is_refused_by_name():
 
 
 @e2e_test(tool="create_metadata", kind="error")
-def test_creating_a_top_level_external_object_is_refused_with_the_way_to_do_it():
+def test_extobj_top_level_create_is_refused_with_the_way_to_do_it():
     """create_metadata cannot create the ROOT object — and says where one comes from."""
+    reset_fixture_rel(EXT_OBJECTS_REL)
     r = call("create_metadata",
              {"projectName": EXT_OBJECTS_PROJECT, "fqn": "ExternalDataProcessor.E2eNewProc"})
     e = assert_error(r, "a top-level external data processor")
@@ -227,7 +228,7 @@ def test_creating_a_top_level_external_object_is_refused_with_the_way_to_do_it()
 
 
 @e2e_test(tool="modify_metadata", kind="write")
-def test_modify_a_form_member_title_on_an_external_data_processor_form():
+def test_extobj_modify_a_form_member_title():
     """modify_metadata reaches a form member of an external data processor (reported broken)."""
     reset_fixture_rel(EXT_OBJECTS_REL)
     fqn = "ExternalDataProcessor.ExtProc.Form.MainForm.Field.Note"

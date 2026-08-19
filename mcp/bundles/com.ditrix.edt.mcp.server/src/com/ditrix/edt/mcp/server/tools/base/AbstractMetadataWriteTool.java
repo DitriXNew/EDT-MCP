@@ -486,6 +486,29 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      */
     protected ProjectContext resolveProjectAndConfig(String projectName)
     {
+        return resolveProjectRoot(projectName, false);
+    }
+
+    /**
+     * Resolves the project and the ROOT a metadata FQN resolves against for it - the configuration,
+     * or an external-objects project's own root objects (issue #309).
+     *
+     * <p>The difference from {@link #resolveProjectAndConfig(String)} is one case: an
+     * external-objects project linked to NO base configuration resolves successfully here, with a
+     * null {@code config} and a usable {@code scope}. Only a tool that resolves everything through
+     * the scope may use this entry; one that dereferences {@code config} must keep the other, which
+     * still refuses that case rather than handing it a null.</p>
+     *
+     * @param projectName the project name from the tool parameters
+     * @return a {@link ProjectContext}; check {@link ProjectContext#error} first
+     */
+    protected ProjectContext resolveProjectAndScope(String projectName)
+    {
+        return resolveProjectRoot(projectName, true);
+    }
+
+    private ProjectContext resolveProjectRoot(String projectName, boolean allowNoConfiguration)
+    {
         ProjectContext ctx = new ProjectContext();
 
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
@@ -509,11 +532,13 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         MetadataScope scope = MetadataScope.of(project, config);
         // An EXTERNAL-OBJECTS project has no configuration of its own - its roots are its external
         // data processors / reports, and the provider answers with the linked BASE configuration
-        // (null when there is none). Refusing here would refuse the named project outright, and
-        // resolving an FQN against that base configuration is the #309 bug itself. Issue #309.
-        if (config == null && !scope.isExternalObjects())
+        // (null when there is none). A scope-driven caller can work without one; a caller that
+        // dereferences the configuration cannot, and is refused with the reason. Issue #309.
+        if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
         {
-            ctx.error = ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
+            ctx.error = ToolResult.error(
+                com.ditrix.edt.mcp.server.utils.ProjectContext.noConfigurationMessage(
+                    projectName, scope.isExternalObjects())).toJson();
             return ctx;
         }
 

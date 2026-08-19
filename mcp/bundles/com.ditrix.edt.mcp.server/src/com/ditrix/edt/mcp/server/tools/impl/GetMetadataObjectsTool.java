@@ -222,7 +222,7 @@ public class GetMetadataObjectsTool implements IMcpTool
                                                String nameFilter, int limit, String language)
     {
         // Resolve the project and its configuration
-        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
         if (!resolved.ok())
         {
             return resolved.errorJson();
