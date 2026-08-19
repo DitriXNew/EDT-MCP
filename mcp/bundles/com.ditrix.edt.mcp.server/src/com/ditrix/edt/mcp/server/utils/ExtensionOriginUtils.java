@@ -53,6 +53,9 @@ public final class ExtensionOriginUtils
     /** An object the extension itself defines (its own, not from the base configuration). */
     public static final String ORIGIN_EXTENSION = "extension"; //$NON-NLS-1$
 
+    /** Origin of an object owned by an external-objects project - neither core nor extension. */
+    public static final String ORIGIN_EXTERNAL = "external object"; //$NON-NLS-1$
+
     private ExtensionOriginUtils()
     {
         // Utility class
@@ -115,6 +118,30 @@ public final class ExtensionOriginUtils
      */
     public static String originLabel(ObjectBelonging belonging, boolean isExtensionProject)
     {
+        return originLabel(belonging, isExtensionProject, false);
+    }
+
+    /**
+     * The origin label, told which KIND of project the object came from.
+     *
+     * <p>An external data processor / report is owned by its external-objects project. It is not
+     * a configuration object at all, so the two-valued core/extension question does not apply to
+     * it - and answering {@code core} states that it belongs to a base configuration, which is
+     * the very confusion this whole area exists to remove (issue #309).</p>
+     *
+     * @param belonging the object's belonging, or {@code null}
+     * @param isExtensionProject whether the owning project is a configuration EXTENSION
+     * @param isExternalObjectsProject whether the owning project is an EXTERNAL-OBJECTS project
+     * @return one of {@link #ORIGIN_CORE}, {@link #ORIGIN_ADOPTED}, {@link #ORIGIN_EXTENSION},
+     *     {@link #ORIGIN_EXTERNAL}
+     */
+    public static String originLabel(ObjectBelonging belonging, boolean isExtensionProject,
+        boolean isExternalObjectsProject)
+    {
+        if (isExternalObjectsProject)
+        {
+            return ORIGIN_EXTERNAL;
+        }
         if (!isExtensionProject)
         {
             // A base configuration only ever holds native objects.

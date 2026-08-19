@@ -12,10 +12,13 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import static org.mockito.Mockito.mock;
+
 import java.util.List;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 
 /**
@@ -78,6 +81,24 @@ public class MetadataNodeResolverTest
         assertNotNull(MetadataNodeResolver.resolveForCreate(
             MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()),
             "Catalog.NewCatalog")); //$NON-NLS-1$
+    }
+
+    /**
+     * The MIRROR case: a CONFIGURATION type addressed at an external-objects project. There is
+     * no configuration here to add a row to, so handing back a target made the create treat this
+     * project's root as a Configuration and die with a raw ClassCastException. Answering
+     * "no target" is what lets the tool refuse by naming the project kind instead
+     * (issue #309 review round 4).
+     */
+    @Test
+    public void testTopLevelCreateOfAConfigurationTypeDoesNotResolveInAnExternalScope()
+    {
+        MetadataScope external = MetadataScope.ofExternalObjectProject(null,
+            MdClassFactory.eINSTANCE.createConfiguration(),
+            mock(IExternalObjectProject.class));
+        assertNull(MetadataNodeResolver.resolveForCreate(external, "Catalog.NewCatalog")); //$NON-NLS-1$
+        // Its OWN root type is refused here too - those come with the project, not from a create.
+        assertNull(MetadataNodeResolver.resolveForCreate(external, "ExternalDataProcessor.New")); //$NON-NLS-1$
     }
 
     @Test

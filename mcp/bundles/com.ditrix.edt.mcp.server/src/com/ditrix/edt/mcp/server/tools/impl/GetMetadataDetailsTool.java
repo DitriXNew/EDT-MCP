@@ -384,7 +384,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         // configuration this is always "core"; for an extension it distinguishes
         // an adopted base object from one the extension itself owns.
         sb.append("\n**Origin:** ") //$NON-NLS-1$
-            .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), ctx.isExtensionProject))
+            .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(),
+                ctx.isExtensionProject, ctx.scope.isExternalObjects()))
             .append("\n"); //$NON-NLS-1$
         sb.append(SECTION_SEPARATOR);
     }
@@ -457,7 +458,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
         sb.append(roleRights);
         sb.append("\n**Origin:** ") //$NON-NLS-1$
-            .append(ExtensionOriginUtils.originLabel(role.getObjectBelonging(), ctx.isExtensionProject))
+            .append(ExtensionOriginUtils.originLabel(role.getObjectBelonging(),
+                ctx.isExtensionProject, ctx.scope.isExternalObjects()))
             .append("\n"); //$NON-NLS-1$
         sb.append(SECTION_SEPARATOR);
     }

@@ -572,6 +572,15 @@ public final class MetadataNodeResolver
 
         if (parts.length == 2)
         {
+            if (scope.isExternalObjects())
+            {
+                // An external-objects project has NO configuration to add a top object to, and
+                // its own roots are created with the project (create_project / an .epf import),
+                // never here. Handing back a target anyway made createTopLevel treat this root as
+                // a Configuration and die with a raw ClassCastException; answering "no target"
+                // lets the caller get the refusal that names the project kind instead.
+                return null;
+            }
             String type = MetadataTypeUtils.toEnglishSingular(parts[0]);
             if (type == null)
             {

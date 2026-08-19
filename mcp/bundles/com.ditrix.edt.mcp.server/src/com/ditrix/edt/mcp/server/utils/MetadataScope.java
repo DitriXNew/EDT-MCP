@@ -274,6 +274,52 @@ public final class MetadataScope
     }
 
     /**
+     * The declared locales that a node carrying exactly {@code present} still owes a value for
+     * - the scope-aware twin of {@link MetadataLanguageUtils#localesMissing}.
+     *
+     * <p>Asked of the SCOPE because an external-objects project with no base configuration
+     * declares its languages in its own manifest. Answered from a {@code null} Configuration,
+     * the shared helper reports NOTHING missing - so a create there would claim every
+     * translation was done while the manifest still declared untranslated languages.</p>
+     *
+     * @param present the locales the node already carries (may be {@code null})
+     * @return the codes still owed a value, never {@code null}
+     */
+    public List<String> localesMissing(Collection<String> present)
+    {
+        if (configuration != null)
+        {
+            return MetadataLanguageUtils.localesMissing(configuration, present);
+        }
+        List<String> missing = new ArrayList<>();
+        for (String declared : declaredLanguageCodes())
+        {
+            if (present == null || !present.contains(declared))
+            {
+                missing.add(declared);
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * Whether {@code code} is declared by this scope but carries no value anywhere yet - the
+     * scope-aware twin of {@link MetadataLanguageUtils#isDeclaredButUnused}.
+     *
+     * <p>Without a Configuration there is no configuration-level synonym map to call a language
+     * "in use", so a declared code is simply not reported as unused: the question the flag
+     * answers ("is this a language nothing else uses?") cannot be decided here, and guessing
+     * {@code true} would query every legitimate write in a manifest-only project.</p>
+     *
+     * @param code the language code being written, or {@code null}
+     * @return {@code true} when the code is declared but unused
+     */
+    public boolean isDeclaredButUnused(String code)
+    {
+        return configuration != null && MetadataLanguageUtils.isDeclaredButUnused(configuration, code);
+    }
+
+    /**
      * The name of the BASE configuration project an external-objects project is linked to, or
      * {@code null} when there is none - or when this is not an external-objects scope.
      *
@@ -294,7 +340,10 @@ public final class MetadataScope
         try
         {
             IProject parent = externalObjectProject.getParentProject();
-            return parent == null ? null : parent.getName();
+            // A hint is only worth giving if the caller can act on it. A parent handle that is
+            // deleted or closed still has a name, and sending someone to a project EDT cannot
+            // answer for turns a useful refusal into a failing next call.
+            return parent != null && parent.exists() && parent.isOpen() ? parent.getName() : null;
         }
         catch (RuntimeException e)
         {

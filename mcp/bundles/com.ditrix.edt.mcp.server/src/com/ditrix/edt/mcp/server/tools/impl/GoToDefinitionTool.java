@@ -581,6 +581,33 @@ public class GoToDefinitionTool implements IMcpTool
     // ========== Not-found helper ==========
 
     /**
+     * Names the project that could hold {@code name} as a common module, when the caller asked an
+     * EXTERNAL-OBJECTS project - which never has common modules of its own. Without it the answer
+     * is a truthful dead end: no suggestions can come from this root, and the module the caller
+     * means is almost always in the base configuration. Appends nothing for any other project kind.
+     */
+    private void appendExternalProjectHint(StringBuilder sb, MetadataScope scope, String name)
+    {
+        if (!scope.isExternalObjects())
+        {
+            return;
+        }
+        sb.append("This is an external-objects project: it holds no common modules. "); //$NON-NLS-1$
+        String baseProject = scope.baseProjectName();
+        if (baseProject != null)
+        {
+            sb.append("`").append(name).append("` may be a common module of the ") //$NON-NLS-1$ //$NON-NLS-2$
+              .append("base configuration project '").append(baseProject) //$NON-NLS-1$
+              .append("' - ask go_to_definition there.\n\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append("It is not linked to a base configuration either, so there is no ") //$NON-NLS-1$
+              .append("project here that could hold `").append(name).append("`.\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
      * Builds a helpful not-found response with suggestions.
      * If firstPart is a recognized metadata type, shows similar objects of that type.
      * Otherwise, shows similar common modules.
@@ -609,6 +636,16 @@ public class GoToDefinitionTool implements IMcpTool
                 }
                 sb.append("\n"); //$NON-NLS-1$
             }
+            // A common module may be NAMED like a metadata type (a base module called Catalog),
+            // and the type branch wins the dispatch - so without this the caller of
+            // `Catalog.SomeMethod` hears only "no such Catalog object" and is never told that the
+            // module of that name lives in the base project. Not for a standalone type: an
+            // ExternalDataProcessor miss is about this project, and common modules are noise there.
+            MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(firstPart);
+            if (info == null || !info.isStandalone())
+            {
+                appendExternalProjectHint(sb, scope, firstPart);
+            }
         }
         else
         {
@@ -624,25 +661,7 @@ public class GoToDefinitionTool implements IMcpTool
                 }
                 sb.append("\n"); //$NON-NLS-1$
             }
-            if (scope.isExternalObjects())
-            {
-                // A dead end otherwise: this project has no common modules to suggest, and the
-                // one the caller means is very likely in the base configuration. Name the project
-                // that holds it so the answer carries the next call instead of just a refusal.
-                sb.append("This is an external-objects project: it holds no common modules. "); //$NON-NLS-1$
-                String baseProject = scope.baseProjectName();
-                if (baseProject != null)
-                {
-                    sb.append("`").append(firstPart).append("` may be a common module of the ") //$NON-NLS-1$ //$NON-NLS-2$
-                      .append("base configuration project '").append(baseProject) //$NON-NLS-1$
-                      .append("' - ask go_to_definition there.\n\n"); //$NON-NLS-1$
-                }
-                else
-                {
-                    sb.append("It is not linked to a base configuration either, so there is no ") //$NON-NLS-1$
-                      .append("project here that could hold `").append(firstPart).append("`.\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
+            appendExternalProjectHint(sb, scope, firstPart);
         }
 
         // Suggest metadata types

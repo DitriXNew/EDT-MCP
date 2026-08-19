@@ -488,10 +488,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // duplicate was rejected above), so its synonym map starts empty and the only locale it can
         // carry is the one being written - no model read needed. Issue #298.
         List<String> localesMissing = synonymLanguage == null ? null
-            : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage));
+            : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage));
         // Writing into a language the configuration itself does not use is legal but worth a
         // question: it may be a single-language build, or a language not supported yet.
-        boolean localeUnused = MetadataLanguageUtils.isDeclaredButUnused(config, synonymLanguage);
+        boolean localeUnused = ctx.scope.isDeclaredButUnused(synonymLanguage);
 
         if (target.topLevel)
         {
@@ -1698,9 +1698,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // The element is NEW, so its title map carries exactly the locale just written; the rest
             // of the declared locales are what the caller still owes a translation for (#298).
             formResult.put(KEY_LANGUAGE, writtenTitleLanguage).put(KEY_LOCALES_MISSING,
-                MetadataLanguageUtils.localesMissing(config,
-                    Collections.singletonList(writtenTitleLanguage)));
-            if (MetadataLanguageUtils.isDeclaredButUnused(config, writtenTitleLanguage))
+                scope.localesMissing(Collections.singletonList(writtenTitleLanguage)));
+            if (scope.isDeclaredButUnused(writtenTitleLanguage))
             {
                 formResult.put(KEY_LOCALE_UNUSED, true);
             }
@@ -1989,8 +1988,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return buildFormObjectResult(normFqn, formName, persisted, setAsDefault,
             effectiveGenerateContent, props, synonymLanguage,
             synonymLanguage == null ? null
-                : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage)),
-            MetadataLanguageUtils.isDeclaredButUnused(config, synonymLanguage), normReport);
+                : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage)),
+            ctx.scope.isDeclaredButUnused(synonymLanguage), normReport);
     }
 
     /**

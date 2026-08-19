@@ -59,4 +59,25 @@ public class ExtensionOriginUtilsTest
         assertEquals(ExtensionOriginUtils.ORIGIN_CORE,
             ExtensionOriginUtils.originLabel(null, false));
     }
+
+    /**
+     * An external data processor / report belongs to its external-objects project. The
+     * core/extension question does not apply to it, and answering "core" states that it belongs
+     * to a base configuration - the exact confusion issue #309 exists to remove.
+     */
+    @Test
+    public void testExternalObjectsProjectIsNeitherCoreNorExtension()
+    {
+        assertEquals(ExtensionOriginUtils.ORIGIN_EXTERNAL,
+            ExtensionOriginUtils.originLabel(ObjectBelonging.NATIVE, false, true));
+        // The external answer wins even if something claimed extension too - there is no
+        // project that is both, and "external" is the one that names the owner.
+        assertEquals(ExtensionOriginUtils.ORIGIN_EXTERNAL,
+            ExtensionOriginUtils.originLabel(ObjectBelonging.ADOPTED, true, true));
+        // The two-argument form is unchanged for every existing caller.
+        assertEquals(ExtensionOriginUtils.originLabel(ObjectBelonging.NATIVE, true),
+            ExtensionOriginUtils.originLabel(ObjectBelonging.NATIVE, true, false));
+        assertEquals(ExtensionOriginUtils.ORIGIN_CORE,
+            ExtensionOriginUtils.originLabel(ObjectBelonging.NATIVE, false, false));
+    }
 }

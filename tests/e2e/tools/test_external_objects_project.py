@@ -311,6 +311,64 @@ def test_extobj_go_to_definition_resolves_the_projects_own_object():
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
 
 
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_extobj_details_do_not_call_an_external_object_a_core_object():
+    """The Origin footer must not claim an external object belongs to a configuration.
+
+    The footer is two-valued (core / extension) because those were the only project kinds it
+    knew. An external data processor is owned by its own project, so "core" is not a rougher
+    answer — it is a false one, and it is the exact confusion this whole area removes.
+    """
+    r = call("get_metadata_details",
+             {"projectName": EXT_OBJECTS_PROJECT,
+              "objectFqns": ["ExternalDataProcessor.ExtProc"]})
+    assert_ok(r, "details of an external data processor")
+    assert_contains(r.text, "external object", "the origin must name the owning project kind")
+    assert_not_contains(r.text, "Origin:** core",
+                        "an external object is not a core configuration object")
+    assert_no_diff("a read tool must not touch the base project on disk")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
+
+
+@e2e_test(tool="create_metadata", kind="error")
+def test_extobj_configuration_root_create_is_refused_not_crashed():
+    """A configuration FQN on an external-objects project refuses by name, never by exception.
+
+    There is no Configuration here to add a top object to. The create used to treat this
+    project's root as one and surface a raw ClassCastException ("ExternalReportImpl cannot be
+    cast to Configuration") — an internal detail instead of the refusal that says which project
+    kind holds a Catalog.
+    """
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    r = call("create_metadata",
+             {"projectName": EXT_OBJECTS_PROJECT, "fqn": "Catalog.E2eShouldRefuse"})
+    e = assert_error(r, "a configuration type addressed at an external-objects project")
+    assert_not_contains(e, "cannot be cast",
+                        "a refusal must not surface a ClassCastException")
+    assert_error_quality(e, names=["Catalog", EXT_OBJECTS_PROJECT],
+                         ctx="the refusal must name the type and the project kind that holds it")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a refused call must not touch the fixture")
+
+
+@e2e_test(tool="go_to_definition", kind="read")
+def test_extobj_go_to_definition_hints_for_a_type_shaped_module_name():
+    """A base common module NAMED like a metadata type still gets the base-project pointer.
+
+    `Catalog` is both a metadata type token and a legal common-module name. The type branch
+    wins the dispatch, so without the hint the caller of `Catalog.SomeMethod` hears only "no
+    such Catalog object" and is never told a module of that name could live in the base project.
+    """
+    r = call("go_to_definition",
+             {"projectName": EXT_OBJECTS_PROJECT, "symbol": "Catalog.SomeMethod"})
+    assert_ok(r, "a type-shaped module name on an external-objects project")
+    assert_contains(r.text, "Symbol not found", "neither reading resolves in this project")
+    assert_contains(r.text, "no common modules",
+                    "the module reading must be answered, not silently dropped")
+    assert_contains(r.text, PROJECT, "the base project must be named as where to ask")
+    assert_no_diff("a read tool must not touch the base project on disk")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
+
+
 @e2e_test(tool="go_to_definition", kind="read")
 def test_extobj_go_to_definition_never_reaches_the_base_common_modules():
     """A base common module must not be answered under the external project's name.

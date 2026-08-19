@@ -15,7 +15,10 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.core.resources.IProject;
@@ -290,12 +293,9 @@ public class MetadataScopeTest
     @Test
     public void testBaseProjectNameIsAPointerAndOnlyWhenThereIsOne()
     {
-        IProject base = mock(IProject.class);
-        when(base.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
-        IExternalObjectProject linked = mock(IExternalObjectProject.class);
-        when(linked.getParentProject()).thenReturn(base);
         assertEquals("TestConfiguration", //$NON-NLS-1$
-            MetadataScope.ofExternalObjectProject(null, null, linked).baseProjectName());
+            MetadataScope.ofExternalObjectProject(null, null,
+                linkedTo(liveProject("TestConfiguration"))).baseProjectName()); //$NON-NLS-1$
 
         // Unlinked, not started, or a plain configuration scope: no pointer to give.
         IExternalObjectProject unlinked = mock(IExternalObjectProject.class);
@@ -304,6 +304,94 @@ public class MetadataScopeTest
         assertNull(MetadataScope.ofExternalObjectProject(null, null, null).baseProjectName());
         assertNull(MetadataScope.ofConfiguration(
             MdClassFactory.eINSTANCE.createConfiguration()).baseProjectName());
+    }
+
+    /** A workspace project that exists and is open - the only kind worth pointing a caller at. */
+    private static IProject liveProject(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        when(project.exists()).thenReturn(true);
+        when(project.isOpen()).thenReturn(true);
+        return project;
+    }
+
+    private static IExternalObjectProject linkedTo(IProject parent)
+    {
+        IExternalObjectProject linked = mock(IExternalObjectProject.class);
+        when(linked.getParentProject()).thenReturn(parent);
+        return linked;
+    }
+
+    /**
+     * A hint is only worth giving if the caller can act on it: a parent that is deleted or
+     * closed still HAS a name, and naming it would send the caller to a project EDT cannot
+     * answer for - a useful refusal turned into a failing next call (issue #309 review round 4).
+     */
+    @Test
+    public void testBaseProjectNameSkipsAProjectThatIsGoneOrClosed()
+    {
+        IProject deleted = mock(IProject.class);
+        when(deleted.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        when(deleted.exists()).thenReturn(false);
+        when(deleted.isOpen()).thenReturn(true);
+        assertNull(MetadataScope.ofExternalObjectProject(null, null, linkedTo(deleted))
+            .baseProjectName());
+
+        IProject closed = mock(IProject.class);
+        when(closed.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        when(closed.exists()).thenReturn(true);
+        when(closed.isOpen()).thenReturn(false);
+        assertNull(MetadataScope.ofExternalObjectProject(null, null, linkedTo(closed))
+            .baseProjectName());
+    }
+
+    /**
+     * The locales a new node still owes come from whatever declares them. Asked of a
+     * {@code null} Configuration the shared helper reports NOTHING missing, so a create in an
+     * unlinked external-objects project would claim every translation was done while its
+     * manifest still declared untranslated languages (issue #309 review round 4).
+     */
+    @Test
+    public void testLocalesMissingAnswersFromTheManifestWhenThereIsNoConfiguration()
+    {
+        IExternalObjectProject manifestOnly = mock(IExternalObjectProject.class);
+        when(manifestOnly.getLanguages()).thenReturn(languages("ru", "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        MetadataScope scope = MetadataScope.ofExternalObjectProject(null, null, manifestOnly);
+
+        // A value written in "en" still owes "ru" - the shared helper would have said nothing.
+        assertEquals(Arrays.asList("ru"), //$NON-NLS-1$
+            scope.localesMissing(Collections.singletonList("en"))); //$NON-NLS-1$
+        assertTrue(scope.localesMissing(Arrays.asList("ru", "en")).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Arrays.asList("ru", "en"), scope.localesMissing(null)); //$NON-NLS-1$ //$NON-NLS-2$
+        // "declared but unused" cannot be decided without a configuration synonym map, and
+        // guessing true would query every legitimate write in a manifest-only project.
+        assertFalse(scope.isDeclaredButUnused("ru")); //$NON-NLS-1$
+
+        // With a Configuration the answer stays the shared helper's, exactly as before.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Language english = MdClassFactory.eINSTANCE.createLanguage();
+        english.setName("English"); //$NON-NLS-1$
+        english.setLanguageCode("en"); //$NON-NLS-1$
+        config.getLanguages().add(english);
+        MetadataScope configScope = MetadataScope.ofConfiguration(config);
+        assertEquals(MetadataLanguageUtils.localesMissing(config, Collections.singletonList("en")), //$NON-NLS-1$
+            configScope.localesMissing(Collections.singletonList("en"))); //$NON-NLS-1$
+        assertEquals(MetadataLanguageUtils.isDeclaredButUnused(config, "en"), //$NON-NLS-1$
+            configScope.isDeclaredButUnused("en")); //$NON-NLS-1$
+    }
+
+    /** Language objects carrying the given codes, as a project manifest surfaces them. */
+    private static Collection<Language> languages(String... codes)
+    {
+        List<Language> result = new ArrayList<>();
+        for (String code : codes)
+        {
+            Language language = MdClassFactory.eINSTANCE.createLanguage();
+            language.setLanguageCode(code);
+            result.add(language);
+        }
+        return result;
     }
 
     /**
