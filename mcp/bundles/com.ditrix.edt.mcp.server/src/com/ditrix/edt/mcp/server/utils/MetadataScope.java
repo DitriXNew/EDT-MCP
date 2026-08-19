@@ -118,6 +118,25 @@ public final class MetadataScope
         return new MetadataScope(project, configuration, externalProject, v8Project, externalNature);
     }
 
+    /**
+     * A scope over an external-objects project handed in directly - a package-private SEAM for
+     * the unit tests, because a real {@link IExternalObjectProject} only exists behind a started
+     * workspace project and a live BM model. Production always goes through
+     * {@link #of(IProject, Configuration)}.
+     *
+     * @param project the workspace project, or {@code null}
+     * @param configuration the base configuration the project is linked to, or {@code null}
+     * @param externalObjectProject the external-objects project, or {@code null} to model one
+     *            that EDT has not started
+     * @return the scope, always of external-objects nature
+     */
+    static MetadataScope ofExternalObjectProject(IProject project, Configuration configuration,
+        IExternalObjectProject externalObjectProject)
+    {
+        return new MetadataScope(project, configuration, externalObjectProject,
+            externalObjectProject, true);
+    }
+
     private static IV8Project resolveV8Project(IProject project)
     {
         if (project == null)
@@ -255,6 +274,48 @@ public final class MetadataScope
     }
 
     /**
+     * Top-level objects of one TYPE whose Name is similar to {@code name} - the "did you mean?"
+     * list, answered from whichever root this scope has.
+     *
+     * @param typeToken the leading FQN type token (English/Russian, singular/plural)
+     * @param name the name to look for (substring match, either direction)
+     * @param maxResults the most names to return
+     * @return the matching names, never {@code null}
+     */
+    public List<String> findSimilarObjects(String typeToken, String name, int maxResults)
+    {
+        if (!externalObjectsNature)
+        {
+            return MetadataTypeUtils.findSimilarObjects(configuration, typeToken, name, maxResults);
+        }
+        List<String> similar = new ArrayList<>();
+        List<? extends MdObject> candidates = objects(typeToken);
+        if (candidates == null || name == null)
+        {
+            return similar;
+        }
+        String lower = name.toLowerCase();
+        for (MdObject candidate : candidates)
+        {
+            String candidateName = candidate.getName();
+            if (candidateName == null)
+            {
+                continue;
+            }
+            String candidateLower = candidateName.toLowerCase();
+            if (candidateLower.contains(lower) || lower.contains(candidateLower))
+            {
+                similar.add(candidateName);
+                if (similar.size() >= maxResults)
+                {
+                    break;
+                }
+            }
+        }
+        return similar;
+    }
+
+    /**
      * EVERY top-level object this scope holds - used to build an actionable "not found" hint that
      * names what the project DOES contain.
      *
@@ -278,9 +339,29 @@ public final class MetadataScope
         }
         catch (RuntimeException e)
         {
+            // NOT an empty root set. A failed read (the BM model momentarily unavailable, a
+            // project stopping under us) would otherwise come back as "this project contains
+            // nothing" - and every caller would then report a real object as missing. The whole
+            // point of this class is that "unknown" and "empty" are different answers, so the
+            // failure travels instead of being flattened into data.
             Activator.logError("Could not read the external objects of the project", e); //$NON-NLS-1$
-            return Collections.emptyList();
+            throw new IllegalStateException("Could not read the external data processors / " //$NON-NLS-1$
+                + "reports of project '" + projectLabel() + "': " + rootCause(e) //$NON-NLS-1$ //$NON-NLS-2$
+                + ". The project may be starting or stopping - check list_projects for its state " //$NON-NLS-1$
+                + "and retry, or run clean_project.", e); //$NON-NLS-1$
         }
+    }
+
+    /** The most specific message of a failure chain - what actually went wrong, not the wrapper. */
+    private static String rootCause(Throwable e)
+    {
+        Throwable cause = e;
+        while (cause.getCause() != null && cause.getCause() != cause)
+        {
+            cause = cause.getCause();
+        }
+        String message = cause.getMessage();
+        return message != null && !message.isEmpty() ? message : cause.getClass().getSimpleName();
     }
 
     /**
@@ -542,6 +623,12 @@ public final class MetadataScope
      */
     public ScriptVariant scriptVariant()
     {
+        // Configuration first, for an external-objects project too - this is NOT a case of
+        // preferring the base over the project's own manifest value. The platform
+        // (ExternalObjectProject.getScriptVariant) asks the parent configuration FIRST and reads
+        // its manifest only when there is no parent, so a LINKED project's manifest variant is
+        // deliberately shadowed. Reading v8Project.getScriptVariant() here would return the same
+        // value by that same rule, one indirection later. Issue #309 review round 2.
         if (configuration != null)
         {
             return configuration.getScriptVariant();

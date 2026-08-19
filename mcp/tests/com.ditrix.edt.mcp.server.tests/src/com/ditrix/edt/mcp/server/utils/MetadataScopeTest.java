@@ -11,13 +11,21 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
 import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -204,5 +212,114 @@ public class MetadataScopeTest
                 java.util.Arrays.asList("fr"))); //$NON-NLS-1$
         // An empty override falls back to what the scope itself declares.
         assertEquals(java.util.Arrays.asList("en"), scope.declaredOrOverride(null)); //$NON-NLS-1$
+    }
+
+    /** A started external-objects project holding the given standalone root objects. */
+    private static IExternalObjectProject startedProjectWith(MdObject... objects)
+    {
+        IExternalObjectProject started = mock(IExternalObjectProject.class);
+        when(started.getExternalObjects()).thenReturn(Arrays.asList(objects));
+        return started;
+    }
+
+    /**
+     * A STARTED external-objects project answers about its OWN objects - by the English type
+     * token and by the Russian one - even though a base configuration is linked; and a
+     * CONFIGURATION type asked here is "unknown", never an empty list.
+     */
+    @Test
+    public void testExternalScopeResolvesItsOwnObjectsRatherThanTheBaseConfiguration()
+    {
+        ExternalDataProcessor proc = MdClassFactory.eINSTANCE.createExternalDataProcessor();
+        proc.setName("ExtProc"); //$NON-NLS-1$
+        ExternalReport report = MdClassFactory.eINSTANCE.createExternalReport();
+        report.setName("ExtReport"); //$NON-NLS-1$
+        // A base configuration IS linked - and must never be the answer (issue #309).
+        MetadataScope scope = MetadataScope.ofExternalObjectProject(null,
+            configurationWithCatalog("Products"), startedProjectWith(proc, report)); //$NON-NLS-1$
+
+        assertTrue(scope.isExternalObjects());
+        assertFalse(scope.externalRootUnavailable());
+        assertEquals(proc, scope.findObject("ExternalDataProcessor", "extproc")); //$NON-NLS-1$ //$NON-NLS-2$
+        // ВнешнийОтчет - the Russian TYPE token; the NAME stays programmatic.
+        assertEquals(report, scope.findObject(
+            fromCp(0x0412, 0x043D, 0x0435, 0x0448, 0x043D, 0x0438, 0x0439, 0x041E, 0x0442, 0x0447,
+                0x0435, 0x0442),
+            "ExtReport")); //$NON-NLS-1$
+        // The linked configuration DOES hold that Catalog - and this root still says "unknown".
+        assertNull(scope.objects("Catalog")); //$NON-NLS-1$
+        assertNull(scope.findObject("Catalog", "Products")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The "did you mean?" list is answered from THIS root. {@code go_to_definition} advertises
+     * every catalogue type, so its suggestion path runs here too - and on a project EDT has not
+     * started it must stay empty instead of quietly becoming the base configuration's
+     * objects, which is the #309 bug itself (review round 2).
+     */
+    @Test
+    public void testSimilarObjectsComeFromTheScopeRootAndNeverFromTheBaseConfiguration()
+    {
+        ExternalDataProcessor proc = MdClassFactory.eINSTANCE.createExternalDataProcessor();
+        proc.setName("ExtProc"); //$NON-NLS-1$
+        Configuration base = configurationWithCatalog("Products"); //$NON-NLS-1$
+
+        MetadataScope started = MetadataScope.ofExternalObjectProject(null, base,
+            startedProjectWith(proc));
+        assertEquals(Arrays.asList("ExtProc"), //$NON-NLS-1$
+            started.findSimilarObjects("ExternalDataProcessor", "Ext", 10)); //$NON-NLS-1$ //$NON-NLS-2$
+        // A configuration type has no candidates HERE, however well it matches over there.
+        assertTrue(started.findSimilarObjects("Catalog", "Product", 10).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Not started: no root to answer from - empty, NOT the base configuration's Products.
+        MetadataScope unstarted = MetadataScope.ofExternalObjectProject(null, base, null);
+        assertTrue(unstarted.externalRootUnavailable());
+        assertTrue(unstarted.findSimilarObjects("Catalog", "Product", 10).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        // The same question on a CONFIGURATION scope does answer, so the empty lists above are
+        // the scope talking and not a helper that stopped working.
+        assertEquals(Arrays.asList("Products"), MetadataScope.ofConfiguration(base) //$NON-NLS-1$
+            .findSimilarObjects("Catalog", "Product", 10)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A FAILED read of the external root must TRAVEL, not be flattened into "this project holds
+     * nothing": swallowed, an unavailable BM model turns every real object into a plausible
+     * "not found" - exactly the class of lie this scope exists to stop (review round 2).
+     */
+    @Test
+    public void testUnreadableExternalRootFailsLoudlyInsteadOfLookingEmpty()
+    {
+        IExternalObjectProject broken = mock(IExternalObjectProject.class);
+        when(broken.getExternalObjects())
+            .thenThrow(new IllegalStateException("BM model is not available")); //$NON-NLS-1$
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Reports"); //$NON-NLS-1$
+        MetadataScope scope = MetadataScope.ofExternalObjectProject(project, null, broken);
+
+        try
+        {
+            scope.objects("ExternalDataProcessor"); //$NON-NLS-1$
+            fail("A failed root read must not come back as an empty collection"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            String message = e.getMessage();
+            // The project, what ACTUALLY went wrong, and a way out.
+            assertTrue(message, message.contains("Reports")); //$NON-NLS-1$
+            assertTrue(message, message.contains("BM model is not available")); //$NON-NLS-1$
+            assertTrue(message, message.contains("list_projects")); //$NON-NLS-1$
+            assertTrue(message, message.contains("clean_project")); //$NON-NLS-1$
+        }
+
+        // Every root-reading entry point travels the same way - none degrades to empty.
+        try
+        {
+            scope.allExternalObjects();
+            fail("allExternalObjects must not swallow the read failure either"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertNotNull(expected.getMessage());
+        }
     }
 }

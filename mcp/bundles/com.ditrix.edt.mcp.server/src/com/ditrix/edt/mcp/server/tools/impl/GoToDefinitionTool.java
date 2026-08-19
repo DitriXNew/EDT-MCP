@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
@@ -198,13 +199,23 @@ public class GoToDefinitionTool implements IMcpTool
         }
 
         Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
+        // The ROOT to resolve against, not the configuration: this tool ADVERTISES every type in
+        // the shared catalogue (see buildNotFoundResponse's "Supported Metadata Types"), which
+        // now includes ExternalDataProcessor / ExternalReport - so it has to be able to resolve
+        // them where they live, or it promises what it cannot do (issue #309 review round 2).
+        MetadataScope scope = MetadataScope.of(project, config);
+        if (scope.externalRootUnavailable())
+        {
+            return ToolResult.error(ProjectContext.unreadableExternalRootMessage(projectName)).toJson();
+        }
+        if (config == null && !scope.isExternalObjects())
         {
             return ToolResult.error("Could not get configuration for project").toJson(); //$NON-NLS-1$
         }
 
-        // 1. Try as CommonModule method: firstPart = module name, secondPart = method name
-        CommonModule commonModule = findCommonModuleByName(config, firstPart);
+        // 1. Try as CommonModule method: firstPart = module name, secondPart = method name.
+        // Skipped without a configuration - an external-objects project holds no common modules.
+        CommonModule commonModule = config == null ? null : findCommonModuleByName(config, firstPart);
         if (commonModule != null)
         {
             String cmModulePath = "CommonModules/" + commonModule.getName() + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -213,14 +224,14 @@ public class GoToDefinitionTool implements IMcpTool
         }
 
         // 2. Try as metadata object FQN: firstPart = type, secondPart = name
-        MdObject mdObject = findMdObjectByFqn(config, firstPart, secondPart);
+        MdObject mdObject = scope.findObject(firstPart, secondPart);
         if (mdObject != null)
         {
             return formatMetadataDefinition(project, projectName, mdObject, firstPart);
         }
 
         // 3. Nothing found — provide suggestions
-        return buildNotFoundResponse(config, firstPart, secondPart);
+        return buildNotFoundResponse(scope, firstPart, secondPart);
     }
 
     /**
@@ -463,16 +474,6 @@ public class GoToDefinitionTool implements IMcpTool
     }
 
     /**
-     * Finds a metadata object by type name and object name.
-     * Delegates to {@link MetadataTypeUtils} which supports English, Russian,
-     * singular and plural forms.
-     */
-    private MdObject findMdObjectByFqn(Configuration config, String typeName, String objectName)
-    {
-        return MetadataTypeUtils.findObject(config, typeName, objectName);
-    }
-
-    /**
      * Formats a metadata object definition result.
      * Includes the object type, available modules, and module paths.
      */
@@ -578,7 +579,7 @@ public class GoToDefinitionTool implements IMcpTool
      * If firstPart is a recognized metadata type, shows similar objects of that type.
      * Otherwise, shows similar common modules.
      */
-    private String buildNotFoundResponse(Configuration config,
+    private String buildNotFoundResponse(MetadataScope scope,
                                           String firstPart, String secondPart)
     {
         StringBuilder sb = new StringBuilder();
@@ -592,7 +593,7 @@ public class GoToDefinitionTool implements IMcpTool
               .append(englishType).append("', but object '").append(secondPart) //$NON-NLS-1$
               .append("' was not found.\n\n"); //$NON-NLS-1$
 
-            List<String> similar = MetadataTypeUtils.findSimilarObjects(config, englishType, secondPart, 10);
+            List<String> similar = scope.findSimilarObjects(englishType, secondPart, 10);
             if (!similar.isEmpty())
             {
                 sb.append("### Did you mean?\n\n"); //$NON-NLS-1$
@@ -606,8 +607,8 @@ public class GoToDefinitionTool implements IMcpTool
         else
         {
             // firstPart is not a metadata type — suggest similar common modules
-            List<String> similarModules = MetadataTypeUtils.findSimilarObjects(
-                config, "CommonModule", firstPart, 10); //$NON-NLS-1$
+            List<String> similarModules = scope.findSimilarObjects(
+                "CommonModule", firstPart, 10); //$NON-NLS-1$
             if (!similarModules.isEmpty())
             {
                 sb.append("### Similar Common Modules\n\n"); //$NON-NLS-1$

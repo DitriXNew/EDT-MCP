@@ -289,3 +289,47 @@ def test_extobj_modify_a_form_member_title():
         call("clean_project", {"projectName": EXT_OBJECTS_PROJECT})
     assert_no_diff_rel(EXT_OBJECTS_REL, "the fixture must be back at its baseline")
     assert_no_diff("the base project must never be touched by this test")
+
+
+@e2e_test(tool="go_to_definition", kind="read")
+def test_extobj_go_to_definition_resolves_the_projects_own_object():
+    """go_to_definition resolves an FQN in the project that owns it.
+
+    The tool ADVERTISES every type in the shared catalogue, which now includes
+    ExternalDataProcessor / ExternalReport. Resolving through the base configuration would
+    make it advertise what it cannot do: the object exists, and the answer would be
+    "Symbol not found".
+    """
+    r = call("go_to_definition",
+             {"projectName": EXT_OBJECTS_PROJECT, "symbol": "ExternalDataProcessor.ExtProc"})
+    assert_ok(r, "go_to_definition on the project's own external data processor")
+    assert_not_contains(r.text, "Symbol not found",
+                        "the object exists in THIS project and must resolve")
+    assert_contains(r.text, "ExtProc", "the resolved object must be named")
+    assert_contains(r.text, "MetadataObject", "it must resolve as a metadata object")
+    assert_no_diff("a read tool must not touch the base project on disk")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
+
+
+@e2e_test(tool="go_to_definition", kind="read")
+def test_extobj_go_to_definition_never_suggests_from_the_base_configuration():
+    """A miss on the external project suggests from ITS root, never from the base config.
+
+    The base configuration TestConfiguration holds a Catalog; this project holds none. A
+    "Did you mean?" list here could only have come from the wrong model — the #309 bug in
+    its quietest form, since the response still looks perfectly reasonable.
+    """
+    r = call("go_to_definition",
+             {"projectName": EXT_OBJECTS_PROJECT, "symbol": "Catalog.Catalo"})
+    assert_ok(r, "go_to_definition for a configuration type on an external-objects project")
+    assert_contains(r.text, "Symbol not found", "this project holds no catalogs")
+    assert_not_contains(r.text, "Did you mean",
+                        "a suggestion here could only come from the base configuration")
+    # The same tool DOES suggest, from this project's own root, for a type it does hold.
+    own = call("go_to_definition",
+               {"projectName": EXT_OBJECTS_PROJECT, "symbol": "ExternalDataProcessor.ExtPro"})
+    assert_ok(own, "go_to_definition for a near-miss on the project's own type")
+    assert_contains(own.text, "ExternalDataProcessor.ExtProc",
+                    "the suggestion must come from the project's own objects")
+    assert_no_diff("a read tool must not touch the base project on disk")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")

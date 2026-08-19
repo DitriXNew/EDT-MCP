@@ -29,6 +29,10 @@ YAML frontmatter plus an optional fenced `bsl` body. For a method: `module`, `me
 
 The metadata type token is dialect-aware: the FQN may use the Russian type name (Документ.Встреча, Справочник.Товары), singular or plural, and is normalized internally. The OBJECT name itself is the programmatic `Name`, not a synonym - only the leading TYPE token is bilingual.
 
+## External-objects projects
+
+On a project with `V8ExternalObjectsNature`, a metadata FQN resolves against THAT project - its own `ExternalDataProcessor` / `ExternalReport` roots (`ExternalDataProcessor.MyProc`, or the Russian `ВнешняяОбработка.MyProc`) - never against the base configuration the project is linked to. Such a project holds no common modules, so the `ModuleName.MethodName` form finds nothing there, and the suggestion list is drawn from the project's own objects. A project EDT has not started is refused by name rather than answered with "not found".
+
 ## Examples
 
 - Qualified method: `{ "projectName": "MyProject", "symbol": "CommonModule.DoWork" }`
