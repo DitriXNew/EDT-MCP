@@ -62,10 +62,10 @@
 	ЮТест.ОжидаетЧто(tests_MathHelper.Subtract(10, 3)).Равно(7, "tests_MathHelper.Subtract(10,3) must be 7");
 КонецПроцедуры
 
-// A test in the extension can call code from the BASE configuration. Computeute is a
+// A test in the extension can call code from the BASE configuration. Calc is a
 // server CommonModule of TestConfiguration; this proves cross-config visibility.
 Процедура CallsBaseConfigCalcModule() Экспорт
-	ЮТест.ОжидаетЧComputealc.Add(2, 3)).Равно(5, "Calc.Add(2,3) must return 5");
+	ЮТест.ОжидаетЧто(Calc.Add(2, 3)).Равно(5, "Calc.Add(2,3) must return 5");
 КонецПроцедуры
 
 // Chained string assertions on a single value.
