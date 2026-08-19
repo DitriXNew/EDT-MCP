@@ -59,14 +59,21 @@ public final class MetadataScope
     /** The EClass name of an external report - a standalone external-objects root. */
     static final String ECLASS_EXTERNAL_REPORT = "ExternalReport"; //$NON-NLS-1$
 
+    /** The nature that MAKES a project an external-objects one - the fact, independent of startup. */
+    private static final String NATURE_EXTERNAL_OBJECTS =
+        "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"; //$NON-NLS-1$
+
+    private final boolean externalObjectsNature;
     private final IProject project;
     private final Configuration configuration;
     private final IExternalObjectProject externalObjectProject;
     private final IV8Project v8Project;
 
-    private MetadataScope(IProject project, Configuration configuration,
-        IExternalObjectProject externalObjectProject, IV8Project v8Project)
+    private MetadataScope(IProject project, Configuration configuration, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        IExternalObjectProject externalObjectProject, IV8Project v8Project,
+        boolean externalObjectsNature)
     {
+        this.externalObjectsNature = externalObjectsNature;
         this.project = project;
         this.configuration = configuration;
         this.externalObjectProject = externalObjectProject;
@@ -83,7 +90,7 @@ public final class MetadataScope
      */
     public static MetadataScope ofConfiguration(Configuration configuration)
     {
-        return new MetadataScope(null, configuration, null, null);
+        return new MetadataScope(null, configuration, null, null, false);
     }
 
     /**
@@ -99,25 +106,16 @@ public final class MetadataScope
     public static MetadataScope of(IProject project, Configuration configuration)
     {
         IV8Project v8Project = resolveV8Project(project);
-        if (v8Project instanceof IExternalObjectProject)
-        {
-            return new MetadataScope(project, configuration, (IExternalObjectProject)v8Project,
-                v8Project);
-        }
-        return new MetadataScope(project, configuration, null, v8Project);
-    }
-
-    /**
-     * Whether {@code project} is an external-objects project - answered WITHOUT needing a
-     * configuration, so a caller can tell "this project has no Configuration root" apart from
-     * "the configuration is not loaded yet".
-     *
-     * @param project the workspace project (may be {@code null})
-     * @return {@code true} for an {@link IExternalObjectProject}
-     */
-    public static boolean isExternalObjectsProject(IProject project)
-    {
-        return resolveV8Project(project) instanceof IExternalObjectProject;
+        IExternalObjectProject externalProject = v8Project instanceof IExternalObjectProject
+            ? (IExternalObjectProject)v8Project : null;
+        // A REGISTERED project answers for itself. An UNREGISTERED one - EDT never started it, or
+        // the manager is not up - is asked through its .project descriptor instead of assumed to
+        // be a configuration: assuming would silently resolve an external-objects FQN against the
+        // base configuration, which is the #309 bug coming back through the back door.
+        boolean externalNature = externalProject != null || (v8Project == null
+            && Boolean.TRUE.equals(ProjectContext.hasAnyNature(project,
+                Collections.singletonList(NATURE_EXTERNAL_OBJECTS))));
+        return new MetadataScope(project, configuration, externalProject, v8Project, externalNature);
     }
 
     private static IV8Project resolveV8Project(IProject project)
@@ -151,7 +149,22 @@ public final class MetadataScope
     /** @return {@code true} when this scope's root is an external-objects project's own objects. */
     public boolean isExternalObjects()
     {
-        return externalObjectProject != null;
+        return externalObjectsNature;
+    }
+
+    /**
+     * Whether this IS an external-objects project whose root set cannot be read - the platform has
+     * registered no {@code IExternalObjectProject} for it, which is what an EDT project whose
+     * lifecycle did not start looks like.
+     *
+     * <p>Kept apart from "it holds nothing": answering an empty list for a project that was never
+     * started reads as a fact about the project, and it is a fact about the workspace.</p>
+     *
+     * @return {@code true} when the root set is unavailable rather than empty
+     */
+    public boolean externalRootUnavailable()
+    {
+        return externalObjectsNature && externalObjectProject == null;
     }
 
     /**
@@ -183,9 +196,14 @@ public final class MetadataScope
         {
             return null;
         }
-        if (externalObjectProject == null)
+        if (!externalObjectsNature)
         {
             return MetadataTypeUtils.getObjects(configuration, typeToken);
+        }
+        if (externalObjectProject == null)
+        {
+            // Unknown, not empty - see externalRootUnavailable().
+            return null;
         }
         String eClassName = externalEClassName(typeToken);
         if (eClassName == null)
@@ -217,7 +235,7 @@ public final class MetadataScope
      */
     public MdObject findObject(String typeToken, String objectName)
     {
-        if (externalObjectProject == null)
+        if (!externalObjectsNature)
         {
             return MetadataTypeUtils.findObject(configuration, typeToken, objectName);
         }

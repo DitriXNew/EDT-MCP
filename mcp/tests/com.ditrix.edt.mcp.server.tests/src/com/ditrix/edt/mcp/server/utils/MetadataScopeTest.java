@@ -103,6 +103,9 @@ public class MetadataScopeTest
     {
         MetadataScope scope = MetadataScope.ofConfiguration(configurationWithCatalog("Products")); //$NON-NLS-1$
         assertTrue(scope.allExternalObjects().isEmpty());
+        // "the root set cannot be read" is a statement about an EXTERNAL-OBJECTS project only; a
+        // configuration scope must never claim it, or every configuration call would report it.
+        assertFalse(scope.externalRootUnavailable());
     }
 
     @Test
