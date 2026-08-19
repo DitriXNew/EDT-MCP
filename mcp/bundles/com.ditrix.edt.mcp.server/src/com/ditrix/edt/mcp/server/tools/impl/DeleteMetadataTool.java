@@ -385,13 +385,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
 
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        // Normalized BEFORE the context is resolved, because the FQN goes IN: the specialized
+        // deletes below (predefined item, XDTO member) return before the generic path that
+        // appends the addressing hint, so a type this project kind cannot hold was reported as a
+        // missing local owner - sending the caller to look for something that can never be here
+        // (issue #309).
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
-
-        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
 
         // A FQN addressing a FORM member (item / attribute / command / handler) is handled by a
         // dedicated branch: form members live on the editable Form content model (a cross-model hop),

@@ -311,6 +311,46 @@ def test_extobj_go_to_definition_resolves_the_projects_own_object():
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
 
 
+@e2e_test(tool="delete_metadata", kind="error")
+def test_extobj_every_write_tool_refuses_a_type_it_cannot_hold():
+    """create / modify / delete all refuse a configuration type by naming the project kind.
+
+    Each tool has specialized dispatches that resolve their own project context and reach the
+    Configuration directly — the BASE one for a linked external-objects project. Each branch
+    that lacked the check answered about the wrong project: a real owner found next door and
+    then "Owner object not found in transaction", or a local not-found that sends the caller
+    looking for something this project can never hold. The guard is now part of getting the
+    context, so the three tools answer the same way.
+    """
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    predefined = call("create_metadata",
+                      {"projectName": EXT_OBJECTS_PROJECT,
+                       "fqn": "Catalog.Catalog.Predefined.E2eItem"})
+    e = assert_error(predefined, "a predefined item addressed at an external-objects project")
+    assert_not_contains(e, "in transaction", "an internal transaction message is not an answer")
+    assert_error_quality(e, names=["Catalog", EXT_OBJECTS_PROJECT],
+                         ctx="the refusal must name the type and the project kind")
+
+    modified = call("modify_metadata",
+                    {"projectName": EXT_OBJECTS_PROJECT, "fqn": "Subsystem.Subsystem",
+                     "content": [{"metadata": "Catalog.Catalog"}]})
+    e = assert_error(modified, "a subsystem content write on an external-objects project")
+    assert_error_quality(e, names=["Subsystem", EXT_OBJECTS_PROJECT],
+                         ctx="modify must refuse the same way create does")
+
+    deleted = call("delete_metadata",
+                   {"projectName": EXT_OBJECTS_PROJECT,
+                    "fqn": "Catalog.Catalog.Predefined.Item", "confirm": True})
+    e = assert_error(deleted, "a predefined delete on an external-objects project")
+    assert_not_contains(e, "get_metadata_objects to list",
+                        "do not send the caller hunting for an owner that cannot be here")
+    assert_error_quality(e, names=["Catalog", EXT_OBJECTS_PROJECT],
+                         ctx="delete must refuse the same way create does")
+
+    assert_no_diff_rel(EXT_OBJECTS_REL, "refused calls must not touch the fixture")
+    assert_no_diff("refused calls must not touch the base project either")
+
+
 @e2e_test(tool="create_metadata", kind="error")
 def test_extobj_specialized_dispatches_refuse_before_reading_the_base_configuration():
     """The branches that own their resolution must be refused too, not just the generic one.

@@ -507,6 +507,39 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         return resolveProjectRoot(projectName, true);
     }
 
+    /**
+     * {@link #resolveProjectAndScope(String)} plus the TYPE/ROOT check: refuses when {@code fqn}
+     * names a type this project kind cannot hold at all - a configuration type addressed at an
+     * external-objects project, or a standalone external type addressed at a configuration.
+     *
+     * <p>Bound to context resolution ON PURPOSE. Every write tool has specialized dispatches
+     * that resolve their own context and read the {@code Configuration} directly, and each one
+     * that lacked this check answered about the WRONG project: a real owner found in the LINKED
+     * base configuration and then "Owner object not found in transaction" when its BM id was
+     * used in this project's model, or advice to "create it first" for something this project
+     * can never hold. Making the check part of GETTING the context is what stops the next such
+     * branch from having to remember it (issue #309).</p>
+     *
+     * @param projectName the project name from the tool parameters
+     * @param fqn the FQN this call addresses; {@code null}/empty checks nothing extra
+     * @return a {@link ProjectContext}; check {@link ProjectContext#error} first
+     */
+    protected ProjectContext resolveProjectAndScope(String projectName, String fqn)
+    {
+        ProjectContext ctx = resolveProjectAndScope(projectName);
+        if (ctx.hasError() || fqn == null || fqn.isEmpty())
+        {
+            return ctx;
+        }
+        String hint = ctx.scope.addressingHint(fqn);
+        if (!hint.isEmpty())
+        {
+            ctx.error = ToolResult.error("'" + fqn + "' cannot be addressed in project " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'" + projectName + "'." + hint).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return ctx;
+    }
+
     private ProjectContext resolveProjectRoot(String projectName, boolean allowNoConfiguration)
     {
         ProjectContext ctx = new ProjectContext();

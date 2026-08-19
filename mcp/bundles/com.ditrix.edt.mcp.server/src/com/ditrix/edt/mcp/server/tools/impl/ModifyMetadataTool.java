@@ -441,13 +441,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return args.error;
         }
 
-        ProjectContext ctx = resolveProjectAndScope(args.projectName);
+        // Normalized BEFORE the context is resolved: the resolution refuses a type this project
+        // kind cannot hold, and it has to do so ahead of the specialized dispatches below, which
+        // resolve subsystems and XDTO packages through the Configuration - the BASE one for a
+        // linked external-objects project (issue #309).
+        String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
+        ProjectContext ctx = resolveProjectAndScope(args.projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
-
-        String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
 
         // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
         // branch: form members live on the editable Form content model (a cross-model hop), not the

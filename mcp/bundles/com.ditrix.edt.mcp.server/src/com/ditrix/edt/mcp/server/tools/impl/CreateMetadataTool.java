@@ -403,24 +403,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
         IProject project = ctx.project;
         Configuration config = ctx.config;
-        // BEFORE any specialized dispatch. Several branches below own their resolution and
-        // return without ever reaching the scope-aware create target - the nested-subsystem one
-        // resolves its parent through the Configuration, which for a LINKED external-objects
-        // project is the base configuration: it then found a real parent in another project's
-        // model and failed with "Parent subsystem not found in transaction", an internal detail
-        // instead of an answer. One guard here covers every such branch, present and future.
-        String wrongKindOfProject = wrongProjectKindRefusal(ctx.scope, normFqn);
-        if (wrongKindOfProject != null)
-        {
-            return wrongKindOfProject;
-        }
 
         // A NESTED subsystem ('Subsystem.Sales.Subsystem.Orders', any depth, either language) takes
         // a dedicated branch, and deliberately NOT the generic member path: 'Subsystem.subsystems'
@@ -535,30 +524,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * @return the ready-to-return JSON error, or {@code null} when the FQN is not a standalone
      *     top-level address (the caller then falls through to the generic message)
      */
-    /**
-     * The refusal for an FQN whose TYPE cannot live in this project kind at all - a configuration
-     * type addressed at an external-objects project, or a standalone external type addressed at a
-     * configuration. {@code null} when the type fits the scope, so a caller can guard with it.
-     *
-     * <p>Asked BEFORE any resolution: every specialized branch that resolves through the
-     * {@code Configuration} would otherwise answer about the WRONG project - a real parent found
-     * in the base model, then an internal transaction failure - or, worse, hand back advice
-     * ("create it first") for something this project can never hold.</p>
-     *
-     * @param scope the resolution root
-     * @param normFqn the normalized FQN being created
-     * @return the ready JSON error, or {@code null} when the type fits this scope
-     */
-    private static String wrongProjectKindRefusal(MetadataScope scope, String normFqn)
-    {
-        String hint = scope.addressingHint(normFqn);
-        if (hint.isEmpty())
-        {
-            return null;
-        }
-        return ToolResult.error("Cannot create '" + normFqn + "' here." + hint).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
     private static String standaloneTopLevelRefusal(String normFqn)
     {
         String[] parts = normFqn.split("\\."); //$NON-NLS-1$
@@ -720,20 +685,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String createXdtoMember(String projectName, String normFqn, XdtoWriter.MemberRef ref,
         List<JsonObject> properties)
     {
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
-        }
-        // This branch is reached BEFORE the shared guard above, and resolves its package through
-        // ctx.config - the BASE configuration for a linked external-objects project. Unguarded it
-        // accepted a package owned by another project, and unlinked it answered "XDTOPackage not
-        // found ... create it first", telling the caller to create one in a project that can
-        // never hold it.
-        String wrongKindOfProject = wrongProjectKindRefusal(ctx.scope, normFqn);
-        if (wrongKindOfProject != null)
-        {
-            return wrongKindOfProject;
         }
         // The leaf name is written verbatim into Package.xdto as an XML name - validate it with the
         // same identifier rule the mdclass member create enforces (a 1C identifier is a safe subset
@@ -978,7 +933,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             props.parentName = normReport.apply("parent", props.parentName); //$NON-NLS-1$
         }
 
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -1644,7 +1599,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -1923,7 +1878,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         List<String> objectFields = JsonUtils.extractArrayArgument(params, KEY_OBJECT_FIELDS);
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
 
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -2189,7 +2144,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         String procName = procNameHolder[0];
 
-        ProjectContext ctx = resolveProjectAndScope(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
