@@ -646,6 +646,15 @@ public class GoToDefinitionTool implements IMcpTool
             {
                 appendExternalProjectHint(sb, scope, firstPart);
             }
+            // Both directions of a type/root mismatch, in one call: the catalogue is global, so
+            // this tool advertises ExternalDataProcessor to a CONFIGURATION project too - and a
+            // bare "object was not found" there implies the object could exist here if only the
+            // name were right. Empty string when the type does fit this root.
+            String mismatch = scope.addressingHint(firstPart);
+            if (!mismatch.isEmpty())
+            {
+                sb.append(mismatch.trim()).append("\n\n"); //$NON-NLS-1$
+            }
         }
         else
         {

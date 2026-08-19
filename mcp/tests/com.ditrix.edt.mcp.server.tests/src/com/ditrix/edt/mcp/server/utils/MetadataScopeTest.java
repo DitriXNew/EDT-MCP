@@ -217,6 +217,43 @@ public class MetadataScopeTest
         assertEquals(java.util.Arrays.asList("en"), scope.declaredOrOverride(null)); //$NON-NLS-1$
     }
 
+    /**
+     * The classification behind the create guard: several dispatches own their resolution and
+     * reach the Configuration directly, so they are refused on the TYPE TOKEN before any lookup.
+     * The FQN shapes they take are deeper than "Type.Name", and the hint must still decide them
+     * - a nested subsystem and an XDTO member are exactly those shapes
+     * (issue #309 review round 5).
+     */
+    @Test
+    public void testAddressingHintDecidesTheDeepFqnShapesToo()
+    {
+        ExternalDataProcessor proc = MdClassFactory.eINSTANCE.createExternalDataProcessor();
+        proc.setName("ExtProc"); //$NON-NLS-1$
+        MetadataScope external = MetadataScope.ofExternalObjectProject(null,
+            configurationWithCatalog("Products"), startedProjectWith(proc)); //$NON-NLS-1$
+
+        // A nested subsystem and an XDTO member: configuration-only, however deep the FQN.
+        String nested = external.addressingHint("Subsystem.Sales.Subsystem.Orders"); //$NON-NLS-1$
+        assertTrue(nested, nested.contains("EXTERNAL-OBJECTS")); //$NON-NLS-1$
+        assertTrue(nested, nested.contains("Subsystem")); //$NON-NLS-1$
+        String xdto = external.addressingHint("XDTOPackage.BasePkg.ObjectType.NewType"); //$NON-NLS-1$
+        assertTrue(xdto, xdto.contains("XDTOPackage")); //$NON-NLS-1$
+
+        // Its OWN type at the same depth is not a mismatch, so the guard stays out of the way.
+        assertEquals("", external.addressingHint( //$NON-NLS-1$
+            "ExternalDataProcessor.ExtProc.Form.MainForm.Field.Note")); //$NON-NLS-1$
+
+        // And the REVERSE direction, which the same guard covers: a standalone type addressed
+        // at a configuration says which project KIND holds it.
+        MetadataScope configuration = MetadataScope.ofConfiguration(
+            configurationWithCatalog("Products")); //$NON-NLS-1$
+        String reverse = configuration.addressingHint( //$NON-NLS-1$
+            "ExternalDataProcessor.ExtProc.Attribute.Note"); //$NON-NLS-1$
+        assertTrue(reverse, reverse.contains("EXTERNAL-OBJECTS type")); //$NON-NLS-1$
+        assertTrue(reverse, reverse.contains("list_projects")); //$NON-NLS-1$
+        assertEquals("", configuration.addressingHint("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /** A started external-objects project holding the given standalone root objects. */
     private static IExternalObjectProject startedProjectWith(MdObject... objects)
     {

@@ -311,6 +311,58 @@ def test_extobj_go_to_definition_resolves_the_projects_own_object():
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
 
 
+@e2e_test(tool="create_metadata", kind="error")
+def test_extobj_specialized_dispatches_refuse_before_reading_the_base_configuration():
+    """The branches that own their resolution must be refused too, not just the generic one.
+
+    Two dispatches in create_metadata return before the scope-aware create target and resolve
+    through the Configuration — which for a LINKED external-objects project is the BASE one.
+    The nested-subsystem branch found a real parent in the other project and then failed with
+    "Parent subsystem not found in transaction"; the XDTO branch answered "XDTOPackage not
+    found ... create it first", telling the caller to create one in a project that can never
+    hold it. Both must refuse by naming the project kind instead.
+    """
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    nested = call("create_metadata",
+                  {"projectName": EXT_OBJECTS_PROJECT,
+                   "fqn": "Subsystem.Subsystem.Subsystem.E2eChild"})
+    e = assert_error(nested, "a nested subsystem addressed at an external-objects project")
+    assert_not_contains(e, "in transaction",
+                        "an internal transaction message is not an answer")
+    assert_error_quality(e, names=["Subsystem", EXT_OBJECTS_PROJECT],
+                         ctx="the refusal must name the type and the project kind")
+
+    xdto = call("create_metadata",
+                {"projectName": EXT_OBJECTS_PROJECT,
+                 "fqn": "XDTOPackage.BasePkg.ObjectType.NewType"})
+    e = assert_error(xdto, "an XDTO member addressed at an external-objects project")
+    assert_not_contains(e, "Create it first",
+                        "never advise creating something this project kind cannot hold")
+    assert_error_quality(e, names=["XDTOPackage", EXT_OBJECTS_PROJECT],
+                         ctx="the refusal must name the type and the project kind")
+
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a refused call must not touch the fixture")
+    assert_no_diff("a refused call must not touch the base project either")
+
+
+@e2e_test(tool="go_to_definition", kind="read")
+def test_extobj_type_asked_of_a_configuration_says_where_it_lives():
+    """The REVERSE direction: a standalone type asked of a configuration project.
+
+    The type catalogue is global, so go_to_definition advertises ExternalDataProcessor to a
+    configuration project too. A bare "object was not found" there implies the object could
+    exist in this project if only the name were right — it never can.
+    """
+    r = call("go_to_definition",
+             {"projectName": PROJECT, "symbol": "ExternalDataProcessor.ExtProc"})
+    assert_ok(r, "a standalone type asked of the configuration project")
+    assert_contains(r.text, "Symbol not found", "it cannot resolve here")
+    assert_contains(r.text, "EXTERNAL-OBJECTS type",
+                    "the answer must say the type lives in another project KIND")
+    assert_contains(r.text, "list_projects", "and how to find that project")
+    assert_no_diff("a read tool must not touch the base project on disk")
+
+
 @e2e_test(tool="get_metadata_details", kind="read")
 def test_extobj_details_do_not_call_an_external_object_a_core_object():
     """The Origin footer must not claim an external object belongs to a configuration.
