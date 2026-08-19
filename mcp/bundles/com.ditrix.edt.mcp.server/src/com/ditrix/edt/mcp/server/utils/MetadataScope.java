@@ -484,10 +484,29 @@ public final class MetadataScope
      */
     public String resolveSynonymLanguage(String value, String explicitLanguage, String subject)
     {
+        return resolveSynonymLanguage(value, explicitLanguage, subject, null);
+    }
+
+    /**
+     * The {@link #resolveSynonymLanguage(String, String, String)} variant that validates against
+     * the codes the project will declare AFTER the current call - the post-batch set
+     * {@code modify_metadata} computes when one batch both assigns a {@code languageCode} and
+     * writes a value under it.
+     *
+     * @param value the localized value being set (may be {@code null}/empty)
+     * @param explicitLanguage an explicitly requested language code, or {@code null}/empty
+     * @param subject what is being localized, for the error message
+     * @param declaredOverride the codes declared AFTER this call, or {@code null}/empty
+     * @return the resolved language code, or {@code null} when {@code value} is absent
+     * @throws IllegalArgumentException when a code is needed but cannot be determined
+     */
+    public String resolveSynonymLanguage(String value, String explicitLanguage, String subject,
+        Collection<String> declaredOverride)
+    {
         if (configuration != null)
         {
             return MetadataLanguageUtils.resolveSynonymLanguage(configuration, value,
-                explicitLanguage, subject);
+                explicitLanguage, subject, declaredOverride);
         }
         // No configuration to answer from: validate against - and default to - what the project
         // itself declares. An omitted code becomes the project's default BEFORE the shared call, so
@@ -495,7 +514,24 @@ public final class MetadataScope
         String effective = explicitLanguage != null && !explicitLanguage.isEmpty()
             ? explicitLanguage : defaultLanguageCode();
         return MetadataLanguageUtils.resolveSynonymLanguage(null, value, effective, subject,
-            declaredLanguageOverride());
+            declaredOrOverride(declaredOverride));
+    }
+
+    /**
+     * {@code declaredOverride} when it has content, else the codes THIS scope declares - the
+     * scope-aware twin of {@link MetadataLanguageUtils#declaredOrOverride}, so a project whose
+     * languages live in its manifest rather than in a Configuration is not read as declaring none.
+     *
+     * @param declaredOverride the codes declared after the current call (may be {@code null}/empty)
+     * @return the codes to validate against, never {@code null}
+     */
+    public List<String> declaredOrOverride(Collection<String> declaredOverride)
+    {
+        if (declaredOverride != null && !declaredOverride.isEmpty())
+        {
+            return MetadataLanguageUtils.declaredOrOverride(configuration, declaredOverride);
+        }
+        return declaredLanguageCodes();
     }
 
     /**

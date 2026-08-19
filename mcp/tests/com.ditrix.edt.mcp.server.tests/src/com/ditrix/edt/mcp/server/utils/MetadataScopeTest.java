@@ -176,4 +176,33 @@ public class MetadataScopeTest
         // No value -> no code, in both.
         assertNull(scope.resolveSynonymLanguage(null, null, "the synonym")); //$NON-NLS-1$
     }
+
+    /**
+     * The POST-BATCH declared set must reach the shared validator: one modify_metadata batch can
+     * declare a language code and write a value under it, and the write must be judged by what
+     * the batch leaves behind, not by the model as it was (issue #309 review).
+     */
+    @Test
+    public void testSynonymLanguageHonoursThePostBatchDeclaredOverride()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Language english = MdClassFactory.eINSTANCE.createLanguage();
+        english.setName("English"); //$NON-NLS-1$
+        english.setLanguageCode("en"); //$NON-NLS-1$
+        config.getLanguages().add(english);
+        config.setDefaultLanguage(english);
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+
+        // "fr" is NOT declared by the model, but IS by the batch - so it must be accepted, and
+        // the shared helper must be the one deciding that.
+        assertEquals("fr", scope.resolveSynonymLanguage("Nom", "fr", "the synonym", //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Arrays.asList("fr"))); //$NON-NLS-1$
+        assertEquals(
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Nom", "fr", "the synonym", //$NON-NLS-1$ //$NON-NLS-2$
+                java.util.Arrays.asList("fr")), //$NON-NLS-1$
+            scope.resolveSynonymLanguage("Nom", "fr", "the synonym", //$NON-NLS-1$
+                java.util.Arrays.asList("fr"))); //$NON-NLS-1$
+        // An empty override falls back to what the scope itself declares.
+        assertEquals(java.util.Arrays.asList("en"), scope.declaredOrOverride(null)); //$NON-NLS-1$
+    }
 }

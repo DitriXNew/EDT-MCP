@@ -270,6 +270,15 @@ public final class ProjectContext
 
         Configuration config = configProvider.getConfiguration(project);
         MetadataScope scope = MetadataScope.of(project, config);
+        // Checked BEFORE the configuration question, and on BOTH paths: this project HAS no
+        // readable root at all, so every later answer would be a "not found" about a project
+        // EDT never started - and the strict path would blame the missing base configuration,
+        // which is not the reason either.
+        if (scope.externalRootUnavailable())
+        {
+            return new ConfigurationResult(project, null, null,
+                ToolResult.error(unreadableExternalRootMessage(projectName)).toJson());
+        }
         if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
         {
             return new ConfigurationResult(project, null, null,
@@ -293,6 +302,25 @@ public final class ProjectContext
      * @param externalObjects whether the project is an external-objects one
      * @return the message
      */
+    /**
+     * The refusal for an external-objects project whose ROOT SET cannot be read - EDT has not
+     * started it, so the platform holds no {@code IExternalObjectProject} for it.
+     *
+     * <p>Distinct from every other refusal on purpose: the objects are neither absent nor
+     * misaddressed, the project is simply not up, and only that sentence tells the caller to look
+     * at the workspace instead of at the FQN.</p>
+     *
+     * @param projectName the project the caller named
+     * @return the message
+     */
+    public static String unreadableExternalRootMessage(String projectName)
+    {
+        return "Project '" + projectName + "' is an external-objects project that EDT has not " //$NON-NLS-1$ //$NON-NLS-2$
+            + "started, so neither its external data processors / reports nor anything inside them " //$NON-NLS-1$
+            + "can be read. Check list_projects for its state, run clean_project, or re-open the " //$NON-NLS-1$
+            + "project in EDT."; //$NON-NLS-1$
+    }
+
     public static String noConfigurationMessage(String projectName, boolean externalObjects)
     {
         if (externalObjects)

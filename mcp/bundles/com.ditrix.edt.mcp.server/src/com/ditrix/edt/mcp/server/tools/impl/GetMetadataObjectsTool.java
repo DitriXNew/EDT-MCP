@@ -390,16 +390,6 @@ public class GetMetadataObjectsTool implements IMcpTool
                 .toJson();
         }
 
-        if (scope.externalRootUnavailable())
-        {
-            // "0 objects" here would read as a fact about the project; it is a fact about the
-            // workspace - EDT has not started this project, so its root set cannot be read at all.
-            return ToolResult.error("Project '" + projectName + "' is an external-objects " //$NON-NLS-1$ //$NON-NLS-2$
-                + "project that EDT has not started, so its objects cannot be listed. Check " //$NON-NLS-1$
-                + "list_projects for its state, run clean_project, or re-open the project in EDT.") //$NON-NLS-1$
-                .toJson();
-        }
-
         List<MetadataInfo> objects = new ArrayList<>();
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(category))
         {

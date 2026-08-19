@@ -1996,7 +1996,15 @@ public final class FormElementWriter
         {
             return null;
         }
-        EObject resolved = resolveType(provider, owner, ownerEnglishType + "Object." + ownerName); //$NON-NLS-1$
+        // A STANDALONE type (external data processor / report) names its object type WITHOUT the
+        // "Object" suffix in the DT model - ExternalDataProcessor.<Name>, not
+        // ExternalDataProcessorObject.<Name>; only the XML (Designer) export renames it. Appending
+        // the suffix there would look up a name the model does not have.
+        MetadataTypeUtils.MetadataTypeInfo ownerInfo =
+            MetadataTypeUtils.resolve(ownerEnglishType);
+        String objectTypeName = ownerInfo != null && ownerInfo.isStandalone()
+            ? ownerEnglishType + "." + ownerName : ownerEnglishType + "Object." + ownerName; //$NON-NLS-1$ //$NON-NLS-2$
+        EObject resolved = resolveType(provider, owner, objectTypeName);
         if (!(resolved instanceof TypeItem))
         {
             // The platform TYPE_ITEM provider only knows PLATFORM type names - createProxy throws

@@ -2672,7 +2672,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Read OUTSIDE the write transaction (a plain configuration read, like the language
         // resolution the prepare step already did); only the per-object present locales are
         // collected inside. Issue #298.
-        final List<String> declaredCodes = MetadataLanguageUtils.declaredOrOverride(config,
+        final List<String> declaredCodes = ctx.scope.declaredOrOverride(
             declaredCodesAfterBatch(config, target, properties));
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
@@ -5604,7 +5604,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Validate against what the configuration will declare AFTER this batch: an edit that
             // sets a Language's 'languageCode' and a localized value under it must not reject its own
             // second half, and one that RENAMES a code must not accept the code it removes.
-            code = MetadataLanguageUtils.resolveSynonymLanguage(ctx.config, value,
+            code = ctx.scope.resolveSynonymLanguage(value,
                 asString(prop.get("language")), "'" + name + "'", ctx.declaredAfterBatch); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         catch (IllegalArgumentException e)

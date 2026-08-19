@@ -374,6 +374,22 @@ public class MetadataTypeUtilsTest
         assertNull(report.getConfigReferenceName());
     }
 
+    /**
+     * An external data processor / report has the SAME object form as a DataProcessor / Report -
+     * a main {@code Object} attribute of its own produced object type - so the object-form seed
+     * must recognize them, or {@code generateContent=true} silently seeds nothing there
+     * (issue #309 review).
+     */
+    @Test
+    public void testStandaloneTypesCarryAnObjectFormMainAttribute()
+    {
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("ExternalDataProcessor")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("ExternalReport")); //$NON-NLS-1$
+        // The configuration twins keep theirs, and a record-based owner still has none.
+        assertTrue(MetadataTypeBuilder.hasObjectFormMainAttribute("DataProcessor")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.hasObjectFormMainAttribute("InformationRegister")); //$NON-NLS-1$
+    }
+
     /** A configuration type is NOT standalone - the flag must not spread. */
     @Test
     public void testConfigurationTypesAreNotStandalone()

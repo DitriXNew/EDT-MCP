@@ -66,6 +66,23 @@ public class ProjectContextTest
         assertTrue(external, external.contains("get_metadata_objects")); //$NON-NLS-1$
     }
 
+    /**
+     * "EDT has not started this project" is a THIRD answer, distinct from both "no configuration"
+     * and "not found": the objects are neither absent nor misaddressed, so the message has to send
+     * the caller to the workspace rather than to the FQN (issue #309 review).
+     */
+    @Test
+    public void testUnreadableExternalRootMessageSendsTheCallerToTheWorkspace()
+    {
+        String msg = ProjectContext.unreadableExternalRootMessage("Reports"); //$NON-NLS-1$
+        assertTrue(msg, msg.contains("Reports")); //$NON-NLS-1$
+        assertTrue(msg, msg.contains("has not " + "started")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(msg, msg.contains("list_projects")); //$NON-NLS-1$
+        assertTrue(msg, msg.contains("clean_project")); //$NON-NLS-1$
+        // It must NOT be confused with the missing-base-configuration refusal.
+        assertFalse(msg, msg.contains("no base configuration")); //$NON-NLS-1$
+    }
+
     @Test
     public void testNoConfigurationMessageStaysGenericForAConfigurationProject()
     {

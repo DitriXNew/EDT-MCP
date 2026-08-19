@@ -204,6 +204,40 @@ def test_extobj_create_and_delete_an_attribute():
     assert_no_diff("the base project must never be touched by this test")
 
 
+@e2e_test(tool="create_metadata", kind="write")
+def test_extobj_create_a_form_object_with_generated_content():
+    """generateContent must SEED the main Object attribute on an external data processor.
+
+    An external data processor's object form has exactly the shape a DataProcessor's does - the
+    committed fixture form is that shape - so the seed applies. It was silently skipped because
+    the object-form capability list named only the configuration twins, and the call then
+    reported generateContent=false and created an empty form (issue #309 review).
+    """
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    fqn = "ExternalDataProcessor.ExtProc.Form.E2eSeeded"
+    created = call("create_metadata",
+                   {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn,
+                    "generateContent": True, "expectedNotExists": True})
+    try:
+        assert_ok(created, "create a form object with generateContent on an external owner")
+        after = call("get_metadata_details",
+                     {"projectName": EXT_OBJECTS_PROJECT, "objectFqns": [fqn]})
+        assert_ok(after, "re-read the new form")
+        assert_contains(after.text, "Object",
+                        "the seeded main attribute must be in the form structure")
+        # The seeded attribute's value type is the owner's OWN produced object type. In the DT
+        # model that is ExternalDataProcessor.<Name> - the "Object" suffix is an XML-export
+        # spelling - so assert the DT name reaches disk.
+        poll_diff_contains_rel(EXT_OBJECTS_REL, "ExternalDataProcessor.ExtProc",
+                               ctx="the main attribute must be typed by the owner's object type")
+    finally:
+        removed = call("delete_metadata",
+                       {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn, "confirm": True})
+        assert_ok(removed, "delete the generated form again")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "the create/delete round trip must leave no diff")
+    assert_no_diff("the base project must never be touched by this test")
+
+
 @e2e_test(tool="create_metadata", kind="error")
 def test_extobj_unsupported_member_kind_is_refused_by_name():
     """An ExternalDataProcessor has no `commands` collection at all — the error says so.

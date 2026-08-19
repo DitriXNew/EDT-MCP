@@ -530,6 +530,16 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
         Configuration config = configProvider.getConfiguration(project);
         MetadataScope scope = MetadataScope.of(project, config);
+        // The project HAS no readable root (EDT never started it), so every FQN below would come
+        // back "not found" about a project that is simply not up. Refused on BOTH paths - see
+        // ProjectContext.unreadableExternalRootMessage.
+        if (scope.externalRootUnavailable())
+        {
+            ctx.error = ToolResult.error(
+                com.ditrix.edt.mcp.server.utils.ProjectContext.unreadableExternalRootMessage(
+                    projectName)).toJson();
+            return ctx;
+        }
         // An EXTERNAL-OBJECTS project has no configuration of its own - its roots are its external
         // data processors / reports, and the provider answers with the linked BASE configuration
         // (null when there is none). A scope-driven caller can work without one; a caller that

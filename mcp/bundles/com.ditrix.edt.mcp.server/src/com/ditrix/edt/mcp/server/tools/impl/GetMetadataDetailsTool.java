@@ -211,9 +211,11 @@ public class GetMetadataDetailsTool implements IMcpTool
         Configuration config = resolved.configuration();
         
         // Determine language CODE for synonyms (the synonym map is keyed by code,
-        // e.g. "ru"/"en", not by the Language object's name). May be null when the
-        // configuration has no languages; downstream synonym lookup tolerates that.
-        String effectiveLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
+        // e.g. "ru"/"en", not by the Language object's name). Asked of the SCOPE, so an
+        // external-objects project with no base configuration still defaults to the language its
+        // own manifest declares instead of to nothing. May be null when the project declares no
+        // language at all; downstream synonym lookup tolerates that.
+        String effectiveLanguage = resolved.scope().resolveLanguageCode(language);
 
         // The BM model is needed only to render a FORM's structure (a cross-model hop into the
         // editable Form content); resolved best-effort (a form FQN with no model reports a failure).
