@@ -46,32 +46,32 @@ public class FormStructureReaderTest
     @Test
     public void testResolveMdFormRejectsTooFewParts()
     {
-        assertNull(FormStructureReader.resolveMdForm(null, "CommonForm")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "CommonForm")); //$NON-NLS-1$
     }
 
     @Test
     public void testResolveMdFormRejectsThreeParts()
     {
-        assertNull(FormStructureReader.resolveMdForm(null, "Catalog.Products.ItemForm")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "Catalog.Products.ItemForm")); //$NON-NLS-1$
     }
 
     @Test
     public void testResolveMdFormRejectsFiveParts()
     {
-        assertNull(FormStructureReader.resolveMdForm(null, "Catalog.Products.Forms.ItemForm.Extra")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "Catalog.Products.Forms.ItemForm.Extra")); //$NON-NLS-1$
     }
 
     @Test
     public void testResolveMdFormRejectsNonCommonFormTwoParts()
     {
         // Two-part path whose type is not a CommonForm is not a valid form path.
-        assertNull(FormStructureReader.resolveMdForm(null, "Catalog.Products")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "Catalog.Products")); //$NON-NLS-1$
     }
 
     @Test
     public void testResolveMdFormRejectsWrongFormsKeyword()
     {
-        assertNull(FormStructureReader.resolveMdForm(null, "Catalog.Products.NotForms.ItemForm")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "Catalog.Products.NotForms.ItemForm")); //$NON-NLS-1$
     }
 
     @Test
@@ -79,10 +79,10 @@ public class FormStructureReaderTest
     {
         // Well-formed paths return null (not throw) when the config is null: the shared resolver
         // short-circuits on a null configuration.
-        assertNull(FormStructureReader.resolveMdForm(null, "CommonForm.MyForm")); //$NON-NLS-1$
-        assertNull(FormStructureReader.resolveMdForm(null, "Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "CommonForm.MyForm")); //$NON-NLS-1$
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null), "Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
         // Russian metadata TYPE token is accepted (Справочник).
-        assertNull(FormStructureReader.resolveMdForm(null,
+        assertNull(FormStructureReader.resolveMdForm(MetadataScope.ofConfiguration(null),
             "Справочник.Products.Forms.ItemForm")); //$NON-NLS-1$
     }
 

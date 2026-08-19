@@ -338,6 +338,51 @@ public class MetadataTypeUtilsTest
         assertEquals("Document", info.getEnglishSingular());
     }
 
+    /**
+     * The two STANDALONE types (issue #309): an external data processor / report is addressed by
+     * the SAME bilingual token grammar as every configuration type, and normalizes the same way,
+     * but belongs to no Configuration collection.
+     */
+    @Test
+    public void testExternalObjectTypesResolveBilinguallyAndAreStandalone()
+    {
+        // ВнешняяОбработка / ВнешниеОбработки
+        String ruProcessor = new String(new int[] { 0x0412, 0x043D, 0x0435, 0x0448, 0x043D, 0x044F,
+            0x044F, 0x041E, 0x0431, 0x0440, 0x0430, 0x0431, 0x043E, 0x0442, 0x043A, 0x0430 }, 0, 16);
+        // ВнешнийОтчет
+        String ruReport = new String(new int[] { 0x0412, 0x043D, 0x0435, 0x0448, 0x043D, 0x0438,
+            0x0439, 0x041E, 0x0442, 0x0447, 0x0435, 0x0442 }, 0, 12);
+
+        assertEquals("ExternalDataProcessor", //$NON-NLS-1$
+            MetadataTypeUtils.toEnglishSingular("ExternalDataProcessors")); //$NON-NLS-1$
+        assertEquals("ExternalDataProcessor", MetadataTypeUtils.toEnglishSingular(ruProcessor)); //$NON-NLS-1$
+        assertEquals("ExternalReport", MetadataTypeUtils.toEnglishSingular(ruReport)); //$NON-NLS-1$
+
+        // The Russian FQN normalizes to the English type token, exactly like Catalog / Document.
+        assertEquals("ExternalDataProcessor.ExtProc", //$NON-NLS-1$
+            MetadataTypeUtils.normalizeFqn(ruProcessor + ".ExtProc")); //$NON-NLS-1$
+
+        MetadataTypeInfo processor = MetadataTypeUtils.resolve("ExternalDataProcessor"); //$NON-NLS-1$
+        assertNotNull(processor);
+        assertTrue(processor.isStandalone());
+        assertNull(processor.getConfigReferenceName());
+        assertEquals("ExternalDataProcessors", processor.getDirectoryName()); //$NON-NLS-1$
+
+        MetadataTypeInfo report = MetadataTypeUtils.resolve("ExternalReport"); //$NON-NLS-1$
+        assertNotNull(report);
+        assertTrue(report.isStandalone());
+        assertNull(report.getConfigReferenceName());
+    }
+
+    /** A configuration type is NOT standalone - the flag must not spread. */
+    @Test
+    public void testConfigurationTypesAreNotStandalone()
+    {
+        assertFalse(MetadataTypeUtils.resolve("Catalog").isStandalone()); //$NON-NLS-1$
+        assertFalse(MetadataTypeUtils.resolve("DataProcessor").isStandalone()); //$NON-NLS-1$
+        assertFalse(MetadataTypeUtils.resolve("Report").isStandalone()); //$NON-NLS-1$
+    }
+
     @Test
     public void testResolveUnknown()
     {
@@ -366,11 +411,23 @@ public class MetadataTypeUtilsTest
         }
     }
 
+    /**
+     * A type is EITHER an entry in a Configuration collection (and then it names that collection)
+     * OR a STANDALONE root of its own project (an external data processor / report, which no
+     * Configuration lists). Pinned in BOTH directions: a configuration type added without its
+     * collection name fails, and so does a standalone type that wrongly claims one.
+     */
     @Test
-    public void testAllTypesHaveConfigReferenceNames()
+    public void testConfigReferenceNamePresentExactlyForConfigurationTypes()
     {
         for (MetadataTypeInfo info : MetadataTypeInfo.values())
         {
+            if (info.isStandalone())
+            {
+                assertNull("a standalone type must name no Configuration collection: "
+                    + info.getEnglishSingular(), info.getConfigReferenceName());
+                continue;
+            }
             assertNotNull("configReferenceName is null for " + info.getEnglishSingular(),
                 info.getConfigReferenceName());
             assertFalse("configReferenceName is empty for " + info.getEnglishSingular(),

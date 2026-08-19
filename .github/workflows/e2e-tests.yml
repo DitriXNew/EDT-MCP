@@ -7,8 +7,8 @@ name: E2E Tests (reusable)
 # no docker image, no self-hosted runner. The `build` job builds the plugin; the `e2e`
 # job boots a headless EDT (inlined setup, numbered steps 1/8…8/8 — each phase is a
 # separate line in the Actions UI so you can see what is cached vs what runs),
-# force-starts the MCP server (EDT_MCP_AUTO_START), imports the TestConfiguration
-# fixtures into an empty workspace (EDT_MCP_IMPORT_PROJECTS), then runs the suite
+# force-starts the MCP server (EDT_MCP_AUTO_START), imports the three fixture projects
+# into an empty workspace (EDT_MCP_IMPORT_PROJECTS), then runs the suite
 # against the local :8765.
 #
 # Scope: skips the live-infobase round-trip (requires_live_infobase) by default, so
@@ -348,7 +348,10 @@ jobs:
           # tests (delete_metadata / rename_metadata_object / delete_project / delete_infobase /
           # update_database / a type-change modify_metadata) would HANG forever on the default ASK dialog.
           export EDT_MCP_DESTRUCTIVE_CONSENT=allow
-          export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests"
+          # Three fixture projects, one per EDT project KIND: the base configuration, the
+          # extension, and the external-objects project (issue #309 - a project whose roots are
+          # its own external data processors / reports, which resolves nothing like the other two).
+          export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests:$GITHUB_WORKSPACE/tests/ExternalObjects"
           echo "[edt] importing: $EDT_MCP_IMPORT_PROJECTS"
           # EDT runs Apache Ignite (BM store) which needs java.nio/sun.nio.ch opened and the
           # module system relaxed — exactly the flags EDT's own 1cedt.ini ships (the set is

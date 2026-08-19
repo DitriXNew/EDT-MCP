@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -455,8 +456,18 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     {
         /** Resolved project; non-null only when {@link #error} is null. */
         public IProject project;
-        /** Resolved configuration; non-null only when {@link #error} is null. */
+        /**
+         * Resolved configuration; non-null when {@link #error} is null - EXCEPT for an
+         * external-objects project linked to no base configuration, which resolves successfully
+         * with a null configuration and a non-null {@link #scope} (issue #309).
+         */
         public Configuration config;
+        /**
+         * The ROOT a metadata FQN resolves against for this project: the configuration, or an
+         * external-objects project's own root objects. Non-null whenever {@link #error} is null;
+         * use it - not {@link #config} - to resolve an FQN.
+         */
+        public MetadataScope scope;
         /** Non-null when resolution failed: a JSON error to return verbatim. */
         public String error;
 
@@ -495,7 +506,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         }
 
         Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
+        MetadataScope scope = MetadataScope.of(project, config);
+        // An EXTERNAL-OBJECTS project has no configuration of its own - its roots are its external
+        // data processors / reports, and the provider answers with the linked BASE configuration
+        // (null when there is none). Refusing here would refuse the named project outright, and
+        // resolving an FQN against that base configuration is the #309 bug itself. Issue #309.
+        if (config == null && !scope.isExternalObjects())
         {
             ctx.error = ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
             return ctx;
@@ -503,6 +519,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
 
         ctx.project = project;
         ctx.config = config;
+        ctx.scope = scope;
         return ctx;
     }
 

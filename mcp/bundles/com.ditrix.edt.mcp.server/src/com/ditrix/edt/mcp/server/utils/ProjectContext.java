@@ -241,18 +241,23 @@ public final class ProjectContext
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return new ConfigurationResult(project, null,
+            return new ConfigurationResult(project, null, null,
                 ToolResult.error("Configuration provider not available").toJson()); //$NON-NLS-1$
         }
 
         Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
+        MetadataScope scope = MetadataScope.of(project, config);
+        // An EXTERNAL-OBJECTS project legitimately has no configuration of its own: its root objects
+        // are its external data processors / reports, and the configuration the provider answers with
+        // is the linked BASE one (null when it is linked to none). Refusing on a null configuration
+        // there would refuse the very project the caller named. Issue #309.
+        if (config == null && !scope.isExternalObjects())
         {
-            return new ConfigurationResult(project, null,
+            return new ConfigurationResult(project, null, null,
                 ToolResult.error("Could not get configuration for project: " + projectName).toJson()); //$NON-NLS-1$
         }
 
-        return new ConfigurationResult(project, config, null);
+        return new ConfigurationResult(project, config, scope, null);
     }
 
     /**
@@ -269,7 +274,7 @@ public final class ProjectContext
         ProjectContext ctx = of(projectName);
         if (!ctx.exists())
         {
-            return new ConfigurationResult(null, null,
+            return new ConfigurationResult(null, null, null,
                 ToolResult.error(notFoundMessage(projectName)).toJson());
         }
         return ctx.resolveConfiguration();
@@ -285,12 +290,15 @@ public final class ProjectContext
     {
         private final IProject project;
         private final Configuration configuration;
+        private final MetadataScope scope;
         private final String errorJson;
 
-        private ConfigurationResult(IProject project, Configuration configuration, String errorJson)
+        private ConfigurationResult(IProject project, Configuration configuration,
+            MetadataScope scope, String errorJson)
         {
             this.project = project;
             this.configuration = configuration;
+            this.scope = scope;
             this.errorJson = errorJson;
         }
 
@@ -306,10 +314,23 @@ public final class ProjectContext
             return project;
         }
 
-        /** @return the resolved configuration, or {@code null} on error. */
+        /**
+         * @return the resolved configuration, or {@code null} on error - and also for an
+         *     external-objects project that is linked to no base configuration, which is a SUCCESS
+         *     (check {@link #ok()}, not this, for failure)
+         */
         public Configuration configuration()
         {
             return configuration;
+        }
+
+        /**
+         * @return the ROOT a metadata FQN resolves against for this project (the configuration, or
+         *     an external-objects project's own root objects); {@code null} on error
+         */
+        public MetadataScope scope()
+        {
+            return scope;
         }
 
         /** @return the error JSON to return from {@code execute}, or {@code null} on success. */

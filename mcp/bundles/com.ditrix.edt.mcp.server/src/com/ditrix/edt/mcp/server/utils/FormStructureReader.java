@@ -133,6 +133,25 @@ public final class FormStructureReader
      */
     public static MdObject resolveMdForm(Configuration config, String formPath)
     {
+        return resolveMdForm(MetadataScope.ofConfiguration(config), formPath);
+    }
+
+    /**
+     * Resolves the metadata form object ({@code BasicForm}) from a form FQN path, against whichever
+     * ROOT the project has - the {@link Configuration} of a configuration / extension project, or
+     * the standalone root objects of an external-objects project, whose external data processors
+     * and reports own forms exactly like a configuration object does (issue #309).
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param formPath the form FQN path
+     * @return the {@code BasicForm} {@link MdObject}, or {@code null} if not found
+     */
+    public static MdObject resolveMdForm(MetadataScope scope, String formPath)
+    {
+        if (scope == null || formPath == null)
+        {
+            return null;
+        }
         String[] parts = formPath.split("\\."); //$NON-NLS-1$
 
         // CommonForm.FormName — the CommonForm IS a BasicForm.
@@ -142,7 +161,7 @@ public final class FormStructureReader
             {
                 return null;
             }
-            return MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+            return scope.findObject(parts[0], parts[1]);
         }
 
         // MetadataType.ObjectName.Forms.FormName — find the owner object, then its form.
@@ -152,7 +171,7 @@ public final class FormStructureReader
             {
                 return null;
             }
-            MdObject owner = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+            MdObject owner = scope.findObject(parts[0], parts[1]);
             if (owner == null)
             {
                 return null;

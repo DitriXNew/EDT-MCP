@@ -55,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -236,8 +237,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         List<String[]> failures = new ArrayList<>();
 
         // Per-request render context, constant across every FQN in the loop.
-        RenderContext ctx = new RenderContext(config, bmModel, effectiveLanguage, full, assignable,
-            isExtensionProject, roleObjectOffset);
+        RenderContext ctx = new RenderContext(config, resolved.scope(), bmModel, effectiveLanguage,
+            full, assignable, isExtensionProject, roleObjectOffset);
 
         // Process each FQN
         for (String fqn : objectFqns)
@@ -276,7 +277,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
         if (formPath != null)
         {
-            String formStructure = renderFormStructure(ctx.config, ctx.bmModel, formPath, ctx.effectiveLanguage);
+            String formStructure = renderFormStructure(ctx.scope, ctx.bmModel, formPath, ctx.effectiveLanguage);
             if (formStructure == null)
             {
                 failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
@@ -298,7 +299,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         // this does not duplicate FQN navigation. A FQN that is not a template, or a template whose
         // content is NOT a DataCompositionSchema (e.g. a SpreadsheetDocument print form), falls
         // through UNCHANGED to the generic object-resolution path below.
-        String dcsStructure = renderTemplateDcsIfApplicable(ctx.config, ctx.bmModel, fqn, ctx.effectiveLanguage);
+        String dcsStructure = renderTemplateDcsIfApplicable(ctx.scope, ctx.bmModel, fqn, ctx.effectiveLanguage);
         if (dcsStructure != null)
         {
             sb.append(dcsStructure);
@@ -343,10 +344,10 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
-        MdObject mdObject = resolveObject(ctx.config, fqn);
+        MdObject mdObject = resolveObject(ctx.scope, fqn);
         if (mdObject == null)
         {
-            failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+            failures.add(new String[] { fqn, describeResolutionFailure(fqn, ctx.scope) });
             return;
         }
 
@@ -410,7 +411,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             // really has, so the reason is not "does not exist" about something the caller can see.
             String[] kindAdvice = new String[] { "" }; //$NON-NLS-1$
             String memberAssignable =
-                renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef, kindAdvice);
+                renderFormMemberAssignable(ctx.scope, ctx.bmModel, normFqn, memberRef, kindAdvice);
             if (memberAssignable == null)
             {
                 // With advice the element DOES exist under another kind, so the generic "or the
@@ -425,10 +426,10 @@ public class GetMetadataDetailsTool implements IMcpTool
             sb.append(SECTION_SEPARATOR);
             return;
         }
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.config, fqn);
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(ctx.scope, fqn);
         if (node == null || node.object == null)
         {
-            failures.add(new String[] { fqn, describeResolutionFailure(fqn) });
+            failures.add(new String[] { fqn, describeResolutionFailure(fqn, ctx.scope) });
             return;
         }
         sb.append(formatAssignable(normFqn, node.object));
@@ -498,7 +499,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             return null;
         }
         MetadataNodeResolver.ResolvedNode ownerResolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.ownerFqn());
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.ownerFqn());
         if (ownerResolved.node == null)
         {
             failures.add(new String[] { fqn, "Owner object not found: " + ref.ownerFqn() //$NON-NLS-1$
@@ -642,6 +643,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     static final class RenderContext
     {
         final Configuration config;
+        /** The ROOT an FQN resolves against: the configuration, or an external-objects project's roots. */
+        final MetadataScope scope;
         final IBmModel bmModel;
         final String effectiveLanguage;
         final boolean full;
@@ -650,10 +653,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         /** 0-based object offset for a Role FQN's paginated rights matrix (ignored in {@code full} mode). */
         final int roleObjectOffset;
 
-        RenderContext(Configuration config, IBmModel bmModel, String effectiveLanguage,
-            boolean full, boolean assignable, boolean isExtensionProject, int roleObjectOffset)
+        RenderContext(Configuration config, MetadataScope scope, IBmModel bmModel, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+            String effectiveLanguage, boolean full, boolean assignable, boolean isExtensionProject,
+            int roleObjectOffset)
         {
             this.config = config;
+            this.scope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
             this.bmModel = bmModel;
             this.effectiveLanguage = effectiveLanguage;
             this.full = full;
@@ -997,14 +1002,14 @@ public class GetMetadataDetailsTool implements IMcpTool
      * EObjects must not escape the read task). Returns {@code null} when the form has no editable
      * content model (empty / legacy / not built) or the BM model is unavailable.
      */
-    private static String renderFormStructure(Configuration config, IBmModel bmModel, String formPath,
+    private static String renderFormStructure(MetadataScope scope, IBmModel bmModel, String formPath,
         String language)
     {
         if (bmModel == null)
         {
             return null;
         }
-        MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
+        MdObject mdForm = FormStructureReader.resolveMdForm(scope, formPath);
         if (!(mdForm instanceof IBmObject))
         {
             return null;
@@ -1040,7 +1045,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      * SpreadsheetDocument template; every edit the lazy materialization makes is discarded when the
      * transaction returns, so this pure read never persists anything.
      *
-     * @param config the resolved configuration
+     * @param scope the resolution root of the project (configuration, or external-objects roots)
      * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
      * @param fqn the requested FQN (not yet normalized)
      * @param language the resolved title/presentation language CODE (may be {@code null})
@@ -1050,14 +1055,14 @@ public class GetMetadataDetailsTool implements IMcpTool
      *         form, etc.) - {@code null} means "not applicable here", NOT a failure: the caller falls
      *         through to the generic object-resolution render.
      */
-    private static String renderTemplateDcsIfApplicable(Configuration config, IBmModel bmModel, String fqn,
+    private static String renderTemplateDcsIfApplicable(MetadataScope scope, IBmModel bmModel, String fqn,
         String language)
     {
         if (bmModel == null)
         {
             return null;
         }
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, fqn);
         if (node == null || !(node.object instanceof BasicTemplate) || !(node.object instanceof IBmObject))
         {
             return null;
@@ -1114,7 +1119,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      * features UNION its {@code extInfo}'s layout properties, issue #235). The member EObject must not
      * escape the read task, so the whole render runs inside it.
      *
-     * @param config the resolved configuration
+     * @param scope the resolution root of the project (configuration, or external-objects roots)
      * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
      * @param normFqn the normalized member FQN, for the section heading
      * @param ref the parsed form-member reference (see {@link FormElementWriter#parse})
@@ -1124,14 +1129,14 @@ public class GetMetadataDetailsTool implements IMcpTool
      * @return the Markdown assignable table, or {@code null} when the BM model is unavailable, the form
      *     has no editable content model, or the member does not exist
      */
-    private static String renderFormMemberAssignable(Configuration config, IBmModel bmModel,
+    private static String renderFormMemberAssignable(MetadataScope scope, IBmModel bmModel,
         String normFqn, FormElementWriter.FormMemberRef ref, String[] kindAdviceOut)
     {
         if (bmModel == null)
         {
             return null;
         }
-        MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
+        MdObject mdForm = FormStructureReader.resolveMdForm(scope, ref.formPath);
         if (!(mdForm instanceof IBmObject))
         {
             return null;
@@ -1212,7 +1217,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      * per-object failure (recorded in the machine-readable failures table), never
      * a whole-call failure.
      */
-    private MdObject resolveObject(Configuration config, String fqn)
+    private MdObject resolveObject(MetadataScope scope, String fqn)
     {
         // Parse FQN: Type.Name
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
@@ -1231,7 +1236,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             mdType = normalized;
         }
 
-        return MetadataTypeUtils.findObject(config, mdType, mdName);
+        return scope.findObject(mdType, mdName);
     }
 
     /**
@@ -1241,12 +1246,27 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     String describeResolutionFailure(String fqn)
     {
+        return describeResolutionFailure(fqn, null);
+    }
+
+    /**
+     * The {@link #describeResolutionFailure(String)} variant that can say WHY the address cannot
+     * resolve in THIS project - an external-objects type asked of a configuration, or the reverse
+     * (issue #309). {@code scope} may be {@code null}, and the reason is then the generic one.
+     *
+     * @param fqn the FQN that did not resolve
+     * @param scope the project's resolution root, or {@code null}
+     * @return the machine-readable reason
+     */
+    String describeResolutionFailure(String fqn, MetadataScope scope)
+    {
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
         if (parts.length < 2)
         {
             return "Invalid FQN. Expected format: Type.Name (e.g. Catalog.Products)"; //$NON-NLS-1$
         }
-        return "Object not found - use get_metadata_objects to list valid FQNs"; //$NON-NLS-1$
+        String hint = scope == null ? "" : scope.addressingHint(fqn); //$NON-NLS-1$
+        return "Object not found - use get_metadata_objects to list valid FQNs" + hint; //$NON-NLS-1$
     }
 
     /**

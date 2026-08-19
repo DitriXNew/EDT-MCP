@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:ExternalDataProcessor xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="b81dd003-6102-4bd7-b029-3e95ccd3cd7c">
+  <producedTypes>
+    <objectType typeId="24702f60-5a8d-4c18-8e49-1efbc067e121" valueTypeId="aeb50e90-413e-4d28-91de-26579e7ffa38"/>
+  </producedTypes>
+  <name>ExtProc</name>
+  <synonym>
+    <key>en</key>
+    <value>Ext proc</value>
+  </synonym>
+  <defaultForm>ExternalDataProcessor.ExtProc.Form.MainForm</defaultForm>
+  <attributes uuid="1798fc17-6ce6-437a-a93d-70553c5ad301">
+    <name>Note</name>
+    <synonym>
+      <key>en</key>
+      <value>Note</value>
+    </synonym>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>100</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+  </attributes>
+  <forms uuid="d33a3235-1432-4fa3-8eec-b5c9819a5c03">
+    <name>MainForm</name>
+    <synonym>
+      <key>en</key>
+      <value>Main form</value>
+    </synonym>
+    <usePurposes>PersonalComputer</usePurposes>
+  </forms>
+</mdclass:ExternalDataProcessor>

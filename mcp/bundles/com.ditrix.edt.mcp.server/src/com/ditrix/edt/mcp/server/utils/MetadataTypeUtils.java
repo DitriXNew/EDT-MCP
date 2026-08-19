@@ -189,22 +189,47 @@ public final class MetadataTypeUtils
             "\u0411\u043E\u0442", "\u0411\u043E\u0442\u044B"), // Бот, Боты //$NON-NLS-1$ //$NON-NLS-2$
 
         WEB_SOCKET_CLIENT("WebSocketClient", "WebSocketClients", "webSocketClients", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "WebSocket\u041A\u043B\u0438\u0435\u043D\u0442"); // WebSocketКлиент //$NON-NLS-1$
+            "WebSocket\u041A\u043B\u0438\u0435\u043D\u0442"), // WebSocketКлиент //$NON-NLS-1$
+
+        // The two STANDALONE types: an external data processor / report is a ROOT object of an
+        // external-objects project (V8ExternalObjectsNature), not a member of any Configuration
+        // collection - hence no configReferenceName. They resolve through MetadataScope, which
+        // knows that root; they belong in THIS catalogue because their FQN type token is
+        // bilingual exactly like every other top-level type and has to normalize the same way.
+        EXTERNAL_DATA_PROCESSOR("ExternalDataProcessor", "ExternalDataProcessors", null, //$NON-NLS-1$ //$NON-NLS-2$
+            "ExternalDataProcessors", true, //$NON-NLS-1$
+            "\u0412\u043D\u0435\u0448\u043D\u044F\u044F\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0430", // ВнешняяОбработка //$NON-NLS-1$
+            "\u0412\u043D\u0435\u0448\u043D\u0438\u0435\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0438"), // ВнешниеОбработки //$NON-NLS-1$
+
+        EXTERNAL_REPORT("ExternalReport", "ExternalReports", null, "ExternalReports", true, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "\u0412\u043D\u0435\u0448\u043D\u0438\u0439\u041E\u0442\u0447\u0435\u0442", // ВнешнийОтчет //$NON-NLS-1$
+            "\u0412\u043D\u0435\u0448\u043D\u0438\u0435\u041E\u0442\u0447\u0435\u0442\u044B"); // ВнешниеОтчеты //$NON-NLS-1$
 
         private final String englishSingular;
         private final String englishPlural;
         private final String configReferenceName;
         private final String directoryName; // null if type has no src/ directory
+        /** A ROOT object of its own project (external data processor / report), not a Configuration member. */
+        private final boolean standalone;
         private final String[] russianNames;
 
         MetadataTypeInfo(String englishSingular, String englishPlural,
                          String configReferenceName, String directoryName,
                          String... russianNames)
         {
+            this(englishSingular, englishPlural, configReferenceName, directoryName, false,
+                russianNames);
+        }
+
+        MetadataTypeInfo(String englishSingular, String englishPlural, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                         String configReferenceName, String directoryName, boolean standalone,
+                         String... russianNames)
+        {
             this.englishSingular = englishSingular;
             this.englishPlural = englishPlural;
             this.configReferenceName = configReferenceName;
             this.directoryName = directoryName;
+            this.standalone = standalone;
             this.russianNames = russianNames;
         }
 
@@ -221,6 +246,20 @@ public final class MetadataTypeUtils
         public String getConfigReferenceName()
         {
             return configReferenceName;
+        }
+
+        /**
+         * Whether this type is a STANDALONE root object of its own project (an external data
+         * processor / report) rather than an entry in a {@code Configuration} collection. The two
+         * are mutually exclusive by construction: a standalone type has no
+         * {@link #getConfigReferenceName() configuration collection}, and every configuration type
+         * has one.
+         *
+         * @return {@code true} for an external-objects root type
+         */
+        public boolean isStandalone()
+        {
+            return standalone;
         }
 
         /** @return directory name in src/, or {@code null} if not applicable */

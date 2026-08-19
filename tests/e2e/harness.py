@@ -49,6 +49,13 @@ TESTS_PROJECT = os.environ.get("MCP_TESTS_PROJECT", PROJECT + ".tests")
 # reverts this too and re-syncs the model — a session must leave the WHOLE tree clean.
 TESTS_PROJECT_REL = os.environ.get("MCP_TESTS_PROJECT_REL", "tests/tests")
 
+# The EXTERNAL-OBJECTS fixture (V8ExternalObjectsNature, issue #309): a project whose roots
+# are its own external data processors / reports, linked to TestConfiguration as its base.
+# It is a THIRD project kind - neither a configuration nor an extension - and the tools
+# resolved FQNs in it against the BASE configuration until #309 was fixed.
+EXT_OBJECTS_PROJECT = os.environ.get("MCP_EXT_OBJECTS_PROJECT", "ExternalObjects")
+EXT_OBJECTS_REL = os.environ.get("MCP_EXT_OBJECTS_REL", "tests/ExternalObjects")
+
 # Opt-in gate for the ATTENDED live-infobase round-trip suite (test_live_roundtrip.py).
 # Those tests drive a REAL 1C runtime-client launch / debug session against a running
 # infobase with YAXUnit installed — heavy, stateful, and absent in headless CI. They
@@ -902,9 +909,10 @@ def _git(*args, timeout=None):
     )
 
 
-# Both fixture projects. The BASE is the one tests mutate (reset before every test); the
-# EXTENSION is read-only to the tests but the end-of-run cleanup reverts it too.
-ALL_FIXTURE_RELS = [PROJECT_REL, TESTS_PROJECT_REL]
+# Every fixture project. The BASE is the one most tests mutate (reset before every test); the
+# EXTENSION and the EXTERNAL-OBJECTS project are touched only by their own files, and the
+# end-of-run cleanup reverts all three.
+ALL_FIXTURE_RELS = [PROJECT_REL, TESTS_PROJECT_REL, EXT_OBJECTS_REL]
 
 
 def _reset_rel(rel):
@@ -982,6 +990,41 @@ def reset_fixture():
             return False
         _reset_rel(PROJECT_REL)
         return True
+
+
+def reset_fixture_rel(rel):
+    """Hard reset ONE fixture path to HEAD - for a test file that mutates a fixture other
+    than the base project (the external-objects one, say), which reset_fixture() does not cover.
+
+    @return True if the reset ran, False if the fixtures are frozen and it was refused."""
+    with _FIXTURE_LOCK:
+        if _FIXTURES_FROZEN:
+            return False
+        _reset_rel(rel)
+        return True
+
+
+def status_porcelain_rel(rel):
+    """git status --porcelain scoped to one fixture path (see _status_porcelain)."""
+    return _git_checked("status", "--porcelain", "--", rel).stdout.rstrip("\r\n")
+
+
+def assert_no_diff_rel(rel, ctx=""):
+    """The given fixture path must be clean - assert_no_diff for a non-base fixture."""
+    st = status_porcelain_rel(rel)
+    if st:
+        _fail("expected NO change to %s but found [%s]:\n%s" % (rel, ctx, st[:500]))
+
+
+def diff_rel(rel):
+    """git diff scoped to one fixture path."""
+    return _git("diff", "--", rel).stdout
+
+
+def read_fixture_file(rel, relpath):
+    """Read a file inside a fixture path other than the base project."""
+    with open(os.path.join(REPO_ROOT, *rel.split("/"), *relpath.split("/")), encoding="utf-8") as f:
+        return f.read()
 
 
 def reset_all_fixtures():

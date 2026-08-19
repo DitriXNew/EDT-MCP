@@ -8,10 +8,15 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
+
 import org.junit.Test;
+
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 
 /**
  * Tests for the pure, model-independent logic of {@link MetadataNodeResolver}: FQN arity validation
@@ -28,6 +33,51 @@ public class MetadataNodeResolverTest
     private static String fromCp(int... cps)
     {
         return new String(cps, 0, cps.length);
+    }
+
+    /**
+     * {@link MetadataNodeResolver#childKindsFor} answers from the OWNER's own EClass, so a type
+     * that simply has no such collection can be told apart from a mistyped kind (issue #309).
+     */
+    @Test
+    public void testChildKindsAreReadOffTheOwnerType()
+    {
+        List<String> catalogKinds = MetadataNodeResolver.childKindsFor(
+            MdClassFactory.eINSTANCE.createCatalog());
+        assertTrue(catalogKinds.toString(), catalogKinds.contains("Attribute")); //$NON-NLS-1$
+        assertTrue(catalogKinds.toString(), catalogKinds.contains("TabularSection")); //$NON-NLS-1$
+        assertTrue(catalogKinds.toString(), catalogKinds.contains("Command")); //$NON-NLS-1$
+        // A Catalog has no accounting flags - that is a ChartOfAccounts collection.
+        assertFalse(catalogKinds.toString(), catalogKinds.contains("AccountingFlag")); //$NON-NLS-1$
+
+        // An external data processor carries attributes / tabular sections / templates but NO
+        // commands: the platform model has no such collection on it, which is why
+        // '...Command.X' can never resolve there however it is spelled.
+        List<String> externalKinds = MetadataNodeResolver.childKindsFor(
+            MdClassFactory.eINSTANCE.createExternalDataProcessor());
+        assertTrue(externalKinds.toString(), externalKinds.contains("Attribute")); //$NON-NLS-1$
+        assertTrue(externalKinds.toString(), externalKinds.contains("TabularSection")); //$NON-NLS-1$
+        assertTrue(externalKinds.toString(), externalKinds.contains("Template")); //$NON-NLS-1$
+        assertFalse(externalKinds.toString(), externalKinds.contains("Command")); //$NON-NLS-1$
+
+        assertTrue(MetadataNodeResolver.childKindsFor(null).isEmpty());
+    }
+
+    /**
+     * A TOP-level create of a STANDALONE type does not resolve: an external data processor is the
+     * root of its own project, not a row in a Configuration collection (issue #309). The tool
+     * turns this {@code null} into the refusal that says where such an object comes from.
+     */
+    @Test
+    public void testTopLevelCreateOfAStandaloneTypeDoesNotResolve()
+    {
+        assertNull(MetadataNodeResolver.resolveForCreate(
+            MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()),
+            "ExternalDataProcessor.NewProc")); //$NON-NLS-1$
+        // A configuration type still resolves for create, unchanged.
+        assertNotNull(MetadataNodeResolver.resolveForCreate(
+            MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()),
+            "Catalog.NewCatalog")); //$NON-NLS-1$
     }
 
     @Test
@@ -270,7 +320,8 @@ public class MetadataNodeResolverTest
         // No configuration: neither form resolves; the result echoes the requested FQN and is
         // NOT flagged as a fallback hit (the not-found message / log contract relies on that).
         MetadataNodeResolver.ResolvedNode r =
-            MetadataNodeResolver.resolveExistingWithYoFallback(null, "Catalog.X"); //$NON-NLS-1$
+            MetadataNodeResolver.resolveExistingWithYoFallback(MetadataScope.ofConfiguration(null),
+                "Catalog.X"); //$NON-NLS-1$
         assertNull(r.node);
         assertEquals("Catalog.X", r.fqn); //$NON-NLS-1$
         assertFalse(r.yoFallback);

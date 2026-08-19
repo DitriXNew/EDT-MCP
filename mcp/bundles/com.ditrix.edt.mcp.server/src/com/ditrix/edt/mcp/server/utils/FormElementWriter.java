@@ -1076,7 +1076,26 @@ public final class FormElementWriter
     public static FormEditContext resolveForEdit(IProject project, Configuration config,
         String formPath, String formNotFoundMessage)
     {
-        MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
+        return resolveForEdit(project, MetadataScope.ofConfiguration(config), formPath,
+            formNotFoundMessage);
+    }
+
+    /**
+     * The {@link #resolveForEdit(IProject, Configuration, String, String)} variant that resolves the
+     * form against whichever ROOT the project has - so a form of an external data processor /
+     * report is found in its own project rather than looked for in the base configuration
+     * (issue #309).
+     *
+     * @param project the workspace project
+     * @param scope the resolution root of {@code project}
+     * @param formPath the form path to resolve
+     * @param formNotFoundMessage the user-visible message when the form does not resolve
+     * @return the resolved context
+     */
+    public static FormEditContext resolveForEdit(IProject project, MetadataScope scope,
+        String formPath, String formNotFoundMessage)
+    {
+        MdObject mdForm = FormStructureReader.resolveMdForm(scope, formPath);
         if (mdForm == null)
         {
             throw new FormValidationException(ToolResult.error(formNotFoundMessage).toJson());

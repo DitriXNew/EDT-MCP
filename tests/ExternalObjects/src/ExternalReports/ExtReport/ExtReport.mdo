@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:ExternalReport xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="31fd6502-a603-4623-97d5-6e83a67144d1">
+  <producedTypes>
+    <objectType typeId="e193ae2d-8918-43b5-9b5e-e6ccda4cac14" valueTypeId="1a3f25c1-36c7-4143-8727-f1d67d172da0"/>
+  </producedTypes>
+  <name>ExtReport</name>
+  <synonym>
+    <key>en</key>
+    <value>Ext report</value>
+  </synonym>
+</mdclass:ExternalReport>
