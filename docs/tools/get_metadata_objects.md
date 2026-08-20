@@ -1,12 +1,12 @@
 # get_metadata_objects
 
-Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, ObjectModule, ManagerModule) as a Markdown table. Use it to discover what objects exist; filter by metadataType and/or nameFilter (Name only). Use this to list objects; for the full properties of one named object use get_metadata_details. Full parameters and examples: call get_tool_guide('get_metadata_objects').
+Discover metadata objects available in a 1C configuration. Parameters and examples: get_tool_guide('get_metadata_objects').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name (required) |
-| metadataType | — | string | Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs, xdtoPackages - OR a single standard metadata type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', 'Document'). Single value only - not an array. An unrecognized value returns an error listing the supported options. |
+| metadataType | — | string | Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs, xdtoPackages - OR a single standard metadata type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', 'Document'). Single value only - not an array. An unrecognized value returns an error listing the supported options. In an EXTERNAL-OBJECTS project the vocabulary is all / externalDataProcessors / externalReports instead - that project holds its own roots, not a configuration. |
 | nameFilter | — | string | Case-insensitive substring matched against Name only (not Synonym) |
 | limit | — | integer | Max rows (default from preferences: 100, max 1000) |
 | language | — | string | Synonym language code, e.g. 'en'/'ru' (default: configuration default) |
@@ -37,6 +37,14 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 - `Type` - e.g. `Document`, `Catalog`, `InformationRegister`, `CommonModule`, `Enum`.
 - `ObjectModule` - `Yes` if the object has an object/record-set/value-manager module, else `-`.
 - `ManagerModule` - `Yes` if the object has a manager module, else `-`.
+
+## External-objects projects
+A project with the external-objects nature holds no configuration: its roots are its own
+external data processors and reports. This tool answers about THAT project, with its own
+two-entry vocabulary - `all`, `externalDataProcessors`, `externalReports`, or the type name
+itself (`ExternalDataProcessor` / `ExternalReport`, English or Russian). A configuration
+category asked of such a project is refused, naming what the project does hold, rather than
+answered from the base configuration it is linked to.
 
 ## Examples
 - Everything: `{projectName: "MyProject"}`.

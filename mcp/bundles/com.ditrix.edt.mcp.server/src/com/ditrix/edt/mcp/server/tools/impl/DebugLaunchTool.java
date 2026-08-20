@@ -1038,13 +1038,52 @@ public class DebugLaunchTool implements IMcpTool
         try
         {
             String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            String applicationId = LaunchConfigUtils.getApplicationIdFor(config);
+            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
+            // configuration without a stored ATTR_APPLICATION_ID launches the default application
+            // application, while getApplicationIdFor yields a synthetic "launch:<name>" that no
+            // IApplicationManager knows - so attribution came back null and the arm, though
+            // created, could never authorise the re-address the caller asked for.
+            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
+                projectName);
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.isOpen())
             {
                 return null;
             }
             return LaunchLifecycleUtils.attributionInfobaseName(
+                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break the launch
+        {
+            return null;
+        }
+    }
+
+    /**
+     * The WST server name behind a launch configuration - what the port-conflict dialog quotes.
+     * Best-effort: {@code null} simply refuses the writing answer.
+     *
+     * @param config the launch configuration
+     * @return the server name, or {@code null}
+     */
+    private static String launchServerName(ILaunchConfiguration config)
+    {
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
+            // configuration without a stored ATTR_APPLICATION_ID launches the default application
+            // application, while getApplicationIdFor yields a synthetic "launch:<name>" that no
+            // IApplicationManager knows - so attribution came back null and the arm, though
+            // created, could never authorise the re-address the caller asked for.
+            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
+                projectName);
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.isOpen())
+            {
+                return null;
+            }
+            return LaunchLifecycleUtils.attributionServerName(
                 Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break the launch
@@ -1179,8 +1218,12 @@ public class DebugLaunchTool implements IMcpTool
         ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         StandaloneServerPortConflictPolicy launchPortPolicy = standaloneServerPortPolicy(config,
             portPolicy);
+        // Resolved ONCE and reused for the disarm: reading it again later could return a
+        // different server if the configuration was rebound meanwhile, and the arm would then
+        // never be released by the value it was taken with.
+        String launchServer = launchServerName(config);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, launchPortPolicy);
+            launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -1197,7 +1240,8 @@ public class DebugLaunchTool implements IMcpTool
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy);
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+                launchServer);
         }
     }
 
@@ -1266,11 +1310,16 @@ public class DebugLaunchTool implements IMcpTool
         // port-conflict matcher is armed and can refuse the launch - without a window that refusal
         // reached nobody. "policy != null" is the non-Attach signal (the caller passes null for an
         // Attach, which attaches to a running server and never starts one).
+        // Resolved ONCE, before anything uses it: the window, the arm and its release must all
+        // carry the SAME name. Read twice, a rebound configuration (or one best-effort lookup
+        // that momentarily fails) would address the window to one server and the arm to another,
+        // and the arm would never be released by the value it was taken with.
+        String launchServer = launchServerName(config);
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
-            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
+            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
-            launchPolicy, launchInfobase, launchPortPolicy);
+            launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
         // (#230). This launch is fire-and-forget: tool.execute() has already returned and
         // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no
@@ -1328,7 +1377,8 @@ public class DebugLaunchTool implements IMcpTool
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy);
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+                launchServer);
             if (conflicts != null)
             {
                 conflicts.close();

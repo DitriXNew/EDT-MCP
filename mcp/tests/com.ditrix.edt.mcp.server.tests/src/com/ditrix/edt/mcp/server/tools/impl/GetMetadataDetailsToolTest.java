@@ -42,6 +42,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.google.gson.JsonPrimitive;
 
@@ -324,6 +325,28 @@ public class GetMetadataDetailsToolTest
         // discovery tool (get_metadata_objects) to obtain a valid FQN.
         assertTrue(reason.contains("Object not found")); //$NON-NLS-1$
         assertTrue(reason.contains("get_metadata_objects")); //$NON-NLS-1$
+    }
+
+    /**
+     * An EXTERNAL-OBJECTS type asked of a CONFIGURATION project cannot resolve there at all, and
+     * the reason says which project kind holds it instead of the bare "not found" that sent the
+     * caller looking for a typo (issue #309).
+     */
+    @Test
+    public void testResolutionFailureReasonNamesTheWrongProjectKind()
+    {
+        GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
+        MetadataScope scope =
+            MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration());
+
+        String reason = tool.describeResolutionFailure("ExternalDataProcessor.ExtProc", scope); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("Object not found")); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("external-objects")); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("list_projects")); //$NON-NLS-1$
+
+        // A configuration type keeps the plain reason - the hint must not fire for everything.
+        String plain = tool.describeResolutionFailure("Catalog.NoSuchObject", scope); //$NON-NLS-1$
+        assertFalse(plain, plain.contains("external-objects")); //$NON-NLS-1$
     }
 
     /**
@@ -784,7 +807,8 @@ public class GetMetadataDetailsToolTest
         PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
 
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, 0); //$NON-NLS-1$
+            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
+                "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Catalog.Colors.Predefined.Blue"); //$NON-NLS-1$
@@ -805,7 +829,8 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, 0); //$NON-NLS-1$
+            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
+                "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Document.Order.Predefined.X"); //$NON-NLS-1$
@@ -824,7 +849,8 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, 0); //$NON-NLS-1$
+            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
+                "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref =

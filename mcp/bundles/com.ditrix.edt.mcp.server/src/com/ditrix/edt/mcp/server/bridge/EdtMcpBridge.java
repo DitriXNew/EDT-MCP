@@ -59,6 +59,19 @@ public class EdtMcpBridge implements IEdtMcpBridge, BiFunction<String, String, S
     @Override
     public String listTools()
     {
+        BridgeActivity.callStarted();
+        try
+        {
+            return renderToolList();
+        }
+        finally
+        {
+            BridgeActivity.callFinished();
+        }
+    }
+
+    private String renderToolList()
+    {
         JsonArray result = new JsonArray();
         registry.getAllTools().stream()
             .sorted(Comparator.comparing(IMcpTool::getName))
@@ -73,6 +86,21 @@ public class EdtMcpBridge implements IEdtMcpBridge, BiFunction<String, String, S
 
     @Override
     public String callTool(String toolName, String argsJson)
+    {
+        // Bracketed, not just counted: a caller waiting on an assistant turn needs to see that
+        // work is under way, and one tool that runs for minutes ticks the counter only once.
+        BridgeActivity.callStarted();
+        try
+        {
+            return dispatchToolCall(toolName, argsJson);
+        }
+        finally
+        {
+            BridgeActivity.callFinished();
+        }
+    }
+
+    private String dispatchToolCall(String toolName, String argsJson)
     {
         JsonElement arguments;
         try

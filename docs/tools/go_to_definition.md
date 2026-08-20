@@ -1,6 +1,6 @@
 # go_to_definition
 
-Go to the definition of a symbol (the inverse of find_references): a qualified method 'ModuleName.MethodName', a bare 'MethodName' (also pass modulePath), or a metadata FQN like 'Catalog.Products'. A bare method name requires modulePath. Use this for where a symbol is DEFINED; for all its USAGES use find_references, for a literal (non-symbol) text scan use search_in_code. Full parameters and examples: call get_tool_guide('go_to_definition').
+Locate the source definition of a BSL symbol or metadata object. Parameters and examples: get_tool_guide('go_to_definition').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -41,6 +41,10 @@ YAML frontmatter plus an optional fenced `bsl` body. For a method: `module`, `me
 ## Bilingual (ru/en)
 
 The metadata type token is dialect-aware: the FQN may use the Russian type name (Документ.Встреча, Справочник.Товары), singular or plural, and is normalized internally. The OBJECT name itself is the programmatic `Name`, not a synonym - only the leading TYPE token is bilingual.
+
+## External-objects projects
+
+On a project with `V8ExternalObjectsNature`, a metadata FQN resolves against THAT project - its own `ExternalDataProcessor` / `ExternalReport` roots (`ExternalDataProcessor.MyProc`, or the Russian `ВнешняяОбработка.MyProc`) - never against the base configuration the project is linked to. Such a project holds no common modules of its own, and the base configuration's are NOT searched under its name - the `ModuleName.MethodName` form finds nothing here, and the answer names the base project to ask instead. Suggestions are drawn from the project's own objects. A project EDT has not started is refused by name rather than answered with "not found".
 
 ## Examples
 

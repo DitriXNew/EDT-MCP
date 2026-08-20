@@ -88,6 +88,34 @@ public final class BackgroundJobRenderer
     {
         if (workmateResponse != null)
         {
+            // Said BEFORE the answer, not after it: whether Workmate declared itself finished
+            // changes how the text should be read, and a note under a long answer is missed.
+            if (!workmateResponse.isDeclaredFinal())
+            {
+                target.append("\n> **Completion not confirmed.** ") //$NON-NLS-1$
+                    // What was MEASURED, not what was inferred: this plugin sees only the calls
+                    // Workmate makes back into it, so "no sign of work" is honest where
+                    // "stopped answering" would claim knowledge of Workmate's own internals.
+                    .append(workmateResponse.wentQuiet()
+                        ? "Workmate showed no sign of work for two minutes - this plugin sees " //$NON-NLS-1$
+                            + "only the calls Workmate makes back into it - so the conversation " //$NON-NLS-1$
+                            + "was wound up without its end-of-answer marker" //$NON-NLS-1$
+                        : "Workmate never sent its end-of-answer marker") //$NON-NLS-1$
+                    .append(", so this is the last text it produced rather than an answer " //$NON-NLS-1$
+                        + "it called complete. It may be partial: use it only after checking " //$NON-NLS-1$
+                        + "what it claims against the project, and ask a narrower question " //$NON-NLS-1$
+                        + "rather than repeating this one.\n"); //$NON-NLS-1$
+                if (!workmateResponse.isAnswerAccepted())
+                {
+                    // Stronger than "may be partial": nothing here was ever accepted as an
+                    // answer. Saying only "not confirmed" would let a plan be read as a result -
+                    // the very behaviour issue #427 reported.
+                    target.append("> **Not an answer.** What follows is what Workmate said it " //$NON-NLS-1$
+                        + "was GOING to do; it never produced a result. Whatever it announced " //$NON-NLS-1$
+                        + "may have been half-done, so inspect the project before asking " //$NON-NLS-1$
+                        + "again.\n"); //$NON-NLS-1$
+                }
+            }
             target.append("\n## Answer\n\n").append(trimToNull(workmateResponse.getText())); //$NON-NLS-1$
             String reasoning = trimToNull(workmateResponse.getReasoning());
             if (reasoning != null)

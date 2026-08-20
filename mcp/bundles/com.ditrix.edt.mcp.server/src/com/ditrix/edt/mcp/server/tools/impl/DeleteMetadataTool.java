@@ -63,6 +63,7 @@ import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -384,14 +385,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         boolean force = JsonUtils.extractBooleanArgument(params, "force", false); //$NON-NLS-1$
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        // Normalized BEFORE the context is resolved, because the FQN goes IN: the specialized
+        // deletes below (predefined item, XDTO member) return before the generic path that
+        // appends the addressing hint, so a type this project kind cannot hold was reported as a
+        // missing local owner - sending the caller to look for something that can never be here
+        // (issue #309).
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
-        Configuration config = ctx.config;
-
-        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
 
         // A FQN addressing a FORM member (item / attribute / command / handler) is handled by a
         // dedicated branch: form members live on the editable Form content model (a cross-model hop),
@@ -452,7 +456,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
         // would miss the stored name — the resolver retries the normalized FQN.
         MetadataNodeResolver.ResolvedNode resolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(config, normFqn);
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, normFqn);
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null)
         {
@@ -462,7 +466,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "Any node create_metadata can address can be deleted; see " //$NON-NLS-1$
                 + "get_tool_guide('create_metadata') for the kinds. " //$NON-NLS-1$
                 + "Use get_metadata_objects to find an object's FQN." //$NON-NLS-1$
-                + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson();
+                + MetadataNodeResolver.yoNotFoundHint(normFqn)
+                + ctx.scope.addressingHint(normFqn)).toJson();
         }
         if (resolved.yoFallback)
         {
@@ -958,11 +963,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                ctx.config, ref.formPath,
+                ctx.scope, ref.formPath,
                 "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
-                    + "Column on a collection attribute / " //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Parameter / Field / Button / Group / " //$NON-NLS-1$
+                    + "Decoration / Table / Column on a collection attribute / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
             // The #343 advice may quote a corrected handler address, and whether the corrected
             // owner really carries that event is a question only the platform type can answer.
@@ -1308,15 +1313,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormObjectRef ref, boolean confirm)
     {
         IProject project = ctx.project;
-        Configuration config = ctx.config;
 
         // Reuse create_metadata's owner + owned-form resolution so create/delete address the SAME object. The
         // resolver expects the 'forms' shape: Type.Object.forms.FormName (FormElementWriter owns it).
         String formPath = FormElementWriter.formPathOf(ref.ownerType, ref.ownerName, ref.formName);
-        MdObject mdForm = FormStructureReader.resolveMdForm(config, formPath);
+        MdObject mdForm = FormStructureReader.resolveMdForm(ctx.scope, formPath);
         if (mdForm == null)
         {
-            return formObjectNotFoundError(config, ref);
+            return formObjectNotFoundError(ctx.scope, ref);
         }
         if (!(mdForm instanceof IBmObject))
         {
@@ -1444,14 +1448,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * owner from a missing form (the form lookup failed) for a sharper message. Pure message selection,
      * no mutation.
      */
-    private static String formObjectNotFoundError(Configuration config, FormElementWriter.FormObjectRef ref)
+    private static String formObjectNotFoundError(MetadataScope scope, FormElementWriter.FormObjectRef ref)
     {
         // Distinguish a missing owner from a missing form for a sharper message.
-        MdObject owner = MetadataTypeUtils.findObject(config, ref.ownerType, ref.ownerName);
+        MdObject owner = scope.findObject(ref.ownerType, ref.ownerName);
         if (owner == null)
         {
             return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Use get_metadata_objects to list available objects.").toJson(); //$NON-NLS-1$
+                + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
+                + scope.addressingHint(ref.ownerFqn())).toJson();
         }
         return ToolResult.error("Form '" + ref.formName + "' not found on " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
             + ". Use get_metadata_details to list the object's forms.").toJson(); //$NON-NLS-1$
@@ -1502,7 +1507,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
 
         MetadataNodeResolver.ResolvedNode ownerResolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.ownerFqn());
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.ownerFqn());
         if (ownerResolved.node == null)
         {
             return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
@@ -2201,7 +2206,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean confirm)
     {
         MetadataNodeResolver.MetadataNode pkgNode =
-            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.packageFqn).node;
         if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
             || !(pkgNode.object instanceof IBmObject))
         {

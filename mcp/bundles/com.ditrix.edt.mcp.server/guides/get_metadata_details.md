@@ -24,6 +24,12 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - A predefined ITEM FQN (`Catalog.X.Predefined.ItemName`) renders that single item's properties instead of an mdclass object section, headed `## Predefined item: <fqn>`.
 - Per-object failures (malformed FQN or object not found) do NOT fail the whole call. They are collected into a dedicated `## Errors` table at the end with an `ERROR` status row carrying the FQN and reason, so a client can tell a failed object from data.
 
+## External-objects projects
+An external data processor / report is addressed exactly like a configuration object -
+`ExternalDataProcessor.<Name>`, its members as `....Attribute.<Name>`, its form as
+`....Form.<Name>` - but only in ITS OWN project. Asked of the base configuration the same
+FQN cannot resolve, and the failure row says which project kind holds that type.
+
 ## Examples
 - Basic, one object: `{projectName: "MyProject", objectFqns: ["Catalog.Products"]}`.
 - Full details, several objects: `{projectName: "MyProject", objectFqns: ["Catalog.Products", "Document.SalesOrder"], full: true}`.

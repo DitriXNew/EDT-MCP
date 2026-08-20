@@ -57,6 +57,7 @@ import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver.CreateTarget;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -181,7 +182,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata). XDTO PACKAGE MEMBERS " //$NON-NLS-1$
+                + "property names are rejected (set them via modify_metadata). A FORM CONTENT member " //$NON-NLS-1$
+                + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
+                + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
+                + "'attribute' (the bound attribute of a Field / Table), 'command' (a Button's " //$NON-NLS-1$
+                + "command) and 'type' (a Group's kind). XDTO PACKAGE MEMBERS " //$NON-NLS-1$
                 + "('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
                 + "'...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an " //$NON-NLS-1$
                 + "ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / " //$NON-NLS-1$
@@ -398,7 +403,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -422,15 +427,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 normFqn, subsystemChain, props, expectedNotExists, normReport));
         }
 
-        CreateTarget target = MetadataNodeResolver.resolveForCreate(config, normFqn);
+        CreateTarget target = MetadataNodeResolver.resolveForCreate(ctx.scope, normFqn);
         if (target == null)
         {
+            String standalone = standaloneTopLevelRefusal(normFqn);
+            if (standalone != null)
+            {
+                return standalone;
+            }
+            String wrongKind = unsupportedChildKindRefusal(ctx.scope, normFqn);
+            if (wrongKind != null)
+            {
+                return wrongKind;
+            }
             return ToolResult.error("Cannot resolve a create target for FQN '" + fqn + "'. " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Use 'Type.Name' for a top object or 'Type.Name.Kind.Name' for a member " //$NON-NLS-1$
                 + "(Kind = Attribute/TabularSection/Dimension/Resource/EnumValue/Command or a " //$NON-NLS-1$
                 + "type-specific child such as AccountingFlag/AddressingAttribute/Column; see " //$NON-NLS-1$
                 + "get_tool_guide('create_metadata') for the full list). The parent must already " //$NON-NLS-1$
-                + "exist; use get_metadata_objects to check.").toJson(); //$NON-NLS-1$
+                + "exist; use get_metadata_objects to check." + ctx.scope.addressingHint(normFqn))
+                .toJson();
         }
         if (!isValidIdentifier(target.childName))
         {
@@ -454,7 +470,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonymLanguage;
         try
         {
-            synonymLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, props.synonym,
+            synonymLanguage = ctx.scope.resolveSynonymLanguage(props.synonym,
                 props.language, "the synonym"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException e)
@@ -463,7 +479,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         // Uniform duplicate / stale-intent check for both top-level and members.
-        if (MetadataNodeResolver.resolveExisting(config, normFqn) != null)
+        if (MetadataNodeResolver.resolveExisting(ctx.scope, normFqn) != null)
         {
             return duplicateError(normFqn, expectedNotExists);
         }
@@ -472,10 +488,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // duplicate was rejected above), so its synonym map starts empty and the only locale it can
         // carry is the one being written - no model read needed. Issue #298.
         List<String> localesMissing = synonymLanguage == null ? null
-            : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage));
+            : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage));
         // Writing into a language the configuration itself does not use is legal but worth a
         // question: it may be a single-language build, or a language not supported yet.
-        boolean localeUnused = MetadataLanguageUtils.isDeclaredButUnused(config, synonymLanguage);
+        boolean localeUnused = ctx.scope.isDeclaredButUnused(synonymLanguage);
 
         if (target.topLevel)
         {
@@ -493,6 +509,78 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * @param name the rejected name
      * @return the ready-to-return JSON error
      */
+    /**
+     * The refusal for a TOP-level FQN naming a STANDALONE type - an {@code ExternalDataProcessor} /
+     * {@code ExternalReport}, which is the ROOT of an external-objects project rather than an entry
+     * in a {@code Configuration} collection.
+     *
+     * <p>Such an object is created together with its project (an EDT wizard action, or an
+     * {@code .epf} import), not by adding a row to a configuration collection, so this tool cannot
+     * make one - and says which tool does what instead of leaving the caller with the generic
+     * "cannot resolve a create target". Its MEMBERS (attributes, tabular sections, forms and their
+     * content) ARE creatable once the object exists; that is the rest of issue #309.</p>
+     *
+     * @param normFqn the normalized FQN
+     * @return the ready-to-return JSON error, or {@code null} when the FQN is not a standalone
+     *     top-level address (the caller then falls through to the generic message)
+     */
+    private static String standaloneTopLevelRefusal(String normFqn)
+    {
+        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
+        if (parts.length != 2)
+        {
+            return null;
+        }
+        MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(parts[0]);
+        if (info == null || !info.isStandalone())
+        {
+            return null;
+        }
+        return ToolResult.error("create_metadata cannot create a top-level '" //$NON-NLS-1$
+            + info.getEnglishSingular() + "': it is the ROOT object of an external-objects project, " //$NON-NLS-1$
+            + "not an entry in a configuration collection. Create it in EDT (New > External data " //$NON-NLS-1$
+            + "processor / report) or import an existing .epf/.erf; create_project " //$NON-NLS-1$
+            + "(projectKind=externalObjects) makes the empty PROJECT only. Its members " //$NON-NLS-1$
+            + "('" + normFqn + ".Attribute.X', '" + normFqn + ".Form.Y', form content) can be " //$NON-NLS-1$ //$NON-NLS-2$
+            + "created here once the object exists.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for a member FQN whose PARENT exists but whose KIND that parent does not have.
+     *
+     * <p>The generic "cannot resolve a create target" reads as "check your spelling" and sends the
+     * caller round the same loop; an {@code ExternalDataProcessor} simply has no {@code commands}
+     * collection, and no re-spelling will produce one (issue #309). Naming the kinds the resolved
+     * owner really has turns a dead end into the next step - and it is read off the model, so it
+     * is right for every type, not just this one.</p>
+     *
+     * @param scope the resolution root
+     * @param normFqn the normalized FQN
+     * @return the ready-to-return JSON error, or {@code null} when this is not the failing case
+     */
+    private static String unsupportedChildKindRefusal(MetadataScope scope, String normFqn)
+    {
+        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
+        if (parts.length < 4 || !MetadataNodeResolver.isValidArity(parts.length))
+        {
+            return null;
+        }
+        String ownerFqn = String.join(".", java.util.Arrays.copyOf(parts, parts.length - 2)); //$NON-NLS-1$
+        MetadataNodeResolver.MetadataNode owner = MetadataNodeResolver.resolveExisting(scope, ownerFqn);
+        if (owner == null || owner.object == null)
+        {
+            // The parent itself is missing: that is the generic message's case, not this one.
+            return null;
+        }
+        List<String> kinds = MetadataNodeResolver.childKindsFor(owner.object);
+        String kindToken = parts[parts.length - 2];
+        return ToolResult.error("'" + owner.object.eClass().getName() + " '" + owner.object.getName() //$NON-NLS-1$ //$NON-NLS-2$
+            + "' has no '" + kindToken + "' members. It accepts: " //$NON-NLS-1$ //$NON-NLS-2$
+            + (kinds.isEmpty() ? "no member kinds at all" : String.join(", ", kinds)) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". A form is addressed separately as '" + ownerFqn + ".Form.<Name>'; see " //$NON-NLS-1$ //$NON-NLS-2$
+            + "get_metadata_details for what this object already has.").toJson(); //$NON-NLS-1$
+    }
+
     private static String invalidNameError(String name)
     {
         return ToolResult.error("Invalid name '" + name + "'. A name must start with " //$NON-NLS-1$ //$NON-NLS-2$
@@ -597,7 +685,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private String createXdtoMember(String projectName, String normFqn, XdtoWriter.MemberRef ref,
         List<JsonObject> properties)
     {
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -845,7 +933,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             props.parentName = normReport.apply("parent", props.parentName); //$NON-NLS-1$
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -1494,9 +1582,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (kind == null)
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
-                + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration, Field, " //$NON-NLS-1$
-                + "Button, Table, Column (a collection attribute's column, addressed as " //$NON-NLS-1$
-                + "'...Attribute.AttrName.Column.ColName') and Handler for events.").toJson(); //$NON-NLS-1$
+                + normFqn + "'. Supported form kinds: Attribute, Command, Parameter, Group, " //$NON-NLS-1$
+                + "Decoration, Field, Button, Table, Column (a collection attribute's column, " //$NON-NLS-1$
+                + "addressed as '...Attribute.AttrName.Column.ColName') and Handler for events.") //$NON-NLS-1$
+                .toJson();
         }
         if (!isValidIdentifier(ref.name))
         {
@@ -1511,13 +1600,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return propErr;
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
         IProject project = ctx.project;
         Configuration config = ctx.config;
+        MetadataScope scope = ctx.scope;
 
         final FormElementWriter.Kind fKind = kind;
         // A COLUMN's owner is named by the FQN itself ('...Attribute.AttrName.Column.ColName'), so it
@@ -1527,7 +1617,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String titleText = fmProps.titleVal;
         // The designer's auto-children (extended tooltip / context menu) get script-variant
         // localized name suffixes, like FormObjectDefaultNameProvider.
-        final boolean russianAutoNames = config.getScriptVariant() == ScriptVariant.RUSSIAN;
+        final boolean russianAutoNames = scope.scriptVariant() == ScriptVariant.RUSSIAN;
         final String[] createdKind = new String[1];
 
         // Resolved BEFORE the write (it needs only the configuration) so the success payload can
@@ -1535,7 +1625,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String titleLanguage;
         try
         {
-            titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, fmProps.titleVal,
+            titleLanguage = scope.resolveSynonymLanguage(fmProps.titleVal,
                 fmProps.titleLang, "the title"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException e)
@@ -1548,7 +1638,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // A configuration that declares NO language at all still gets its generated title - under
         // the script-variant locale, exactly as before this change. Losing the title outright would
         // be a regression, and a language-less configuration offers nothing better to key it by.
-        String resolvedTitleLanguage = MetadataLanguageUtils.resolveLanguageCode(config, null);
+        String resolvedTitleLanguage = scope.defaultLanguageCode();
         if (resolvedTitleLanguage == null)
         {
             resolvedTitleLanguage = russianAutoNames ? "ru" : "en"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -1558,15 +1648,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean persisted;
         try
         {
-            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, scope,
                 ref.formPath, "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
-                    + "get_metadata_objects and get_metadata_details."); //$NON-NLS-1$
+                    + "get_metadata_objects and get_metadata_details." //$NON-NLS-1$
+                    + scope.addressingHint(ref.formPath));
 
             // A Table auto-generates one column per tabular-section attribute; the column names come
             // from the metadata owner (the form model alone cannot enumerate them), resolved here.
             final List<String> tableColumns = fKind == FormElementWriter.Kind.TABLE
-                ? resolveTabularSectionColumns(config, ref.formPath, bind) : null;
+                ? resolveTabularSectionColumns(scope, ref.formPath, bind) : null;
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormMember", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -1608,9 +1699,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // The element is NEW, so its title map carries exactly the locale just written; the rest
             // of the declared locales are what the caller still owes a translation for (#298).
             formResult.put(KEY_LANGUAGE, writtenTitleLanguage).put(KEY_LOCALES_MISSING,
-                MetadataLanguageUtils.localesMissing(config,
-                    Collections.singletonList(writtenTitleLanguage)));
-            if (MetadataLanguageUtils.isDeclaredButUnused(config, writtenTitleLanguage))
+                scope.localesMissing(Collections.singletonList(writtenTitleLanguage)));
+            if (scope.isDeclaredButUnused(writtenTitleLanguage))
             {
                 formResult.put(KEY_LOCALE_UNUSED, true);
             }
@@ -1627,7 +1717,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * list when the owner / tabular section cannot be resolved (the table is still created, with just
      * the standard LineNumber column).
      */
-    private static List<String> resolveTabularSectionColumns(Configuration config, String formPath,
+    private static List<String> resolveTabularSectionColumns(MetadataScope scope, String formPath,
         String dataPath)
     {
         List<String> columns = new java.util.ArrayList<>();
@@ -1640,7 +1730,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return columns;
         }
-        MdObject owner = MetadataTypeUtils.findObject(config, seg[0], seg[1]);
+        MdObject owner = scope.findObject(seg[0], seg[1]);
         if (!(owner instanceof EObject))
         {
             return columns;
@@ -1719,6 +1809,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "named in the FQN, and its data type is set afterwards with modify_metadata.") //$NON-NLS-1$
                     .toJson();
             }
+            // A PARAMETER takes NOTHING at creation, for the same reason a column takes only a
+            // title: the platform type has exactly name / valueType / keyParameter / comment, it
+            // nests under nothing and binds to nothing, so every property here would be parsed,
+            // stored and then never applied - a success reported for a discarded request.
+            if (kind == FormElementWriter.Kind.PARAMETER)
+            {
+                return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' does not apply to a form " //$NON-NLS-1$
+                    + "parameter at creation. Create it bare, then set 'valueType' (the same " //$NON-NLS-1$
+                    + "{types:[...]} vocabulary an attribute takes), 'keyParameter' or 'comment' " //$NON-NLS-1$
+                    + "with modify_metadata. A parameter has no title and no parent.").toJson(); //$NON-NLS-1$
+            }
             switch (pName.toLowerCase())
             {
                 case "title": //$NON-NLS-1$
@@ -1789,7 +1890,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         List<String> objectFields = JsonUtils.extractArrayArgument(params, KEY_OBJECT_FIELDS);
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
@@ -1797,11 +1898,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IProject project = ctx.project;
         Configuration config = ctx.config;
 
-        MdObject owner = MetadataTypeUtils.findObject(config, ref.ownerType, ref.ownerName);
+        MdObject owner = ctx.scope.findObject(ref.ownerType, ref.ownerName);
         if (owner == null)
         {
             return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Use get_metadata_objects to list available objects.").toJson(); //$NON-NLS-1$
+                + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
+                + ctx.scope.addressingHint(ref.ownerFqn())).toJson();
         }
         if (!(owner instanceof IBmObject))
         {
@@ -1818,7 +1920,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonymLanguage;
         try
         {
-            synonymLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, props.synonym,
+            synonymLanguage = ctx.scope.resolveSynonymLanguage(props.synonym,
                 props.language, "the synonym"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException e)
@@ -1853,9 +1955,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // The bound object fields ride along to createForm, which resolves an omitted (null) list to the
         // per-kind defaults; ignored downstream when the seed itself does not apply. #208.
         final List<String> fObjectFields = objectFields;
-        // The fallback predefined command-bar name follows the configuration script variant, like
+        // The fallback predefined command-bar name follows the project's script variant, like
         // the designer's default-name provider (FormObjectDefaultNameProvider).
-        final boolean russianAutoNames = config.getScriptVariant() == ScriptVariant.RUSSIAN;
+        final boolean russianAutoNames = ctx.scope.scriptVariant() == ScriptVariant.RUSSIAN;
 
         final String contentFormFqn;
         try
@@ -1898,8 +2000,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return buildFormObjectResult(normFqn, formName, persisted, setAsDefault,
             effectiveGenerateContent, props, synonymLanguage,
             synonymLanguage == null ? null
-                : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage)),
-            MetadataLanguageUtils.isDeclaredButUnused(config, synonymLanguage), normReport);
+                : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage)),
+            ctx.scope.isDeclaredButUnused(synonymLanguage), normReport);
     }
 
     /**
@@ -2054,13 +2156,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         String procName = procNameHolder[0];
 
-        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        ProjectContext ctx = resolveProjectAndScope(projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
         IProject project = ctx.project;
-        Configuration config = ctx.config;
 
         final boolean extensionHandler = callType != null && !callType.trim().isEmpty();
         if (extensionHandler && !ExtensionOriginUtils.isExtensionProject(project))
@@ -2079,7 +2180,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Cannot resolve the platform version needed to validate the form " //$NON-NLS-1$
                 + "event.").toJson(); //$NON-NLS-1$
         }
-        final String langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
+        final String langCode = ctx.scope.defaultLanguageCode();
 
         final String eventName = ref.name;
         final String[] createdKind = new String[1];
@@ -2092,7 +2193,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean persisted;
         try
         {
-            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, ctx.scope,
                 ref.formPath, formNotFound);
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormHandler", //$NON-NLS-1$
                 (formModel, tx) -> writeHandler(formModel, spec, normFqn));

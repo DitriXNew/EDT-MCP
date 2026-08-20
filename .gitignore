@@ -31,3 +31,6 @@ tests/TestConfiguration/.scannerwork/
 
 # Scratch: EDT workspace .metadata dumps pulled in for diagnosis (logs, telemetry)
 tmp/
+
+# EDT builds the external-objects fixture into bin/ (an .epf build artifact, not a source)
+/tests/ExternalObjects/bin/

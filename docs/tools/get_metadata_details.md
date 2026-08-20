@@ -1,6 +1,6 @@
 # get_metadata_details
 
-Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; to LIST objects by type use get_metadata_objects instead. The rendering is dispatched by the FQN's kind: a FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands); a ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties; a Catalog / ChartOfCharacteristicTypes / ChartOfAccounts / ChartOfCalculationTypes also renders its 'Predefined items' table, and a single predefined-item FQN ('<Owner>.X.Predefined.ItemName') renders that one item; a ScheduledJob or CommonModule adds a type-specific Properties table. Pass 'assignable: true' on an OBJECT or an mdclass / form MEMBER to discover which properties modify_metadata will accept there, with their allowed values; that mode does NOT resolve a predefined item (its settable surface is FIXED and owner-specific - see the guide) and never renders a form event HANDLER (read the form's own FQN for those). Every reflected section is capped, so request fewer FQNs to keep the response small; only the non-full role matrix can be paged, with 'roleObjectOffset'. Full parameters and examples: call get_tool_guide('get_metadata_details').
+Inspect the properties and structure of a metadata object or member. Parameters and examples: get_tool_guide('get_metadata_details').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -38,6 +38,12 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - Type-specific properties are appended for a few kinds whose behaviour the basic view otherwise hid: a **ScheduledJob** gets a Properties table (methodName, use, predefined, restartCountOnFailure / restartIntervalOnFailure, key, and whether a Schedule is set), a **CommonModule** gets its context-availability flags (server / serverCall / clientManagedApplication / clientOrdinaryApplication / externalConnection / global / privileged) and returnValuesReuse, a **Catalog** / **ChartOfCharacteristicTypes** / **ChartOfCalculationTypes** / **ChartOfAccounts** gets its "Predefined items" table (see above), and an **InformationRegister**'s Dimensions additionally show their `Indexing`. These render in both the default and `full: true` views.
 - A predefined ITEM FQN (`Catalog.X.Predefined.ItemName`) renders that single item's properties instead of an mdclass object section, headed `## Predefined item: <fqn>`.
 - Per-object failures (malformed FQN or object not found) do NOT fail the whole call. They are collected into a dedicated `## Errors` table at the end with an `ERROR` status row carrying the FQN and reason, so a client can tell a failed object from data.
+
+## External-objects projects
+An external data processor / report is addressed exactly like a configuration object -
+`ExternalDataProcessor.<Name>`, its members as `....Attribute.<Name>`, its form as
+`....Form.<Name>` - but only in ITS OWN project. Asked of the base configuration the same
+FQN cannot resolve, and the failure row says which project kind holds that type.
 
 ## Examples
 - Basic, one object: `{projectName: "MyProject", objectFqns: ["Catalog.Products"]}`.

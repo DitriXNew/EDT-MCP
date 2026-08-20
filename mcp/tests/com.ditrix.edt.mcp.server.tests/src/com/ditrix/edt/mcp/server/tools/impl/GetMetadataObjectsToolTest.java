@@ -304,4 +304,42 @@ public class GetMetadataObjectsToolTest
         assertNull(tool.normalizeMetadataType("")); //$NON-NLS-1$
         assertNull(tool.normalizeMetadataType(null));
     }
+
+    /**
+     * An EXTERNAL-OBJECTS project has its own two-entry vocabulary (issue #309): the category
+     * tokens and the bilingual type names both resolve, and nothing else does - a configuration
+     * category asked of such a project is refused rather than answered from the base
+     * configuration.
+     */
+    @Test
+    public void testNormalizeExternalMetadataTypeAcceptsItsOwnVocabulary()
+    {
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        // ВнешняяОбработка / ВнешниеОтчеты
+        String ruProcessor = new String(new int[] { 0x0412, 0x043D, 0x0435, 0x0448, 0x043D, 0x044F,
+            0x044F, 0x041E, 0x0431, 0x0440, 0x0430, 0x0431, 0x043E, 0x0442, 0x043A, 0x0430 }, 0, 16);
+        String ruReports = new String(new int[] { 0x0412, 0x043D, 0x0435, 0x0448, 0x043D, 0x0438,
+            0x0435, 0x041E, 0x0442, 0x0447, 0x0435, 0x0442, 0x044B }, 0, 13);
+
+        assertEquals("all", tool.normalizeExternalMetadataType("all")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("externaldataprocessors", //$NON-NLS-1$
+            tool.normalizeExternalMetadataType("externalDataProcessors")); //$NON-NLS-1$
+        assertEquals("externaldataprocessors", //$NON-NLS-1$
+            tool.normalizeExternalMetadataType("ExternalDataProcessor")); //$NON-NLS-1$
+        assertEquals("externaldataprocessors", tool.normalizeExternalMetadataType(ruProcessor)); //$NON-NLS-1$
+        assertEquals("externalreports", tool.normalizeExternalMetadataType("ExternalReports")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("externalreports", tool.normalizeExternalMetadataType(ruReports)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeExternalMetadataTypeRejectsConfigurationCategories()
+    {
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertNull(tool.normalizeExternalMetadataType("catalogs")); //$NON-NLS-1$
+        assertNull(tool.normalizeExternalMetadataType("Document")); //$NON-NLS-1$
+        assertNull(tool.normalizeExternalMetadataType("dataProcessors")); //$NON-NLS-1$
+        assertNull(tool.normalizeExternalMetadataType("bogusType_e2e")); //$NON-NLS-1$
+        assertNull(tool.normalizeExternalMetadataType(""));  //$NON-NLS-1$
+        assertNull(tool.normalizeExternalMetadataType(null));
+    }
 }

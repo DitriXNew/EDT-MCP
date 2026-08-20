@@ -18,8 +18,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Collection;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+
+import com.ditrix.edt.mcp.server.bridge.BridgeActivity;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.IDocument;
@@ -71,6 +76,156 @@ public class WorkmateGateway
      * answering from the model alone. It is the skill Workmate's own autopilot uses.
      */
     public static final String DEFAULT_SKILL = "custom"; //$NON-NLS-1$
+
+    /**
+     * How many times a plan-shaped answer is pushed to continue in the SAME conversation before
+     * the last one is reported as the result. Five is Workmate's own number: its {@code
+     * DevAutopilot} drives the very same facade with {@code while (autoContinue <= 5)}.
+     */
+    private static final int MAX_CONTINUATIONS = 5;
+
+    /**
+     * The nudge sent as the continuation message. It is Russian because it is addressed to
+     * Workmate's model, whose conversation runs in the IDE language — it is data for that model,
+     * not surface text. Same intent as {@code DevAutopilot}'s own continuation prompt (answer with
+     * the result, not with a plan), with one deliberate difference: it does NOT order a tool call.
+     * Measured live, "continue with tools" kept a model that wanted a documentation search — a
+     * tool this toolset does not have — announcing that search five times over. Naming the escape
+     * hatch instead ("if the tool you need is unavailable, answer from your own knowledge") is
+     * what turns the last continuation into an answer.
+     */
+    private static final String CONTINUATION_PROMPT =
+        "\u041E\u0442\u0432\u0435\u0442\u044C \u043D\u0430 \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \u0432\u043E\u043F\u0440\u043E\u0441 \u0418\u0422\u041E\u0413\u041E\u0412\u042B\u041C \u0442\u0435\u043A\u0441\u0442\u043E\u043C " //$NON-NLS-1$
+        + "\u043F\u0440\u044F\u043C\u043E \u0441\u0435\u0439\u0447\u0430\u0441. \u041D\u0435 \u043E\u043F\u0438\u0441\u044B\u0432\u0430\u0439 \u043D\u0430\u043C\u0435\u0440\u0435\u043D\u0438\u044F \u0438 \u043D\u0435 \u043F\u0438\u0448\u0438 " //$NON-NLS-1$
+        + "\u043F\u043B\u0430\u043D. \u0415\u0441\u043B\u0438 \u043D\u0443\u0436\u043D\u044B\u0439 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D, " //$NON-NLS-1$
+        + "\u043E\u0442\u0432\u0435\u0442\u044C \u0438\u0437 \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0445 \u0437\u043D\u0430\u043D\u0438\u0439."; //$NON-NLS-1$
+
+    /**
+     * Above this length an answer is taken at face value. An announcement of intent is short by
+     * nature ("I will look it up in the documentation"); a real answer that happens to contain
+     * one of the markers below is not, and must never be thrown away by a continuation.
+     */
+    private static final int PLAN_TEXT_MAX_CHARS = 400;
+
+    /**
+     * First-person announcements of intent, lowercase. A SHORT answer containing one of these is
+     * Workmate saying what it is about to do — the exact shape issue #427 reported ("For a full
+     * reference ... I will use the 1C documentation search"), which the platform then never
+     * followed up on its own.
+     *
+     * <p>First person is the discipline of this list, and the reason an inclusive imperative
+     * ("let us use an index") is deliberately absent: a FINISHED short recommendation opens with
+     * one as readily as a plan does, and a continuation is not free - it can run Workmate's tools
+     * again, and its own answer then REPLACES the one already in hand.
+     */
+    /**
+     * Announcements turned into their opposite. A short answer containing one of these is a
+     * decision NOT to act - the one shape that looks exactly like an intent marker and means the
+     * opposite of one, so it is checked first and wins.
+     */
+    /**
+     * The sentinel Workmate is asked to put at the end of a FINAL answer.
+     *
+     * <p>This is the signal the platform does not give us: {@code SendMessageResult} carries text,
+     * a session and counters, nothing that says "I am done". Asking for an explicit marker turns
+     * the question from guessing at phrasing - which is language- and idiom-bound, and never
+     * complete - into reading a declaration. The phrase list below stays as the fallback for a
+     * turn that did not declare anything.
+     */
+    static final String FINAL_MARKER = "<!end>"; //$NON-NLS-1$
+
+    /**
+     * How long ONE turn may stay silent before the conversation is wound up.
+     *
+     * <p>Separate from the job's total budget on purpose: a conversation that stopped moving is
+     * done in every sense that matters to the caller, and waiting out the whole budget only
+     * delays the answer already in hand. What is NOT done is pretending it finished cleanly -
+     * the result says the completion marker never arrived.
+     *
+     * <p>IDLE, not elapsed: a turn that is working - calling this plugin's tools through the
+     * bridge, which reports both started calls and calls still running ({@link BridgeActivity}) -
+     * keeps the clock reset. Only silence counts, because a tool loop that legitimately runs for
+     * minutes must not be cut off (a project question measured 75 s here, and a bigger project
+     * takes longer).
+     */
+    static final long DEFAULT_IDLE_TURN_TIMEOUT_MS = 120_000L;
+
+    /** How often the wait wakes up to see whether the turn is still doing anything. */
+    static final long DEFAULT_IDLE_POLL_MS = 5_000L;
+
+    /**
+     * How often a directly invoked tool's wait re-reads the clock. Short, because its only
+     * job is to keep a descheduled thread from waking up past the deadline it was given.
+     */
+    private static final long TOOL_WAIT_POLL_MS = 1_000L;
+
+    /** Mutable only so a test can shrink the window; production never changes them. */
+    private static volatile long idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
+
+    private static volatile long idlePollMs = DEFAULT_IDLE_POLL_MS;
+
+    /**
+     * How many Workmate turns this bundle is waiting on right now. The idle rule needs it because
+     * the activity it reads is process-wide: see {@link #isOnlyAwaitedTurn()}.
+     */
+    private static final AtomicInteger AWAITED_TURNS = new AtomicInteger();
+
+    /**
+     * Appended by THIS adapter to every request, so the caller's question stays their own and the
+     * protocol travels with the conversation rather than with the question.
+     */
+    static final String FINALITY_INSTRUCTION =
+        "\n\n\u041A\u043E\u0433\u0434\u0430 \u043E\u0442\u0432\u0435\u0442 \u043E\u043A\u043E\u043D\u0447\u0430\u0442\u0435\u043B\u044C\u043D\u044B\u0439 \u0438 \u0440\u0430\u0431\u043E\u0442\u0430 " //$NON-NLS-1$
+        + "\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0430, \u0437\u0430\u0432\u0435\u0440\u0448\u0438 \u0435\u0433\u043E \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E\u0439 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0439 " //$NON-NLS-1$
+        + "\u0441\u0442\u0440\u043E\u043A\u043E\u0439 <!end>. \u041F\u043E\u043A\u0430 \u0440\u0430\u0431\u043E\u0442\u0430 \u043D\u0435 \u0437\u0430\u043A\u043E\u043D\u0447\u0435\u043D\u0430, " //$NON-NLS-1$
+        + "\u044D\u0442\u043E\u0442 \u043C\u0430\u0440\u043A\u0435\u0440 \u043D\u0435 \u043F\u0438\u0448\u0438."; //$NON-NLS-1$
+
+    /** The Russian negation particle that turns any of the verbs below into a refusal. */
+    private static final String NEGATION_PARTICLE = "\u043D\u0435"; // не
+
+    /** Words that turn a following "not" into a correlative rather than a denial. */
+    private static final String[] CORRELATIVE_AFTER_NOT = {
+        "only", //$NON-NLS-1$
+        "just" //$NON-NLS-1$
+    };
+
+    private static final String[] NEGATING_ADVERBS = {
+        "not", //$NON-NLS-1$
+        "never" //$NON-NLS-1$
+    };
+
+    private static final String[] INTENT_MARKERS = {
+        "\u0432\u043E\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u044E\u0441\u044C", // воспользуюсь //$NON-NLS-1$
+        "\u043F\u043E\u0438\u0449\u0443", // поищу //$NON-NLS-1$
+        "\u043D\u0430\u0439\u0434\u0443", // найду //$NON-NLS-1$
+        "\u0438\u0437\u0443\u0447\u0443", // изучу //$NON-NLS-1$
+        "\u043F\u043E\u0441\u043C\u043E\u0442\u0440\u044E", // посмотрю //$NON-NLS-1$
+        "\u043F\u0440\u043E\u0432\u0435\u0440\u044E", // проверю //$NON-NLS-1$
+        "\u0441\u043E\u0437\u0434\u0430\u043C", // создам //$NON-NLS-1$
+        "\u043D\u0430\u0447\u043D\u0443", // начну //$NON-NLS-1$
+        // Analytic future, restricted to an action verb for the same reason "let me" is:
+        // the bare auxiliary also opens finished statements ("I will be glad to help").
+        "\u0431\u0443\u0434\u0443 \u0438\u0441\u043A\u0430\u0442\u044C", // буду искать //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0442\u044C", // буду проверять //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C", // буду смотреть //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0438\u0437\u0443\u0447\u0430\u0442\u044C", // буду изучать //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0441\u043E\u0437\u0434\u0430\u0432\u0430\u0442\u044C", // буду создавать //$NON-NLS-1$
+        "\u0431\u0443\u0434\u0443 \u0440\u0430\u0437\u0431\u0438\u0440\u0430\u0442\u044C\u0441\u044F", // буду разбираться //$NON-NLS-1$
+        "i will", //$NON-NLS-1$
+        "i'll", //$NON-NLS-1$
+        // "let me" alone is a discourse marker ("let me clarify: ..."), so only the phrases
+        // that announce an ACTION are markers of intent.
+        "let me search", //$NON-NLS-1$
+        "let me check", //$NON-NLS-1$
+        "let me look", //$NON-NLS-1$
+        "let me find", //$NON-NLS-1$
+        "let me run", //$NON-NLS-1$
+        // Anchored to the pronoun: bare "going to" is a preposition in ordinary prose ("the
+        // value going to the register"), while "I am going to" announces work exactly as
+        // "I will" does. Apostrophes are normalized before matching, so one spelling suffices.
+        "i'm going to", //$NON-NLS-1$
+        "i am going to" //$NON-NLS-1$
+    };
 
     /**
      * Stable id under which {@link #ensureChatSession()} registers a JShell session.
@@ -146,7 +301,19 @@ public class WorkmateGateway
          * a larger budget" would run that work a second time.
          */
         TIMED_OUT_AFTER_DISPATCH,
-        CALL_FAILED
+        CALL_FAILED,
+        /**
+         * Workmate rejected the requested tool NAME before entering anything. Its own message
+         * is complete and actionable, so the tool reports it as it stands rather than dressing
+         * it in sign-in and network advice that has nothing to do with a mistyped name.
+         */
+        UNKNOWN_TOOL,
+        /**
+         * The call failed AFTER the request had reached Workmate. Same reason
+         * {@link #TIMED_OUT_AFTER_DISPATCH} exists: that turn had already started and its
+         * tools change this configuration, so the advice must not end in "retry".
+         */
+        FAILED_AFTER_DISPATCH
     }
 
     /** Checked adapter failure carrying a stable category and a diagnostic detail. */
@@ -215,6 +382,18 @@ public class WorkmateGateway
         {
             return new GatewayException(FailureKind.CALL_FAILED, detail);
         }
+
+        /** @return rejection of a tool NAME, before anything ran */
+        public static GatewayException unknownTool(String detail)
+        {
+            return new GatewayException(FailureKind.UNKNOWN_TOOL, detail);
+        }
+
+        /** @return failure of a turn that had already been sent and may have run tools */
+        public static GatewayException failedAfterDispatch(String detail)
+        {
+            return new GatewayException(FailureKind.FAILED_AFTER_DISPATCH, detail);
+        }
     }
 
     /** Immutable response returned to the tool after the reflective call succeeds. */
@@ -223,6 +402,10 @@ public class WorkmateGateway
         private final String text;
         private final String reasoning;
         private final Integer assistantMessageCount;
+        private final int continuations;
+        private final boolean declaredFinal;
+        private final boolean wentQuiet;
+        private final boolean answerAccepted;
 
         public WorkmateResponse(String text, String reasoning)
         {
@@ -231,9 +414,32 @@ public class WorkmateGateway
 
         public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount)
         {
+            this(text, reasoning, assistantMessageCount, 0);
+        }
+
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount,
+            int continuations)
+        {
+            this(text, reasoning, assistantMessageCount, continuations, true, false);
+        }
+
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount,
+            int continuations, boolean declaredFinal, boolean wentQuiet)
+        {
+            this(text, reasoning, assistantMessageCount, continuations, declaredFinal, wentQuiet,
+                true);
+        }
+
+        public WorkmateResponse(String text, String reasoning, Integer assistantMessageCount, // NOSONAR the outcome needs every one of these to be reported honestly
+            int continuations, boolean declaredFinal, boolean wentQuiet, boolean answerAccepted)
+        {
             this.text = text;
             this.reasoning = reasoning;
             this.assistantMessageCount = assistantMessageCount;
+            this.continuations = continuations;
+            this.declaredFinal = declaredFinal;
+            this.wentQuiet = wentQuiet;
+            this.answerAccepted = answerAccepted;
         }
 
         public String getText()
@@ -257,6 +463,55 @@ public class WorkmateGateway
         {
             return assistantMessageCount;
         }
+
+        /**
+         * How many times the conversation was pushed to continue before this answer. Zero means
+         * the first turn WAS the answer - or that it could not be continued at all, e.g. because
+         * the installed Workmate exposes no conversation handle. A caller that phrases "still
+         * empty even after continuing" must consult this rather than assume it happened.
+         *
+         * @return the number of continuations actually sent, never negative
+         */
+        public int getContinuations()
+        {
+            return continuations;
+        }
+
+        /**
+         * Whether Workmate itself marked the answer as final (the agreed end-of-answer marker).
+         * When it did not, this text is the last thing it said - which may be complete, but was
+         * not declared complete.
+         *
+         * @return {@code true} when the completion marker arrived
+         */
+        public boolean isDeclaredFinal()
+        {
+            return declaredFinal;
+        }
+
+        /**
+         * Whether the conversation was wound up because a turn stopped answering, rather than
+         * because Workmate finished.
+         *
+         * @return {@code true} when a turn timed out and ended the conversation
+         */
+        public boolean wentQuiet()
+        {
+            return wentQuiet;
+        }
+
+        /**
+         * Whether this text was ever ACCEPTED as an answer. When it was not, it is the last
+         * thing Workmate announced it was going to do - kept rather than thrown away because a
+         * conversation that stopped mid-work still tells the caller where it stopped, but it is
+         * not a result and must never be read as one.
+         *
+         * @return {@code true} when the text is an accepted answer
+         */
+        public boolean isAnswerAccepted()
+        {
+            return answerAccepted;
+        }
     }
 
     /**
@@ -266,14 +521,14 @@ public class WorkmateGateway
      * @param question user message
      * @param maxToolRounds optional Workmate tool-round limit
      * @param skillName optional Workmate skill name
-     * @param timeoutSeconds wall-clock wait bound
+     * @param timeoutMillis wall-clock wait bound
      * @return Workmate text and optional reasoning
      * @throws GatewayException categorized runtime/compatibility failure
      */
     public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-        String skillName, int timeoutSeconds) throws GatewayException
+        String skillName, long timeoutMillis) throws GatewayException
     {
-        return ask(project, question, maxToolRounds, skillName, timeoutSeconds, message -> {
+        return ask(project, question, maxToolRounds, skillName, timeoutMillis, message -> {
             // The compatibility overload has no progress consumer.
         });
     }
@@ -286,14 +541,21 @@ public class WorkmateGateway
      * @param question user message
      * @param maxToolRounds optional Workmate tool-round limit
      * @param skillName optional Workmate skill name
-     * @param timeoutSeconds total remaining job budget used to await Workmate
+     * @param timeoutMillis total remaining job budget used to await Workmate
      * @param progress milestone listener
      * @return Workmate text, optional reasoning and assistant-message count
      * @throws GatewayException categorized runtime/compatibility failure
      */
     public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-        String skillName, int timeoutSeconds, ProgressListener progress) throws GatewayException
+        String skillName, long timeoutMillis, ProgressListener progress) throws GatewayException
     {
+        // Taken BEFORE the reflective setup, not after it: bundle lookup, injector resolution
+        // and the authorization probe all spend the caller's budget, and a deadline started
+        // afterwards would hand the conversation a fresh full one on top of what setup used.
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        // Declared outside the try because the catch at the bottom classifies by it: once a
+        // request is out, even an unexpected error must not be answered with a retry.
+        AtomicBoolean dispatched = new AtomicBoolean(false);
         try
         {
             Bundle aiBundle = requireBundle(AI_BUNDLE);
@@ -332,86 +594,133 @@ public class WorkmateGateway
                 SEND_REQUEST + "(ProjectId,String,ConversationSession,boolean,String,Boolean,Integer)", //$NON-NLS-1$
                 projectIdClass, String.class, sessionClass, boolean.class, String.class,
                 Boolean.class, Integer.class);
-            Object request = create(requestConstructor, projectId, question, null, true,
-                // chat = FALSE matches Workmate's OWN default (ConversationFacade maps a null
-                // getChat() to false), and it is NOT what decides whether Workmate works the task
-                // with its tools: with TRUE and with FALSE alike, a "raw" request came back in
-                // ~1.2 s with assistantMessages = 1 and no tool round at all.
-                //
-                // The SKILL is what decides it, measured live against Workmate 1.0.5. Under
-                // ConversationFacade's own default "raw" the cloud answers from the model alone.
-                // Under DEFAULT_SKILL the same facade runs Workmate's full tool loop: the model
-                // called JShellManual, JShellSession and JShell, reached this plugin through
-                // IEdtMcpBridge and answered from real EDT-MCP output (7 assistant messages).
-                // Not every name is accepted - "chat"/"agent"/"git-review" are refused by the
-                // cloud with "Failed to create conversation" in ~35 ms - so do not treat this as
-                // a free-form field.
-                skillName == null || skillName.isEmpty() ? DEFAULT_SKILL : skillName,
-                Boolean.FALSE, maxToolRounds);
-
             Class<?> cancellationTokenClass = requireClass(aiBundle, CANCELLATION_TOKEN);
-            AtomicBoolean cancelled = new AtomicBoolean(false);
-            Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
             Method sendAsync = requireMethod(facadeClass, "sendAsync", requestClass, //$NON-NLS-1$
                 cancellationTokenClass);
-
-            // Dispatching is irreversible in the way that matters: Workmate's tool loop can edit
-            // this configuration, and the cancellation token stops us WAITING, not the edits
-            // already made. So the job is committed first - a later "timed out, start a new job"
-            // would invite a retry that runs those edits a second time.
-            if (!progress.onTryCommit())
-            {
-                throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
-                    + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
-            }
-            Object futureValue = invoke(sendAsync, facade, request, cancellationToken);
-            if (!(futureValue instanceof CompletableFuture<?>))
-            {
-                throw GatewayException.incompatible("method '" + CONVERSATION_FACADE //$NON-NLS-1$
-                    + ".sendAsync' returned " + typeName(futureValue) //$NON-NLS-1$
-                    + " instead of CompletableFuture"); //$NON-NLS-1$
-            }
-            progress.onProgress("Sent the request to Workmate."); //$NON-NLS-1$
-
-            Object sendResult;
-            CompletableFuture<?> future = (CompletableFuture<?>) futureValue;
-            try
-            {
-                sendResult = future.get(timeoutSeconds, TimeUnit.SECONDS);
-            }
-            catch (TimeoutException e)
-            {
-                // The token ASKS Workmate to stop; it does not undo what its tools have
-                // already done. So this is a dispatched timeout, not a plain retryable one -
-                // the difference is whether the caller may safely run the same request again.
-                cancelled.set(true);
-                future.cancel(true);
-                throw GatewayException.timedOutAfterDispatch();
-            }
-            catch (InterruptedException e)
-            {
-                cancelled.set(true);
-                future.cancel(true);
-                Thread.currentThread().interrupt();
-                throw GatewayException.callFailed("the waiting thread was interrupted"); //$NON-NLS-1$
-            }
-            catch (ExecutionException e)
-            {
-                throw GatewayException.callFailed(rootCauseMessage(e));
-            }
-
-            if (sendResult == null)
-            {
-                throw GatewayException.callFailed("sendAsync completed without a result"); //$NON-NLS-1$
-            }
             Class<?> resultClass = requireClass(aiBundle, SEND_RESULT);
-            String text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
-            String reasoning = stringValue(
-                invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
-            Integer assistantMessageCount = integerValue(invoke(
-                requireMethod(resultClass, "getAssistantMessageCount"), sendResult)); //$NON-NLS-1$
-            progress.onProgress("Received the Workmate response."); //$NON-NLS-1$
-            return new WorkmateResponse(text, reasoning, assistantMessageCount);
+
+            // ONE facade call answers ONE assistant turn: ConversationFacade completes its future
+            // when the ask stream ends, and that stream ends on a plan ("I will look it up")
+            // exactly as it ends on a finished answer (issue #427). Workmate's own driver does not
+            // treat the first turn as the result either - DevAutopilot re-sends into the SAME
+            // conversation while the answer still looks like an announcement. So does this loop.
+            String effectiveSkill =
+                skillName == null || skillName.isEmpty() ? DEFAULT_SKILL : skillName;
+            Object session = null;
+            String message = question;
+            String answer = null;
+            String reasoning = null;
+            String lastAnnouncement = null;
+            boolean declaredFinal = false;
+            boolean wentQuiet = false;
+            // Nullable on purpose: "the platform did not report a count" is not "zero", and the
+            // renderer omits the field for the former. One turn without a count makes the whole
+            // aggregate unknown, because a partial sum would be published as if it were the total.
+            Integer assistantMessages = Integer.valueOf(0);
+            int continuations = 0;
+            while (true)
+            {
+                Object request = create(requestConstructor, projectId,
+                    message + FINALITY_INSTRUCTION, session,
+                    session == null,
+                    // chat = FALSE matches Workmate's OWN default (ConversationFacade maps a null
+                    // getChat() to false), and it is NOT what decides whether Workmate works the
+                    // task with its tools: with TRUE and with FALSE alike, a "raw" request came
+                    // back in ~1.2 s with assistantMessages = 1 and no tool round at all.
+                    //
+                    // The SKILL is what decides it, measured live against Workmate 1.0.5. Under
+                    // ConversationFacade's own default "raw" the cloud answers from the model
+                    // alone. Under DEFAULT_SKILL the same facade runs Workmate's full tool loop:
+                    // the model called JShellManual, JShellSession and JShell, reached this plugin
+                    // through IEdtMcpBridge and answered from real EDT-MCP output (7 assistant
+                    // messages). Not every name is accepted - "chat"/"agent"/"git-review" are
+                    // refused by the cloud with "Failed to create conversation" in ~35 ms - so do
+                    // not treat this as a free-form field.
+                    effectiveSkill, Boolean.FALSE, maxToolRounds);
+
+                // Dispatching is irreversible in the way that matters: Workmate's tool loop can
+                // edit this configuration, and the cancellation token stops us WAITING, not the
+                // edits already made. So the job is committed before the FIRST send - a later
+                // "timed out, start a new job" would invite a retry that runs those edits again.
+                // The continuations need no second commit: they belong to a job already committed.
+                // Checked BEFORE the commit handshake, not only inside the send: a request that
+                // has not gone out yet leaves nothing behind, so an expired budget here is an
+                // ordinary retryable timeout rather than the "already dispatched" kind.
+                if (session == null && budgetSpent(deadlineNanos))
+                {
+                    throw GatewayException.timedOut();
+                }
+                if (session == null && !progress.onTryCommit())
+                {
+                    throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
+                        + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
+                }
+                Turn turn = sendTurn(facade, sendAsync, request, cancellationTokenClass,
+                    resultClass, deadlineNanos, session == null,
+                    session == null ? "Sent the request to Workmate." //$NON-NLS-1$
+                        : "Asked Workmate to continue in the same conversation.", //$NON-NLS-1$
+                    progress, dispatched);
+                if (turn == null)
+                {
+                    wentQuiet = true;
+                    break;
+                }
+                assistantMessages = addMessages(assistantMessages, turn.messages);
+                // The DECLARATION wins: a turn that marked itself final is final, whatever it
+                // sounds like. Only an undeclared turn is judged by phrasing.
+                boolean declared = declaresFinal(turn.text);
+                String stripped = stripFinalMarker(turn.text);
+                // A marker with no answer in front of it is not an answer: accepting it would
+                // report emptiness as a result, or fall back to an earlier announcement.
+                declaredFinal = declaredFinal || (declared && stripped != null);
+                boolean isAnswer =
+                    stripped != null && (declared || !needsContinuation(turn.text));
+                // Two DIFFERENT things are remembered, and the difference is the whole point of
+                // this loop: an accepted answer, and the last announcement. A later empty turn
+                // must not erase an answer already produced - but an announcement must never be
+                // promoted to "the answer" just because nothing better followed it, which is the
+                // very behaviour issue #427 reported.
+                if (isAnswer)
+                {
+                    answer = stripped;
+                    reasoning = turn.reasoning;
+                }
+                else if (stripped != null)
+                {
+                    lastAnnouncement = stripped;
+                }
+                if (isAnswer || turn.session == null || continuations >= MAX_CONTINUATIONS
+                    || budgetSpent(deadlineNanos))
+                {
+                    break;
+                }
+                session = turn.session;
+                message = CONTINUATION_PROMPT;
+                continuations++;
+                progress.onProgress("Workmate answered with an intention rather than a result; " //$NON-NLS-1$
+                    + "continuing the same conversation (" + continuations + " of " //$NON-NLS-1$ //$NON-NLS-2$
+                    + MAX_CONTINUATIONS + ")."); //$NON-NLS-1$
+            }
+            if (answer == null && lastAnnouncement != null && !wentQuiet)
+            {
+                // Workmate said something every time and never finished. Reporting its last
+                // announcement as the answer would be exactly the #427 behaviour; reporting
+                // "empty" would be untrue. So the call fails, quoting what it kept saying.
+                throw GatewayException.failedAfterDispatch("1C:Workmate never produced a final answer: " //$NON-NLS-1$
+                    + "after " + continuations + " continuation(s) - each of which had already " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "run, possibly through its tools, so inspect Workmate and the project " //$NON-NLS-1$
+                    + "before repeating the request - it was still announcing what " //$NON-NLS-1$
+                    + "it intended to do (\"" + summarize(lastAnnouncement) + "\"). Ask a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "narrower question, or raise timeoutSeconds so its tool loop can finish."); //$NON-NLS-1$
+            }
+            // Quiet or exhausted, the caller still gets what Workmate produced - with the fact
+            // that it never said it was finished, which is the difference between an answer and
+            // the last thing it happened to say.
+            String reported = answer != null ? answer : stripFinalMarker(lastAnnouncement);
+            progress.onProgress(declaredFinal ? "Received the Workmate response." //$NON-NLS-1$
+                : "Received a response that Workmate did not mark as final."); //$NON-NLS-1$
+            return new WorkmateResponse(reported, reasoning, assistantMessages, continuations,
+                declaredFinal, wentQuiet, answer != null);
         }
         catch (GatewayException e)
         {
@@ -419,7 +728,811 @@ public class WorkmateGateway
         }
         catch (RuntimeException | LinkageError e)
         {
-            throw GatewayException.callFailed(rootCauseMessage(e));
+            throw dispatchedOrPlainFailure(dispatched.get(), rootCauseMessage(e));
+        }
+    }
+
+    /**
+     * The right failure for something that escaped an outer catch: after a request has gone
+     * out, even an unexpected error must not be answered with a retry.
+     *
+     * @param dispatched whether a request had already been sent
+     * @param detail what went wrong
+     * @return the failure to throw
+     */
+    private static GatewayException dispatchedOrPlainFailure(boolean dispatched, String detail)
+    {
+        return dispatched ? GatewayException.failedAfterDispatch(detail)
+            : GatewayException.callFailed(detail);
+    }
+
+    /**
+     * Whether {@link #FINAL_MARKER} sits at {@code at}, compared case-insensitively and without
+     * copying or re-casing the text.
+     *
+     * @param text the text being cleaned
+     * @param at the candidate offset
+     * @return {@code true} when the marker starts there
+     */
+    private static boolean regionMatchesIgnoreCase(CharSequence text, int at)
+    {
+        for (int i = 0; i < FINAL_MARKER.length(); i++)
+        {
+            if (Character.toLowerCase(text.charAt(at + i)) != FINAL_MARKER.charAt(i))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether the turn declared itself final by carrying {@link #FINAL_MARKER}.
+     *
+     * @param text the turn's text (may be {@code null})
+     * @return {@code true} when the marker is present
+     */
+    static boolean declaresFinal(String text)
+    {
+        // ENDS with, not contains: the instruction asks for the marker as the last line, and a
+        // turn that merely mentions it - explaining the protocol, quoting an earlier answer -
+        // has not declared anything.
+        return text != null && text.trim().toLowerCase(Locale.ROOT).endsWith(FINAL_MARKER);
+    }
+
+    /**
+     * The answer without the protocol marker: it is this adapter's bookkeeping, not something the
+     * caller asked for.
+     *
+     * @param text the turn's text (may be {@code null})
+     * @return the text with every occurrence of the marker removed and trimmed
+     */
+    static String stripFinalMarker(String text)
+    {
+        if (text == null)
+        {
+            return null;
+        }
+        // Only the TRAILING marker is protocol. One written inside the text is the model's own
+        // words - explaining the protocol, quoting an earlier answer - and cutting it would edit
+        // the answer this adapter is supposed to pass through.
+        //
+        // Case-insensitive matching WITHOUT lowercasing the text: a character whose lowercase
+        // mapping is longer (U+0130, say) shifts every later index, and deleting by an index taken
+        // from the lowercased copy would then cut the answer instead of the marker.
+        StringBuilder cleaned = new StringBuilder(text);
+        trimEnd(cleaned);
+        while (cleaned.length() >= FINAL_MARKER.length()
+            && regionMatchesIgnoreCase(cleaned, cleaned.length() - FINAL_MARKER.length()))
+        {
+            cleaned.setLength(cleaned.length() - FINAL_MARKER.length());
+            trimEnd(cleaned);
+        }
+        String result = cleaned.toString().trim();
+        return result.isEmpty() ? null : result;
+    }
+
+    /**
+     * Drops trailing whitespace from {@code text} in place.
+     *
+     * @param text the buffer being cleaned
+     */
+    private static void trimEnd(StringBuilder text)
+    {
+        int end = text.length();
+        while (end > 0 && Character.isWhitespace(text.charAt(end - 1)))
+        {
+            end--;
+        }
+        text.setLength(end);
+    }
+
+    /**
+     * Whether Workmate's answer is an announcement of what it is ABOUT to do rather than the
+     * result, and the conversation should therefore be pushed to continue.
+     *
+     * <p>Two shapes, both reported by issue #427 and both produced by the platform completing its
+     * ask stream after one assistant turn:
+     * <ul>
+     *   <li>an EMPTY answer — nothing was said at all, so there is nothing to report;</li>
+     *   <li>a SHORT answer that states an intention ("For a full reference \u2026 I will use the 1C
+     *       documentation search"). Length is what keeps this from eating real answers: a
+     *       finished answer that happens to contain such a word is not {@value
+     *       #PLAN_TEXT_MAX_CHARS} characters short.</li>
+     * </ul>
+     * Over-eagerness here costs one extra round-trip and nothing else — the continuation cannot
+     * lose an answer, because the last NON-BLANK text is what the caller receives. Under-eagerness
+     * is the bug itself.
+     *
+     * @param text Workmate's answer for this turn (may be {@code null})
+     * @return {@code true} when the conversation should be continued
+     */
+    static boolean needsContinuation(String text)
+    {
+        String trimmed = trimToNull(text);
+        if (trimmed == null)
+        {
+            return true;
+        }
+        if (trimmed.length() > PLAN_TEXT_MAX_CHARS)
+        {
+            return false;
+        }
+        // Apostrophes are normalized first: the markers are written with the ASCII one.
+        String lower = normalizeApostrophes(trimmed.toLowerCase(Locale.ROOT));
+        for (String marker : INTENT_MARKERS)
+        {
+            if (announcesAction(lower, marker))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * First line (or first 160 characters) of a message, for quoting inside an error.
+     *
+     * @param text the message (never {@code null})
+     * @return a single-line excerpt
+     */
+    private static String summarize(String text)
+    {
+        String oneLine = text.trim().replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$
+        return oneLine.length() <= 160 ? oneLine : oneLine.substring(0, 157) + "..."; //$NON-NLS-1$
+    }
+
+    /**
+     * Whether one of {@code words} begins at the first non-space position at or after
+     * {@code from}, as a whole word.
+     *
+     * @param text the lowercased answer
+     * @param from where to start looking
+     * @param words the candidate words
+     * @return {@code true} when one of them is the next word
+     */
+    private static boolean startsWord(String text, int from, String[] words)
+    {
+        int start = skipWhitespaceForward(text, from);
+        for (String word : words)
+        {
+            int end = start + word.length();
+            if (text.startsWith(word, start)
+                && (end >= text.length() || !Character.isLetter(text.charAt(end))))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The first non-whitespace position at or after {@code from}.
+     *
+     * <p>ALL whitespace, not the space character: a model wraps its lines where it likes, and
+     * "I will\nnot edit generated files" must read as the refusal it is rather than as an
+     * announcement whose negation happens to sit on the next line.
+     *
+     * @param text the lowercased answer
+     * @param from where to start
+     * @return the index of the next non-whitespace character, or the text length
+     */
+    private static int skipWhitespaceForward(String text, int from)
+    {
+        int start = from;
+        while (start < text.length() && Character.isWhitespace(text.charAt(start)))
+        {
+            start++;
+        }
+        return start;
+    }
+
+    /**
+     * The position just past the last non-whitespace character before {@code at}.
+     *
+     * @param text the lowercased answer
+     * @param at where to start looking back from
+     * @return the index just after the preceding word, or {@code 0}
+     */
+    private static int skipWhitespaceBackward(String text, int at)
+    {
+        int end = at;
+        while (end > 0 && Character.isWhitespace(text.charAt(end - 1)))
+        {
+            end--;
+        }
+        return end;
+    }
+
+    /**
+     * Replaces typographic apostrophes with the ASCII one.
+     *
+     * <p>Models punctuate contractions with U+2019 ("I\u2019ll"), while the markers are
+     * written with the plain apostrophe. Normalizing the TEXT keeps one spelling per marker.
+     *
+     * @param text the lowercased answer
+     * @return the same text with apostrophe variants unified
+     */
+    private static String normalizeApostrophes(String text)
+    {
+        return text.replace('\u2019', '\'').replace('\u02BC', '\'');
+    }
+
+    /**
+     * Whether {@code text} contains {@code marker} as a whole word.
+     *
+     * <p>A plain {@code contains} with a trailing space in the marker misses every announcement
+     * the model punctuates - "I will:", "I'll." or a bullet list opener - which is the very shape
+     * this predicate exists to catch. Requiring a NON-LETTER (or the end of the text) after the
+     * marker accepts those and still refuses a longer word that merely starts the same way.
+     *
+     * @param text the lowercased answer
+     * @param marker the lowercased marker
+     * @return {@code true} when the marker appears as a whole word
+     */
+    private static boolean announcesAction(String text, String marker)
+    {
+        int from = 0;
+        while (from <= text.length() - marker.length())
+        {
+            int at = text.indexOf(marker, from);
+            if (at < 0)
+            {
+                return false;
+            }
+            int after = at + marker.length();
+            boolean wholeWord = (at == 0 || !Character.isLetter(text.charAt(at - 1)))
+                && (after >= text.length() || !Character.isLetter(text.charAt(after)));
+            // Negation is judged per OCCURRENCE, not per text: "I will not edit generated files;
+            // I will inspect the source model" refuses one thing and announces another, and the
+            // announcement is what decides whether the turn is finished.
+            if (wholeWord && !isNegated(text, at, after))
+            {
+                return true;
+            }
+            from = at + 1;
+        }
+        return false;
+    }
+
+    /**
+     * Whether the marker occurrence at {@code at} is directly negated, as in "\u043D\u0435
+     * \u043F\u0440\u043E\u0432\u0435\u0440\u044E" ("I will not check").
+     *
+     * <p>Russian builds the negated future by putting "\u043D\u0435" in front of the very verb
+     * this list matches, so without this the refusal reads as the announcement it denies.
+     *
+     * @param text the lowercased answer
+     * @param at where the marker starts
+     * @return {@code true} when a negation particle immediately precedes it
+     */
+    private static boolean isNegated(String text, int at, int after)
+    {
+        return negatedBefore(text, at) || negatedAfter(text, after);
+    }
+
+    /**
+     * Russian negation: the particle sits in front of the verb this list matches
+     * ("не проверю").
+     *
+     * @param text the lowercased answer
+     * @param at where the marker starts
+     * @return {@code true} when the particle immediately precedes it
+     */
+    private static boolean negatedBefore(String text, int at)
+    {
+        int end = skipWhitespaceBackward(text, at);
+        return end >= NEGATION_PARTICLE.length()
+            && text.startsWith(NEGATION_PARTICLE, end - NEGATION_PARTICLE.length())
+            && (end == NEGATION_PARTICLE.length()
+                || !Character.isLetter(text.charAt(end - NEGATION_PARTICLE.length() - 1)));
+    }
+
+    /**
+     * English negation: the adverb follows the auxiliary ("I will NOT edit", "I'll NEVER touch").
+     *
+     * @param text the lowercased answer
+     * @param after the index just past the marker
+     * @return {@code true} when a negating adverb follows it
+     */
+    private static boolean negatedAfter(String text, int after)
+    {
+        int start = skipWhitespaceForward(text, after);
+        for (String adverb : NEGATING_ADVERBS)
+        {
+            int end = start + adverb.length();
+            if (text.startsWith(adverb, start)
+                && (end >= text.length() || !Character.isLetter(text.charAt(end))))
+            {
+                // "I will NOT ONLY inspect the module, I will also fix it" denies nothing - the
+                // correlative intensifies the announcement that follows it.
+                return !startsWord(text, end, CORRELATIVE_AFTER_NOT);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Sends one prepared request and reads the assistant turn it produced.
+     *
+     * @param facade the conversation facade
+     * @param sendAsync its {@code sendAsync} method
+     * @param request the prepared {@code SendUserMessageRequest}
+     * @param cancellationTokenClass the token interface to implement for this send
+     * @param resultClass the {@code SendMessageResult} class to read the turn from
+     * @param deadlineNanos when the caller's total budget expires
+     * @param firstTurn whether this is the first send of the conversation
+     * @param sentMessage the progress milestone to report once the request is away
+     * @param progress milestone listener
+     * @return the turn Workmate answered with
+     * @throws GatewayException categorized runtime/compatibility failure
+     */
+    private Turn sendTurn(Object facade, Method sendAsync, Object request, // NOSONAR one reflective send needs every piece of the reflective context
+        Class<?> cancellationTokenClass, Class<?> resultClass, long deadlineNanos,
+        boolean firstTurn, String sentMessage, ProgressListener progress, AtomicBoolean dispatched)
+        throws GatewayException
+    {
+        // Immediately before the send, because dispatching is what has consequences: Workmate's
+        // tool loop can change this configuration, and a request let out after the advertised
+        // budget spends time the caller was never promised. A later wait-timeout does not undo it.
+        if (budgetSpent(deadlineNanos))
+        {
+            throw firstTurn ? GatewayException.timedOut() : GatewayException.timedOutAfterDispatch();
+        }
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
+        Object futureValue;
+        try
+        {
+            futureValue = invoke(sendAsync, facade, request, cancellationToken);
+        }
+        catch (GatewayException e)
+        {
+            // sendAsync can also fail BEFORE it returns a future. On a continuation the earlier
+            // turns have already run, so this failure carries the same warning as a later one.
+            throw firstTurn ? e : continuationFailed(e.getDetail());
+        }
+        if (!(futureValue instanceof CompletableFuture<?>))
+        {
+            throw GatewayException.incompatible("method '" + CONVERSATION_FACADE //$NON-NLS-1$
+                + ".sendAsync' returned " + typeName(futureValue) //$NON-NLS-1$
+                + " instead of CompletableFuture"); //$NON-NLS-1$
+        }
+        // Raised HERE, not by the caller: everything from this point on runs with a request
+        // that is already out, so a failure escaping this method - even one this method does
+        // not classify itself - must not be answered with a retry.
+        dispatched.set(true);
+        progress.onProgress(sentMessage);
+
+        // Recomputed AFTER the dispatch returned: sendAsync does synchronous work of its own
+        // (it creates the conversation), and waiting on the budget measured before it would add
+        // that duration back on top of the absolute deadline, once per turn.
+        if (budgetSpent(deadlineNanos))
+        {
+            // The request is already out, so this is never the retryable kind of timeout.
+            cancelled.set(true);
+            ((CompletableFuture<?>)futureValue).cancel(true);
+            throw GatewayException.timedOutAfterDispatch();
+        }
+
+        Object sendResult;
+        CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
+        try
+        {
+            // Milliseconds, not floored seconds: rounding down cancelled a turn up to a second
+            // before the advertised budget ran out, and a floor of one second let an already
+            // spent budget overshoot by one more.
+            // The length may round; only "is there still time" must not (budgetSpent above).
+            sendResult = awaitTurn(future, Math.max(1L, remainingMillis(deadlineNanos)));
+        }
+        catch (TimeoutException e)
+        {
+            boolean idleBound = e instanceof IdleTimeoutException;
+            // The token ASKS Workmate to stop; it does not undo what its tools have
+            // already done. So this is a dispatched timeout, not a plain retryable one -
+            // the difference is whether the caller may safely run the same request again.
+            cancelled.set(true);
+            future.cancel(true);
+            if (idleBound)
+            {
+                // The TURN went quiet rather than the budget running out: wind the conversation
+                // up with what is already in hand, and let the caller see that Workmate never
+                // declared itself finished.
+                progress.onProgress("No sign of work for " + (idleTurnTimeoutMs / 1000) //$NON-NLS-1$
+                    + "s - no calls into this plugin, none running - so the conversation was " //$NON-NLS-1$
+                    + "wound up without a completion marker."); //$NON-NLS-1$
+                return null;
+            }
+            throw GatewayException.timedOutAfterDispatch();
+        }
+        catch (InterruptedException e)
+        {
+            cancelled.set(true);
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw GatewayException.failedAfterDispatch("the waiting thread was interrupted " //$NON-NLS-1$
+                + "while the turn was already running."); //$NON-NLS-1$
+        }
+        catch (ExecutionException e)
+        {
+            // The turn ran and then failed - on the FIRST send as much as on a continuation. Its
+            // tools may already have changed the project, so neither may invite a blind retry.
+            throw dispatchedFailed(firstTurn, rootCauseMessage(e));
+        }
+
+        if (sendResult == null)
+        {
+            throw dispatchedFailed(firstTurn, "sendAsync completed without a result"); //$NON-NLS-1$
+        }
+        String text;
+        String reasoning;
+        Integer count;
+        try
+        {
+            text = stringValue(invoke(requireMethod(resultClass, "getText"), sendResult)); //$NON-NLS-1$
+            reasoning = stringValue(invoke(requireMethod(resultClass, "getReasoning"), sendResult)); //$NON-NLS-1$
+            // null BEFORE integerValue: that helper rejects every non-Number, null included, so
+            // converting first would turn "the platform reported no count" into a failed job.
+            Object rawCount =
+                invoke(requireMethod(resultClass, "getAssistantMessageCount"), sendResult); //$NON-NLS-1$
+            count = rawCount == null ? null : integerValue(rawCount);
+        }
+        catch (GatewayException e)
+        {
+            // An answer that cannot be READ is still an answer that was produced: the same reason
+            // the conversation-handle failure below carries the inspect-first warning.
+            throw dispatchedFailed(firstTurn,
+                "its answer could not be read - " + e.getDetail()); //$NON-NLS-1$
+        }
+        Object session;
+        try
+        {
+            session = sessionOf(resultClass, sendResult);
+        }
+        catch (GatewayException e)
+        {
+            // This turn has ALREADY run - possibly through Workmate's tools, which change this
+            // configuration. A bare "call failed" would be answered with a retry that performs
+            // the same work again, so the message says what happened and what to check first.
+            throw GatewayException.failedAfterDispatch("1C:Workmate answered, but its conversation handle "
+                + "could not be read (" + e.getDetail() + "), so the conversation cannot be "
+                + "continued. That answer was already produced and its tools may have run: "
+                + "inspect Workmate and the project before starting the same request again."); //$NON-NLS-1$
+        }
+        return new Turn(text, reasoning, count, session);
+    }
+
+    /**
+     * A failure that happened AFTER the request went out, phrased so it is not answered with a
+     * blind retry: the turn had already started, and Workmate runs its tools inside it.
+     *
+     * @param firstTurn whether this was the conversation's first send
+     * @param detail what went wrong
+     * @return the failure to throw
+     */
+    private static GatewayException dispatchedFailed(boolean firstTurn, String detail)
+    {
+        if (!firstTurn)
+        {
+            return continuationFailed(detail);
+        }
+        return GatewayException.failedAfterDispatch("1C:Workmate failed after its turn had " //$NON-NLS-1$
+            + "already started (" + detail + "). That turn was running Workmate's tools, which " //$NON-NLS-1$ //$NON-NLS-2$
+            + "change this project: inspect Workmate and the project before repeating the " //$NON-NLS-1$
+            + "request."); //$NON-NLS-1$
+    }
+
+    /**
+     * A failure of a CONTINUATION, phrased so it is not answered with a blind retry: the turns
+     * before it have already run, possibly through Workmate's tools.
+     *
+     * @param detail what went wrong
+     * @return the failure to throw
+     */
+    private static GatewayException continuationFailed(String detail)
+    {
+        return GatewayException.failedAfterDispatch("1C:Workmate failed while continuing the " //$NON-NLS-1$
+            + "conversation (" + detail + "). Earlier turns had already run and their tools may " //$NON-NLS-1$ //$NON-NLS-2$
+            + "have changed the project: inspect Workmate and the project before repeating the " //$NON-NLS-1$
+            + "request."); //$NON-NLS-1$
+    }
+
+    /**
+     * Waits for the turn, giving up early only when it has gone SILENT.
+     *
+     * <p>Activity is the calls Workmate makes back into this plugin, read from
+     * {@link BridgeActivity}: calls STARTED since the last look, plus calls still executing. Both
+     * are needed - a single tool that runs for minutes starts once and would otherwise read as
+     * silence - and neither can stand still while work goes on, which is why the retained call
+     * history is not the signal (it is bounded, and it can be switched off).
+     *
+     * @param future the turn's future
+     * @param budgetMillis what is left of the caller's total budget
+     * @return the turn's result
+     * @throws IdleTimeoutException when nothing happened for the idle window
+     * @throws TimeoutException when the caller's budget ran out first
+     * @throws InterruptedException if the wait is interrupted
+     * @throws ExecutionException if the turn failed
+     */
+    static Object awaitTurn(CompletableFuture<?> future, long budgetMillis)
+        throws TimeoutException, InterruptedException, ExecutionException
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMillis);
+        long lastActivity = System.nanoTime();
+        long seenCalls = BridgeActivity.ticks();
+        AWAITED_TURNS.incrementAndGet();
+        try
+        {
+            while (true)
+            {
+                long leftMs =
+                    Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+                if (leftMs <= 0)
+                {
+                    throw new TimeoutException("the job's budget ran out"); //$NON-NLS-1$
+                }
+                try
+                {
+                    return future.get(Math.min(leftMs, idlePollMs), TimeUnit.MILLISECONDS);
+                }
+                catch (TimeoutException stillRunning)
+                {
+                    long calls = BridgeActivity.ticks();
+                    // Either signal means "alive": a new call since the last look, or one that is
+                    // still running now. Without the second, a single long tool call - the very
+                    // case this timeout must not interrupt - would look like silence after its
+                    // one tick.
+                    //
+                    // The third case is not evidence at all: while a second turn is awaited the
+                    // signal cannot be attributed, so the clock does not RUN rather than merely
+                    // not firing. Without this reset, the silence measured during the ambiguous
+                    // stretch would be spent the instant the other turn ended, and the survivor
+                    // would be cut without ever having been watched alone for a full window.
+                    if (calls != seenCalls || BridgeActivity.inFlight() > 0
+                        || !isOnlyAwaitedTurn())
+                    {
+                        seenCalls = calls;
+                        lastActivity = System.nanoTime();
+                    }
+                    else if (System.nanoTime() - lastActivity
+                        >= TimeUnit.MILLISECONDS.toNanos(idleTurnTimeoutMs))
+                    {
+                        throw new IdleTimeoutException();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            AWAITED_TURNS.decrementAndGet();
+        }
+    }
+
+    /**
+     * Whether this is the only Workmate turn being awaited right now.
+     *
+     * <p>The bridge counters are process-wide, and Workmate's API offers nothing to attribute a
+     * call to a conversation: {@code IEdtMcpBridge.callTool} carries a tool name and arguments,
+     * nothing else. So while two jobs run at once, activity proves only that SOMETHING is
+     * working - it cannot prove that THIS turn is. Cutting a turn on that evidence would end a
+     * live conversation because a different one went quiet, so the idle rule stands down and the
+     * job's own budget is the bound. With one job - the ordinary case - nothing changes.
+     *
+     * @return {@code true} when exactly one turn is waiting on Workmate
+     */
+    private static boolean isOnlyAwaitedTurn()
+    {
+        return AWAITED_TURNS.get() <= 1;
+    }
+
+    /**
+     * Whether this timeout means "the turn went silent" rather than "the budget ran out".
+     *
+     * @param e the timeout that ended a wait
+     * @return {@code true} for the idle kind
+     */
+    static boolean isIdleTimeout(TimeoutException e)
+    {
+        return e instanceof IdleTimeoutException;
+    }
+
+    /**
+     * @return how many Workmate turns are being awaited right now
+     */
+    static int awaitedTurns()
+    {
+        return AWAITED_TURNS.get();
+    }
+
+    /** Test seam: shrinks the idle window so a test does not wait two minutes. */
+    static void setIdleTimingsForTest(long timeoutMs, long pollMs)
+    {
+        idleTurnTimeoutMs = timeoutMs;
+        idlePollMs = pollMs;
+    }
+
+    /** Test seam: restores the production idle window. */
+    static void resetIdleTimingsForTest()
+    {
+        idleTurnTimeoutMs = DEFAULT_IDLE_TURN_TIMEOUT_MS;
+        idlePollMs = DEFAULT_IDLE_POLL_MS;
+    }
+
+    /** A turn that stopped doing anything, as opposed to one that ran out of budget. */
+    private static final class IdleTimeoutException extends TimeoutException
+    {
+        private static final long serialVersionUID = 1L;
+    }
+
+    /**
+     * The conversation handle this turn belongs to, or {@code null} when the installed Workmate
+     * does not expose one. A missing handle is not a failure: it only means this turn cannot be
+     * continued, so the answer is reported as it stands rather than the whole call failing.
+     *
+     * @param resultClass the {@code SendMessageResult} class
+     * @param sendResult the result instance
+     * @return the {@code ConversationSession}, or {@code null}
+     */
+    private static Object sessionOf(Class<?> resultClass, Object sendResult)
+        throws GatewayException
+    {
+        Method getSession;
+        try
+        {
+            getSession = resultClass.getMethod("getSession"); //$NON-NLS-1$
+        }
+        catch (NoSuchMethodException | SecurityException e) // NOSONAR an ABSENT method only costs the continuation
+        {
+            return null;
+        }
+        // Only the LOOKUP is optional. A getter that exists and throws is a real Workmate failure,
+        // and swallowing it here would quietly turn a broken conversation into "cannot continue",
+        // reporting a plan as the answer.
+        return invoke(getSession, sendResult);
+    }
+
+    /**
+     * Adds one turn's assistant-message count to the running total, keeping "unknown" unknown.
+     *
+     * @param total the total so far, or {@code null} once any turn failed to report one
+     * @param turnCount this turn's count, or {@code null} when the platform did not report it
+     * @return the new total, or {@code null}
+     */
+    private static Integer addMessages(Integer total, Integer turnCount)
+    {
+        if (total == null || turnCount == null)
+        {
+            return null;
+        }
+        return Integer.valueOf(total.intValue() + turnCount.intValue());
+    }
+
+    /**
+     * Waits for a directly invoked Workmate tool, bounded by an ABSOLUTE deadline.
+     *
+     * <p>Every wake re-reads the clock instead of trusting one relative measurement: a thread
+     * descheduled after computing "how long is left" would otherwise begin that full wait
+     * whenever it resumes, and overrun the budget by however long it was away. The token is
+     * marked as soon as the deadline passes, so the tool learns it too.
+     *
+     * @param future the tool's future
+     * @param deadlineNanos when the caller's budget expires
+     * @param cancelled the flag behind the token handed to Workmate
+     * @return the tool's result
+     * @throws TimeoutException when the budget runs out first
+     * @throws InterruptedException if the wait is interrupted
+     * @throws ExecutionException if the tool failed
+     */
+    private static Object awaitToolResult(CompletableFuture<?> future, long deadlineNanos,
+        AtomicBoolean cancelled) throws TimeoutException, InterruptedException, ExecutionException
+    {
+        while (true)
+        {
+            // Expiry is decided in NANOSECONDS: remainingMillis truncates, so a remainder under
+            // one millisecond would read as zero and end the wait before the deadline it was
+            // given - cancelling a tool that was about to finish inside it.
+            if (budgetSpent(deadlineNanos))
+            {
+                // THE rule, and the only one this side can prove: a timeout is a budget that ran
+                // out while the tool had NOT finished. Once the future is terminal its outcome is
+                // handed over as it stands - result or failure alike - because nothing here can
+                // establish whether our cancellation caused it. Review of #444 walked that to the
+                // end: a completion stamp records when a dependent action RAN, never when the
+                // source completed, and the producer side belongs to Workmate.
+                if (future.isDone())
+                {
+                    return future.get();
+                }
+                cancelled.set(true);
+                throw new TimeoutException("the tool's budget ran out"); //$NON-NLS-1$
+            }
+            // ... while the WAIT length may round, as long as it never rounds down to zero (which
+            // would spin) - it only decides how soon the deadline is looked at again.
+            long leftMs = Math.max(1L, remainingMillis(deadlineNanos));
+            try
+            {
+                return future.get(Math.min(leftMs, TOOL_WAIT_POLL_MS), TimeUnit.MILLISECONDS);
+            }
+            catch (TimeoutException stillRunning)
+            {
+                // Deliberately swallowed: only the absolute deadline above ends this wait.
+                continue;
+            }
+            catch (ExecutionException failed)
+            {
+                // Terminal is terminal: the tool answered, and its own answer - a failure
+                // included - carries more for the caller than a timeout label this side cannot
+                // justify. Relabelling it would hide the cause behind "the budget ran out".
+                throw failed;
+            }
+        }
+    }
+
+    /**
+     * Whether a budget is spent.
+     *
+     * <p>The ONE place this question is answered, and it is answered in nanoseconds:
+     * {@link #remainingMillis} truncates, so a remainder under a millisecond reads as zero and
+     * a caller asking "<= 0" would declare the budget gone up to a millisecond early - early
+     * enough to refuse a dispatch, or cancel a tool, that still had time. Milliseconds are for
+     * how LONG to wait; nanoseconds decide WHETHER there is still time.
+     *
+     * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
+     * @return {@code true} once the deadline has been reached
+     */
+    private static boolean budgetSpent(long deadlineNanos)
+    {
+        return System.nanoTime() - deadlineNanos >= 0;
+    }
+
+    /**
+     * Whether the directly invoked tool has reached a terminal state.
+     *
+     * @param toolFuture holder filled when {@code callTools} hands its future over
+     * @return {@code true} once that future is done; {@code false} while it is absent or running
+     */
+    private static boolean toolFinished(AtomicReference<CompletableFuture<?>> toolFuture)
+    {
+        CompletableFuture<?> future = toolFuture.get();
+        return future != null && future.isDone();
+    }
+
+    /**
+     * Milliseconds left of a total budget, never negative.
+     *
+     * @param deadlineNanos the {@link System#nanoTime()} value the budget expires at
+     * @return remaining whole milliseconds
+     */
+    private static long remainingMillis(long deadlineNanos)
+    {
+        return Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+    }
+
+    /** {@code null} for a {@code null}/blank string, the trimmed value otherwise. */
+    private static String trimToNull(String value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** One assistant turn: what it said, how many messages it took, and how to continue it. */
+    private static final class Turn
+    {
+        private final String text;
+        private final String reasoning;
+        private final Integer messages;
+        private final Object session;
+
+        Turn(String text, String reasoning, Integer messages, Object session)
+        {
+            this.text = text;
+            this.reasoning = reasoning;
+            this.messages = messages;
+            this.session = session;
         }
     }
 
@@ -435,14 +1548,22 @@ public class WorkmateGateway
      *
      * @param toolName exact Workmate tool name, e.g. {@code JShellSession} or {@code JShell}
      * @param argsJson JSON OBJECT with that tool's arguments; blank means no arguments
-     * @param timeoutSeconds how long to wait for the tool
+     * @param timeoutMillis how long to wait for the tool
      * @param progress milestone listener
      * @return the tool's own textual result
      * @throws GatewayException categorized runtime/compatibility failure
      */
-    public String callWorkmateTool(String toolName, String argsJson, int timeoutSeconds,
+    public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
         ProgressListener progress) throws GatewayException
     {
+        // Taken BEFORE the reflective setup, not after it: bundle lookup, injector resolution,
+        // the authorization probe and building the call all spend the caller's budget, and a
+        // wait measured afterwards would hand the tool a fresh full budget on top of what setup
+        // already used - so the job could outlive the timeoutSeconds it advertised (#442).
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        // Outside the try, because the catch at the bottom classifies by it: a tool that has
+        // started may already have run code, and "retry" would run it twice.
+        AtomicBoolean invoked = new AtomicBoolean(false);
         try
         {
             Bundle aiBundle = requireBundle(AI_BUNDLE);
@@ -494,11 +1615,32 @@ public class WorkmateGateway
             }
             Class<?> cancellationTokenClass = requireClass(aiBundle, CANCELLATION_TOKEN);
             AtomicBoolean cancelled = new AtomicBoolean(false);
-            Object token = createCancellationToken(cancellationTokenClass, cancelled);
+            // The future the deadline half of the token judges. Filled in the moment callTools
+            // hands it over; until then there is nothing running that could be cancelled.
+            AtomicReference<CompletableFuture<?>> toolFuture = new AtomicReference<>();
+            // Two halves. Our own give-up, and the budget - but the budget stops mattering the
+            // instant the future is TERMINAL: Workmate may keep polling this token during its
+            // cleanup, and a call that finished in time must not be told it was cancelled just
+            // because the clock moved on afterwards. Judged by the future's own state rather than
+            // by a flag this side sets after the fact, which scheduler delay could postpone.
+            //
+            // Nanoseconds, not remainingMillis(): that helper truncates a sub-millisecond
+            // remainder to zero, which would report the budget spent up to a millisecond early
+            // and abort a tool that was about to finish inside it.
+            Object token = createCancellationToken(cancellationTokenClass, cancelled,
+                () -> !toolFinished(toolFuture) && budgetSpent(deadlineNanos));
             Method callTools = requireMethod(toolsClass, "callTools", callsClass, //$NON-NLS-1$
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
 
+            // Checked immediately before the invoke, because invoking is what has consequences:
+            // a Workmate tool can run arbitrary code (JShell) or change this configuration, and a
+            // call let out after the advertised budget spends time the caller was never promised.
+            // Nothing has been dispatched yet, so this is the ordinary retryable timeout.
+            if (budgetSpent(deadlineNanos))
+            {
+                throw GatewayException.timedOut();
+            }
             // Same reason as the facade above: a Workmate tool can run arbitrary code (JShell)
             // or change the configuration, and cancelling the wait does not undo that.
             if (!progress.onTryCommit())
@@ -506,7 +1648,19 @@ public class WorkmateGateway
                 throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
                     + "before tool '" + toolName + "' could be invoked, so it was not invoked"); //$NON-NLS-1$ //$NON-NLS-2$
             }
+            // Again, after the handshake and not only before it: onTryCommit takes the job
+            // record's lock and can wait there, so the budget may run out between the two. The
+            // conversation path re-checks in the same place for the same reason. Still the
+            // retryable kind - the commit stops the registry from killing the job, but no tool
+            // has been entered, so nothing was left half-done.
+            if (budgetSpent(deadlineNanos))
+            {
+                throw GatewayException.timedOut();
+            }
             Object futureValue = invoke(callTools, tools, calls, token);
+            // The tool is RUNNING from here on - JShell executes arbitrary code, and other
+            // Workmate tools change this project - so nothing below may advise a retry.
+            invoked.set(true);
             if (!(futureValue instanceof CompletableFuture<?>))
             {
                 throw GatewayException.incompatible("method '" + MCP_TOOLS //$NON-NLS-1$
@@ -514,10 +1668,16 @@ public class WorkmateGateway
                     + " instead of CompletableFuture"); //$NON-NLS-1$
             }
             CompletableFuture<?> future = (CompletableFuture<?>)futureValue;
+            toolFuture.set(future);
+
             Object result;
             try
             {
-                result = future.get(timeoutSeconds, TimeUnit.SECONDS);
+                // Driven by the ABSOLUTE deadline, re-read on every wake: a single relative
+                // wait computed here would start late if this thread is descheduled, and then
+                // run its full length PAST the deadline. callTools also does synchronous work
+                // of its own, which the pre-invoke measurement cannot include.
+                result = awaitToolResult(future, deadlineNanos, cancelled);
             }
             catch (TimeoutException e)
             {
@@ -533,19 +1693,36 @@ public class WorkmateGateway
                 cancelled.set(true);
                 future.cancel(true);
                 Thread.currentThread().interrupt();
-                throw GatewayException.callFailed("the waiting thread was interrupted"); //$NON-NLS-1$
+                throw GatewayException.failedAfterDispatch("the waiting thread was " //$NON-NLS-1$
+                    + "interrupted while tool '" + toolName + "' was already running."); //$NON-NLS-1$ //$NON-NLS-2$
             }
             catch (ExecutionException e)
             {
-                throw GatewayException.callFailed(rootCauseMessage(e.getCause() == null
-                    ? e : e.getCause()));
+                throw GatewayException.failedAfterDispatch("Workmate tool '" + toolName //$NON-NLS-1$
+                    + "' failed after it had been invoked (" //$NON-NLS-1$
+                    + rootCauseMessage(e.getCause() == null ? e : e.getCause())
+                    + "). It may already have changed this project."); //$NON-NLS-1$
             }
             progress.onProgress("Workmate tool '" + toolName + "' returned."); //$NON-NLS-1$ //$NON-NLS-2$
-            return extractToolText(result, toolName);
+            // BEFORE the post-dispatch wrapper below, because a name Workmate does not know is
+            // rejected by its dispatch loop without any tool being entered: that call is safe to
+            // correct and repeat, and warning "the project may have changed" would be a lie.
+            rejectUnknownTool(result, toolName);
+            try
+            {
+                return extractToolText(result, toolName);
+            }
+            catch (GatewayException e)
+            {
+                // The tool RAN; only its answer could not be read. Reporting that as an ordinary
+                // failure would advertise a retry, and this tool may have executed code.
+                throw GatewayException.failedAfterDispatch("Workmate tool '" + toolName //$NON-NLS-1$
+                    + "' ran, but its result could not be read - " + e.getDetail()); //$NON-NLS-1$
+            }
         }
         catch (RuntimeException | LinkageError e)
         {
-            throw GatewayException.callFailed(rootCauseMessage(e));
+            throw dispatchedOrPlainFailure(invoked.get(), rootCauseMessage(e));
         }
     }
 
@@ -1154,6 +2331,45 @@ public class WorkmateGateway
      * @return the tool's text, never {@code null}
      * @throws GatewayException when the result carries no message at all
      */
+    /**
+     * Fails RETRYABLY when Workmate rejected the call because it knows no tool by that name.
+     *
+     * <p>Its dispatch loop looks the name up before entering anything: an unknown one is put
+     * aside in {@code unknownCalls} and the result completes normally with no messages at all.
+     * Told apart from a tool that ran and answered badly, this is the difference between "fix
+     * the name and call again" and "something may have changed, look first".
+     *
+     * <p>Tolerant by design: a Workmate build without that field simply yields no verdict here,
+     * and the call falls through to the ordinary reading of the result.
+     *
+     * @param result the {@code McpCallToolsResult} Workmate returned
+     * @param toolName the name that was asked for
+     * @throws GatewayException when the name was rejected
+     */
+    static void rejectUnknownTool(Object result, String toolName) throws GatewayException
+    {
+        if (result == null)
+        {
+            return;
+        }
+        Object unknown;
+        try
+        {
+            unknown = readField(result.getClass().getField("unknownCalls"), result); //$NON-NLS-1$
+        }
+        catch (NoSuchFieldException | SecurityException e) // NOSONAR absence is not a verdict
+        {
+            return;
+        }
+        if (unknown instanceof Collection && !((Collection<?>)unknown).isEmpty())
+        {
+            throw GatewayException.unknownTool("1C:Workmate knows no tool named '" + toolName //$NON-NLS-1$
+                + "' and rejected the call without running anything. Check the name - it is " //$NON-NLS-1$
+                + "case-insensitive but must match a Workmate tool, for example JShellSession, " //$NON-NLS-1$
+                + "JShell or JShellManual - and call ask_workmate again."); //$NON-NLS-1$
+        }
+    }
+
     private static String extractToolText(Object result, String toolName) throws GatewayException
     {
         if (result == null)
@@ -1250,11 +2466,31 @@ public class WorkmateGateway
 
     private static Object createCancellationToken(Class<?> tokenClass, AtomicBoolean cancelled)
     {
+        return createCancellationToken(tokenClass, cancelled, () -> false);
+    }
+
+    /**
+     * A cancellation token that is ALSO cancelled once {@code expired} says the budget is gone.
+     *
+     * <p>A check placed before the dispatch can only ever be check-then-act: the thread may be
+     * preempted between the two, and no placement fixes that. What does is making the token
+     * itself deadline-aware - Workmate polls it inside its own loop, so a tool entered late,
+     * or still running when the budget ends, sees the cancellation at its next check instead of
+     * depending on this side of the call at all.
+     *
+     * @param tokenClass Workmate's cancellation-token interface
+     * @param cancelled set when this side gives up waiting
+     * @param expired reports whether the caller's budget is spent
+     * @return the proxy to hand to Workmate
+     */
+    private static Object createCancellationToken(Class<?> tokenClass, AtomicBoolean cancelled,
+        BooleanSupplier expired)
+    {
         return Proxy.newProxyInstance(tokenClass.getClassLoader(), new Class<?>[] {tokenClass},
             (proxy, method, args) -> {
                 if ("isCanceled".equals(method.getName())) //$NON-NLS-1$
                 {
-                    return cancelled.get();
+                    return cancelled.get() || expired.getAsBoolean();
                 }
                 if ("toString".equals(method.getName())) //$NON-NLS-1$
                 {

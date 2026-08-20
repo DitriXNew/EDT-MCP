@@ -146,7 +146,8 @@ public class AskWorkmateTool implements IMcpTool
                     + "Omit to use Workmate's default project context.") //$NON-NLS-1$
             .integerProperty(KEY_MAX_TOOL_ROUNDS,
                 "Optional positive limit for Workmate's internal tool-call " //$NON-NLS-1$
-                    + "rounds.") //$NON-NLS-1$
+                    + "rounds; it applies per assistant turn, so a conversation continued to " //$NON-NLS-1$
+                    + "reach a final answer spends it again on each turn.") //$NON-NLS-1$
             .stringProperty(KEY_SKILL_NAME,
                 "Optional Workmate skill name. Omit to use '" //$NON-NLS-1$
                     + WorkmateGateway.DEFAULT_SKILL + "', the skill under which Workmate runs " //$NON-NLS-1$
@@ -265,7 +266,8 @@ public class AskWorkmateTool implements IMcpTool
                         // Commit-capable, not progress::add: a Workmate tool can run arbitrary
                         // code, and once it is invoked no timeout can take that back.
                         String out = gateway.callWorkmateTool(workmateTool, workmateArgs,
-                            jobTimeoutSeconds, jobProgress(progress));
+                            remainingBudgetMillis(progress, jobTimeoutSeconds),
+                            jobProgress(progress));
                         return new WorkmateResponse(out == null || out.isEmpty()
                             ? "(the tool returned no text)" : out, null); //$NON-NLS-1$
                     }
@@ -299,6 +301,26 @@ public class AskWorkmateTool implements IMcpTool
      * @param progress the running job's reporter
      * @return a listener bound to that job
      */
+    /**
+     * What is left of the JOB's budget, in whole seconds, for the platform call about to run.
+     *
+     * <p>The job's budget starts at submission and the shared worker pool can hold the work in
+     * its queue first, so handing the platform the full {@code timeoutSeconds} would grant it the
+     * queue delay on top of the total the caller was promised - and this tool's conversation can
+     * spend that extra time on further continuations with tool side effects.
+     *
+     * @param progress the job's reporter, which knows the remaining budget
+     * @param jobTimeoutSeconds the job's total budget, the ceiling of the result
+     * @return at least one second, never more than the total budget
+     */
+    private static long remainingBudgetMillis(ProgressReporter progress, int jobTimeoutSeconds)
+    {
+        long total = TimeUnit.SECONDS.toMillis(jobTimeoutSeconds);
+        // Milliseconds all the way through: dividing by 1000 here would hand a job with 1 999 ms
+        // left only one second, and a job with 300 ms left a whole second it no longer has.
+        return Math.min(total, Math.max(0L, progress.remainingMillis()));
+    }
+
     private static ProgressListener jobProgress(ProgressReporter progress)
     {
         return new ProgressListener()
@@ -497,10 +519,12 @@ public class AskWorkmateTool implements IMcpTool
                             return new WorkmateResponse(chatHandoffAnswer(), null);
                         }
                         WorkmateResponse response = gateway.ask(jobProject, jobQuestion,
-                            maxToolRounds, skillName, jobTimeoutSeconds, listener);
+                            maxToolRounds, skillName,
+                            remainingBudgetMillis(progress, jobTimeoutSeconds), listener);
                         if (response == null || trimToNull(response.getText()) == null)
                         {
-                            throw new WorkmateJobException(emptyAnswerMessage());
+                            throw new WorkmateJobException(emptyAnswerMessage(
+                                response == null ? 0 : response.getContinuations()));
                         }
                         return response;
                     }
@@ -629,6 +653,31 @@ public class AskWorkmateTool implements IMcpTool
                     + "simply retry: check the Workmate chat panel and the project (" //$NON-NLS-1$
                     + "get_project_errors, git status) for what it already did, and only then " //$NON-NLS-1$
                     + "start a new ask_workmate job, with a larger timeoutSeconds."; //$NON-NLS-1$
+            case UNKNOWN_TOOL:
+                // Returned AS IT STANDS. Live check: wrapping it produced "1C:Workmate failed to
+                // answer: 1C:Workmate knows no tool named 'X' ... call ask_workmate again.. Check
+                // Workmate sign-in, network, and settings" - a stutter, a doubled stop, and
+                // sign-in advice for a mistyped name.
+                //
+                // Passing a detail through verbatim makes THIS method responsible for it being a
+                // whole sentence, rather than trusting whoever raised it: a blank one would reach
+                // the caller as an exception class name.
+                String rejected = trimToNull(error.getDetail());
+                return rejected == null
+                    ? "1C:Workmate rejected the requested tool name without running anything. " //$NON-NLS-1$
+                        + "Check the workmateTool value and call ask_workmate again." //$NON-NLS-1$
+                    : endSentence(rejected);
+            case FAILED_AFTER_DISPATCH:
+                // The detail already says the turn had run; what must NOT follow it is the
+                // "then retry ask_workmate" this method appends to an ordinary failure. The two
+                // sentences together would tell the caller to repeat work that may be half-done.
+                return "1C:Workmate failed after the request had been sent: " //$NON-NLS-1$
+                    // The detail is a sentence in most paths and a bare cause message in the
+                    // catch-all one; punctuate it here so the two never run together.
+                    + endSentence(error.getDetail())
+                    + " Do NOT simply repeat the question: check the " //$NON-NLS-1$
+                    + "Workmate chat panel and the project (get_project_errors, git status) " //$NON-NLS-1$
+                    + "for what it already did, and only then start a new ask_workmate job."; //$NON-NLS-1$
             case CALL_FAILED:
             default:
                 return "1C:Workmate failed to answer: " + error.getDetail() //$NON-NLS-1$
@@ -637,10 +686,48 @@ public class AskWorkmateTool implements IMcpTool
         }
     }
 
-    private static String emptyAnswerMessage()
+    /**
+     * Ends {@code detail} with a full stop unless it already ends in punctuation, so a detail and
+     * the advice that follows it never read as one run-on sentence.
+     *
+     * @param detail the failure detail (may be {@code null})
+     * @return the detail, terminated
+     */
+    private static String endSentence(String detail)
     {
-        return "1C:Workmate returned an empty answer. Open Workmate in EDT, verify that it is " //$NON-NLS-1$
-            + "signed in and configured, then start a new ask_workmate job."; //$NON-NLS-1$
+        String text = detail == null ? "" : detail.trim(); //$NON-NLS-1$
+        if (text.isEmpty())
+        {
+            return "(no detail reported)."; //$NON-NLS-1$
+        }
+        char last = text.charAt(text.length() - 1);
+        return last == '.' || last == '!' || last == '?' ? text : text + "."; //$NON-NLS-1$
+    }
+
+    /**
+     * Reports that Workmate said nothing at all.
+     *
+     * <p>The sentence turns on whether the conversation was actually continued (#427): saying
+     * "even after being asked to continue" when no continuation was sent - which happens when the
+     * installed Workmate exposes no conversation handle to continue WITH - would send the reader
+     * after a sign-in problem that is not there.
+     *
+     * @param continuations how many continuations the adapter actually sent
+     * @return the actionable message
+     */
+    private static String emptyAnswerMessage(int continuations)
+    {
+        return "1C:Workmate returned an empty answer" //$NON-NLS-1$
+            + (continuations > 0
+                ? ", even after being asked " + continuations + " time(s) to continue the same " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "conversation" //$NON-NLS-1$
+                : "") //$NON-NLS-1$
+            // Empty is not the same as "nothing happened": the question HAD been dispatched, and
+            // Workmate's tool loop edits this project. A bare "start a new job" would invite a
+            // second run of work that may already be half-done.
+            + ". Those turns had already run, and Workmate's tools change this project: inspect " //$NON-NLS-1$
+            + "Workmate and the project first. Then, if the work was not done, verify that " //$NON-NLS-1$
+            + "Workmate is signed in and configured and start a new ask_workmate job."; //$NON-NLS-1$
     }
 
     private static String trimToNull(String value)

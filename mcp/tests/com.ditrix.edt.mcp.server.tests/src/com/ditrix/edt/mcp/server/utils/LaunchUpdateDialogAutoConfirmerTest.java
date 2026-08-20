@@ -757,6 +757,8 @@ public class LaunchUpdateDialogAutoConfirmerTest
     // === "Find free port" needs unanimity, and the bookkeeping must not drift (review of #435) ===
 
     /** A dialog text naming the server of infobase "TestConfiguration #1". */
+    private static final String QUOTE = String.valueOf((char)34);
+
     private static final String PORT_DETAIL =
         "Standalone server \"Standalone server for TestConfiguration #1\" conflicts ...";
 
@@ -782,7 +784,8 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // THIS server. Dropping it from the vote would let a caller that declined the re-address be
         // overruled by one that asked for it.
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1",
+            "Standalone server for TestConfiguration #1");
         assertTrue("alone, the attributed reassign arm may press",
             LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
@@ -809,12 +812,125 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testAForeignPortConflictIsNotRecordedIntoThisWindow() throws Exception
+    {
+        // Review of #445: the press was already refused for a foreign dialog, but the ACCOUNTING
+        // still routed by the infobase suffix - so a concurrent launch of "My Base" was recorded
+        // into the window of "Base", and that operation reported a failure it never had.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch mine =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("Base",
+                "Standalone server for Base"))
+        {
+            LaunchUpdateDialogAutoConfirmer.notePortConflictForTest(
+                "Standalone server " + QUOTE + "Standalone server for My Base" + QUOTE
+                    + " cannot use port 8080.",
+                LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
+            assertFalse("another server's conflict must not fail this operation",
+                mine.portConflicted());
+
+            LaunchUpdateDialogAutoConfirmer.notePortConflictForTest(
+                "Standalone server " + QUOTE + "Standalone server for Base" + QUOTE
+                    + " cannot use port 8080.",
+                LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
+            assertTrue("its own conflict still lands", mine.portConflicted());
+        }
+    }
+
+    @Test
+    public void testAnExactServerMatchStandsWithoutTheInfobaseName()
+    {
+        // Review of #445: the two lookups are independent, and the weaker one failing must not
+        // cancel a re-address the caller asked for. An exact server match already proves the
+        // dialog belongs to this arm; only a missing SERVER name still vetoes.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, null,
+            "Standalone server for TestConfiguration #1");
+        assertTrue("an exact server match authorises the press on its own",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, null,
+            "Standalone server for TestConfiguration #1");
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
+    public void testTwoSameNamedInfobasesReleaseTheirOwnArm()
+    {
+        // Review of #445: the server name is part of the identity, so a release that matched
+        // only (policy, infobase) took the OTHER call arm - leaving one call unable to get
+        // the re-address it asked for, and an arm outstanding for a server already finished.
+        String serverA = "Standalone server for Base";
+        String serverB = "Other server for Base";
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverA);
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverB);
+
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverB);
+
+        String dialogA = "Standalone server " + QUOTE + serverA + QUOTE + " cannot use port.";
+        assertTrue("the arm that stayed is the one that was not released",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(dialogA));
+        String dialogB = "Standalone server " + QUOTE + serverB + QUOTE + " cannot use port.";
+        assertFalse("and the released one no longer authorises anything",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(dialogB));
+
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base", serverA);
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
+    public void testAnArmForBaseDoesNotAuthoriseTheDialogOfMyBase()
+    {
+        // THE #437 hole: EDT titles the server "<localized prefix> <infobase>", so matching by
+        // the infobase alone accepted a server whose name merely ENDS with it. An arm for
+        // "Base" would then press "Find free port" on the dialog of "My Base" and rewrite a
+        // DIFFERENT server. Attribution is by the server name, compared exactly.
+        String myBaseDialog =
+            "Standalone server " + QUOTE + "Standalone server for My Base" + QUOTE
+                + " cannot use port 8080.";
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base",
+            "Standalone server for Base");
+
+        assertFalse("an arm for Base must not authorise the dialog of My Base",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(myBaseDialog));
+
+        String baseDialog = "Standalone server " + QUOTE + "Standalone server for Base" + QUOTE
+            + " cannot use port 8080.";
+        assertTrue("its own dialog is still answered",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(baseDialog));
+
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "Base");
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
+    public void testAnArmWithoutAResolvedServerNameNeverPresses()
+    {
+        // The writing answer requires PROOF that the dialog belongs to this server. A name that
+        // could not be resolved is not proof - it refuses, and (per the unanimity rule) it also
+        // vetoes a concurrent arm that did resolve one.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1", null);
+        assertFalse("no server name, no press",
+            LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
+        LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+        assertEquals(0, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+    }
+
+    @Test
     public void testLoneReassignArmIsAllowedAndBalancedArmsLeaveNothingBehind()
     {
         assertEquals("the suite must start from no outstanding arms", 0,
             LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1",
+            "Standalone server for TestConfiguration #1");
         assertTrue("a lone reassign arm may move the server",
             LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
@@ -831,9 +947,11 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // The press rewrites the server configuration for everyone using that server, so a
         // concurrent call that did not ask for it must be able to veto.
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1",
+            "Standalone server for TestConfiguration #1");
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1",
+            "Standalone server for TestConfiguration #1");
         assertFalse("a single cancelling arm must veto the move",
             LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
@@ -852,14 +970,16 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // widest overload and releasing through a narrower one (which passes the default) must not
         // leave a "reassign" behind for the next, unrelated caller to be answered with.
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1");
+            StandaloneServerPortConflictPolicy.REASSIGN, "TestConfiguration #1",
+            "Standalone server for TestConfiguration #1");
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
             StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
         assertEquals("the arm must be gone, not merely re-labelled", 0,
             LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
 
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1");
+            StandaloneServerPortConflictPolicy.CANCEL, "TestConfiguration #1",
+            "Standalone server for TestConfiguration #1");
         assertFalse("a later cancelling caller must NOT inherit the earlier reassign",
             LaunchUpdateDialogAutoConfirmer.reassignAllowedForTest(PORT_DETAIL));
         LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(

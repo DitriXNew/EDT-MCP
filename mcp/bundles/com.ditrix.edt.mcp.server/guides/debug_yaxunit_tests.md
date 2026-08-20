@@ -20,6 +20,6 @@ The parameters match `run_yaxunit_tests(debug=true)`:
 - `timeout` is the start-call wait only, default and maximum 45 seconds. It does not limit the background job. A larger value is clamped.
 - `updateBeforeLaunch` defaults to `true` and performs the pre-launch recompute/update chain. `updateScope` narrows that chain; `externalInfobaseChanges` selects how its blocking external-change prompt is answered.
 
-The progress journal uses the same `resolve`, `prep:terminate`, `prep:recompute`, `prep:db-update`, and `spawn` phases as `run_yaxunit_tests`. A phase that stops advancing may be slow work or an EDT modal dialog; inspect EDT instead of waiting indefinitely.
+The progress journal uses the same `resolve`, `prep:terminate`, `prep:check-changes`, `prep:recompute`, `prep:settle`, `prep:db-update`, and `spawn` phases as `run_yaxunit_tests`; `prep:recompute` appears only when the gate found something to recompute. A phase that stops advancing may be slow work or an EDT modal dialog; inspect EDT instead of waiting indefinitely.
 
 The debug job commits immediately before handing pre-launch work to its Eclipse job because that work may update the infobase independently, and immediately before `launch(DEBUG_MODE)` because attaching the debugger and starting the client cannot be recalled by interrupting the registry worker.

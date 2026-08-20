@@ -85,6 +85,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
@@ -440,13 +441,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return args.error;
         }
 
-        ProjectContext ctx = resolveProjectAndConfig(args.projectName);
+        // Normalized BEFORE the context is resolved: the resolution refuses a type this project
+        // kind cannot hold, and it has to do so ahead of the specialized dispatches below, which
+        // resolve subsystems and XDTO packages through the Configuration - the BASE one for a
+        // linked external-objects project (issue #309).
+        String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
+        ProjectContext ctx = resolveProjectAndScope(args.projectName, normFqn);
         if (ctx.hasError())
         {
             return ctx.error;
         }
-
-        String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
 
         // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
         // branch: form members live on the editable Form content model (a cross-model hop), not the
@@ -494,7 +498,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
         // 'yo'->'ye' in names by default, so a caller re-typing the original yo spelling
         // would miss the stored name — the resolver retries the normalized FQN.
-        ResolvedTarget resolvedTarget = resolveModifyTarget(ctx.config, args.fqn, normFqn);
+        ResolvedTarget resolvedTarget = resolveModifyTarget(ctx.scope, args.fqn, normFqn);
         if (resolvedTarget.error != null)
         {
             return resolvedTarget.error;
@@ -718,12 +722,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         // Owner resolution uses the yo-fallback; force-export targets the RESOLVED owner's canonical FQN.
         MetadataNodeResolver.ResolvedNode ownerResolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(config, ref.ownerFqn());
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.scope, ref.ownerFqn());
         if (ownerResolved.node == null)
         {
             return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
-                + MetadataNodeResolver.yoNotFoundHint(ref.ownerFqn())).toJson();
+                + MetadataNodeResolver.yoNotFoundHint(ref.ownerFqn())
+                + ctx.scope.addressingHint(ref.ownerFqn())).toJson();
         }
         MdObject owner = ownerResolved.node.object;
         if (!(owner instanceof IBmObject))
@@ -1142,17 +1147,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * use downstream, or a ready JSON {@link ResolvedTarget#error} when the node does not exist.
      * Extracted verbatim from {@link #executeOnUiThread}.
      */
-    private static ResolvedTarget resolveModifyTarget(Configuration config, String fqn, String normFqn)
+    private static ResolvedTarget resolveModifyTarget(MetadataScope scope, String fqn, String normFqn)
     {
         MetadataNodeResolver.ResolvedNode resolved =
-            MetadataNodeResolver.resolveExistingWithYoFallback(config, normFqn);
+            MetadataNodeResolver.resolveExistingWithYoFallback(scope, normFqn);
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null || node.object == null)
         {
             return ResolvedTarget.notFound(
                 ToolResult.error("Node not found: " + fqn + ". Use 'Type.Name' for a top object or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
-                    + MetadataNodeResolver.yoNotFoundHint(normFqn)).toJson());
+                    + MetadataNodeResolver.yoNotFoundHint(normFqn)
+                    + scope.addressingHint(normFqn)).toJson());
         }
         if (resolved.yoFallback)
         {
@@ -2590,7 +2596,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // re-navigate to the leaf's owner BY NAME inside the tx - this is what lets a member of a
         // NESTED object (e.g. a tabular-section attribute) be modified, not just a direct member.
         final String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        BmFetchPlan plan = resolveBmFetchPlan(config, node, target, parts);
+        BmFetchPlan plan = resolveBmFetchPlan(ctx.scope, node, target, parts);
         if (plan.error != null)
         {
             return plan.error;
@@ -2608,7 +2614,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // once so an unresolved 'type' reference can append the extension-adopt hint (issue #262).
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         List<PreparedChange> changes = new ArrayList<>();
-        String prepErr = validateAndPrepare(ctx.project, config, version, target, properties, changes,
+        String prepErr = validateAndPrepare(ctx.project, ctx.scope, config, version, target, properties, changes,
             normReport, isExtensionProject);
         if (prepErr != null)
         {
@@ -2669,7 +2675,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Read OUTSIDE the write transaction (a plain configuration read, like the language
         // resolution the prepare step already did); only the per-object present locales are
         // collected inside. Issue #298.
-        final List<String> declaredCodes = MetadataLanguageUtils.declaredOrOverride(config,
+        final List<String> declaredCodes = ctx.scope.declaredOrOverride(
             declaredCodesAfterBatch(config, target, properties));
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
@@ -3062,7 +3068,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "FormRetypePreflight", //$NON-NLS-1$
-            (formModel, tx) -> formRetypeVerdict(ctx.config, version,
+            (formModel, tx) -> formRetypeVerdict(ctx.scope, version,
                 FormElementWriter.resolveFormMember(formModel, ref), properties, normReport));
     }
 
@@ -3081,7 +3087,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * <p>The normalization report is a THROWAWAY: the write repeats the preparation with the real
      * one, and sharing it would report every renamed name twice.</p>
      *
-     * @param config the configuration reference targets resolve against
+     * @param scope the root reference targets resolve against
      * @param version the platform version the type payload is built for
      * @param member the resolved form member, or {@code null} when it does not exist
      * @param properties the requested property changes
@@ -3089,7 +3095,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      *            {@link MdNameNormalizer.Report#emptyCopy()}, so this pass reports nothing twice
      * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
      */
-    String formRetypeVerdict(Configuration config, Version version, EObject member,
+    String formRetypeVerdict(MetadataScope scope, Version version, EObject member,
         List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
         if (member == null)
@@ -3098,7 +3104,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         try
         {
-            prepareFormMemberChanges(config, version, member, properties, normReport.emptyCopy());
+            prepareFormMemberChanges(scope, version, member, properties, normReport.emptyCopy());
         }
         catch (FormValidationException e)
         {
@@ -3550,7 +3556,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * verbatim from {@link #executeOnUiThread}; the caller re-checks {@link BmFetchPlan#error} and
      * returns it unchanged, preserving the original error cases.
      */
-    private static BmFetchPlan resolveBmFetchPlan(Configuration config,
+    private static BmFetchPlan resolveBmFetchPlan(MetadataScope scope,
         MetadataNodeResolver.MetadataNode node, MdObject target, String[] parts)
     {
         BmFetchPlan plan = new BmFetchPlan();
@@ -3567,7 +3573,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         else
         {
-            MdObject topObject = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+            MdObject topObject = scope.findObject(parts[0], parts[1]);
             if (!(topObject instanceof IBmObject))
             {
                 plan.error = ToolResult.error("Top object is not a BM object").toJson(); //$NON-NLS-1$
@@ -3589,11 +3595,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@link #validateMethodReference} can read a CommonModule's source when the target is a
      * ScheduledJob / EventSubscription; every other property ignores it.
      */
-    private String validateAndPrepare(IProject project, Configuration config, Version version, MdObject target,
+    private String validateAndPrepare(IProject project, MetadataScope scope, Configuration config, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        Version version, MdObject target,
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        PrepareContext ctx = new PrepareContext(project, config, version,
+        PrepareContext ctx = new PrepareContext(project, scope, config, version,
             declaredCodesAfterBatch(config, target, properties));
         for (JsonObject prop : properties)
         {
@@ -3696,10 +3703,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // the CURRENT model, and only a retype that can really be applied reaches the gate - which
             // runs outside any transaction, because it may block on a UI dialog (issue #295 review).
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                ctx.config, ref.formPath,
+                ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form member as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table, " //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Parameter / Field / Button / Group / " //$NON-NLS-1$
+                    + "Decoration / Table, " //$NON-NLS-1$
                     + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
             // The version the type payload is built for: resolved BEFORE the gate, because the
             // pre-check validates that payload (it is the same one the write then uses).
@@ -3744,11 +3752,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
     {
-        Configuration config = ctx.config;
         final List<String> applied = new ArrayList<>();
         // A form member's title is a localized property too, so it gets the same report the mdclass
         // path gives (issue #298). The declared codes are read OUTSIDE the write transaction.
-        final List<String> declaredCodes = MetadataLanguageUtils.declaredLanguageCodes(config);
+        final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
 
         // Validate + apply inside ONE BM write transaction: resolve the member, validate every
@@ -3772,7 +3779,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                 }
                 List<HolderChange> changes =
-                    prepareFormMemberChanges(config, version, member, properties, normReport);
+                    prepareFormMemberChanges(ctx.scope, version, member, properties, normReport);
                 // (receiver, change) of every localized write, reported only AFTER the whole
                 // batch is applied: reading a map mid-batch would report a locale as missing that
                 // a LATER change in the same call fills in.
@@ -3805,7 +3812,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 for (int i = 0; i < localizedChanges.size(); i++)
                 {
                     localizedReport.collect(localizedHolders.get(i),
-                        List.of(localizedChanges.get(i)), declaredCodes, config);
+                        List.of(localizedChanges.get(i)), declaredCodes, ctx.config);
                 }
             });
 
@@ -3906,7 +3913,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                ctx.config, ref.formPath,
+                ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address the dynamic-list attribute as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Attribute.Name'."); //$NON-NLS-1$
             // Converting a plain (or collection-typed) attribute into a dynamic list REPLACES its
@@ -4171,7 +4178,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code eSet}, so the transaction rolls back with no partial mutation. The extInfo holder is
      * created (when absent) only at APPLY time by the caller, once every property has validated.
      */
-    private List<HolderChange> prepareFormMemberChanges(Configuration config, Version version,
+    private List<HolderChange> prepareFormMemberChanges(MetadataScope scope, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         EObject member, List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
         // Reject a classifier `type` change batched with a nested-extInfo layout prop BEFORE building any
@@ -4190,7 +4197,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 throw new FormValidationException(guard);
             }
-            changes.add(prepareFormMemberChange(config, version, member, prop, normReport));
+            changes.add(prepareFormMemberChange(scope, version, member, prop, normReport));
         }
         return changes;
     }
@@ -4300,24 +4307,32 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * chosen from (so the enum / boolean / ... value is coerced to the correct feature); an invalid
      * value throws {@link FormValidationException} BEFORE any mutation.
      */
-    private HolderChange prepareFormMemberChange(Configuration config, Version version, EObject member,
+    private HolderChange prepareFormMemberChange(MetadataScope scope, Version version, EObject member,
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
         JsonObject normProp = normalizeFormProperty(member, prop);
-        String orphanErr = refuseRetypeThatOrphansColumns(member, normProp);
-        if (orphanErr != null)
+        // The three retype guards below are about DATA BINDING - columns hanging off the member,
+        // tables and fields bound to its data path. They identify their subject by NAME, and a
+        // parameter shares no namespace with an attribute, so a parameter named like one answered
+        // for the ATTRIBUTE and refused a legal retype with a message about a different member.
+        // Nothing binds to a parameter by data path, so none of them applies (issue #396 review).
+        if (!FormElementWriter.isFormParameter(member))
         {
-            throw new FormValidationException(orphanErr);
-        }
-        String listErr = refuseCollectionRetypeOnADynamicList(member, normProp);
-        if (listErr != null)
-        {
-            throw new FormValidationException(listErr);
-        }
-        String boundItemsErr = refuseRetypeThatOrphansItems(member, normProp);
-        if (boundItemsErr != null)
-        {
-            throw new FormValidationException(boundItemsErr);
+            String orphanErr = refuseRetypeThatOrphansColumns(member, normProp);
+            if (orphanErr != null)
+            {
+                throw new FormValidationException(orphanErr);
+            }
+            String listErr = refuseCollectionRetypeOnADynamicList(member, normProp);
+            if (listErr != null)
+            {
+                throw new FormValidationException(listErr);
+            }
+            String boundItemsErr = refuseRetypeThatOrphansItems(member, normProp);
+            if (boundItemsErr != null)
+            {
+                throw new FormValidationException(boundItemsErr);
+            }
         }
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
@@ -4326,7 +4341,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
         // so there is no unresolved-reference case here to hint. `project` is null: a form member is
         // never a ScheduledJob / EventSubscription, so validateMethodReference never dereferences it.
-        String pErr = prepare(PrepareContext.forFormMember(config, version), member, holder.classifyExtInfo, normProp,
+        String pErr = prepare(PrepareContext.forFormMember(scope, version), member, holder.classifyExtInfo, normProp,
             built, normReport, false);
         if (pErr != null)
         {
@@ -4852,7 +4867,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // tree and have no position / parent).
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
         if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND
-            || kind == FormElementWriter.Kind.COLUMN)
+            || kind == FormElementWriter.Kind.COLUMN
+            || kind == FormElementWriter.Kind.PARAMETER)
         {
             return ToolResult.error("'parent' / 'position' move a form ITEM (field / group / " //$NON-NLS-1$
                 + "decoration / button / table); a form " + ref.kindToken + " is not positioned. " //$NON-NLS-1$ //$NON-NLS-2$
@@ -4908,7 +4924,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                ctx.config, ref.formPath,
+                ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form item as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
             final String mdFormName = fctx.mdForm.getName();
@@ -4999,7 +5015,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                ctx.config, ref.formPath,
+                ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a handler as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Handler.Event' or " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<ItemKind>.<ItemName>.Handler.Event'."); //$NON-NLS-1$
@@ -5092,7 +5108,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                ctx.config, ref.formPath,
+                ctx.scope, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a button as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Button.Name' or 'CommonForm.FormName.Button.Name'."); //$NON-NLS-1$
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
@@ -5190,6 +5206,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         final Configuration config;
 
+        /** The ROOT an FQN resolves against: a configuration, or external-objects roots. */
+        final MetadataScope scope;
+
         final Version version;
 
         /** Codes declared AFTER this batch; {@code null} when it changes no language code. */
@@ -5202,16 +5221,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
          */
         final MetadataTypeBuilder.TypeTarget typeTarget;
 
-        PrepareContext(IProject project, Configuration config, Version version,
+        PrepareContext(IProject project, MetadataScope scope, Configuration config, Version version,
             List<String> declaredAfterBatch)
         {
-            this(project, config, version, declaredAfterBatch, MetadataTypeBuilder.TypeTarget.METADATA);
+            this(project, scope, config, version, declaredAfterBatch,
+                MetadataTypeBuilder.TypeTarget.METADATA);
         }
 
-        private PrepareContext(IProject project, Configuration config, Version version,
+        private PrepareContext(IProject project, MetadataScope scope, Configuration config, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+            Version version,
             List<String> declaredAfterBatch, MetadataTypeBuilder.TypeTarget typeTarget)
         {
             this.project = project;
+            this.scope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
             this.config = config;
             this.version = version;
             this.declaredAfterBatch = declaredAfterBatch;
@@ -5223,13 +5245,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
          * collection type (ValueTable / ValueTree), so only this context admits those kinds (#295).
          * {@code project} is {@code null} here, as the class doc explains.
          *
-         * @param config the configuration the member belongs to
+         * @param scope the resolution root the member belongs to
          * @param version the platform version
          * @return a context whose type target is a form attribute
          */
-        static PrepareContext forFormMember(Configuration config, Version version)
+        static PrepareContext forFormMember(MetadataScope scope, Version version)
         {
-            return new PrepareContext(null, config, version, null,
+            MetadataScope effective = scope == null ? MetadataScope.ofConfiguration(null) : scope;
+            return new PrepareContext(null, effective, effective.configuration(), version, null,
                 MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
         }
     }
@@ -5411,9 +5434,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case TYPE_DESCRIPTION:
                 return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
             case REFERENCE:
-                return prepareReference(ctx.config, target, name, value, info, out);
+                return prepareReference(ctx.scope, target, name, value, info, out);
             case MANY_REFERENCE:
-                return prepareManyReference(ctx.config, name, prop, info, out);
+                return prepareManyReference(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
                 return prepareStyleValue(name, prop, target, info, out);
             case ADJUSTABLE_BOOLEAN:
@@ -5594,7 +5617,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Validate against what the configuration will declare AFTER this batch: an edit that
             // sets a Language's 'languageCode' and a localized value under it must not reject its own
             // second half, and one that RENAMES a code must not accept the code it removes.
-            code = MetadataLanguageUtils.resolveSynonymLanguage(ctx.config, value,
+            code = ctx.scope.resolveSynonymLanguage(value,
                 asString(prop.get("language")), "'" + name + "'", ctx.declaredAfterBatch); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         catch (IllegalArgumentException e)
@@ -5641,14 +5664,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code defaultForm} is set on) - passed to {@link #resolveReferenceTarget} so a bare short form
      * Name (no dots) can resolve against the owner's OWN {@code getForms()} collection (issue #262).
      */
-    private String prepareReference(Configuration config, EObject owner, String name, String value,
+    private String prepareReference(MetadataScope scope, EObject owner, String name, String value,
         PropertyInfo info, List<PreparedChange> out)
     {
         if (value == null || value.isEmpty())
         {
             return requireValueError(name);
         }
-        MdObject targetMd = resolveReferenceTarget(config, owner, value);
+        MdObject targetMd = resolveReferenceTarget(scope, owner, value);
         String vErr = validateReferenceTarget(name, info.feature, targetMd, value);
         if (vErr != null)
         {
@@ -5664,7 +5687,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code out}. Returns a JSON error on failure, or {@code null} on success. Read-only: it only
      * builds and queues the change (no model mutation).
      */
-    private String prepareManyReference(Configuration config, String name, JsonObject prop,
+    private String prepareManyReference(MetadataScope scope, String name, JsonObject prop,
         PropertyInfo info, List<PreparedChange> out)
     {
         JsonElement raw = prop.get(KEY_VALUE);
@@ -5682,7 +5705,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return ToolResult.error("Each entry of the '" + name + "' list must be a " //$NON-NLS-1$ //$NON-NLS-2$
                     + "non-empty FQN string.").toJson(); //$NON-NLS-1$
             }
-            MdObject t = resolveReferenceTarget(config, null, fqn);
+            MdObject t = resolveReferenceTarget(scope, null, fqn);
             String vErr = validateReferenceTarget(name, info.feature, t, fqn);
             if (vErr != null)
             {
@@ -5757,8 +5780,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     // resolution headlessly (no BM/live-project needed - pure EMF containment reads).
     static MdObject resolveReferenceTarget(Configuration config, EObject owner, String fqn)
     {
+        return resolveReferenceTarget(MetadataScope.ofConfiguration(config), owner, fqn);
+    }
+
+    /**
+     * The {@link #resolveReferenceTarget(Configuration, EObject, String)} variant that resolves
+     * against whichever ROOT the project has, so a reference between two objects of an
+     * external-objects project resolves there and not in the base configuration (issue #309).
+     *
+     * @param scope the resolution root
+     * @param owner the element the property is being set on, or {@code null}
+     * @param fqn the reference value as supplied by the caller
+     * @return the resolved metadata object, or {@code null} when nothing resolves
+     */
+    static MdObject resolveReferenceTarget(MetadataScope scope, EObject owner, String fqn)
+    {
         String norm = MetadataTypeUtils.normalizeFqn(fqn);
-        MetadataNodeResolver.MetadataNode n = MetadataNodeResolver.resolveExisting(config, norm);
+        MetadataNodeResolver.MetadataNode n = MetadataNodeResolver.resolveExisting(scope, norm);
         if (n != null)
         {
             return n.object;
@@ -5766,7 +5804,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String formPath = FormElementWriter.parseFormPath(norm);
         if (formPath != null)
         {
-            MdObject form = FormStructureReader.resolveMdForm(config, formPath);
+            MdObject form = FormStructureReader.resolveMdForm(scope, formPath);
             if (form != null)
             {
                 return form;

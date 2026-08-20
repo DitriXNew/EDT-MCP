@@ -254,7 +254,12 @@ public final class MetadataTypeBuilder
     private static final Set<String> OBJECT_FORM_TYPES = new HashSet<>(Arrays.asList(
         "Catalog", "Document", "ChartOfCharacteristicTypes", "ChartOfAccounts", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "ChartOfCalculationTypes", "ExchangePlan", "BusinessProcess", "Task", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "Report", "DataProcessor")); //$NON-NLS-1$ //$NON-NLS-2$
+        "Report", "DataProcessor", //$NON-NLS-1$ //$NON-NLS-2$
+        // The standalone twins: an external data processor / report has exactly the same object
+        // form with a main Object attribute (the committed ExternalObjects fixture is that shape),
+        // and its produced types carry the objectType the seed reads. Leaving them out made
+        // generateContent=true silently seed nothing on an external owner (issue #309 review).
+        "ExternalDataProcessor", "ExternalReport")); //$NON-NLS-1$ //$NON-NLS-2$
 
     /**
      * Whether a metadata owner addressed by {@code englishSingularType} (the canonical English-singular

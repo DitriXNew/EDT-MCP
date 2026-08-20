@@ -36,6 +36,7 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_contains,
+    assert_not_contains,
     assert_no_diff,
     poll_disk_contains,
     poll_disk_lacks,
@@ -434,3 +435,158 @@ def test_form_corpus_every_decoration_type_is_settable():
     # a Picture decoration swaps in a PictureDecorationExtInfo — the type change is structural
     poll_disk_contains(form_file, 'xsi:type="form:PictureDecorationExtInfo"',
                        ctx="the Picture decoration's ext-info must reach disk")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# PARAMETERS - the fifth axis (issue #396)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_form_corpus_parameter_is_addressable_end_to_end():
+    """A form PARAMETER can be created, read, retyped and deleted through MCP.
+
+    This axis had no address at all: `Parameter` was not a kind token, so create / modify /
+    delete answered "Unsupported form element kind" and get_metadata_details never showed one.
+    Every other axis of the form corpus is walked by this file; this leg is what keeps this one
+    from falling out again.
+    """
+    base, form, form_file = _seed_form("Param")
+    param = form + ".Parameter.Filter"
+
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": param}),
+              "create a form parameter")
+    poll_disk_contains(form_file, "<name>Filter</name>",
+                       ctx="the parameter must reach Form.form on disk")
+
+    # It renders in the form structure, in its own section - a parameter has no title, so the
+    # table is Name / Type / Key / Comment.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(d, "read the form back")
+    assert_contains(d.text, "## Parameters", "the parameters section must render")
+    assert_contains(d.text, "Filter", "the parameter must be listed")
+
+    # Its three real features go through modify_metadata - valueType via the SAME shared
+    # {types:[...]} vocabulary an attribute takes.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": param,
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String", "length": 50}]}},
+                       {"name": "keyParameter", "value": True},
+                       {"name": "comment", "value": "corpus probe"}]})
+    assert_ok(r, "set the parameter's type, key flag and comment")
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(d, "re-read the form")
+    assert_contains(d.text, "String", "the parameter must carry the type that was set")
+    assert_contains(d.text, "corpus probe", "the comment must render")
+
+    assert_ok(call("delete_metadata", {"projectName": PROJECT, "fqn": param, "confirm": True}),
+              "delete the parameter")
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(d, "read the form after the delete")
+    assert_not_contains(d.text, "## Parameters",
+                        "the section must disappear with the last parameter")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_form_corpus_parameter_is_addressable_in_russian():
+    """The Russian kind token addresses the same member - only the TOKEN is bilingual."""
+    base, form, form_file = _seed_form("ParamRu")
+    ru_param = form + "." + "Параметр" + ".Filter"
+
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": ru_param}),
+              "create a form parameter through the Russian token")
+    poll_disk_contains(form_file, "<name>Filter</name>",
+                       ctx="the parameter must reach Form.form on disk")
+    # The SAME member is reachable through the English token - one member, two spellings.
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": form + ".Parameter.Filter",
+        "properties": [{"name": "comment", "value": "one member"}]}),
+        "the English token must reach the member the Russian one created")
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(d, "read the form back")
+    assert_contains(d.text, "one member", "the comment written through the English token")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_corpus_parameter_is_not_an_item_and_not_an_attribute():
+    """Making a kind resolvable must not let it flow into item-only or attribute-only paths.
+
+    Every leg here was a real defect found by review after the kind was added, and each one
+    reproduced before it was fixed:
+
+    * `parent` / `position` reached the visual-item mover, which then complained about a
+      missing parent item instead of saying a parameter has no position;
+    * a handler-shaped address resolved its OWNER through the items tree, reporting an
+      existing parameter as a missing item;
+    * the attribute-only retype guards identify their subject by data path - built from the
+      NAME alone - so a parameter sharing a name with a bound collection attribute had a
+      perfectly legal retype refused with a message about that OTHER member.
+    """
+    base, form, form_file = _seed_form("ParamGuards")
+
+    # An attribute Rows, collection-typed, with a table bound to it - and a PARAMETER of the
+    # same name. The two namespaces are independent, so this is legal.
+    attr = form + ".Attribute.Rows"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attr}), "seed the attribute")
+    assert_ok(_set_attribute_type(attr, "ValueTable"), "make it a collection")
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": form + ".Table.RowsTable",
+        "properties": [{"name": "dataPath", "value": "Rows"}]}), "bind a table to it")
+    param = form + ".Parameter.Rows"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": param}),
+              "a parameter may share a name with an attribute")
+
+    # Retyping the PARAMETER is legal: nothing binds to a parameter by data path.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": param,
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String", "length": 10}]}}]})
+    assert_ok(r, "retyping a parameter must not consult the attribute's bound table")
+
+    # ...while the ATTRIBUTE of that name is still guarded, so the skip is scoped, not a hole.
+    e = assert_error(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": attr,
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String", "length": 10}]}}]}),
+        "retyping the bound ATTRIBUTE is still refused")
+    assert_contains(e, "row source", "the attribute guard must still fire")
+
+    # A parameter has no position.
+    e = assert_error(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": param,
+        "properties": [{"name": "parent", "value": "SomeGroup"}]}),
+        "a move addressed at a parameter")
+    assert_contains(e, "not positioned", "the refusal must say a parameter has no position")
+    assert_not_contains(e, "Parent form item not found",
+                        "it must not reach the visual-item mover at all")
+
+    # ...and no events.
+    e = assert_error(call("create_metadata", {
+        "projectName": PROJECT, "fqn": param + ".Handler.OnChange"}),
+        "a handler addressed at a parameter")
+    assert_contains(e, "carries no events",
+                    "the refusal must name the reason, not report a missing item")
+
+    # A misspelt kind names the real one - the advice knows parameters now. Asked about a name
+    # only a PARAMETER bears: with two same-named members and an unresolvable token the tool
+    # cannot know which was meant, and either answer would be a guess.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form + ".Parameter.Solo"}),
+              "seed a parameter no attribute shares a name with")
+    e = assert_error(call("delete_metadata", {
+        "projectName": PROJECT, "fqn": form + ".Parametr.Solo", "confirm": True}),
+        "a misspelt kind token")
+    assert_contains(e, "Parameter", "the advice must name the kind that does exist")
+
+
+@e2e_test(tool="create_metadata", kind="error")
+def test_form_corpus_parameter_refuses_properties_it_cannot_store():
+    """A parameter has no title and no parent, so a create-time property is refused, not dropped.
+
+    The platform type carries name / valueType / keyParameter / comment only. Accepting a
+    `title` here would report a success for a value that was never stored anywhere.
+    """
+    base, form, form_file = _seed_form("ParamProps")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": form + ".Parameter.Probe",
+        "properties": [{"name": "title", "value": "Nope", "language": "en"}]})
+    e = assert_error(r, "a title on a form parameter")
+    assert_error_quality(e, names=["title", "modify_metadata"],
+                         ctx="the refusal must name the property and where the real ones go")

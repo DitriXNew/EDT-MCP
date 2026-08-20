@@ -238,21 +238,100 @@ public final class ProjectContext
      */
     public ConfigurationResult resolveConfiguration()
     {
+        return resolveRoot(false);
+    }
+
+    /**
+     * Resolves the ROOT a metadata FQN resolves against for THIS project - the configuration, or an
+     * external-objects project's own root objects (issue #309).
+     *
+     * <p>The difference from {@link #resolveConfiguration()} is one case: an external-objects
+     * project linked to NO base configuration resolves successfully here, with a null
+     * {@link ConfigurationResult#configuration()} and a usable {@link ConfigurationResult#scope()}.
+     * Only a caller that resolves everything through the scope may use this entry; a caller that
+     * dereferences the configuration must keep {@link #resolveConfiguration()}, which still refuses
+     * that case rather than handing it a null.</p>
+     *
+     * @return a result carrying the project, the scope and (when there is one) the configuration
+     */
+    public ConfigurationResult resolveMetadataRoot()
+    {
+        return resolveRoot(true);
+    }
+
+    private ConfigurationResult resolveRoot(boolean allowNoConfiguration)
+    {
         IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
         if (configProvider == null)
         {
-            return new ConfigurationResult(project, null,
+            return new ConfigurationResult(project, null, null,
                 ToolResult.error("Configuration provider not available").toJson()); //$NON-NLS-1$
         }
 
         Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
+        MetadataScope scope = MetadataScope.of(project, config);
+        // Checked BEFORE the configuration question, and on BOTH paths: this project HAS no
+        // readable root at all, so every later answer would be a "not found" about a project
+        // EDT never started - and the strict path would blame the missing base configuration,
+        // which is not the reason either.
+        if (scope.externalRootUnavailable())
         {
-            return new ConfigurationResult(project, null,
-                ToolResult.error("Could not get configuration for project: " + projectName).toJson()); //$NON-NLS-1$
+            return new ConfigurationResult(project, null, null,
+                ToolResult.error(unreadableExternalRootMessage(projectName)).toJson());
+        }
+        if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
+        {
+            return new ConfigurationResult(project, null, null,
+                ToolResult.error(noConfigurationMessage(projectName, scope.isExternalObjects()))
+                    .toJson());
         }
 
-        return new ConfigurationResult(project, config, null);
+        return new ConfigurationResult(project, config, scope, null);
+    }
+
+    /**
+     * The "no configuration" refusal, told apart by WHY there is none.
+     *
+     * <p>An external-objects project has no configuration by construction - its roots are its own
+     * external data processors / reports - so the generic wording sounds like a transient failure
+     * of a project that should have had one. Naming the project kind, and the tools that DO work
+     * there, is the difference between "something broke" and "ask a different question"
+     * (issue #309).</p>
+     *
+     * @param projectName the project the caller named
+     * @param externalObjects whether the project is an external-objects one
+     * @return the message
+     */
+    /**
+     * The refusal for an external-objects project whose ROOT SET cannot be read - EDT has not
+     * started it, so the platform holds no {@code IExternalObjectProject} for it.
+     *
+     * <p>Distinct from every other refusal on purpose: the objects are neither absent nor
+     * misaddressed, the project is simply not up, and only that sentence tells the caller to look
+     * at the workspace instead of at the FQN.</p>
+     *
+     * @param projectName the project the caller named
+     * @return the message
+     */
+    public static String unreadableExternalRootMessage(String projectName)
+    {
+        return "Project '" + projectName + "' is an external-objects project that EDT has not " //$NON-NLS-1$ //$NON-NLS-2$
+            + "started, so neither its external data processors / reports nor anything inside them " //$NON-NLS-1$
+            + "can be read. Check list_projects for its state, run clean_project, or re-open the " //$NON-NLS-1$
+            + "project in EDT."; //$NON-NLS-1$
+    }
+
+    public static String noConfigurationMessage(String projectName, boolean externalObjects)
+    {
+        if (externalObjects)
+        {
+            return "Project '" + projectName + "' is an EXTERNAL-OBJECTS project with no base " //$NON-NLS-1$ //$NON-NLS-2$
+                + "configuration, and this operation needs one. Its OWN external data processors / " //$NON-NLS-1$
+                + "reports are reachable through get_metadata_objects / get_metadata_details / " //$NON-NLS-1$
+                + "create_metadata / modify_metadata / delete_metadata; link the project to a " //$NON-NLS-1$
+                + "configuration project to use the rest."; //$NON-NLS-1$
+        }
+        return "Could not get configuration for project: " + projectName; //$NON-NLS-1$
     }
 
     /**
@@ -269,10 +348,29 @@ public final class ProjectContext
         ProjectContext ctx = of(projectName);
         if (!ctx.exists())
         {
-            return new ConfigurationResult(null, null,
+            return new ConfigurationResult(null, null, null,
                 ToolResult.error(notFoundMessage(projectName)).toJson());
         }
         return ctx.resolveConfiguration();
+    }
+
+    /**
+     * The {@link #resolveConfiguration(String)} twin that resolves the metadata ROOT instead of
+     * insisting on a configuration - see {@link #resolveMetadataRoot()} for which caller may use
+     * which (issue #309). The project not-found check is identical.
+     *
+     * @param projectName the MCP project name argument
+     * @return a result carrying the project + scope on success, or the first matching error JSON
+     */
+    public static ConfigurationResult resolveMetadataRoot(String projectName)
+    {
+        ProjectContext ctx = of(projectName);
+        if (!ctx.exists())
+        {
+            return new ConfigurationResult(null, null, null,
+                ToolResult.error(notFoundMessage(projectName)).toJson());
+        }
+        return ctx.resolveMetadataRoot();
     }
 
     /**
@@ -285,12 +383,15 @@ public final class ProjectContext
     {
         private final IProject project;
         private final Configuration configuration;
+        private final MetadataScope scope;
         private final String errorJson;
 
-        private ConfigurationResult(IProject project, Configuration configuration, String errorJson)
+        private ConfigurationResult(IProject project, Configuration configuration,
+            MetadataScope scope, String errorJson)
         {
             this.project = project;
             this.configuration = configuration;
+            this.scope = scope;
             this.errorJson = errorJson;
         }
 
@@ -306,10 +407,23 @@ public final class ProjectContext
             return project;
         }
 
-        /** @return the resolved configuration, or {@code null} on error. */
+        /**
+         * @return the resolved configuration, or {@code null} on error - and also for an
+         *     external-objects project that is linked to no base configuration, which is a SUCCESS
+         *     (check {@link #ok()}, not this, for failure)
+         */
         public Configuration configuration()
         {
             return configuration;
+        }
+
+        /**
+         * @return the ROOT a metadata FQN resolves against for this project (the configuration, or
+         *     an external-objects project's own root objects); {@code null} on error
+         */
+        public MetadataScope scope()
+        {
+            return scope;
         }
 
         /** @return the error JSON to return from {@code execute}, or {@code null} on success. */

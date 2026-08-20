@@ -355,6 +355,51 @@ public class AskWorkmateToolTest
     }
 
     @Test
+    public void testARejectedToolNameIsReportedAsItStands()
+    {
+        // Found on the stand, not in a unit test: wrapping this message produced "failed to
+        // answer: 1C:Workmate knows no tool named ... again.. Check Workmate sign-in, network,
+        // and settings" - a stutter, a doubled stop, and irrelevant advice for a typo.
+        String detail = "1C:Workmate knows no tool named 'Nope' and rejected the call " //$NON-NLS-1$
+            + "without running anything. Check the name and call ask_workmate again."; //$NON-NLS-1$
+        String result = executeWithFailure(GatewayException.unknownTool(detail));
+        assertJobFailedContains(result, "knows no tool named", "without running anything"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("no second, unrelated diagnosis is bolted on", //$NON-NLS-1$
+            result.contains("sign-in")); //$NON-NLS-1$
+        assertFalse("and no doubled full stop where the two used to meet", //$NON-NLS-1$
+            result.contains("again..")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAVerbatimDetailIsStillMadeWholeBeforeItIsReported()
+    {
+        // Passing a detail through unwrapped puts the burden of it being a sentence HERE, not
+        // on whoever raised it: a blank one would otherwise surface as a class name.
+        String blank = executeWithFailure(GatewayException.unknownTool("   ")); //$NON-NLS-1$
+        assertJobFailedContains(blank, "rejected the requested tool name", //$NON-NLS-1$
+            "call ask_workmate again"); //$NON-NLS-1$
+        assertFalse("a blank detail must never degrade to an exception class name", //$NON-NLS-1$
+            blank.contains("WorkmateJobException")); //$NON-NLS-1$
+
+        String unpunctuated =
+            executeWithFailure(GatewayException.unknownTool("no such tool here")); //$NON-NLS-1$
+        assertJobFailedContains(unpunctuated, "no such tool here."); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailureAfterDispatchNeverAsksForARetry()
+    {
+        // The detail says the turn had already run; the wrapper must not undo that by
+        // appending "then retry ask_workmate", which is what the ordinary failure says.
+        String result = executeWithFailure(GatewayException.failedAfterDispatch(
+            "1C:Workmate failed while continuing the conversation (boom).")); //$NON-NLS-1$
+        assertJobFailedContains(result, "failed after the request had been sent", //$NON-NLS-1$
+            "Do NOT simply repeat", "get_project_errors", "start a new ask_workmate job"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a dispatched failure must never invite a blind retry", //$NON-NLS-1$
+            result.contains("then retry ask_workmate")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testEmptyAnswerMovesJobToFailed()
     {
         AskWorkmateTool nullText = tool(stubReturning(null, "reasoning")); //$NON-NLS-1$
@@ -666,7 +711,7 @@ public class AskWorkmateToolTest
         AskWorkmateTool tool = tool(new WorkmateGateway()
         {
             @Override
-            public String callWorkmateTool(String toolName, String argsJson, int timeoutSeconds,
+            public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
                 ProgressListener progress) throws GatewayException
             {
                 throw GatewayException.callFailed("JShell rejected the manual_ids"); //$NON-NLS-1$
@@ -730,7 +775,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
             {
                 reportRealisticProgress(progress);
                 sent.set(question);
@@ -759,7 +804,7 @@ public class AskWorkmateToolTest
         return new WorkmateGateway()
         {
             @Override
-            public String callWorkmateTool(String toolName, String argsJson, int timeoutSeconds,
+            public String callWorkmateTool(String toolName, String argsJson, long timeoutMillis,
                 ProgressListener progress)
             {
                 progress.onProgress("Located the 1C:Workmate plugin."); //$NON-NLS-1$
@@ -802,7 +847,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
             {
                 reportRealisticProgress(progress);
                 return response;
@@ -816,7 +861,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
                 throws GatewayException
             {
                 throw failure;
@@ -831,7 +876,7 @@ public class AskWorkmateToolTest
         {
             @Override
             public WorkmateResponse ask(IProject project, String question, Integer maxToolRounds,
-                String skillName, int timeoutSeconds, ProgressListener progress)
+                String skillName, long timeoutMillis, ProgressListener progress)
                 throws GatewayException
             {
                 progress.onProgress("Located the 1C:Workmate plugin."); //$NON-NLS-1$

@@ -32,6 +32,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
@@ -48,6 +50,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -79,6 +82,15 @@ public class GetMetadataObjectsTool implements IMcpTool
     private static final String TYPE_SCHEDULED_JOBS = "scheduledjobs"; //$NON-NLS-1$
 
     private static final String TYPE_XDTO_PACKAGES = "xdtopackages"; //$NON-NLS-1$
+
+    /** The two categories only an EXTERNAL-OBJECTS project can answer (issue #309). */
+    private static final String TYPE_EXTERNAL_DATA_PROCESSORS = "externaldataprocessors"; //$NON-NLS-1$
+    private static final String TYPE_EXTERNAL_REPORTS = "externalreports"; //$NON-NLS-1$
+
+    /** The English singular type token behind {@link #TYPE_EXTERNAL_DATA_PROCESSORS}. */
+    private static final String TOKEN_EXTERNAL_DATA_PROCESSOR = "ExternalDataProcessor"; //$NON-NLS-1$
+    /** The English singular type token behind {@link #TYPE_EXTERNAL_REPORTS}. */
+    private static final String TOKEN_EXTERNAL_REPORT = "ExternalReport"; //$NON-NLS-1$
 
     /**
      * The category tokens this tool actually collects (lowercase). Used both as the
@@ -123,7 +135,9 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "standard metadata " + //$NON-NLS-1$
                 "type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', " + //$NON-NLS-1$
                 "'Document'). Single value only - not an array. An unrecognized value returns an error " + //$NON-NLS-1$
-                "listing the supported options.") //$NON-NLS-1$
+                "listing the supported options. In an EXTERNAL-OBJECTS project the vocabulary is " + //$NON-NLS-1$
+                "all / externalDataProcessors / externalReports instead - that project holds its " + //$NON-NLS-1$
+                "own roots, not a configuration.") //$NON-NLS-1$
             .stringProperty("nameFilter", //$NON-NLS-1$
                 "Case-insensitive substring matched against Name only (not Synonym)") //$NON-NLS-1$
             .integerProperty(LIMIT,
@@ -208,18 +222,29 @@ public class GetMetadataObjectsTool implements IMcpTool
                                                String nameFilter, int limit, String language)
     {
         // Resolve the project and its configuration
-        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
+        ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
         if (!resolved.ok())
         {
             return resolved.errorJson();
         }
         IProject project = resolved.project();
         Configuration config = resolved.configuration();
+        MetadataScope scope = resolved.scope();
 
         // Determine language CODE for synonyms (the synonym map is keyed by code,
         // e.g. "ru"/"en", not by the Language object's name). May be null when the
-        // configuration has no languages; getSynonymForLanguage tolerates that.
-        String effectiveLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
+        // project declares no languages; getSynonymForLanguage tolerates that.
+        String effectiveLanguage = scope.resolveLanguageCode(language);
+
+        // An EXTERNAL-OBJECTS project answers about its OWN roots. Its "configuration" is the
+        // linked BASE one, so listing that here answered with a different project's objects
+        // (issue #309): the external data processors / reports the caller asked for were absent
+        // and unrelated configuration objects took their place.
+        if (scope.isExternalObjects())
+        {
+            return externalObjectsOutput(projectName, scope, metadataType, nameFilter, limit,
+                effectiveLanguage);
+        }
 
         // Normalize metadataType to the internal category token: either it already IS
         // one (legacy vocabulary, back-compat), or it is a standard type-name token
@@ -228,6 +253,11 @@ public class GetMetadataObjectsTool implements IMcpTool
         String category = normalizeMetadataType(metadataType);
         if (category == null)
         {
+            String standalone = standaloneTypeRefusal(scope, metadataType);
+            if (standalone != null)
+            {
+                return standalone;
+            }
             return ToolResult.error("Unknown metadata type: " + metadataType + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                    "Supported categories (case-insensitive): all, documents, catalogs, informationRegisters, " + //$NON-NLS-1$
                    "accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, " + //$NON-NLS-1$
@@ -325,7 +355,150 @@ public class GetMetadataObjectsTool implements IMcpTool
         // Format output. Show the caller's ORIGINAL filter value in the "Filter:" line (what
         // they typed - a category token, a type name, whatever casing), not the internal
         // lowercased category token; the TYPE_ALL comparison in formatOutput is case-insensitive.
-        return formatOutput(projectName, objects, limit, effectiveLanguage, metadataType, isExtensionProject);
+        return formatOutput(projectName, objects, limit, effectiveLanguage, metadataType,
+            isExtensionProject, false);
+    }
+
+    /**
+     * Lists the OWN root objects of an external-objects project: its external data processors
+     * and reports, which are standalone BM top objects rather than entries in a Configuration
+     * collection (issue #309).
+     *
+     * <p>A configuration category (catalogs, documents, ...) asked of such a project is refused
+     * with the reason, not answered with the linked base configuration's objects: the caller
+     * asked about THIS project, and quietly answering about another one is what made the bug
+     * invisible.</p>
+     *
+     * @param projectName the project the caller named
+     * @param scope the external-objects resolution root
+     * @param metadataType the caller's raw type filter
+     * @param nameFilter the caller's case-insensitive Name substring, or {@code null}
+     * @param limit max rows
+     * @param language the resolved synonym language code (may be {@code null})
+     * @return the Markdown listing, or a JSON error for a type this project cannot hold
+     */
+    private String externalObjectsOutput(String projectName, MetadataScope scope, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        String metadataType, String nameFilter, int limit, String language)
+    {
+        String category = normalizeExternalMetadataType(metadataType);
+        if (category == null)
+        {
+            return ToolResult.error("Unknown metadata type for an external-objects project: " //$NON-NLS-1$
+                + metadataType + ". Supported (case-insensitive): all, externalDataProcessors, " //$NON-NLS-1$
+                + "externalReports - or the type name itself (ExternalDataProcessor / " //$NON-NLS-1$
+                + "ExternalReport, English or Russian)." + scope.addressingHint(metadataType + ".x")) //$NON-NLS-1$ //$NON-NLS-2$
+                .toJson();
+        }
+
+        List<MetadataInfo> objects = new ArrayList<>();
+        if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(category))
+        {
+            collectExternalObjects(scope, TOKEN_EXTERNAL_DATA_PROCESSOR, objects, nameFilter);
+        }
+        if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_REPORTS.equals(category))
+        {
+            collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, objects, nameFilter);
+        }
+        // An external-objects project holds no adopted objects, so it has no Origin column.
+        return formatOutput(projectName, objects, limit, language, metadataType, false, true);
+    }
+
+    /**
+     * The {@link #normalizeMetadataType} twin for an external-objects project: only {@code all}
+     * and the two external categories exist there. Accepts the category token and the bilingual
+     * type name alike, through the SAME shared resolver.
+     *
+     * Package-private so it can be unit-tested directly: like {@link #normalizeMetadataType} it
+     * touches neither the workbench nor a live model.
+     *
+     * @param metadataType raw filter value as supplied by the caller
+     * @return {@link #TYPE_ALL} / {@link #TYPE_EXTERNAL_DATA_PROCESSORS} /
+     *     {@link #TYPE_EXTERNAL_REPORTS}, or {@code null} if not recognized here
+     */
+    String normalizeExternalMetadataType(String metadataType)
+    {
+        if (metadataType == null || metadataType.isEmpty())
+        {
+            return null;
+        }
+        String lower = metadataType.toLowerCase();
+        if (TYPE_ALL.equals(lower) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(lower)
+            || TYPE_EXTERNAL_REPORTS.equals(lower))
+        {
+            return lower;
+        }
+        MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(metadataType);
+        if (info == null)
+        {
+            return null;
+        }
+        if (TOKEN_EXTERNAL_DATA_PROCESSOR.equals(info.getEnglishSingular()))
+        {
+            return TYPE_EXTERNAL_DATA_PROCESSORS;
+        }
+        if (TOKEN_EXTERNAL_REPORT.equals(info.getEnglishSingular()))
+        {
+            return TYPE_EXTERNAL_REPORTS;
+        }
+        return null;
+    }
+
+    /**
+     * Appends the external objects of one TYPE, honouring the Name substring filter.
+     */
+    private void collectExternalObjects(MetadataScope scope, String typeToken,
+        List<MetadataInfo> objects, String filter)
+    {
+        List<? extends MdObject> found = scope.objects(typeToken);
+        if (found == null)
+        {
+            return;
+        }
+        for (MdObject object : found)
+        {
+            if (!matchesFilter(object.getName(), filter))
+            {
+                continue;
+            }
+            MetadataInfo info = createMetadataInfo(object, typeToken);
+            // An external data processor / report carries an object module and no manager one.
+            info.hasObjectModule = hasModule(externalObjectModule(object));
+            objects.add(info);
+        }
+    }
+
+    /** The object module of an external data processor / report, or {@code null}. */
+    private static Module externalObjectModule(MdObject object)
+    {
+        if (object instanceof ExternalDataProcessor)
+        {
+            return ((ExternalDataProcessor)object).getObjectModule();
+        }
+        if (object instanceof ExternalReport)
+        {
+            return ((ExternalReport)object).getObjectModule();
+        }
+        return null;
+    }
+
+    /**
+     * The refusal for an external-objects TYPE asked of a project that is not one - the mirror of
+     * the check {@link #externalObjectsOutput} makes in the other direction (issue #309).
+     *
+     * @param scope the project's resolution root
+     * @param metadataType the caller's raw type filter
+     * @return the ready JSON error, or {@code null} when the value is not a standalone type
+     */
+    private static String standaloneTypeRefusal(MetadataScope scope, String metadataType)
+    {
+        MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(metadataType);
+        if (info == null || !info.isStandalone())
+        {
+            return null;
+        }
+        return ToolResult.error("Metadata type '" + info.getEnglishSingular() //$NON-NLS-1$
+            + "' is not part of a configuration." //$NON-NLS-1$
+            + scope.addressingHint(info.getEnglishSingular() + ".x")).toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -393,12 +566,16 @@ public class GetMetadataObjectsTool implements IMcpTool
     /**
      * Formats the output as markdown.
      */
-    private String formatOutput(String projectName, List<MetadataInfo> objects, int limit,
-                                 String language, String metadataType, boolean isExtensionProject)
+    private String formatOutput(String projectName, List<MetadataInfo> objects, int limit, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                                 String language, String metadataType, boolean isExtensionProject,
+                                 boolean externalObjects)
     {
         StringBuilder sb = new StringBuilder();
         
-        sb.append("## Configuration Metadata: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The heading names WHAT was listed: an external-objects project holds no configuration,
+        // and calling its roots "Configuration Metadata" is the same confusion issue #309 was.
+        sb.append(externalObjects ? "## External Objects: " : "## Configuration Metadata: ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(projectName).append("\n\n"); //$NON-NLS-1$
         
         int total = objects.size();
         int shown = Math.min(total, limit);

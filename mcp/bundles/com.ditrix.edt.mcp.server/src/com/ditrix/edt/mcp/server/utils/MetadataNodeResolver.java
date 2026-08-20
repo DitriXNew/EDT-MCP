@@ -6,8 +6,11 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.emf.common.util.EList;
@@ -273,6 +276,54 @@ public final class MetadataNodeResolver
     }
 
     /**
+     * The child KINDS {@code owner} really has - one canonical English token per containment
+     * collection its {@link EClass} declares, in catalogue order.
+     *
+     * <p>Answers "what CAN be created here" from the model itself rather than from a hand-written
+     * per-type list, so a "Kind = ..." error names the kinds of the object in front of the caller.
+     * An {@code ExternalDataProcessor} has no {@code commands} collection at all, for instance, so
+     * a {@code ...Command.X} address there is not a typo to re-check but a kind the type does not
+     * have - and the error can say so (issue #309).</p>
+     *
+     * @param owner the owner object (may be {@code null})
+     * @return the canonical kind tokens, never {@code null}
+     */
+    public static List<String> childKindsFor(MdObject owner)
+    {
+        List<String> kinds = new ArrayList<>();
+        if (owner == null)
+        {
+            return kinds;
+        }
+        for (String featureName : new LinkedHashSet<>(CHILD_FEATURE_BY_TOKEN.values()))
+        {
+            EStructuralFeature f = owner.eClass().getEStructuralFeature(featureName);
+            if (f instanceof EReference)
+            {
+                kinds.add(kindTokenForFeature(featureName));
+            }
+        }
+        return kinds;
+    }
+
+    /**
+     * The canonical FQN kind token for an EMF containment feature name: its singular, capitalized
+     * ({@code "tabularSections"} &rarr; {@code "TabularSection"}). Derived from the feature rather
+     * than tabulated a second time - {@link #featureNameForKind} accepts the result case-insensitively,
+     * so what this prints is addressable.
+     *
+     * @param featureName the containment feature name
+     * @return the kind token
+     */
+    private static String kindTokenForFeature(String featureName)
+    {
+        String singular = featureName.endsWith("s") //$NON-NLS-1$
+            ? featureName.substring(0, featureName.length() - 1) : featureName;
+        return singular.isEmpty() ? singular
+            : Character.toUpperCase(singular.charAt(0)) + singular.substring(1);
+    }
+
+    /**
      * Maps a child KIND token (English/Russian, singular/plural, any case) to the EMF containment
      * feature name on the owner.
      *
@@ -310,7 +361,21 @@ public final class MetadataNodeResolver
      */
     public static MetadataNode resolveExisting(Configuration config, String fqn)
     {
-        if (config == null || fqn == null || fqn.isEmpty())
+        return resolveExisting(MetadataScope.ofConfiguration(config), fqn);
+    }
+
+    /**
+     * Resolves an existing node from its full-name FQN, against whichever ROOT the project has -
+     * the {@link Configuration} of a configuration / extension project, or the standalone root
+     * objects of an external-objects project (issue #309).
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the full-name FQN (e.g. {@code "Catalog.Products.Attribute.Weight"})
+     * @return the resolved node, or {@code null} if any segment does not resolve / the FQN is malformed
+     */
+    public static MetadataNode resolveExisting(MetadataScope scope, String fqn)
+    {
+        if (scope == null || fqn == null || fqn.isEmpty())
         {
             return null;
         }
@@ -320,14 +385,21 @@ public final class MetadataNodeResolver
             return null;
         }
 
-        MdObject top = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+        MdObject top = scope.findObject(parts[0], parts[1]);
         if (top == null)
         {
             return null;
         }
         if (parts.length == 2)
         {
-            return new MetadataNode(top, config, configFeature(config, parts[0]), true);
+            // An external-objects root has no container: the object IS a top object of the project's
+            // own model, listed by no Configuration collection. Owner/feature stay null, and the
+            // callers that name a container file (the delete's re-export) then name nothing rather
+            // than the base configuration's Configuration.mdo, which does not register it.
+            Configuration config = scope.configuration();
+            EObject owner = scope.isExternalObjects() ? null : config;
+            EReference feature = scope.isExternalObjects() ? null : configFeature(config, parts[0]);
+            return new MetadataNode(top, owner, feature, true);
         }
 
         EObject owner = top;
@@ -392,7 +464,20 @@ public final class MetadataNodeResolver
      */
     public static ResolvedNode resolveExistingWithYoFallback(Configuration config, String fqn)
     {
-        MetadataNode node = resolveExisting(config, fqn);
+        return resolveExistingWithYoFallback(MetadataScope.ofConfiguration(config), fqn);
+    }
+
+    /**
+     * The {@link #resolveExistingWithYoFallback(Configuration, String)} variant that resolves
+     * against whichever ROOT the project has (issue #309).
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the full-name FQN (already {@code normalizeFqn}-ed by callers; may be {@code null})
+     * @return the resolution result, never {@code null}
+     */
+    public static ResolvedNode resolveExistingWithYoFallback(MetadataScope scope, String fqn)
+    {
+        MetadataNode node = resolveExisting(scope, fqn);
         if (node != null)
         {
             return new ResolvedNode(node, fqn, false);
@@ -400,7 +485,7 @@ public final class MetadataNodeResolver
         String retry = yoRetryFqn(fqn);
         if (retry != null)
         {
-            MetadataNode normalized = resolveExisting(config, retry);
+            MetadataNode normalized = resolveExisting(scope, retry);
             if (normalized != null)
             {
                 return new ResolvedNode(normalized, retry, true);
@@ -456,7 +541,26 @@ public final class MetadataNodeResolver
      */
     public static CreateTarget resolveForCreate(Configuration config, String fqn)
     {
-        if (config == null || fqn == null || fqn.isEmpty())
+        return resolveForCreate(MetadataScope.ofConfiguration(config), fqn);
+    }
+
+    /**
+     * The {@link #resolveForCreate(Configuration, String)} variant that resolves the parent against
+     * whichever ROOT the project has (issue #309).
+     *
+     * <p>A TOP-level create still requires a {@code Configuration} collection to put the object in,
+     * so a top-level FQN of a STANDALONE type (an external data processor / report, which is a
+     * project root rather than a configuration entry) does not resolve here - the caller reports
+     * that, rather than silently creating nothing.</p>
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the full-name FQN of the node to create
+     * @return the create target, or {@code null} if the FQN is malformed, the type/kind token is
+     *     unrecognized, or the parent does not exist
+     */
+    public static CreateTarget resolveForCreate(MetadataScope scope, String fqn)
+    {
+        if (scope == null || fqn == null || fqn.isEmpty())
         {
             return null;
         }
@@ -468,6 +572,15 @@ public final class MetadataNodeResolver
 
         if (parts.length == 2)
         {
+            if (scope.isExternalObjects())
+            {
+                // An external-objects project has NO configuration to add a top object to, and
+                // its own roots are created with the project (create_project / an .epf import),
+                // never here. Handing back a target anyway made createTopLevel treat this root as
+                // a Configuration and die with a raw ClassCastException; answering "no target"
+                // lets the caller get the refusal that names the project kind instead.
+                return null;
+            }
             String type = MetadataTypeUtils.toEnglishSingular(parts[0]);
             if (type == null)
             {
@@ -482,7 +595,7 @@ public final class MetadataNodeResolver
         }
 
         // Navigate to the OWNER of the leaf (everything up to, but excluding, the last pair).
-        MdObject top = MetadataTypeUtils.findObject(config, parts[0], parts[1]);
+        MdObject top = scope.findObject(parts[0], parts[1]);
         if (top == null)
         {
             return null;
@@ -579,6 +692,10 @@ public final class MetadataNodeResolver
      */
     private static EReference configFeature(Configuration config, String typeToken)
     {
+        if (config == null)
+        {
+            return null;
+        }
         String type = MetadataTypeUtils.toEnglishSingular(typeToken);
         if (type == null)
         {

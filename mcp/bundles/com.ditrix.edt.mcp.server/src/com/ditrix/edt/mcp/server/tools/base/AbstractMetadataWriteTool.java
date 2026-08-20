@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -455,8 +456,18 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     {
         /** Resolved project; non-null only when {@link #error} is null. */
         public IProject project;
-        /** Resolved configuration; non-null only when {@link #error} is null. */
+        /**
+         * Resolved configuration; non-null when {@link #error} is null - EXCEPT for an
+         * external-objects project linked to no base configuration, which resolves successfully
+         * with a null configuration and a non-null {@link #scope} (issue #309).
+         */
         public Configuration config;
+        /**
+         * The ROOT a metadata FQN resolves against for this project: the configuration, or an
+         * external-objects project's own root objects. Non-null whenever {@link #error} is null;
+         * use it - not {@link #config} - to resolve an FQN.
+         */
+        public MetadataScope scope;
         /** Non-null when resolution failed: a JSON error to return verbatim. */
         public String error;
 
@@ -474,6 +485,62 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      * @return a {@link ProjectContext}; check {@link ProjectContext#error} first
      */
     protected ProjectContext resolveProjectAndConfig(String projectName)
+    {
+        return resolveProjectRoot(projectName, false);
+    }
+
+    /**
+     * Resolves the project and the ROOT a metadata FQN resolves against for it - the configuration,
+     * or an external-objects project's own root objects (issue #309).
+     *
+     * <p>The difference from {@link #resolveProjectAndConfig(String)} is one case: an
+     * external-objects project linked to NO base configuration resolves successfully here, with a
+     * null {@code config} and a usable {@code scope}. Only a tool that resolves everything through
+     * the scope may use this entry; one that dereferences {@code config} must keep the other, which
+     * still refuses that case rather than handing it a null.</p>
+     *
+     * @param projectName the project name from the tool parameters
+     * @return a {@link ProjectContext}; check {@link ProjectContext#error} first
+     */
+    protected ProjectContext resolveProjectAndScope(String projectName)
+    {
+        return resolveProjectRoot(projectName, true);
+    }
+
+    /**
+     * {@link #resolveProjectAndScope(String)} plus the TYPE/ROOT check: refuses when {@code fqn}
+     * names a type this project kind cannot hold at all - a configuration type addressed at an
+     * external-objects project, or a standalone external type addressed at a configuration.
+     *
+     * <p>Bound to context resolution ON PURPOSE. Every write tool has specialized dispatches
+     * that resolve their own context and read the {@code Configuration} directly, and each one
+     * that lacked this check answered about the WRONG project: a real owner found in the LINKED
+     * base configuration and then "Owner object not found in transaction" when its BM id was
+     * used in this project's model, or advice to "create it first" for something this project
+     * can never hold. Making the check part of GETTING the context is what stops the next such
+     * branch from having to remember it (issue #309).</p>
+     *
+     * @param projectName the project name from the tool parameters
+     * @param fqn the FQN this call addresses; {@code null}/empty checks nothing extra
+     * @return a {@link ProjectContext}; check {@link ProjectContext#error} first
+     */
+    protected ProjectContext resolveProjectAndScope(String projectName, String fqn)
+    {
+        ProjectContext ctx = resolveProjectAndScope(projectName);
+        if (ctx.hasError() || fqn == null || fqn.isEmpty())
+        {
+            return ctx;
+        }
+        String hint = ctx.scope.addressingHint(fqn);
+        if (!hint.isEmpty())
+        {
+            ctx.error = ToolResult.error("'" + fqn + "' cannot be addressed in project " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'" + projectName + "'." + hint).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return ctx;
+    }
+
+    private ProjectContext resolveProjectRoot(String projectName, boolean allowNoConfiguration)
     {
         ProjectContext ctx = new ProjectContext();
 
@@ -495,14 +562,32 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         }
 
         Configuration config = configProvider.getConfiguration(project);
-        if (config == null)
+        MetadataScope scope = MetadataScope.of(project, config);
+        // The project HAS no readable root (EDT never started it), so every FQN below would come
+        // back "not found" about a project that is simply not up. Refused on BOTH paths - see
+        // ProjectContext.unreadableExternalRootMessage.
+        if (scope.externalRootUnavailable())
         {
-            ctx.error = ToolResult.error("Could not get configuration for project: " + projectName).toJson(); //$NON-NLS-1$
+            ctx.error = ToolResult.error(
+                com.ditrix.edt.mcp.server.utils.ProjectContext.unreadableExternalRootMessage(
+                    projectName)).toJson();
+            return ctx;
+        }
+        // An EXTERNAL-OBJECTS project has no configuration of its own - its roots are its external
+        // data processors / reports, and the provider answers with the linked BASE configuration
+        // (null when there is none). A scope-driven caller can work without one; a caller that
+        // dereferences the configuration cannot, and is refused with the reason. Issue #309.
+        if (config == null && !(allowNoConfiguration && scope.isExternalObjects()))
+        {
+            ctx.error = ToolResult.error(
+                com.ditrix.edt.mcp.server.utils.ProjectContext.noConfigurationMessage(
+                    projectName, scope.isExternalObjects())).toJson();
             return ctx;
         }
 
         ctx.project = project;
         ctx.config = config;
+        ctx.scope = scope;
         return ctx;
     }
 

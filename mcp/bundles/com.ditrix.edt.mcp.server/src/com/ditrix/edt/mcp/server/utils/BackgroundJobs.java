@@ -380,6 +380,22 @@ public final class BackgroundJobs implements AutoCloseable
             // Work that can always be abandoned simply proceeds.
             return true;
         }
+
+        /**
+         * What is left of the job's TOTAL budget, measured from submission.
+         * <p>
+         * The budget starts when the job is submitted, not when a worker picks it up, and the
+         * shared pool can hold work in its queue in between. Work that bounds its own platform
+         * calls must therefore ask, rather than restart the caller's timeout from the moment it
+         * happens to begin - which would grant itself the whole queue delay on top.
+         *
+         * @return remaining milliseconds, or {@link Long#MAX_VALUE} for an unbounded caller
+         *     (a test seam or a reporter that is not registry-backed)
+         */
+        default long remainingMillis()
+        {
+            return Long.MAX_VALUE;
+        }
     }
 
     /** Who owns a job's work, and therefore its admission slot. */
@@ -693,7 +709,7 @@ public final class BackgroundJobs implements AutoCloseable
             {
                 try
                 {
-                    runWork(record, work);
+                    runWork(record, timeoutMs, work);
                 }
                 finally
                 {
@@ -953,7 +969,7 @@ public final class BackgroundJobs implements AutoCloseable
         }
     }
 
-    private static void runWork(JobRecord record, JobWork work)
+    private static void runWork(JobRecord record, long timeoutMs, JobWork work)
     {
         if (!record.isRunning())
         {
@@ -973,6 +989,12 @@ public final class BackgroundJobs implements AutoCloseable
                 public boolean tryCommit()
                 {
                     return record.tryCommit();
+                }
+
+                @Override
+                public long remainingMillis()
+                {
+                    return record.remainingMillis(timeoutMs);
                 }
             });
             record.complete(result);
@@ -1109,6 +1131,19 @@ public final class BackgroundJobs implements AutoCloseable
         synchronized boolean isRunning()
         {
             return status == Status.RUNNING;
+        }
+
+        /**
+         * Milliseconds left of this job's budget, counted from SUBMISSION (its {@code
+         * startedAtNanos}), so queue time is spent budget like any other.
+         *
+         * @param timeoutMs the job's total budget
+         * @return remaining milliseconds, never negative
+         */
+        long remainingMillis(long timeoutMs)
+        {
+            long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
+            return Math.max(0L, timeoutMs - elapsed);
         }
 
         synchronized boolean tryCommit()

@@ -194,7 +194,8 @@ public class MetadataRenameService
                 "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
                 "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
                 "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
-                "Kind = Attribute / Command / Field / Button / Group / Decoration / Table (an " + //$NON-NLS-1$
+                "Kind = Attribute / Command / Parameter / Field / Button / Group / Decoration / " + //$NON-NLS-1$
+                "Table (an " + //$NON-NLS-1$
                 "attribute column as '...Attribute.AttrName.Column.ColName'). A form itself " + //$NON-NLS-1$
                 "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
         }
@@ -507,6 +508,14 @@ public class MetadataRenameService
         else if (kind == FormElementWriter.Kind.COMMAND)
         {
             clash = FormElementWriter.findFormCommand(formModel, newName);
+        }
+        else if (kind == FormElementWriter.Kind.PARAMETER)
+        {
+            // A parameter lives in the form's own parameters containment, so the item lookup
+            // below never sees one: without this arm a rename onto an EXISTING parameter's name
+            // is not refused and the form ends up with two parameters of the same name
+            // (issue #396 - reproduced on the stand before this arm existed).
+            clash = FormElementWriter.findFormParameter(formModel, newName);
         }
         else
         {

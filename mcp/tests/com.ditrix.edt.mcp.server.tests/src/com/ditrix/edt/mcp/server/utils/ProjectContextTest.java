@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -48,5 +49,44 @@ public class ProjectContextTest
         // exists()/isOpen() must never NPE on the empty context.
         assertFalse(ProjectContext.of(null).exists());
         assertFalse(ProjectContext.of(null).isOpen());
+    }
+
+    /**
+     * A project with NO configuration is refused differently depending on WHY it has none: an
+     * external-objects project has none by construction, and telling the caller that (plus which
+     * tools do work there) is the difference between "something broke" and "ask a different
+     * question" - issue #309.
+     */
+    @Test
+    public void testNoConfigurationMessageNamesTheExternalObjectsKind()
+    {
+        String external = ProjectContext.noConfigurationMessage("Reports", true); //$NON-NLS-1$
+        assertTrue(external, external.contains("Reports")); //$NON-NLS-1$
+        assertTrue(external, external.contains("EXTERNAL-OBJECTS")); //$NON-NLS-1$
+        assertTrue(external, external.contains("get_metadata_objects")); //$NON-NLS-1$
+    }
+
+    /**
+     * "EDT has not started this project" is a THIRD answer, distinct from both "no configuration"
+     * and "not found": the objects are neither absent nor misaddressed, so the message has to send
+     * the caller to the workspace rather than to the FQN (issue #309 review).
+     */
+    @Test
+    public void testUnreadableExternalRootMessageSendsTheCallerToTheWorkspace()
+    {
+        String msg = ProjectContext.unreadableExternalRootMessage("Reports"); //$NON-NLS-1$
+        assertTrue(msg, msg.contains("Reports")); //$NON-NLS-1$
+        assertTrue(msg, msg.contains("has not " + "started")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(msg, msg.contains("list_projects")); //$NON-NLS-1$
+        assertTrue(msg, msg.contains("clean_project")); //$NON-NLS-1$
+        // It must NOT be confused with the missing-base-configuration refusal.
+        assertFalse(msg, msg.contains("no base configuration")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoConfigurationMessageStaysGenericForAConfigurationProject()
+    {
+        String generic = ProjectContext.noConfigurationMessage("MyConfig", false); //$NON-NLS-1$
+        assertEquals("Could not get configuration for project: MyConfig", generic); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

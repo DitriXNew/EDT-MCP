@@ -45,7 +45,7 @@ Control:
 
 - `timeout` — how many seconds the start call waits for the background job (default and maximum 45; a larger value is clamped). It does not limit the job's server-side lifetime. See ## Polling and Pending.
 - `updateBeforeLaunch` — auto-chain, default `true`. See ## Auto-chain.
-- `updateScope` — which projects to force-recompute + update before the run when `updateBeforeLaunch=true`: `all` (configuration + dependent extensions, default), `configuration`, or `extension:<ProjectName>` (comma-separate several). See ## Auto-chain.
+- `updateScope` — the outer scope the run may recompute + update before it starts, when `updateBeforeLaunch=true` (within it only the projects whose sources changed are recomputed): `all` (configuration + dependent extensions, default), `configuration`, or `extension:<ProjectName>` (comma-separate several). See ## Auto-chain.
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 
 ## Required order before the first run
@@ -80,10 +80,14 @@ The progress journal names these phases:
 |---|---|
 | `resolve` | resolving the launch configuration and its application |
 | `prep:terminate` | sweeping live / stale launches of this application |
-| `prep:recompute` | force-recomputing the scoped projects |
+| `prep:check-changes` | deciding which scoped projects changed since their last prepared launch (disk sync + content fingerprint) |
+| `prep:recompute` | force-recomputing the projects that DID change, and waiting for that rebuild to settle |
+| `prep:settle` | draining the derived data of the projects that did NOT change (the cheap pass that replaces the recompute) |
 | `prep:db-update` | updating the infobase |
 | `spawn` | starting the 1C client |
 | `run` | the client is running the tests |
+
+**`prep:recompute` appears only when the gate found something to recompute.** The two phases around it are what an up-to-date workspace normally shows: `prep:check-changes` while the gate compares each project against the content state of its last successful preparation, then `prep:settle` for the projects it found unchanged. Seeing `prep:recompute` means the gate could not certify some project as unchanged — a real source edit, a project it has never prepared, or a check it could not complete; it errs towards recomputing. NOT seeing it means the expensive rebuild was skipped, which is the intended steady state and not a sign that something went wrong.
 
 **What the phase can and cannot tell you.** A phase that ADVANCES between polls proves the server is making progress — keep waiting. A phase that stops changing is ambiguous, and honestly so: a `prep:recompute` that sits still for forty minutes is normal on a large configuration, and one blocked on a modal dialog looks exactly the same from here. There is no signal that separates them, so **when a phase stops advancing, look at EDT** for a dialog waiting for a click instead of waiting indefinitely. Running the pre-flight above is what keeps that case rare.
 
@@ -113,10 +117,10 @@ Cancelling an ATTACHMENT is a different thing from cancelling the run. When an e
 
 ## Auto-chain (updateBeforeLaunch)
 
-Default `true`: before spawning a new test launch, the tool runs the **pre-launch preparation chain** (selectively force-recompute changed projects, wait for the workspace build to settle, politely terminate any live 1C client running this configuration, then run a silent database update) in an Eclipse background job. The owning registry job observes it in **25-second wait slices**:
+Default `true`: before spawning a new test launch, the tool runs the **pre-launch preparation chain** (politely terminate any live 1C client running this configuration, decide which projects changed, force-recompute those and wait for the workspace build to settle, then run a silent database update — the order the phase table above lists) in an Eclipse background job. The owning registry job observes it in **25-second wait slices**:
 
 - **If the chain completes within 25s** the tool proceeds to spawn and poll the test launch as normal.
-- **If the chain is still running after 25s** the owning registry job keeps waiting; when the start call's `timeout` expires it returns **Pending** with the same job's `jobId`. `get_job_status` shows the live phase (`prep:terminate` / `prep:recompute` / `prep:db-update`). This prevents MCP client timeouts on large configurations where a recompute can take 2–8 minutes.
+- **If the chain is still running after 25s** the owning registry job keeps waiting; when the start call's `timeout` expires it returns **Pending** with the same job's `jobId`. `get_job_status` shows the live phase (`prep:terminate` / `prep:check-changes` / `prep:recompute` / `prep:settle` / `prep:db-update`). This prevents MCP client timeouts on large configurations where a recompute can take 2–8 minutes.
 - The 25s slice is internal, not a caller-visible lifetime or a reason to start again. The named job owns every slice through the eventual launch and report.
 
 **Dialogs are not impossible with `updateBeforeLaunch=true`.** The auto-chain answers the platform's update dialogs automatically (`Application update`, `Restructure data`, `Infobase configuration changes`), including any that are already on screen when it starts, so the common cases do not block. What it cannot promise is that EDT never raises a dialog outside those windows. If one does appear, the run stops making progress and shows up as a **Pending whose phase stops changing** — check EDT for a dialog waiting for a click, answer it, and the next `get_job_status` poll continues to observe the same job. Running the pre-flight in ## Required order before the first run is what keeps the infobase update out of the launch and makes this case rare.

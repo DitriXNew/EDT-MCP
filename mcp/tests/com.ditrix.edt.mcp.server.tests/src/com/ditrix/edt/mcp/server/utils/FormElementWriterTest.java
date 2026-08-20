@@ -78,6 +78,38 @@ public class FormElementWriterTest
         assertEquals(Kind.FIELD, FormElementWriter.kindForToken("Field")); //$NON-NLS-1$
         assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("Button")); //$NON-NLS-1$
         assertEquals(Kind.TABLE, FormElementWriter.kindForToken("Table")); //$NON-NLS-1$
+        // The form PARAMETER - singular and plural, like every other kind (issue #396).
+        assertEquals(Kind.PARAMETER, FormElementWriter.kindForToken("Parameter")); //$NON-NLS-1$
+        assertEquals(Kind.PARAMETER, FormElementWriter.kindForToken("parameters")); //$NON-NLS-1$
+    }
+
+    /**
+     * The parameter kind must be addressable in BOTH languages and BOTH numbers, and must not
+     * collide with any other kind. A form address is the only way to reach a parameter, so a
+     * missing spelling is a member that cannot be named at all (issue #396).
+     */
+    @Test
+    public void testParameterKindIsAddressableInBothLanguages()
+    {
+        String ruSingular = fromCp(0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440);
+        String ruPlural = fromCp(0x043f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440, 0x044b);
+        assertEquals(Kind.PARAMETER, FormElementWriter.kindForToken(ruSingular));
+        assertEquals(Kind.PARAMETER, FormElementWriter.kindForToken(ruPlural));
+        // Case-insensitively, as every other kind token resolves.
+        assertEquals(Kind.PARAMETER, FormElementWriter.kindForToken("PARAMETER")); //$NON-NLS-1$
+        assertEquals(Kind.PARAMETER,
+            FormElementWriter.kindForToken(ruSingular.toUpperCase(java.util.Locale.ROOT)));
+
+        // All four spellings are EXPORTED too, so the marker-location filter and the shared
+        // nested-kind catalogue see the same set the resolver accepts.
+        List<String> tokens = FormElementWriter.tokensForKind(Kind.PARAMETER);
+        assertTrue(tokens.toString(), tokens.contains("parameter")); //$NON-NLS-1$
+        assertTrue(tokens.toString(), tokens.contains("parameters")); //$NON-NLS-1$
+        assertTrue(tokens.toString(), tokens.contains(ruSingular));
+        assertTrue(tokens.toString(), tokens.contains(ruPlural));
+
+        // A parameter is NOT an attribute: the two nearest data kinds must stay distinct.
+        assertNotSame(Kind.ATTRIBUTE, FormElementWriter.kindForToken("parameter")); //$NON-NLS-1$
     }
 
     @Test

@@ -7,7 +7,7 @@ Start a background question to the 1C:Workmate plugin and return its jobId. Poll
 | --- | --- | --- | --- |
 | question | — | string | Non-empty question or instruction to send to 1C:Workmate. Required unless workmateTool selects direct tool mode. |
 | projectName | — | string | Optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context. |
-| maxToolRounds | — | integer | Optional positive limit for Workmate's internal tool-call rounds. |
+| maxToolRounds | — | integer | Optional positive limit for Workmate's internal tool-call rounds; it applies per assistant turn, so a conversation continued to reach a final answer spends it again on each turn. |
 | skillName | — | string | Optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing. |
 | timeoutSeconds | — | integer | Total wall-clock budget for the background job across all get_job_status polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job is failed - unless the request has already reached Workmate, which cannot be taken back: the job then reports Workmate's own outcome rather than a retryable timeout, because a retry would run the same work twice. This is not the per-call waitSeconds budget. |
 | waitSeconds | — | integer | Maximum time this start call may wait for completion before returning its job snapshot, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget. |
@@ -27,7 +27,13 @@ Start a background question to the 1C:Workmate plugin and return its jobId. Poll
   Workmate receives its `ProjectId.Default` context.
 - `maxToolRounds` applies only when starting and optionally limits Workmate's
   internal tool-call rounds. It must be a positive integer. Omit it to use
-  Workmate's own default.
+  Workmate's own default. The limit is **per assistant turn**, which is how the
+  platform itself uses it - Workmate's own autopilot passes the same value into
+  every turn of its conversation loop - so a conversation continued to reach a
+  final answer (see below) may spend the allowance again on each continuation.
+  Workmate reports no tool-round count back, only an assistant-message count, so
+  a remaining-rounds budget cannot be tracked across turns without inventing it;
+  bound the whole job with `timeoutSeconds` instead.
 - `skillName` applies only when starting and optionally selects a Workmate skill.
   Omit it: this tool then sends `custom`, the skill under which Workmate runs its
   own tool loop. Workmate's `raw` skill is NOT the default here and is worth
@@ -115,9 +121,78 @@ must be enabled and `hasClientToken()` must report a configured access key.
 
 The progress journal reports only stages actually reached by the adapter:
 question accepted, plugin located, conversation facade obtained, request sent,
-and response received or failure. When Workmate exposes its assistant-message
-count, the completed result includes that value without relabelling it as a
-tool-round count.
+each continuation, and response received or failure. When Workmate exposes its
+assistant-message count, the completed result includes that value (summed over
+every turn) without relabelling it as a tool-round count.
+
+## Why a job can take several turns
+
+One call into Workmate's conversation facade answers ONE assistant turn: its
+future completes when that turn's stream ends, which happens on "I will look it
+up in the documentation" exactly as it happens on a finished answer. Reporting
+that first turn is what made `mode="answer"` return a plan - or nothing at all -
+instead of a result (#427).
+
+So a turn that is empty, or short and phrased as an announcement of intent, is
+not accepted as the answer: the same conversation is continued (up to five
+times) with an instruction to answer the original question now — and to answer
+from its own knowledge when the tool it wants is not in its toolset, which is
+what keeps a model that asked for a documentation search from announcing that
+search over and over. Continuing the conversation is exactly what Workmate's own
+autopilot does with this facade. The
+continuations are bounded by the job's `timeoutSeconds` budget, count into
+`assistantMessages`, and are visible in the progress journal. A long answer is
+always taken at face value, so a finished reference answer is never re-asked.
+
+How a turn is judged finished, in order of authority:
+
+1. **Workmate says so.** This adapter appends one instruction to EVERY request it sends -
+   the caller's question and each continuation alike - asking Workmate to end a FINAL answer
+   with the marker `<!end>`. A turn carrying it is final whatever it sounds like, in any
+   language. The marker is stripped before the answer reaches you.
+2. **Phrasing, as a fallback.** A turn that declared nothing is judged by whether it reads as
+   an announcement of work ("I will search the documentation", «я воспользуюсь поиском»)
+   rather than a result. This is a heuristic and knows only Russian and English.
+
+A turn that goes SILENT for two minutes ends the conversation instead of holding the job
+open: you get whatever Workmate produced so far. Silence, not elapsed time - a turn that is
+working keeps its clock reset, and "working" means a call it started through this plugin's
+bridge or one still running there, so a tool loop that legitimately runs for minutes is never
+cut off.
+
+Three limits of that rule, all deliberate. It sees only what comes back through this plugin, so
+a turn busy in Workmate's own tools or in a long model request looks silent - it can be
+wound up while it was in fact working, which is why the report says "no sign of work" rather
+than claiming Workmate stopped. And while more than one `ask_workmate` job is in flight the
+rule STANDS DOWN entirely, because a bridge call cannot be attributed to a conversation:
+ending a turn on another job's silence would be worse than waiting. With several jobs, the
+`timeoutSeconds` budget is the only bound.
+
+The third follows from the same anonymity, in the other direction: a `mode="chat"` hand-off
+completes its job at once and Workmate keeps working in the panel, where it may call these same
+tools. That traffic is counted as activity, so an answer-mode turn that really has gone quiet
+can be kept alive by an unrelated chat and run to its `timeoutSeconds` budget. The error is on
+the safe side - a job waits rather than being cut short - but it cannot be cut short by hand
+either: an answer-mode job commits before its first request goes out, so `cancel_job` reports
+`alreadyCommitted` and the job runs until Workmate answers or the budget ends it. Stop polling
+and read the result later; the slot frees itself.
+
+Whenever the marker never arrived - because the conversation went quiet, or because the
+continuations ran out - the result carries an explicit **"Completion not confirmed"** note
+above the answer. Read that as "this is the last thing it said", not as "this is the answer".
+
+What comes back is the last text that was ACCEPTED as an answer: an announcement is never
+promoted to the result just because nothing better followed it, and a later empty turn never
+erases an answer already produced. If no turn ever produced an answer, the job FAILS rather
+than returning the plan - the error quotes what Workmate kept announcing and says what to
+change (a narrower question, a larger `timeoutSeconds`).
+
+Silence is the one case where that plan is handed back rather than dropped, because it says
+where Workmate stopped. It is then labelled **"Not an answer"** on top of the "Completion not
+confirmed" note: what you are reading is what Workmate said it was GOING to do, so treat that
+work as possibly half-done and inspect the project. Any failure after a turn has been
+dispatched carries the same warning - inspect Workmate and the project before repeating the
+request, because those turns had already run and their tools may have changed something.
 
 Workmate may contact its configured cloud service and its conversation loop may
 invoke Workmate's own tools. Review the question and selected project/skill with

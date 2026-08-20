@@ -151,10 +151,19 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
                 suggests=["sign-in", "network", "settings", "retry"],
             )
         elif "returned an empty answer" in error:
+            # No "retry" here on purpose: the question had already been dispatched, so the
+            # message must send the caller to look before repeating the work.
             assert_error_quality(
                 error,
                 names=["1C:Workmate"],
-                suggests=["signed in", "configured", "retry"],
+                suggests=["inspect", "signed in", "configured"],
+            )
+        elif "failed after the request had been sent" in error:
+            assert_error_quality(
+                error,
+                names=["1C:Workmate"],
+                suggests=["Do NOT simply repeat", "get_project_errors",
+                          "start a new ask_workmate job"],
             )
         else:
             raise AssertionError("unexpected ask_workmate error contract: " + error)
