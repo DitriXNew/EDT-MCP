@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
@@ -407,7 +408,8 @@ public class DebugLaunchTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error during debug launch by name", e); //$NON-NLS-1$
-            return ToolResult.error("Unexpected error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(
+                "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
         }
     }
 
@@ -638,7 +640,8 @@ public class DebugLaunchTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error during debug launch", e); //$NON-NLS-1$
-            return ToolResult.error("Unexpected error: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(
+                "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
         }
     }
 

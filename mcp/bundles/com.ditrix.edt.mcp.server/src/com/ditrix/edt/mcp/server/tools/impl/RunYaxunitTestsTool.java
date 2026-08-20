@@ -64,6 +64,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
@@ -1040,7 +1041,8 @@ public class RunYaxunitTestsTool implements IMcpTool
         catch (CoreException e)
         {
             Activator.logError("Error running YAXUnit tests", e); //$NON-NLS-1$
-            return ToolResult.error("Launch failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(
+                "Launch failed: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
         }
         catch (InterruptedException e)
         {
@@ -1050,7 +1052,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error running YAXUnit tests", e); //$NON-NLS-1$
-            return ToolResult.error(e.getMessage()).toJson();
+            return ToolResult.error(PlatformFailures.describe(e)).toJson();
         }
     }
 
@@ -1649,7 +1651,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 // cause, not with the delegate's generic message.
                 String cancelled = declinedConflict(conflicts, launchPolicy);
                 return ToolResult.error(cancelled != null ? cancelled
-                    : "Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
+                    : "Launch failed: " + PlatformFailures.describe(ex)).toJson(); //$NON-NLS-1$
             }
             finally
             {

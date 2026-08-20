@@ -28,15 +28,16 @@ public final class CliReflectionErrors
     }
 
     /**
-     * Logs the failure and returns the matching error JSON, routing exactly as the
-     * tools used to do inline:
+     * Logs the failure and returns the matching error JSON, preserving the three-way
+     * routing the tools used to do inline:
      * <ul>
      *   <li>{@link InvocationTargetException} — the API itself threw; unwrap the real
-     *       cause and report {@code "<actionLabel> failed: <cause message>"}.</li>
+     *       cause and report {@code "<actionLabel> failed: <cause description>"}.</li>
      *   <li>{@link NoSuchMethodException} / {@link IllegalAccessException} — the CLI API
      *       shape differs from what the reflection expects; report
      *       {@code "<apiLabel> API mismatch: <message>"}.</li>
-     *   <li>anything else — unexpected; report the raw {@code e.getMessage()}.</li>
+     *   <li>anything else — unexpected; report the most informative platform-failure
+     *       description available.</li>
      * </ul>
      *
      * @param e the exception caught around the reflective CLI-API call
@@ -52,7 +53,8 @@ public final class CliReflectionErrors
         {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             Activator.logError(actionLabel + " failed", cause); //$NON-NLS-1$
-            return ToolResult.error(actionLabel + " failed: " + cause.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error(actionLabel + " failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(cause)).toJson();
         }
         if (e instanceof NoSuchMethodException || e instanceof IllegalAccessException)
         {
@@ -60,6 +62,6 @@ public final class CliReflectionErrors
             return ToolResult.error(apiLabel + " API mismatch: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
         Activator.logError("Unexpected error: " + actionLabel, e); //$NON-NLS-1$
-        return ToolResult.error(e.getMessage()).toJson();
+        return ToolResult.error(PlatformFailures.describe(e)).toJson();
     }
 }

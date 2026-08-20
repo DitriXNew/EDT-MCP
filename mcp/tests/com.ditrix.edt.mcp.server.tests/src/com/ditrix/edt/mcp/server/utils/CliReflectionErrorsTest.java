@@ -19,7 +19,7 @@ import com.google.gson.JsonParser;
 /**
  * Tests {@link CliReflectionErrors#toErrorJson} — the shared error mapper used by the
  * reflection-wrapped CLI/LanguageTool tools. Verifies the three dispatch branches
- * produce the exact actionable message each tool used to build inline, so the shared
+ * produce actionable messages and preserve the API-mismatch contract, so the shared
  * helper cannot silently drift the wire-visible error text.
  */
 public class CliReflectionErrorsTest
@@ -31,7 +31,7 @@ public class CliReflectionErrorsTest
         return obj.get("error").getAsString(); //$NON-NLS-1$
     }
 
-    /** InvocationTargetException → "<actionLabel> failed: <cause message>" (the API itself threw). */
+    /** InvocationTargetException → "<actionLabel> failed: <cause description>". */
     @Test
     public void invocationTargetUnwrapsCauseUnderActionLabel()
     {
@@ -46,7 +46,22 @@ public class CliReflectionErrorsTest
     {
         String msg = error(CliReflectionErrors.toErrorJson(
             new InvocationTargetException(null), "Translate configuration", "LanguageTool")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("Translate configuration failed: null", msg); //$NON-NLS-1$
+        assertEquals("Translate configuration failed: InvocationTargetException " //$NON-NLS-1$
+            + "(the platform reported no message)", msg); //$NON-NLS-1$
+    }
+
+    /** A textless target failure is described instead of rendering a literal null message. */
+    @Test
+    public void invocationTargetWithTextlessCauseNamesTheCause()
+    {
+        Exception e = new InvocationTargetException(new IllegalStateException());
+        String msg = error(
+            CliReflectionErrors.toErrorJson(e, "Export", "CLI")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("the unwrapped target must not render a null message", //$NON-NLS-1$
+            msg.contains("null")); //$NON-NLS-1$
+        assertEquals("Export failed: IllegalStateException " //$NON-NLS-1$
+            + "(the platform reported no message)", msg); //$NON-NLS-1$
     }
 
     /** NoSuchMethodException → "<apiLabel> API mismatch: <message>" (CLI shape differs). */
@@ -67,7 +82,7 @@ public class CliReflectionErrorsTest
                 new IllegalAccessException("denied"), "Generate translation strings", "LanguageTool"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
-    /** Any other exception → the raw message, unprefixed. */
+    /** An ordinary unexpected exception keeps its nonblank message, unprefixed. */
     @Test
     public void unexpectedExceptionReturnsRawMessage()
     {
