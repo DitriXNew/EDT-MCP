@@ -28,23 +28,32 @@ from harness import (
     split_markdown_row, PROJECT_DIR,
 )
 
-# Substrings that identify the actionable "engine not installed" error
-# (see BslLsRunner.jarNotFoundMessage): both must be present to treat it as a skip.
-ENGINE_MISSING_MARKERS = ("EDT_MCP_BSL_LS_JAR", "bsl-language-server")
+# The two answers that mean the engine is ABSENT, each matched by a phrase unique to it
+# (BslLsRunner.jarNotFoundMessage / javaNotFoundMessage). Deliberately not a loose pair of
+# substrings such as the env-var name plus the releases URL: incompatibleEngineMessage ("engine
+# <jar> needs Java 21, but EDT runs on Java 17 ... point EDT_MCP_BSL_LS_JAR at it: <releases url>")
+# carries BOTH of those, so a broad match reads a MISCONFIGURED engine as a missing one and skips
+# every happy path while the run still reports green. An engine that is installed but unusable is
+# a broken setup, and a broken setup has to fail loudly.
+ENGINE_MISSING_MESSAGES = (
+    "BSL Language Server engine not found",
+    "No Java runtime found to launch the BSL Language Server",
+)
 
 # A module of TestConfiguration known to carry a metric finding (MagicNumber).
 CALC_MODULE = "CommonModules/Calc/Module.bsl"
 
 
 def _run_or_skip(args, ctx):
-    """Call code_review; return the Result when the engine actually ran. If the engine
-    jar/Java is not configured, the tool returns its actionable not-found error -> SKIP
-    (an unmet precondition, not a failure). Any OTHER error is a real failure."""
+    """Call code_review; return the Result when the engine actually ran. If the engine jar (or a
+    Java to launch it) is not installed AT ALL, the tool returns its actionable not-found error ->
+    SKIP (an unmet precondition, not a failure). Any OTHER error is a real failure - including the
+    engine being present but unrunnable on this Java, which is a broken setup, not an absent one."""
     r = call("code_review", args)
     if r.is_error:
         err = r.error_text() or ""
-        if all(m in err for m in ENGINE_MISSING_MARKERS):
-            raise E2ESkip("BSL Language Server engine not configured: " + ctx)
+        if any(m in err for m in ENGINE_MISSING_MESSAGES):
+            raise E2ESkip("BSL Language Server engine not installed: " + ctx)
         _fail(ctx + " -> unexpected error: " + err)
     return r
 
@@ -163,19 +172,34 @@ def test_nonexistent_module_is_rejected():
     assert_no_diff("a rejected call must not touch the project on disk")
 
 
-def _rule_cells(text):
-    """The Rule column of every finding row, via the shared escape-aware parser.
+def _finding_rules(text):
+    """The Rule column of every finding row, in table order.
 
-    Deliberately NOT a substring search over the whole response: the legend under the table
-    names MagicNumber as an EXAMPLE of a mechanically fixable rule, so a naive `"MagicNumber"
-    in text` reports a leftover row that does not exist. Only cells count as findings.
+    Read by the column's position in the HEADER rather than by scanning cells for a needle: the
+    steering paragraph above the table names MagicNumber as an example of a mechanically fixable
+    rule, so a naive `"MagicNumber" in text` reports a leftover row that does not exist. Reading
+    the whole column (not just the rows matching one rule) is what lets a caller assert what
+    SURVIVED a filter, not only what vanished.
+
+    Parsing goes through the shared escape-aware splitter because MarkdownUtils.escapeForTable
+    writes a literal pipe as an escaped one, which a naive split would cut in the wrong place.
     """
     rules = []
+    rule_at = None
     for line in (text or "").splitlines():
-        cells = split_markdown_row(line)
-        if len(cells) < 3 or cells[0].lower() in ("severity", "---"):
+        cells = [c.strip() for c in split_markdown_row(line)]
+        if len(cells) < 3:
             continue
-        rules.extend(c.strip("`") for c in cells if "MagicNumber" in c)
+        lowered = [c.lower() for c in cells]
+        if "rule" in lowered and "severity" in lowered:
+            rule_at = lowered.index("rule")          # the header row: fixes the column position
+            continue
+        if rule_at is None or rule_at >= len(cells):
+            continue
+        cell = cells[rule_at].strip("`")
+        if not cell or set(cell) <= set("-:"):       # the header separator row
+            continue
+        rules.append(cell)
     return rules
 
 
@@ -191,21 +215,35 @@ def test_exclude_rule_drops_only_the_named_rule():
     "engine not installed" answer into a SKIP, which is what CI (no jar) must get."""
     base = _run_or_skip({"projectName": PROJECT}, "unfiltered project review")
     assert_ok(base, "unfiltered project review")
-    if not _rule_cells(base.text):
+    baseline = _finding_rules(base.text)
+    if "MagicNumber" not in baseline:
         raise E2ESkip("the fixture currently reports no MagicNumber finding to exclude")
+    # A rule that must SURVIVE the exclusion, taken from THIS scan rather than assumed of the
+    # fixture. Without it the test cannot tell "dropped one rule" from "dropped everything".
+    survivors = sorted({r for r in baseline if r != "MagicNumber"})
+    if not survivors:
+        raise E2ESkip("the fixture reports MagicNumber only, so nothing here can tell a scalpel "
+                      "from a mute button")
+    survivor = survivors[0]
 
     filtered = _run_or_skip({"projectName": PROJECT, "excludeRule": "MagicNumber"},
                             "review with excludeRule=MagicNumber")
     assert_ok(filtered, "review with excludeRule=MagicNumber")
-    leftover = _rule_cells(filtered.text)
+    remaining = _finding_rules(filtered.text)
+    leftover = [r for r in remaining if r == "MagicNumber"]
     if leftover:
         raise AssertionError(
             "excludeRule=MagicNumber must drop every MagicNumber row, but %d row(s) remain: %r "
             "- the parameter is not reaching the filter" % (len(leftover), leftover[:3]))
-    # The filter must be a scalpel, not a mute button: other findings still have to come through,
-    # or "no MagicNumber rows" would also pass for a tool that returned nothing at all.
-    if not (filtered.text or "").strip():
-        raise AssertionError("excludeRule emptied the whole report instead of dropping one rule")
+    # The filter must be a scalpel, not a mute button. Asserting on the RESPONSE being non-empty
+    # would not catch that: with zero findings the tool still renders a heading, a summary and
+    # "no findings match the current filters", so such a check can never fail. Naming a rule the
+    # unfiltered scan really reported is what makes the difference observable.
+    if survivor not in remaining:
+        raise AssertionError(
+            "excludeRule=MagicNumber also dropped %r, which it must not touch - the unfiltered "
+            "scan reported it. %d row(s) left of %d: the filter is muting the report instead of "
+            "excluding one rule" % (survivor, len(remaining), len(baseline)))
     assert_no_diff("a read-only review must not touch the project on disk")
 
 

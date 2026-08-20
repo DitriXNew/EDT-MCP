@@ -401,6 +401,36 @@ public class BslLsRunnerTest
     }
 
     @Test
+    public void testScanForExecJarIgnoresADirectoryNamedLikeAnEngineJar() throws IOException
+    {
+        // listFiles matches on the NAME, so a directory called ...-exec.jar is a candidate unless
+        // the scan checks it is a file. Here it also sorts HIGHER than the real engine, so a
+        // name-only filter would hand a directory to `java -jar` and fail the launch instead of
+        // running the perfectly good jar sitting next to it.
+        File dir = newFolder("engine-with-a-decoy-directory");
+        assertTrue(new File(dir, "bsl-language-server-9.9.9-exec.jar").mkdir());
+        assertTrue(new File(dir, "bsl-language-server-1.10.0-exec.jar").createNewFile());
+
+        File best = BslLsRunner.scanForExecJar(dir);
+
+        assertNotNull(best);
+        assertEquals("the real jar must win over a directory whose NAME looks like a newer jar",
+            "bsl-language-server-1.10.0-exec.jar", best.getName());
+    }
+
+    @Test
+    public void testScanForExecJarReturnsNullWhenOnlyADirectoryLooksLikeAnEngineJar() throws IOException
+    {
+        // With no real jar at all, the answer must stay "nothing found" - that is what turns into
+        // the actionable not-found error. Returning the directory would replace it with an
+        // UnsupportedClassVersionError-grade launch failure the caller cannot act on.
+        File dir = newFolder("engine-with-only-a-decoy-directory");
+        assertTrue(new File(dir, "bsl-language-server-1.10.0-exec.jar").mkdir());
+
+        assertNull(BslLsRunner.scanForExecJar(dir));
+    }
+
+    @Test
     public void testScanForExecJarPrefersStableReleaseOverPreReleaseOfTheSameVersion() throws IOException
     {
         // The integration case DitriX's re-check asked for: a stable release and an RC of the

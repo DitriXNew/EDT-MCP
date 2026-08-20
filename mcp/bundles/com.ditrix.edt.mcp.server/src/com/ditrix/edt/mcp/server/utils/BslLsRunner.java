@@ -665,15 +665,38 @@ public final class BslLsRunner
         return scanned;
     }
 
-    static File scanForExecJar(File dir)
+    /**
+     * The engine jars sitting in a folder: matched by NAME and confirmed to be actual files.
+     * <p>
+     * The {@code isFile} half is not decoration. {@link File#listFiles(java.io.FilenameFilter)} matches on
+     * the name alone, so a DIRECTORY called {@code bsl-language-server-9.9.9-exec.jar} would be
+     * picked as the engine - over a valid lower-version jar, or in place of no jar at all - and
+     * then handed to {@code java -jar}, which takes a jar FILE. That trades an actionable "engine
+     * not found" answer for a launch failure. The explicitly pointed-at paths are already screened
+     * this way in {@link #resolveJar}; the folder scans must not be the exception.
+     * <p>
+     * Shared by both scans on purpose: they had the identical filter, and a filter fixed in only
+     * one of two copies is how the same defect ships twice.
+     *
+     * @param dir folder to scan, may be {@code null}
+     * @return the matching jar files, never {@code null}
+     */
+    private static File[] execJarsIn(File dir)
     {
         if (dir == null || !dir.isDirectory())
         {
-            return null;
+            return new File[0];
         }
         File[] jars = dir.listFiles((d, name) -> name.startsWith("bsl-language-server") //$NON-NLS-1$
-            && name.endsWith("-exec.jar")); //$NON-NLS-1$
-        if (jars == null || jars.length == 0)
+            && name.endsWith("-exec.jar") //$NON-NLS-1$
+            && new File(d, name).isFile());
+        return jars == null ? new File[0] : jars;
+    }
+
+    static File scanForExecJar(File dir)
+    {
+        File[] jars = execJarsIn(dir);
+        if (jars.length == 0)
         {
             return null;
         }
@@ -953,19 +976,9 @@ public final class BslLsRunner
      */
     private static File newestRunnableJar(File dir)
     {
-        if (dir == null || !dir.isDirectory())
-        {
-            return null;
-        }
-        File[] jars = dir.listFiles((d, name) -> name.startsWith("bsl-language-server") //$NON-NLS-1$
-            && name.endsWith("-exec.jar")); //$NON-NLS-1$
-        if (jars == null)
-        {
-            return null;
-        }
         int runtime = hostJavaMajor();
         File best = null;
-        for (File candidate : jars)
+        for (File candidate : execJarsIn(dir))
         {
             if (incompatibleEngineMessage(candidate.getName(), runtime) != null)
             {
