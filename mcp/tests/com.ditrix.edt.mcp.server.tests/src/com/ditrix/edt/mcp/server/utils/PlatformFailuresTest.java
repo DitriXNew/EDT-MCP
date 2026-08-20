@@ -8,7 +8,11 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+
+import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
@@ -27,10 +31,25 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * path — a cancelled server operation carries {@code Status.CANCEL_STATUS}, whose message is the
  * empty string, and EDT's publish results are {@code MultiStatus} trees whose reason sits in a
  * child.
+ *
+ * <p>The {@code withoutObjectIdentity} cases pin the opposite obligation: the text that IS
+ * chosen must not carry an EMF implementation object's identity out to the caller, and must be
+ * left alone byte for byte when it carries none.
  */
 public class PlatformFailuresTest
 {
     private static final String PLUGIN = "com.ditrix.edt.mcp.server";
+
+    /** The #452 leak, exactly as the platform reported it on the stand. */
+    private static final String LEAKING_MESSAGE = "Failed to persist reference value"
+        + " com._1c.g5.v8.dt.rights.model.impl.RoleDescriptionImpl@3f2a1b";
+
+    /**
+     * Any object identity still left in a message: an at-sign followed by hex. Deliberately NOT
+     * "four or more" - the scrubber no longer has a length floor, so a probe that had one would
+     * report a leaked "@abc" as clean.
+     */
+    private static final Pattern ANY_IDENTITY = Pattern.compile("@[0-9a-fA-F]+");
 
     @Test
     public void testOwnMessageWins()
@@ -178,5 +197,135 @@ public class PlatformFailuresTest
     {
         assertEquals("surrounding whitespace is not part of the reason", "boom",
             PlatformFailures.describe(new ApplicationException("  boom  ")));
+    }
+
+    @Test
+    public void testObjectIdentityIsReducedToTheSimpleTypeName()
+    {
+        String scrubbed = PlatformFailures.withoutObjectIdentity(LEAKING_MESSAGE);
+        assertEquals("WHICH object could not be persisted is the diagnosis and must survive",
+            "Failed to persist reference value RoleDescriptionImpl", scrubbed);
+        assertFalse("no identity hash may reach the caller",
+            ANY_IDENTITY.matcher(scrubbed).find());
+    }
+
+    @Test
+    public void testIdentityInTheMiddleOfASentenceIsScrubbed()
+    {
+        // SymbolInfoService.meaningfulOrNull answers a different question with a WHOLE-STRING
+        // match and would see nothing here; this one has to find the identity wherever it sits.
+        assertEquals("Failed to persist reference value RoleDescriptionImpl for feature rights",
+            PlatformFailures.withoutObjectIdentity(
+                "Failed to persist reference value com.example.impl.RoleDescriptionImpl@3f2a1b"
+                    + " for feature rights"));
+    }
+
+    @Test
+    public void testEveryIdentityInTheMessageIsScrubbed()
+    {
+        // One replacement is not the contract: a platform message naming both ends of a broken
+        // reference carries two identities, and leaving the second one is still a leak.
+        assertEquals("RoleDescriptionImpl cannot reference ObjectRightImpl",
+            PlatformFailures.withoutObjectIdentity(
+                "com.example.RoleDescriptionImpl@3f2a1b cannot reference"
+                    + " com.example.ObjectRightImpl@7c0de4"));
+    }
+
+    @Test
+    public void testInnerClassIdentityIsScrubbedAndDoesNotBreakTheReplacement()
+    {
+        // An inner class name carries '$', which a replacement string reads as a group
+        // reference: unquoted it throws instead of scrubbing. The name is a real one - EDT's
+        // quick-fix hover renders exactly this shape.
+        assertEquals("BslAnnotationWithQuickFixesHover$BslAnnotationInfo carries no text",
+            PlatformFailures.withoutObjectIdentity(
+                "com.e1c.BslAnnotationWithQuickFixesHover$BslAnnotationInfo@1f0a2b carries no text"));
+    }
+
+    @Test
+    public void testNullInNullOutAndEmptyStaysEmpty()
+    {
+        assertNull("null in, null out - the caller decides what a missing message means",
+            PlatformFailures.withoutObjectIdentity(null));
+        assertEquals("", PlatformFailures.withoutObjectIdentity(""));
+    }
+
+    @Test
+    public void testMessagesWithoutAnIdentityComeBackByteIdentical()
+    {
+        // Real platform texts. The scrubber sits on a path that runs for EVERY failure, so a
+        // message carrying no identity has to come back unchanged by construction.
+        String[] intact = { "Server \"S\" start attempt failed.", "port 8429 is already in use",
+            "Object not found: Catalog.Products.Attribute.Price" };
+        for (String message : intact)
+        {
+            assertSame("a message with no identity must come back as the very same string",
+                message, PlatformFailures.withoutObjectIdentity(message));
+        }
+    }
+
+    @Test
+    public void testAtSignsThatAreNotObjectIdentitiesAreLeftAlone()
+    {
+        // What keeps the pattern off ordinary prose is the right-hand boundary, so the cases that
+        // matter are the ones where a hex-looking run CONTINUES into a name: "example.com" starts
+        // with the hex digit 'e', and a mention has no type name in front of the at-sign at all.
+        String[] intact = { "write to user@example.com", "@codex review" };
+        for (String message : intact)
+        {
+            assertSame("an at-sign that is not an object identity must not be touched", message,
+                PlatformFailures.withoutObjectIdentity(message));
+        }
+    }
+
+    @Test
+    public void testAnAddressWhoseDomainLabelIsEntirelyHexIsLeftAlone()
+    {
+        // Its own test, and the one a length floor gets WRONG: every letter of "face" is a hex
+        // digit, so a floor-only pattern matches "john@face", replaces it with the "simple type
+        // name" of "john", and hands the caller back the corrupted address "john.book". The run
+        // is not terminal - ".book" continues it - so it is not an identity.
+        String message = "notify john@face.book about it";
+        assertSame("a valid address must survive byte for byte, not be rewritten", message,
+            PlatformFailures.withoutObjectIdentity(message));
+    }
+
+    @Test
+    public void testAnIdentityHashShorterThanFourDigitsIsScrubbed()
+    {
+        // The other direction the floor got wrong. The hash is Integer.toHexString(hashCode()),
+        // which is one to eight digits, so a real identity is routinely shorter than four - and a
+        // floor of four let exactly the #452 leak through whenever the run came up short.
+        assertEquals("a short hash is still a hash",
+            "Failed to persist reference value RoleDescriptionImpl",
+            PlatformFailures.withoutObjectIdentity(
+                "Failed to persist reference value RoleDescriptionImpl@abc"));
+    }
+
+    @Test
+    public void testAnIdentityThatEndsTheSentenceIsScrubbed()
+    {
+        // A full stop is a separator, not a name continuation, so it must not defeat the
+        // boundary: the platform ends sentences, and a scrubber that only fired at end-of-string
+        // would leak every identity that happens to be punctuated.
+        assertEquals("Failed to persist reference value RoleDescriptionImpl.",
+            PlatformFailures.withoutObjectIdentity(
+                "Failed to persist reference value com.example.impl.RoleDescriptionImpl@3f2a1b."));
+    }
+
+    @Test
+    public void testScrubbingComposesWithDescribeAndCannotBeReplacedByIt()
+    {
+        // describe() picks the message, withoutObjectIdentity() cleans it. describe alone cannot
+        // help here, because the most informative message IS the leaking one.
+        RuntimeException failure = new RuntimeException(LEAKING_MESSAGE);
+        assertEquals("describe selects the leaking message, as it must", LEAKING_MESSAGE,
+            PlatformFailures.describe(failure));
+        String scrubbed =
+            PlatformFailures.withoutObjectIdentity(PlatformFailures.describe(failure));
+        assertFalse("the composition must leave no identity hash",
+            ANY_IDENTITY.matcher(scrubbed).find());
+        assertTrue("and must keep the type name that carries the diagnosis",
+            scrubbed.contains("RoleDescriptionImpl"));
     }
 }

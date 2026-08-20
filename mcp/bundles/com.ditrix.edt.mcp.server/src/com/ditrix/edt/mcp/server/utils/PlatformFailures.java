@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
@@ -37,6 +39,15 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * it says so, naming the exception type and the status severity, because "CANCEL, no message" is
  * itself the diagnosis: something aborted the operation rather than failing it.
  *
+ * <p>{@link #withoutObjectIdentity(String)} answers a SEPARATE question and is meant to be
+ * COMPOSED with {@code describe}, never substituted for it. {@code describe} selects the most
+ * informative message the failure carries, and that selection is exactly why it cannot cure a
+ * leaking one: for the platform's "Failed to persist reference value
+ * com...RoleDescriptionImpl@3f2a1b" the most informative message IS the message that leaks an
+ * implementation object's identity. Choosing a different message would throw the diagnosis
+ * away; choosing that one keeps the heap address. Selecting the text and cleaning the text are
+ * two questions, answered by two methods, in that order.
+ *
  * <p>Pure and side-effect-free (logging stays with the caller, which knows the context), so the
  * whole decision is unit-testable without an EDT runtime.
  */
@@ -47,6 +58,34 @@ public final class PlatformFailures
 
     /** Cap on how deep a {@link IStatus} child tree is walked. */
     private static final int MAX_STATUS_DEPTH = 4;
+
+    /**
+     * A Java object identity the way {@code Object.toString()} renders it: a possibly qualified
+     * type name, an at-sign, and the identity hash in hex. Group 1 is the type name.
+     *
+     * <p><b>What makes this safe to run over arbitrary prose is the RIGHT-HAND BOUNDARY, not a
+     * floor on the hash length.</b> A length floor is wrong in both directions at once. It is too
+     * NARROW upwards: the hash is {@code Integer.toHexString(hashCode())}, which is one to eight
+     * digits, so a floor of four silently lets a real
+     * {@code RoleDescriptionImpl@abc} through. And it is too WIDE downwards, because length says
+     * nothing about whether the hex run is a hash at all: in "john@face.book" the four letters
+     * "face" are every one of them hex digits, and a floor-only pattern matches "john@face" and
+     * hands the caller back the corrupted "john.book".
+     *
+     * <p>A real identity's hex run is TERMINAL - the object's {@code toString()} ends there, so
+     * what follows is the end of the text or a separator, never the continuation of a name. That
+     * is what the two lookaheads assert: the run may not be followed by another name character,
+     * and may not be followed by a dot that itself continues into one (which is exactly the shape
+     * of a domain, a package tail or a file extension). Both halves are needed - the first alone
+     * still eats "john@face" out of "john@face.book"; the second alone still eats "user@e" out of
+     * "user@example.com".
+     *
+     * <p>Because the boundary carries the safety, the hash may be as short as ONE digit. The
+     * knowing cost of that is a bare "X@1" - a legal, if unusual, identity rendering - being
+     * scrubbed to "X" wherever it is genuinely something else.
+     */
+    private static final Pattern OBJECT_IDENTITY = Pattern
+        .compile("([A-Za-z_$][A-Za-z0-9_$.]*)@[0-9a-fA-F]+(?![0-9A-Za-z_$])(?!\\.[0-9A-Za-z_$])"); //$NON-NLS-1$
 
     private PlatformFailures()
     {
@@ -169,6 +208,64 @@ public final class PlatformFailures
         // loop, and recursing into it here could bounce between a status and its exception.
         String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
         return carriedMessage != null && filter.test(carriedMessage) ? carriedMessage : null;
+    }
+
+    /**
+     * The message with every embedded Java object identity reduced to the SIMPLE type name:
+     * "Failed to persist reference value com...impl.RoleDescriptionImpl@3f2a1b" comes back as
+     * "Failed to persist reference value RoleDescriptionImpl". WHICH kind of object the platform
+     * refused is the diagnosis and survives; the heap address of one particular run says nothing
+     * to a caller who cannot inspect that heap, and does not.
+     *
+     * <p>Compose it with {@link #describe(Throwable)} - the class comment says why it cannot
+     * replace it.
+     *
+     * @param message the text to scrub (may be {@code null})
+     * @return the scrubbed text; {@code null} for {@code null} input, and the very same string
+     *     instance when the text carries no object identity at all
+     */
+    public static String withoutObjectIdentity(String message)
+    {
+        if (message == null)
+        {
+            return null;
+        }
+        Matcher matcher = OBJECT_IDENTITY.matcher(message);
+        if (!matcher.find())
+        {
+            // Hand back the very same instance rather than a copy: this runs on EVERY failure of
+            // the paths that use it, and a message needing no scrubbing must be unchanged by
+            // construction, not merely equal.
+            return message;
+        }
+        StringBuilder scrubbed = new StringBuilder(message.length());
+        do
+        {
+            // quoteReplacement: an inner class name carries '$', which a replacement string reads
+            // as a group reference - unquoted it would throw instead of scrubbing.
+            matcher.appendReplacement(scrubbed,
+                Matcher.quoteReplacement(simpleTypeName(matcher.group(1))));
+        }
+        while (matcher.find());
+        matcher.appendTail(scrubbed);
+        return scrubbed.toString();
+    }
+
+    /**
+     * The simple name of a possibly qualified Java type name: everything after the last dot, or
+     * the whole name when it has none (or ends with one).
+     *
+     * @param typeName the matched type name (never {@code null}, never empty)
+     * @return the simple type name
+     */
+    private static String simpleTypeName(String typeName)
+    {
+        int lastDot = typeName.lastIndexOf('.');
+        if (lastDot < 0 || lastDot == typeName.length() - 1)
+        {
+            return typeName;
+        }
+        return typeName.substring(lastDot + 1);
     }
 
     /**

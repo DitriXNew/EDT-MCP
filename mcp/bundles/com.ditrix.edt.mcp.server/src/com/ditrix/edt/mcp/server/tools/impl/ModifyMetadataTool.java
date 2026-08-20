@@ -3199,6 +3199,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Role FQN AND the {@code RoleDescription}'s own top-object FQN, OUTSIDE the writer, because the
      * rights matrix lives in its OWN BM resource ({@code Rights.rights}) that the role FQN alone does
      * not drain.
+     * <p>
+     * That second FQN is NOT resolved here: the writer reports it as {@link RoleRightsWriter.Result#rightsFqn},
+     * produced inside the same write boundary that registered the description as a BM top object. It has
+     * to come from there - a description this call has just attached has no readable {@code bmGetFqn()}
+     * within its own transaction, so asking the object for its FQN afterwards returned {@code null} for
+     * exactly the freshly created role that issue #452 is about.
+     * <p>
+     * A REFUSED apply is force-exported too - when the writer reports that it WROTE, which is a
+     * different question from whether it can name the rights resource. The writer bootstraps the
+     * rights model - and commits it - before it resolves the first entry, and then applies entries
+     * one at a time, so a refusal raised afterwards (an unknown object, an unknown right, a failing
+     * task) can leave committed work behind. The export is what drains that work, and it is also how
+     * this call DECLARES the project it wrote in (issue #408: {@code WriteScope} is recorded by the
+     * export submission), so returning the error without it would let a call that changed the model
+     * claim it changed nothing.
      */
     private String modifyRoleRights(ProjectContext ctx, String normFqn, Role role,
         List<JsonObject> properties, List<JsonObject> rights, List<JsonObject> templates,
@@ -3213,23 +3228,39 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         RoleRightsWriter.Result result =
             RoleRightsWriter.apply(ctx.project, ctx.config, role, rights, templates, roleProperties);
-        if (result.hasError())
-        {
-            return result.error;
-        }
 
         // The rights matrix (the Rights.rights file) is a SEPARATE BM resource from Role.mdo: the
         // RoleDescription is its own top BM object (its impl extends com._1c.g5.v8.bm.core.BmObject)
         // with its own EClass-keyed exporter (RightsExporter supports ROLE_DESCRIPTION). Exporting only
         // the role FQN drains Role.mdo but never Rights.rights, so force-export its OWN FQN too.
-        // 'persisted' stays honest: true only when the rights resource FQN resolved and was exported.
-        String rightsFqn = RoleRightsWriter.resolveRightsDescriptionFqn(ctx.project, role);
+        // The writer carries that FQN out of the boundary that registered the description (issue #452);
+        // 'persisted' stays honest: true only when the writer reported one AND the export succeeded.
+        String rightsFqn = result.rightsFqn;
         List<String> exportFqns = new ArrayList<>();
         exportFqns.add(normFqn);
         if (rightsFqn != null && !rightsFqn.equals(normFqn))
         {
             exportFqns.add(rightsFqn);
         }
+        if (result.hasError())
+        {
+            // A refusal is not the same as "nothing happened", and the two questions it raises are
+            // SEPARATE. Whether to export at all is answered by rightsModelWritten - the writer says
+            // whether one of its commits already landed (the bootstrap attaching the rights model, or
+            // an entry applied before the failing one). What to export it UNDER is answered by
+            // rightsFqn, and a missing FQN only costs the Rights.rights leg: the role FQN is still
+            // submitted, because that submission is what records the project in this call's
+            // WriteScope (issue #408) - without it a call that mutated the model would be declaring
+            // that it changed nothing. Gating on the FQN conflated the two and skipped both the drain
+            // and the declaration whenever the generator could not name an already-registered rights
+            // model.
+            if (result.rightsModelWritten)
+            {
+                BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+            }
+            return result.error;
+        }
+
         boolean exported = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
         boolean persisted = exported && rightsFqn != null;
 
