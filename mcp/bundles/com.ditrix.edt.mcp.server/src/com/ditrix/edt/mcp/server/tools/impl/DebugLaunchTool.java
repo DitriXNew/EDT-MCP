@@ -146,7 +146,9 @@ public class DebugLaunchTool implements IMcpTool
                     + "breakpoints, so import such a file into a project first.") //$NON-NLS-1$
             .stringProperty(KEY_EXTERNAL_OBJECT_NAME,
                 "Name of the external data processor / report inside externalObjectProjectName " //$NON-NLS-1$
-                    + "(the object NAME, not a file path); required together with it.") //$NON-NLS-1$
+                    + "(the object NAME, not a file path); required together with it. Qualify it as " //$NON-NLS-1$
+                    + "'ExternalDataProcessor.Name' / 'ExternalReport.Name' when a processor and a " //$NON-NLS-1$
+                    + "report share the name.") //$NON-NLS-1$
             .booleanProperty("restartIfRunning", //$NON-NLS-1$
                 "Default false: if a matching session is already running, short-circuit with " //$NON-NLS-1$
                     + "alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). " //$NON-NLS-1$
@@ -166,6 +168,12 @@ public class DebugLaunchTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT, "EDT project name associated with the launch") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Application id of the launched configuration") //$NON-NLS-1$
             .booleanProperty("alreadyRunning", "True if a matching session was already alive; re-launch skipped") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_STARTUP_OPTION,
+                "Echoed back when a /C startup option was applied to this launch; absent otherwise.") //$NON-NLS-1$
+            .stringProperty(KEY_EXTERNAL_OBJECT_PROJECT_NAME,
+                "Echoed back when an external object was launched; absent otherwise.") //$NON-NLS-1$
+            .stringProperty(KEY_EXTERNAL_OBJECT_NAME,
+                "The external data processor / report this launch runs; absent when none was requested.") //$NON-NLS-1$
             .stringProperty("mode", "Launch mode of the session (e.g. debug, run)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_STATUS, "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$
                 + "still starting; absent on the alreadyRunning short-circuit. Poll debug_status for readiness.") //$NON-NLS-1$

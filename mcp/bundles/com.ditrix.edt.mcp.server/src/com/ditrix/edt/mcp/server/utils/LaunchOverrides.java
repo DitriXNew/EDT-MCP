@@ -7,7 +7,6 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 
 import org.eclipse.core.resources.IProject;
@@ -238,10 +237,63 @@ public final class LaunchOverrides
                 + "external objects; the configuration being debugged stays in projectName.").toJson()); //$NON-NLS-1$
         }
 
-        Collection<MdObject> objects = scope.allExternalObjects();
-        MdObject match = null;
+        Resolution named = matchByName(scope);
+        if (named.errorJson != null)
+        {
+            return named;
+        }
+
+        String dumpRefusal = dumpRefusalOrNull(root);
+        if (dumpRefusal != null)
+        {
+            return Resolution.error(ToolResult.error(dumpRefusal).toJson());
+        }
+        return named;
+    }
+
+    /**
+     * Finds the requested object, keyed the way the PLATFORM keys it.
+     *
+     * <p>EDT's {@code ExternalObjectHelper.getExternalObject} filters on name AND type, and the
+     * launch stores the type as its own attribute - so (name, type) is the key, not the name. A
+     * data processor and a report are separate roots in separate folders and nothing stops them
+     * sharing a programmatic name; matching on the name alone would then pick whichever came
+     * first out of the model and run the other object under the requested name.</p>
+     *
+     * <p>So a bare name is accepted only while it is UNAMBIGUOUS, and a caller who hits the
+     * collision qualifies it - {@code ExternalDataProcessor.Runner} - which goes through the same
+     * bilingual resolver every other tool uses, Russian type tokens included.</p>
+     *
+     * @param scope the external-objects project's scope
+     * @return the matched object, or the refusal explaining which way it failed
+     */
+    private Resolution matchByName(MetadataScope scope)
+    {
+        int dot = externalObjectName.indexOf('.');
+        if (dot > 0)
+        {
+            String token = externalObjectName.substring(0, dot);
+            String bare = externalObjectName.substring(dot + 1);
+            if (MetadataScope.externalEClassName(token) == null)
+            {
+                return Resolution.error(ToolResult.error("'" + token + "' is not an external " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "object kind. Qualify the name with ExternalDataProcessor or ExternalReport " //$NON-NLS-1$
+                    + "(the Russian tokens work too), or pass the bare name when only one object " //$NON-NLS-1$
+                    + "bears it.").toJson()); //$NON-NLS-1$
+            }
+            MdObject qualified = scope.findObject(token, bare);
+            if (qualified == null)
+            {
+                return Resolution.error(ToolResult.error("External object not found: '" + bare //$NON-NLS-1$
+                    + "' of kind '" + token + "' in project '" + externalObjectProjectName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'." + availableSuffix(namesOf(scope))).toJson()); //$NON-NLS-1$
+            }
+            return Resolution.ok(qualified);
+        }
+
+        List<MdObject> matches = new ArrayList<>();
         List<String> names = new ArrayList<>();
-        for (MdObject object : objects)
+        for (MdObject object : scope.allExternalObjects())
         {
             String name = object.getName();
             if (name == null)
@@ -251,22 +303,60 @@ public final class LaunchOverrides
             names.add(name);
             if (name.equals(externalObjectName))
             {
-                match = object;
+                matches.add(object);
             }
         }
-        if (match == null)
+        if (matches.isEmpty())
         {
             return Resolution.error(ToolResult.error("External object not found: '" //$NON-NLS-1$
                 + externalObjectName + "' in project '" + externalObjectProjectName + "'." //$NON-NLS-1$ //$NON-NLS-2$
                 + availableSuffix(names)).toJson());
         }
-
-        String dumpRefusal = dumpRefusalOrNull(root);
-        if (dumpRefusal != null)
+        if (matches.size() > 1)
         {
-            return Resolution.error(ToolResult.error(dumpRefusal).toJson());
+            return Resolution.error(ToolResult.error("'" + externalObjectName + "' names " //$NON-NLS-1$ //$NON-NLS-2$
+                + matches.size() + " external objects in project '" + externalObjectProjectName //$NON-NLS-1$
+                + "' - a data processor and a report may share a programmatic name, and the two " //$NON-NLS-1$
+                + "are launched differently. Qualify it: " + qualifiedForms(matches) + ".").toJson()); //$NON-NLS-1$
         }
-        return Resolution.ok(match);
+        return Resolution.ok(matches.get(0));
+    }
+
+    /**
+     * Every external object name in the project, for a not-found refusal.
+     *
+     * @param scope the external-objects project's scope
+     * @return the names, unsorted
+     */
+    private static List<String> namesOf(MetadataScope scope)
+    {
+        List<String> names = new ArrayList<>();
+        for (MdObject object : scope.allExternalObjects())
+        {
+            if (object.getName() != null)
+            {
+                names.add(object.getName());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * The qualified addresses of same-named objects, so the ambiguity refusal hands back values
+     * the caller can paste straight back into {@code externalObjectName}.
+     *
+     * @param matches the objects sharing a name
+     * @return e.g. {@code "ExternalDataProcessor.Runner or ExternalReport.Runner"}
+     */
+    private static String qualifiedForms(List<MdObject> matches)
+    {
+        List<String> forms = new ArrayList<>();
+        for (MdObject object : matches)
+        {
+            forms.add(object.eClass().getName() + "." + object.getName()); //$NON-NLS-1$
+        }
+        forms.sort(String::compareTo);
+        return String.join(" or ", forms); //$NON-NLS-1$
     }
 
     /**

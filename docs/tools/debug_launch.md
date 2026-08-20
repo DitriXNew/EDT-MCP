@@ -13,7 +13,7 @@ Run a 1C application under EDT debugging. An already-running session is NOT rela
 | standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
 | startupOption | — | string | The 1C /C startup option for THIS launch only (e.g. 'xddRun ...; xddReport ...'); applied to a working copy, the saved EDT configuration is not modified. Runtime-client configs only - an Attach config ignores it and is refused. |
 | externalObjectProjectName | — | string | Name of an EXTERNAL-OBJECTS project (not the configuration being debugged) whose data processor / report to run on startup; pair with externalObjectName. EDT builds the .epf itself - there is no way to run a prebuilt file with breakpoints, so import such a file into a project first. |
-| externalObjectName | — | string | Name of the external data processor / report inside externalObjectProjectName (the object NAME, not a file path); required together with it. |
+| externalObjectName | — | string | Name of the external data processor / report inside externalObjectProjectName (the object NAME, not a file path); required together with it. Qualify it as 'ExternalDataProcessor.Name' / 'ExternalReport.Name' when a processor and a report share the name. |
 | restartIfRunning | — | boolean | Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call. |
 
 ## Guide

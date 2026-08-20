@@ -861,6 +861,12 @@
         "configurationType": {
           "type": "string"
         },
+        "externalObjectName": {
+          "type": "string"
+        },
+        "externalObjectProjectName": {
+          "type": "string"
+        },
         "launchConfiguration": {
           "type": "string"
         },
@@ -871,6 +877,9 @@
           "type": "string"
         },
         "project": {
+          "type": "string"
+        },
+        "startupOption": {
           "type": "string"
         },
         "status": {
