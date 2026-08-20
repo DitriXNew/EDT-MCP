@@ -536,16 +536,25 @@ def test_external_object_name_may_be_qualified_by_kind():
 
 @e2e_test(tool="debug_launch", kind="action")
 def test_live_external_processor_is_actually_launched_with_execute():
-    """ATTENDED: the one thing the headless matrix cannot show - a REAL launch.
+    """ATTENDED: a REAL launch reaches EDT and starts a session with the overrides applied.
 
-    Everything else about these arguments is verified without starting anything, which leaves
-    exactly one claim untested: that a resolvable external object really reaches EDT's launch
-    delegate and comes back as a started session rather than a refusal. Skipped unless
-    EDT_MCP_LIVE_INFOBASE=1, because it spawns a 1C client against a live infobase.
+    Skipped unless EDT_MCP_LIVE_INFOBASE=1, because it spawns a 1C client against a live
+    infobase.
 
-    Deliberately asserts the ECHO, not just success: EDT does not fail a launch it cannot
-    attach /Execute to, so "a session started" alone would also be true of the bug. The echoed
-    externalObjectName is what says the override survived into the launch.
+    WHAT THIS PROVES: the arguments survive the whole path - a stamped working copy is accepted
+    by EDT's launch delegate and a debug session really comes up. Waiting for debug_status to
+    report the session is the load-bearing part; without it the test would also pass on a launch
+    that never started.
+
+    WHAT IT DOES NOT PROVE, deliberately and worth knowing before trusting it: that the 1C client
+    actually RAN the processor. If the stamped name/type pair did not match what EDT resolves,
+    the delegate logs and starts the client WITHOUT /Execute - and this test would still pass,
+    because the echoed fields are built locally by the tool before the delegate runs, and
+    debug_status only shows that some session exists. Closing that gap needs the fixture
+    processor to leave an observable trace (write a marker file whose path arrives through the
+    /C startup option, then poll for the file), which is fixture work that cannot be authored
+    blind - it has to be written and RUN against a live infobase. Until then the name/type
+    stamping is pinned by LaunchOverridesTest instead.
 
     Cleans up after itself - the spawned session is terminated and the throwaway launch
     configuration removed - so an attended run leaves the workspace as it found it.
@@ -568,13 +577,15 @@ def test_live_external_processor_is_actually_launched_with_execute():
         sc = r.structured
         if not isinstance(sc, dict):
             raise AssertionError("JSON tool must populate structuredContent: %r" % sc)
+        # The echo is a LOCAL statement of what the tool applied - it is built before the
+        # delegate runs, so it says "the override was not dropped on our side", not "the
+        # processor ran". Asserted for that narrower reason only.
         for key, expected in (("externalObjectProjectName", "ExternalObjects"),
                               ("externalObjectName", "ExtProc"),
                               ("startupOption", "E2E344")):
             if sc.get(key) != expected:
                 raise AssertionError(
-                    "the response must echo the applied override %s=%r, got %r (a launch that "
-                    "dropped it would still report success)" % (key, expected, sc.get(key)))
+                    "the response must echo the applied override %s=%r, got %r" % (key, expected, sc.get(key)))
 
         # The launch is ASYNCHRONOUS - the tool returns status:"launching" the moment the
         # background job is scheduled. Without waiting for the session to actually appear, this
