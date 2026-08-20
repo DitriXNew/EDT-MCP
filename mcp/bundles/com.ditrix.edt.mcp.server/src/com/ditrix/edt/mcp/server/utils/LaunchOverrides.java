@@ -174,15 +174,10 @@ public final class LaunchOverrides
         {
             return Applied.ok(config);
         }
-        // Only the runtime-client delegate reads these attributes. On an Attach configuration they
-        // would be stored and ignored, and the caller would be left believing the processor ran -
-        // the same silent success this class exists to prevent, one layer up.
-        if (isAttach)
+        String attachRefusal = attachRefusalOrNull(config, isAttach);
+        if (attachRefusal != null)
         {
-            return Applied.error("startupOption / externalObjectName apply to a RUNTIME-CLIENT " //$NON-NLS-1$
-                + "launch, and '" + config.getName() + "' is an Attach configuration, which " //$NON-NLS-1$ //$NON-NLS-2$
-                + "ignores them (it attaches to an already-running server rather than starting a " //$NON-NLS-1$
-                + "client). Name a runtime-client configuration, or drop these arguments."); //$NON-NLS-1$
+            return Applied.error(attachRefusal);
         }
 
         try
@@ -229,6 +224,15 @@ public final class LaunchOverrides
      */
     private Resolution resolveExternalObject()
     {
+        // Asked BEFORE the root collection is read. A project mid-import answers with whatever
+        // it holds right now, so a just-added object reads as missing and a just-renamed one
+        // resolves under its old name - and the launch would then be stamped from stale data
+        // rather than refused. build_external_objects gates the same project the same way.
+        String building = ProjectStateChecker.buildingErrorOrNull(externalObjectProjectName);
+        if (building != null)
+        {
+            return Resolution.error(ToolResult.error(building).toJson());
+        }
         ProjectContext.ConfigurationResult root =
             ProjectContext.resolveMetadataRoot(externalObjectProjectName);
         if (!root.ok())
@@ -256,6 +260,34 @@ public final class LaunchOverrides
             return Resolution.error(ToolResult.error(dumpRefusal).toJson());
         }
         return named;
+    }
+
+    /**
+     * Why an Attach configuration cannot carry these overrides, or {@code null}.
+     *
+     * <p>Only the runtime-client delegate reads the attributes; an Attach launch would store and
+     * ignore them, leaving the caller believing the processor ran - the same silent success this
+     * class exists to prevent, one layer up.</p>
+     *
+     * <p>Separated out so the caller can ask it the MOMENT the configuration is known, before the
+     * launch path does anything destructive: the by-name path may terminate a live client session
+     * on its way to the launch, and a request that is going to be refused anyway must not cost
+     * somebody their session first.</p>
+     *
+     * @param config the resolved configuration
+     * @param isAttach whether it is an Attach configuration
+     * @return the refusal text, or {@code null} when there is nothing to refuse
+     */
+    String attachRefusalOrNull(ILaunchConfiguration config, boolean isAttach)
+    {
+        if (isEmpty() || !isAttach)
+        {
+            return null;
+        }
+        return "startupOption / externalObjectName apply to a RUNTIME-CLIENT launch, and '" //$NON-NLS-1$
+            + config.getName() + "' is an Attach configuration, which ignores them (it attaches " //$NON-NLS-1$ //$NON-NLS-2$
+            + "to an already-running server rather than starting a client). Name a " //$NON-NLS-1$
+            + "runtime-client configuration, or drop these arguments."; //$NON-NLS-1$
     }
 
     /**
@@ -308,7 +340,11 @@ public final class LaunchOverrides
                 continue;
             }
             names.add(name);
-            if (name.equals(externalObjectName))
+            // equalsIgnoreCase, matching MetadataScope.findObject - which is what the QUALIFIED
+            // form goes through. Comparing exactly here made the two spellings of one address
+            // accept different sets of names, and the canonical name is stamped afterwards
+            // regardless, so the casing a caller typed never reaches EDT.
+            if (name.equalsIgnoreCase(externalObjectName))
             {
                 matches.add(object);
             }
@@ -483,6 +519,19 @@ public final class LaunchOverrides
             this.overrides = overrides;
             this.externalObject = externalObject;
             this.errorJson = errorJson;
+        }
+
+        /**
+         * The Attach refusal, askable as soon as the configuration is resolved.
+         *
+         * @param config the resolved configuration
+         * @param isAttach whether it is an Attach configuration
+         * @return a ready error JSON, or {@code null}
+         */
+        public String attachRefusalOrNull(ILaunchConfiguration config, boolean isAttach)
+        {
+            String message = overrides.attachRefusalOrNull(config, isAttach);
+            return message == null ? null : ToolResult.error(message).toJson();
         }
 
         /**

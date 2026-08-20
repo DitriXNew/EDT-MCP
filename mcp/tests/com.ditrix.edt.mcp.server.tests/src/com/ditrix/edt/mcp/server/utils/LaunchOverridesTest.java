@@ -127,6 +127,28 @@ public class LaunchOverridesTest
     }
 
     @Test
+    public void testTheAttachRefusalIsAskableBeforeAnythingIsLaunched()
+    {
+        // The by-name launch path can TERMINATE a live client session on its way to the launch
+        // (restartIfRunning=true). Asking this only where the overrides are stamped meant a
+        // request that was going to be refused anyway could cost somebody their session first.
+        // So the refusal has to be answerable from the configuration alone.
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getName()).thenReturn("Attach to 1C:Enterprise Debug Server"); //$NON-NLS-1$
+
+        LaunchOverrides.Prepared prepared =
+            LaunchOverrides.of(STARTUP, null, null).prepare();
+        String refusal = prepared.attachRefusalOrNull(config, true);
+        assertNotNull("an Attach configuration carrying overrides must be refusable early",
+            refusal);
+        assertTrue(messageOf(refusal).contains("Attach")); //$NON-NLS-1$
+
+        // ...and it says nothing about a runtime client, nor about a launch with no overrides.
+        assertNull(prepared.attachRefusalOrNull(config, false));
+        assertNull(LaunchOverrides.of(null, null, null).prepare().attachRefusalOrNull(config, true));
+    }
+
+    @Test
     public void testHalfAnExternalObjectAddressNamesTheMissingHalf()
     {
         // Refused by prepare() alone - no launch configuration is involved, which is the point:

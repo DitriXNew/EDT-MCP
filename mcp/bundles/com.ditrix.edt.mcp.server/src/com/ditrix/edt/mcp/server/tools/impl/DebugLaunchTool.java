@@ -311,6 +311,16 @@ public class DebugLaunchTool implements IMcpTool
                 LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
             String effectiveAppId = LaunchConfigUtils.getApplicationIdFor(config);
 
+            // Asked here, the moment isAttach is known, and NOT where the overrides are stamped:
+            // the existing-session block below can terminate a live client when
+            // restartIfRunning=true, and a request that is going to be refused anyway must not
+            // cost somebody their session on the way to the refusal.
+            String attachRefusal = prepared.attachRefusalOrNull(config, isAttach);
+            if (attachRefusal != null)
+            {
+                return attachRefusal;
+            }
+
             // Unified existing-session decision. One
             // (project, app-id) → at most one live CLIENT session, with the
             // CLIENT-typed-thread discriminator applied so a standalone-SERVER /

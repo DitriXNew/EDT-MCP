@@ -534,6 +534,26 @@ def test_external_object_name_may_be_qualified_by_kind():
     assert_no_diff("a refused launch must not touch the project source")
 
 
+@e2e_test(tool="debug_launch", kind="read")
+def test_a_bare_name_resolves_the_same_way_a_qualified_one_does():
+    """One address, two spellings - they must accept the same names.
+
+    The qualified form goes through `MetadataScope.findObject`, which matches programmatic names
+    case-insensitively like the rest of the tool surface. The bare form used to compare exactly,
+    so `extproc` resolved when written as `ExternalDataProcessor.extproc` and was reported
+    missing when written on its own. Whichever spelling is used, the canonical name is what gets
+    stamped onto the launch, so the casing a caller types never reaches EDT either way.
+    """
+    for name in ("extproc", "EXTPROC", "ExternalDataProcessor.extproc"):
+        e = assert_error(call("debug_launch", {
+            "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
+            "externalObjectProjectName": "ExternalObjects",
+            "externalObjectName": name,
+        }), "the object addressed as %r" % name)
+        _assert_object_resolved(e, "%r must resolve to ExtProc" % name)
+    assert_no_diff("a refused launch must not touch the project source")
+
+
 @e2e_test(tool="debug_launch", kind="action")
 def test_live_external_processor_is_actually_launched_with_execute():
     """ATTENDED: a REAL launch reaches EDT and starts a session with the overrides applied.
