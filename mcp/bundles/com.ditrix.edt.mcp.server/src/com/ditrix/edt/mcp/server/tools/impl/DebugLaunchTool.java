@@ -392,7 +392,7 @@ public class DebugLaunchTool implements IMcpTool
             }
 
             return buildLaunchSuccess(config, typeId, isAttach, configProject, effectiveAppId,
-                overrides);
+                overrides, prepared);
         }
         catch (Exception e)
         {
@@ -430,8 +430,9 @@ public class DebugLaunchTool implements IMcpTool
      * Builds the success response for the by-name launch path. Pure formatting of
      * read-only inputs; no behavioural change relative to the inline builder.
      */
-    private String buildLaunchSuccess(ILaunchConfiguration config, String typeId, boolean isAttach,
-        String configProject, String effectiveAppId, LaunchOverrides overrides)
+    private String buildLaunchSuccess(ILaunchConfiguration config, String typeId, boolean isAttach, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
+        String configProject, String effectiveAppId, LaunchOverrides overrides,
+        LaunchOverrides.Prepared prepared)
     {
         ToolResult result = ToolResult.success()
             .put(KEY_LAUNCH_CONFIGURATION, config.getName())
@@ -454,7 +455,7 @@ public class DebugLaunchTool implements IMcpTool
         {
             result.put(McpKeys.APPLICATION_ID, effectiveAppId);
         }
-        return echoOverrides(result, overrides).toJson();
+        return echoOverrides(result, overrides, prepared).toJson();
     }
 
     /**
@@ -469,16 +470,20 @@ public class DebugLaunchTool implements IMcpTool
      * @param overrides what the caller asked for
      * @return the same payload, for chaining
      */
-    private static ToolResult echoOverrides(ToolResult result, LaunchOverrides overrides)
+    private static ToolResult echoOverrides(ToolResult result, LaunchOverrides overrides,
+        LaunchOverrides.Prepared prepared)
     {
         if (!LaunchOverrides.blank(overrides.startupOption()))
         {
             result.put(KEY_STARTUP_OPTION, overrides.startupOption());
         }
-        if (!LaunchOverrides.blank(overrides.externalObjectName()))
+        // The RESOLVED name, so the echo names what is running - a qualified request resolves to
+        // a bare name, and that bare name is what was stamped onto the launch.
+        String resolved = prepared.resolvedExternalObjectName();
+        if (!LaunchOverrides.blank(resolved))
         {
             result.put(KEY_EXTERNAL_OBJECT_PROJECT_NAME, overrides.externalObjectProjectName());
-            result.put(KEY_EXTERNAL_OBJECT_NAME, overrides.externalObjectName());
+            result.put(KEY_EXTERNAL_OBJECT_NAME, resolved);
         }
         return result;
     }
@@ -612,7 +617,7 @@ public class DebugLaunchTool implements IMcpTool
                 .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_LAUNCH_CONFIGURATION, configName)
                 .put(KEY_CONFIGURATION_TYPE, LaunchConfigUtils.getConfigTypeId(matchingConfig))
-                .put(KEY_ATTACH, false), overrides)
+                .put(KEY_ATTACH, false), overrides, prepared)
                 .put("mode", "debug") //$NON-NLS-1$ //$NON-NLS-2$
                 .put(KEY_STATUS, "launching") //$NON-NLS-1$
                 .put(McpKeys.MESSAGE, "Debug session is starting asynchronously. The 1C client may show " //$NON-NLS-1$

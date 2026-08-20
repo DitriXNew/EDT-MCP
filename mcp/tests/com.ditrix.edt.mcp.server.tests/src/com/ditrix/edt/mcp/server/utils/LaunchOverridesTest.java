@@ -169,6 +169,9 @@ public class LaunchOverridesTest
         ILaunchConfigurationWorkingCopy workingCopy = mock(ILaunchConfigurationWorkingCopy.class);
         when(config.getWorkingCopy()).thenReturn(workingCopy);
         MdObject object = mock(MdObject.class);
+        // Stubbed, because the stamped name comes from the OBJECT, not from the request - see
+        // testAQualifiedRequestStampsTheResolvedBareName for why that distinction is load-bearing.
+        when(object.getName()).thenReturn("Runner"); //$NON-NLS-1$
 
         LaunchOverrides overrides = LaunchOverrides.of(STARTUP, "ExtObjects", "Runner"); //$NON-NLS-1$ //$NON-NLS-2$
         LaunchOverrides.Applied applied =
@@ -183,6 +186,33 @@ public class LaunchOverridesTest
             LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_TYPE, object.getClass().getName());
         verify(workingCopy).setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, STARTUP);
         verify(workingCopy, never()).doSave();
+    }
+
+    @Test
+    public void testAQualifiedRequestStampsTheResolvedBareName() throws Exception
+    {
+        // The address the CALLER types is not the address EDT reads back. A qualified name
+        // (ExternalDataProcessor.Runner) is how a caller disambiguates a processor from a
+        // same-named report - and the delegate re-resolves by comparing the attribute with
+        // getName(), so stamping the qualified string verbatim matches nothing. Matching nothing
+        // is not an error there: the session starts without /Execute. That would have made the
+        // one documented remedy for an ambiguous name the one address guaranteed not to work.
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationWorkingCopy workingCopy = mock(ILaunchConfigurationWorkingCopy.class);
+        when(config.getWorkingCopy()).thenReturn(workingCopy);
+        MdObject object = mock(MdObject.class);
+        when(object.getName()).thenReturn("Runner"); //$NON-NLS-1$
+
+        LaunchOverrides overrides =
+            LaunchOverrides.of(null, "ExtObjects", "ExternalDataProcessor.Runner"); //$NON-NLS-1$ //$NON-NLS-2$
+        LaunchOverrides.Prepared prepared = new LaunchOverrides.Prepared(overrides, object, null);
+        assertNull(prepared.applyTo(config, false).errorJson);
+
+        verify(workingCopy).setAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_NAME, "Runner"); //$NON-NLS-1$
+        verify(workingCopy, never()).setAttribute(
+            LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_NAME, "ExternalDataProcessor.Runner"); //$NON-NLS-1$
+        // ...and the response must name what is RUNNING, which is the resolved name too.
+        assertEquals("Runner", prepared.resolvedExternalObjectName()); //$NON-NLS-1$
     }
 
     @Test

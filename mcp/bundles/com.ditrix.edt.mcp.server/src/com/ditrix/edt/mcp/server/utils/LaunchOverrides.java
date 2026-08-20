@@ -196,10 +196,17 @@ public final class LaunchOverrides
             {
                 workingCopy.setAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_PROJECT_NAME,
                     externalObjectProjectName);
+                // The RESOLVED object's own name, never the requested address. The delegate
+                // re-resolves by comparing this attribute with getName(), so a qualified request
+                // (ExternalDataProcessor.Runner) stamped verbatim would match nothing - and
+                // matching nothing is not an error there, it is a session started without
+                // /Execute. That would have made the documented remedy for an ambiguous name
+                // the one address guaranteed not to work. Taking getName() also normalises
+                // casing, which the qualified lookup accepts case-insensitively.
                 workingCopy.setAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_NAME,
-                    externalObjectName);
-                // Spelled exactly as EDT's ExternalObjectHelper.getClassName does, because the
-                // delegate re-resolves the object by string-comparing this value.
+                    externalObject.getName());
+                // Spelled exactly as EDT's ExternalObjectHelper.getClassName does, for the same
+                // reason: the delegate string-compares this value too.
                 workingCopy.setAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_TYPE,
                     externalObject.getClass().getName());
             }
@@ -476,6 +483,21 @@ public final class LaunchOverrides
             this.overrides = overrides;
             this.externalObject = externalObject;
             this.errorJson = errorJson;
+        }
+
+        /**
+         * The name of the object this launch will actually run, or {@code null} when none was
+         * requested.
+         *
+         * <p>Not necessarily what the caller typed: a qualified address resolves to a bare name,
+         * and the lookup is case-insensitive. The response echoes THIS, so it names what is
+         * running rather than what was asked for.</p>
+         *
+         * @return the resolved object name, or {@code null}
+         */
+        public String resolvedExternalObjectName()
+        {
+            return externalObject == null ? null : externalObject.getName();
         }
 
         /**
