@@ -77,6 +77,36 @@ public final class LaunchConfigUtils
     /** Launch configuration attribute: startup option string passed to 1cv8c.exe via /C. */
     public static final String ATTR_STARTUP_OPTION = "com._1c.g5.v8.dt.launching.core.ATTR_STARTUP_OPTION"; //$NON-NLS-1$
 
+    /**
+     * Launch attribute: the EXTERNAL OBJECTS project holding the object to run on startup.
+     *
+     * <p>Read by EDT's {@code RuntimeClientLaunchDelegate} together with
+     * {@link #ATTR_EXTERNAL_OBJECT_NAME} and {@link #ATTR_EXTERNAL_OBJECT_TYPE}: it resolves the
+     * object in that project, has the platform BUILD its {@code .epf}/{@code .erf} dump, and
+     * passes the dump as {@code /Execute}. The source is therefore a PROJECT in the workspace,
+     * never a path to a prebuilt file - there is no launch attribute for one, and a prebuilt file
+     * would carry no sources for the debugger to map breakpoints onto.</p>
+     *
+     * <p>Only the runtime-client delegate reads these three; an Attach configuration ignores
+     * them.</p>
+     */
+    public static final String ATTR_EXTERNAL_OBJECT_PROJECT_NAME =
+        "com._1c.g5.v8.dt.debug.core.ATTR_EXTERNAL_OBJECT_PROJECT_NAME"; //$NON-NLS-1$
+
+    /** Launch attribute: name of the external object to run (see {@link #ATTR_EXTERNAL_OBJECT_PROJECT_NAME}). */
+    public static final String ATTR_EXTERNAL_OBJECT_NAME =
+        "com._1c.g5.v8.dt.debug.core.ATTR_EXTERNAL_OBJECT_NAME"; //$NON-NLS-1$
+
+    /**
+     * Launch attribute: the external object's type, as EDT's {@code ExternalObjectHelper}
+     * spells it - {@code externalObject.getClass().getName()}, i.e. the FQN of the EMF
+     * IMPLEMENTATION class ({@code ...mdclass.impl.ExternalDataProcessorImpl}), NOT the EClass
+     * name. The delegate re-resolves the object by comparing this string, so it must be produced
+     * the same way; a caller is never asked for it.
+     */
+    public static final String ATTR_EXTERNAL_OBJECT_TYPE =
+        "com._1c.g5.v8.dt.debug.core.ATTR_EXTERNAL_OBJECT_TYPE"; //$NON-NLS-1$
+
     /** Attach configs: infobase alias used by the cluster (e.g. "mr_tradev8"). */
     public static final String ATTR_DEBUG_INFOBASE_ALIAS = "com._1c.g5.v8.dt.debug.core.ATTR_DEBUG_INFOBASE_ALIAS"; //$NON-NLS-1$
 

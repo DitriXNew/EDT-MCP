@@ -129,6 +129,44 @@ public class DebugLaunchToolTest
     }
 
     @Test
+    public void testSchemaDeclaresTheLaunchOverrides()
+    {
+        // The three per-launch overrides of issue #344. They must be DECLARED (a schema-driven
+        // client cannot pass what it cannot see) and their prose must carry the two facts the
+        // schema itself cannot: that nothing is persisted, and that an external object is named
+        // inside a project rather than pathed to a built file.
+        String schema = new DebugLaunchTool().getInputSchema();
+        assertNotNull(schema);
+        assertTrue("schema must declare startupOption",
+            schema.contains("\"startupOption\"")); //$NON-NLS-1$
+        assertTrue("schema must declare externalObjectProjectName",
+            schema.contains("\"externalObjectProjectName\"")); //$NON-NLS-1$
+        assertTrue("schema must declare externalObjectName",
+            schema.contains("\"externalObjectName\"")); //$NON-NLS-1$
+        assertTrue("startupOption must say the saved configuration is left alone",
+            schema.contains("saved EDT configuration is not modified")); //$NON-NLS-1$
+        assertTrue("the external-object prose must rule out a prebuilt file",
+            schema.contains("prebuilt")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsTheExternalObjectLaunch()
+    {
+        // The guide is where the platform reasoning lives: WHY a path cannot work, and why a
+        // misconfigured request is refused instead of launched (the delegate only logs and
+        // starts a session that runs nothing).
+        String guide = new DebugLaunchTool().getGuide();
+        assertTrue("guide must document the external-object launch",
+            guide.contains("## Debugging an external data processor")); //$NON-NLS-1$
+        assertTrue("guide must state that the object is named, not pathed",
+            guide.contains("named, never pathed")); //$NON-NLS-1$
+        assertTrue("guide must explain the silent-success refusal",
+            guide.contains("no `/Execute` at all")); //$NON-NLS-1$
+        assertTrue("guide must name the Attach refusal",
+            guide.contains("rejected on an **Attach** configuration")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRestartIfRunningDefaultsToFalse()
     {
         // Pin the ACTUAL default through the same extraction execute() uses

@@ -815,6 +815,12 @@
           "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
         },
+        "externalObjectName": {
+          "type": "string"
+        },
+        "externalObjectProjectName": {
+          "type": "string"
+        },
         "launchConfigurationName": {
           "type": "string"
         },
@@ -827,6 +833,9 @@
         },
         "standaloneServerPortConflict": {
           "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
+          "type": "string"
+        },
+        "startupOption": {
           "type": "string"
         },
         "updateBeforeLaunch": {

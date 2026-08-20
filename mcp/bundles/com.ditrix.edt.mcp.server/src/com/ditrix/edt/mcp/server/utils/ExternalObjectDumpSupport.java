@@ -15,6 +15,7 @@ import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
+import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumpSupport;
 import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumper;
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -73,13 +74,46 @@ public final class ExternalObjectDumpSupport
      */
     public static IExternalObjectDumper resolveDumper()
     {
+        return resolveService(IExternalObjectDumper.class);
+    }
+
+    /**
+     * Resolves EDT's {@link IExternalObjectDumpSupport} - the service the LAUNCH path uses, which
+     * is a different one from {@link #resolveDumper()}.
+     *
+     * <p>The distinction matters and is not cosmetic. {@code build_external_objects} drives
+     * {@link IExternalObjectDumper#dump} directly and therefore ignores the per-project
+     * "generate external object dumps" preference; EDT's {@code RuntimeClientLaunchDelegate}
+     * goes through {@code IExternalObjectDumpSupport.getDump}, which returns {@code null} when
+     * that preference is off. The delegate then only LOGS and launches the session with no
+     * {@code /Execute} at all - a silent success. That is why the launch path pre-checks
+     * {@link IExternalObjectDumpSupport#isEnabled} instead of trusting the launch to fail.</p>
+     *
+     * @return the dump support service, or {@code null} when platform-services is unavailable
+     *         (this method never throws)
+     */
+    public static IExternalObjectDumpSupport resolveDumpSupport()
+    {
+        return resolveService(IExternalObjectDumpSupport.class);
+    }
+
+    /**
+     * Pulls one service out of the platform-services Guice injector, or {@code null}.
+     *
+     * @param <T> the service type
+     * @param service the service interface to look up
+     * @return the bound instance, or {@code null} when the bundle / injector / binding is absent
+     */
+    private static <T> T resolveService(Class<T> service)
+    {
         try
         {
             Bundle psCoreBundle = Platform.getBundle(PLATFORM_SERVICES_CORE_BUNDLE_ID);
             if (psCoreBundle == null)
             {
                 Activator.logError("external object dump: bundle '" + PLATFORM_SERVICES_CORE_BUNDLE_ID //$NON-NLS-1$
-                    + "' not found — the EDT platform-services plugin is not installed", null); //$NON-NLS-1$
+                    + "' not found — the EDT platform-services plugin is not installed (resolving " //$NON-NLS-1$
+                    + service.getSimpleName() + ")", null); //$NON-NLS-1$
                 return null;
             }
             Class<?> coreClass = psCoreBundle.loadClass(PLATFORM_SERVICES_CORE_CLASS);
@@ -102,12 +136,12 @@ public final class ExternalObjectDumpSupport
             {
                 return null;
             }
-            return ((com.google.inject.Injector)injector).getInstance(IExternalObjectDumper.class);
+            return ((com.google.inject.Injector)injector).getInstance(service);
         }
         catch (Exception e) // NOSONAR probe must never crash the tool
         {
-            Activator.logError("external object dump: could not resolve IExternalObjectDumper " //$NON-NLS-1$
-                + "(the EDT platform-services plugin may not be ready)", e); //$NON-NLS-1$
+            Activator.logError("external object dump: could not resolve " + service.getSimpleName() //$NON-NLS-1$
+                + " (the EDT platform-services plugin may not be ready)", e); //$NON-NLS-1$
             return null;
         }
     }

@@ -11,6 +11,9 @@ Run a 1C application under EDT debugging. An already-running session is NOT rela
 | updateBeforeLaunch | — | boolean | Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach. |
 | externalInfobaseChanges | — | string | How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it. |
 | standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
+| startupOption | — | string | The 1C /C startup option for THIS launch only (e.g. 'xddRun ...; xddReport ...'); applied to a working copy, the saved EDT configuration is not modified. Runtime-client configs only - an Attach config ignores it and is refused. |
+| externalObjectProjectName | — | string | Name of an EXTERNAL-OBJECTS project (not the configuration being debugged) whose data processor / report to run on startup; pair with externalObjectName. EDT builds the .epf itself - there is no way to run a prebuilt file with breakpoints, so import such a file into a project first. |
+| externalObjectName | — | string | Name of the external data processor / report inside externalObjectProjectName (the object NAME, not a file path); required together with it. |
 | restartIfRunning | — | boolean | Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call. |
 
 ## Guide
@@ -32,7 +35,53 @@ Use this to bring up a debuggable 1C session before setting breakpoints and step
 - **applicationId** (string) — from `get_applications`; required in the projectName+applicationId mode.
 - **updateBeforeLaunch** (boolean, default true) — silently apply the configuration->DB update before launching so the EDT launch delegate finds the infobase already UPDATED and shows no 'Update database?' modal. Ignored for Attach configs (nothing to update). The update analysis is shared with the YAXUnit tools: skip when already UPDATED, wait when BEING_UPDATED, otherwise incremental-update. A config without a persisted application binding (tracked under a synthetic `launch:<configName>` id) skips this programmatic update — there is no resolvable application to update — and relies on the auto-confirmer safeguard alone. As a belt-and-suspenders safeguard, the actual `config.launch(...)` is wrapped in an auto-confirmer that programmatically presses 'Update then run' if the delegate's modal still appears — in either EDT locale (English 'Application update' / Russian 'Обновление приложения'), so an unattended Russian-locale EDT never hangs on it. With `updateBeforeLaunch=false` the update is skipped and the platform may then show that modal. On a **standalone-server** application (`applicationId` starting with `ServerApplication.`) the DB update is performed by EDT's coordinated launch flow instead (auto-confirmed by the same armed confirmer; no dialog at all when the IB is already in sync) — this plugin does NOT pre-update such applications out-of-band: doing so started the standalone server in RUN mode and held a designer-agent connection that wedged the subsequent debug restart. Consequence: for server apps there is no synchronous 'stale IB' refusal — the update happens asynchronously inside the launch, and a failure surfaces via `debug_status` / the EDT log, matching EDT-native behaviour.
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
+- **startupOption** (string) — the 1C `/C` startup option for THIS launch only, e.g. `xddRun DirectoryLoader C:/Tests/bin; xddReport C:/out/result.xml; xddShutdown;`. Applied to a working copy of the configuration; the saved EDT configuration is never modified and no `doSave()` happens. Runtime-client configurations only.
+- **externalObjectProjectName** + **externalObjectName** (strings, always together) — run an external data processor / report on startup (the `/Execute` option). See ## Debugging an external data processor.
 - **restartIfRunning** (boolean, default false) — controls what happens when a matching CLIENT session is already running. Default (`false`): short-circuit with `alreadyRunning: true` and do NOT relaunch — call `terminate_launch` first if you truly need a fresh session. `true`: non-interactively terminate the existing CLIENT session, wait for it to die (clearing its registry entry), then relaunch — so the EDT launch delegate never raises its blocking 'Debug session already exists' modal. It only ever terminates a live client session, NEVER a debug server: a standalone-server debug session's live threads are typed SERVER (a debug-mode standalone server keeps a live «Сервер» thread), so it is never treated as the duplicate and is left running. Use `restartIfRunning=true` for unattended re-launches after a code change instead of a separate `terminate_launch` + `debug_launch` round-trip.
+
+## Debugging an external data processor
+
+`externalObjectProjectName` + `externalObjectName` name an external data processor or report to run
+when the client starts. EDT resolves the object inside that project, BUILDS its `.epf` / `.erf`, and
+passes the built file as `/Execute` — so breakpoints inside the processor are hit, because the
+debugger maps frames back through the object's project.
+
+**The object is named, never pathed.** There is no way to run a PREBUILT `.epf` from disk through
+this tool, and that is a platform fact rather than a gap here: the launch attributes take a project
+plus an object name, and a file with no sources in the workspace would carry nothing for the
+debugger to map breakpoints onto — it could run, but never be stepped through. To debug a
+third-party processor (an xUnitForEDT `xddTestRunner.epf`, say), import it into an external-objects
+project first; then it is addressable like any other.
+
+The two arguments are separate from `projectName`: `projectName` (or the named configuration) is the
+CONFIGURATION being debugged, and `externalObjectProjectName` is the EXTERNAL-OBJECTS project that
+holds the processor. Both must be open in the workspace.
+
+Typical xUnitForEDT-style call:
+
+```json
+{
+  "projectName": "MyConfiguration",
+  "applicationId": "<from get_applications>",
+  "externalObjectProjectName": "TestRunners",
+  "externalObjectName": "xddTestRunner",
+  "startupOption": "xddRun DirectoryLoader C:/Tests/bin; xddReport C:/out/result.xml; xddShutdown;"
+}
+```
+
+On success the response echoes `startupOption` / `externalObjectProjectName` / `externalObjectName`,
+so you can tell an overridden launch from a plain one without reading the EDT log.
+
+**Refusals you may hit, and why they are refusals rather than a launch:** EDT's launch delegate does
+NOT fail when it cannot produce the dump — it logs and starts the session with no `/Execute` at all,
+which looks like a completely successful launch in which the processor simply never ran. So the tool
+checks first and refuses instead: the project must be an external-objects project, the object must
+exist in it (the error lists what does), and the project's external-object dump generation must be
+switched on. Note `build_external_objects` is unaffected by that last setting — it dumps directly —
+so a green `build_external_objects` does not imply the launch can run the object.
+
+Both arguments are rejected on an **Attach** configuration: only the runtime-client delegate reads
+them, so an Attach launch would accept and ignore them.
 
 ## Already-running guard
 
