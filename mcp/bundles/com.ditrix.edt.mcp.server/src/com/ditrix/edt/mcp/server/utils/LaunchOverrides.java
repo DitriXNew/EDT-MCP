@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
@@ -279,7 +280,21 @@ public final class LaunchOverrides
      */
     private static String dumpRefusalOrNull(ProjectContext.ConfigurationResult root)
     {
-        IExternalObjectDumpSupport support = ExternalObjectDumpSupport.resolveDumpSupport();
+        return dumpRefusalOrNull(ExternalObjectDumpSupport.resolveDumpSupport(), root.project());
+    }
+
+    /**
+     * The same question with the service supplied - the seam the unit tests drive, because the
+     * live one is pulled out of EDT's Guice injector and cannot be stood up headlessly. This is
+     * the branch that decides whether a launch runs the processor or silently does not, so it is
+     * worth testing rather than reading.
+     *
+     * @param support EDT's dump support, or {@code null} when it could not be resolved
+     * @param project the external-objects project
+     * @return the refusal text, or {@code null} when the dump can be built
+     */
+    static String dumpRefusalOrNull(IExternalObjectDumpSupport support, IProject project)
+    {
         if (support == null)
         {
             return "Cannot verify that EDT can build the external object's .epf: the " //$NON-NLS-1$
@@ -287,20 +302,20 @@ public final class LaunchOverrides
                 + "could start with the processor silently not running, so the launch is refused " //$NON-NLS-1$
                 + "rather than started blind."; //$NON-NLS-1$
         }
-        if (!support.isEnabled(root.project()))
+        if (!support.isEnabled(project))
         {
             return "External object dump generation is switched OFF for project '" //$NON-NLS-1$
-                + root.project().getName() + "', so EDT would start the session WITHOUT running " //$NON-NLS-1$
+                + project.getName() + "', so EDT would start the session WITHOUT running " //$NON-NLS-1$
                 + "the processor (its launch path builds the .epf through that setting and only " //$NON-NLS-1$
                 + "logs when it is off). Turn it on in the project's properties, or run the " //$NON-NLS-1$
                 + "processor from a session you start yourself. Note build_external_objects is " //$NON-NLS-1$
                 + "unaffected by this setting - it dumps directly."; //$NON-NLS-1$
         }
-        IStatus validation = support.validateDumpGeneration(root.project());
+        IStatus validation = support.validateDumpGeneration(project);
         if (validation != null && !validation.isOK())
         {
             return "EDT cannot build the external object's .epf for project '" //$NON-NLS-1$
-                + root.project().getName() + "': " + validation.getMessage(); //$NON-NLS-1$
+                + project.getName() + "': " + validation.getMessage(); //$NON-NLS-1$
         }
         return null;
     }
@@ -357,7 +372,16 @@ public final class LaunchOverrides
         /** A ready error JSON when the arguments do not hold up, else {@code null}. */
         public final String errorJson;
 
-        private Prepared(LaunchOverrides overrides, MdObject externalObject, String errorJson)
+        /**
+         * Package-private rather than private: the test fragment builds one directly with an
+         * already-resolved object, because resolving a real one needs a live workspace while the
+         * STAMPING it feeds is pure and worth pinning.
+         *
+         * @param overrides what the caller asked for
+         * @param externalObject the resolved object, or {@code null}
+         * @param errorJson the refusal, or {@code null}
+         */
+        Prepared(LaunchOverrides overrides, MdObject externalObject, String errorJson)
         {
             this.overrides = overrides;
             this.externalObject = externalObject;

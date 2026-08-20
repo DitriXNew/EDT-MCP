@@ -18,9 +18,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.junit.Test;
+
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.platform.services.core.dump.IExternalObjectDumpSupport;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -150,6 +156,95 @@ public class LaunchOverridesTest
         assertEquals(STARTUP, overrides.startupOption());
         assertEquals("ExtObjects", overrides.externalObjectProjectName()); //$NON-NLS-1$
         assertEquals("Runner", overrides.externalObjectName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResolvedObjectStampsAllThreeAttributesWithTheTypeEdtCompares() throws Exception
+    {
+        // What the launch delegate reads back. The TYPE is the one a caller is never asked for:
+        // EDT spells it as externalObject.getClass().getName() - the EMF IMPLEMENTATION class, not
+        // the EClass name - and re-resolves the object by string-comparing it, so producing it any
+        // other way would resolve nothing and the session would run without the processor.
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationWorkingCopy workingCopy = mock(ILaunchConfigurationWorkingCopy.class);
+        when(config.getWorkingCopy()).thenReturn(workingCopy);
+        MdObject object = mock(MdObject.class);
+
+        LaunchOverrides overrides = LaunchOverrides.of(STARTUP, "ExtObjects", "Runner"); //$NON-NLS-1$ //$NON-NLS-2$
+        LaunchOverrides.Applied applied =
+            new LaunchOverrides.Prepared(overrides, object, null).applyTo(config, false);
+
+        assertNull(applied.errorJson);
+        assertSame(workingCopy, applied.config);
+        verify(workingCopy).setAttribute(
+            LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_PROJECT_NAME, "ExtObjects"); //$NON-NLS-1$
+        verify(workingCopy).setAttribute(LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_NAME, "Runner"); //$NON-NLS-1$
+        verify(workingCopy).setAttribute(
+            LaunchConfigUtils.ATTR_EXTERNAL_OBJECT_TYPE, object.getClass().getName());
+        verify(workingCopy).setAttribute(LaunchConfigUtils.ATTR_STARTUP_OPTION, STARTUP);
+        verify(workingCopy, never()).doSave();
+    }
+
+    @Test
+    public void testDumpGenerationSwitchedOffIsARefusalNotALaunch()
+    {
+        // THE trap this whole feature is built around. EDT's getDump returns null when the
+        // project preference is off; its delegate then logs one line and starts the session with
+        // no /Execute - a launch that reports success and runs nothing. So a disabled project must
+        // come back as a refusal that says what to switch on.
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("ExtObjects"); //$NON-NLS-1$
+        IExternalObjectDumpSupport support = mock(IExternalObjectDumpSupport.class);
+        when(support.isEnabled(project)).thenReturn(false);
+
+        String refusal = LaunchOverrides.dumpRefusalOrNull(support, project);
+
+        assertNotNull("a disabled dump must refuse, not launch", refusal);
+        assertTrue("the refusal must name the project: " + refusal,
+            refusal.contains("ExtObjects")); //$NON-NLS-1$
+        assertTrue("the refusal must say the setting is off: " + refusal,
+            refusal.contains("switched OFF")); //$NON-NLS-1$
+        assertTrue("the refusal must warn that build_external_objects proves nothing here: " + refusal,
+            refusal.contains("build_external_objects")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailingDumpValidationIsReportedWithItsReason()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("ExtObjects"); //$NON-NLS-1$
+        IExternalObjectDumpSupport support = mock(IExternalObjectDumpSupport.class);
+        when(support.isEnabled(project)).thenReturn(true);
+        when(support.validateDumpGeneration(project)).thenReturn(
+            new Status(IStatus.ERROR, "test", "no 1C platform installation")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String refusal = LaunchOverrides.dumpRefusalOrNull(support, project);
+
+        assertNotNull(refusal);
+        assertTrue("the platform's own reason must survive into the refusal: " + refusal,
+            refusal.contains("no 1C platform installation")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnavailableDumpServiceRefusesRatherThanLaunchingBlind()
+    {
+        // Not resolvable means the pre-check cannot be made at all. Launching anyway would be the
+        // silent-success case with no way to notice it, so the honest answer is a refusal.
+        String refusal = LaunchOverrides.dumpRefusalOrNull(null, mock(IProject.class));
+        assertNotNull(refusal);
+        assertTrue(refusal.contains("Cannot verify")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAHealthyProjectPassesTheDumpGate()
+    {
+        // The negative control: without this the three refusals above would also pass for a gate
+        // that rejects everything.
+        IProject project = mock(IProject.class);
+        IExternalObjectDumpSupport support = mock(IExternalObjectDumpSupport.class);
+        when(support.isEnabled(project)).thenReturn(true);
+        when(support.validateDumpGeneration(project)).thenReturn(Status.OK_STATUS);
+        assertNull(LaunchOverrides.dumpRefusalOrNull(support, project));
     }
 
     /** Mockito matcher sugar keeping the verify() above readable. */

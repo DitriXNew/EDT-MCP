@@ -73,7 +73,9 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_ok,
     e2e_test,
+    requires_live_infobase,
     PROJECT,
 )
 
@@ -459,3 +461,53 @@ def test_a_resolvable_external_object_gets_past_the_argument_check():
         raise AssertionError(
             "a real external object must pass the argument check, got: %s" % e)
     assert_no_diff("a refused launch must not touch the project source")
+
+
+@e2e_test(tool="debug_launch", kind="action")
+def test_live_external_processor_is_actually_launched_with_execute():
+    """ATTENDED: the one thing the headless matrix cannot show - a REAL launch.
+
+    Everything else about these arguments is verified without starting anything, which leaves
+    exactly one claim untested: that a resolvable external object really reaches EDT's launch
+    delegate and comes back as a started session rather than a refusal. Skipped unless
+    EDT_MCP_LIVE_INFOBASE=1, because it spawns a 1C client against a live infobase.
+
+    Deliberately asserts the ECHO, not just success: EDT does not fail a launch it cannot
+    attach /Execute to, so "a session started" alone would also be true of the bug. The echoed
+    externalObjectName is what says the override survived into the launch.
+
+    Cleans up after itself - the spawned session is terminated and the throwaway launch
+    configuration removed - so an attended run leaves the workspace as it found it.
+    """
+    requires_live_infobase("spawns a real 1C client running an external data processor")
+
+    cfg_name = "e2e_344_external_object_launch"
+    created = call("create_launch_config", {"projectName": PROJECT, "name": cfg_name})
+    assert_ok(created, "a throwaway runtime-client configuration to launch")
+    try:
+        r = call("debug_launch", {
+            "launchConfigurationName": cfg_name,
+            "externalObjectProjectName": "ExternalObjects",
+            "externalObjectName": "ExtProc",
+            "startupOption": "E2E344",
+            "restartIfRunning": True,
+        })
+        assert_ok(r, "launch the external data processor")
+        sc = r.structured
+        if not isinstance(sc, dict):
+            raise AssertionError("JSON tool must populate structuredContent: %r" % sc)
+        for key, expected in (("externalObjectProjectName", "ExternalObjects"),
+                              ("externalObjectName", "ExtProc"),
+                              ("startupOption", "E2E344")):
+            if sc.get(key) != expected:
+                raise AssertionError(
+                    "the response must echo the applied override %s=%r, got %r (a launch that "
+                    "dropped it would still report success)" % (key, expected, sc.get(key)))
+    finally:
+        call("terminate_launch", {"projectName": PROJECT})
+        call("delete_launch_config", {"name": cfg_name, "confirm": True})
+
+    # The saved configuration is gone, but while it existed the override must never have been
+    # written into it - that is the acceptance criterion the unit test pins on a mock and this
+    # one would have caught for real had applyTo saved the working copy.
+    assert_no_diff("launching a processor must not touch the project source")
