@@ -830,21 +830,7 @@ public class UpdateDatabaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
-            ToolResult errorResult = ToolResult.error("Unexpected error: " + e.getMessage() //$NON-NLS-1$
-                + (portsReassigned
-                    ? " NOTE: before this failure EDT had already moved the standalone server to " //$NON-NLS-1$
-                        + "free ports and rewritten its configuration " //$NON-NLS-1$
-                        + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
-                    : "")); //$NON-NLS-1$
-            if (terminatedClient)
-            {
-                errorResult.put(KEY_TERMINATED_CLIENT, true);
-            }
-            if (portsReassigned)
-            {
-                errorResult.put(KEY_PORTS_REASSIGNED, true);
-            }
-            return errorResult.toJson();
+            return buildUnexpectedErrorResult(e, terminatedClient, portsReassigned);
         }
     }
 
@@ -1133,6 +1119,57 @@ public class UpdateDatabaseTool implements IMcpTool
             errorResult.put("causeType", e.getCause().getClass().getSimpleName()); //$NON-NLS-1$
         }
 
+        return errorResult.toJson();
+    }
+
+    /**
+     * Builds the JSON for a failure that is NOT an {@link ApplicationException} — anything the
+     * update path throws unexpectedly, including a {@link CoreException} whose reason lives in an
+     * {@code IStatus} tree rather than in the exception itself.
+     *
+     * <p>{@link PlatformFailures#describe} rather than {@code getMessage()}, for the same reason
+     * {@link #buildApplicationErrorResult} uses it: a platform exception routinely carries no
+     * message of its own, so the concatenation emitted the literal "Unexpected error: null" —
+     * from a tool that had just changed an infobase irreversibly. The helper walks the cause chain
+     * and the status tree instead, and when the failure genuinely carries no text anywhere it
+     * names the exception type and the status severity, which is itself the diagnosis.
+     *
+     * <p>The message ends with a NEXT STEP rather than the diagnosis alone. This tool changes an
+     * infobase irreversibly and the failure can land after a partial restructuring, so the one
+     * reaction the wording must not invite is an immediate blind re-call: the state is read back
+     * with {@code get_applications}, and the reason the platform did not put in the exception is
+     * in the EDT Error Log. The sentence comes AFTER the port-reassignment note, which keeps its
+     * place directly behind the failure description — that note is a claim about a change that
+     * already outlived this call, and nothing may push it away from the failure it qualifies.
+     *
+     * <p>Side-effect-free (the failure is already logged by the caller) and static, so the message
+     * can be pinned without a live EDT.
+     *
+     * @param e the failure to report (may be {@code null})
+     * @param terminatedClient whether this call terminated a running 1C client before failing
+     * @param portsReassigned whether EDT had already moved the standalone server to free ports
+     * @return the error JSON
+     */
+    static String buildUnexpectedErrorResult(Exception e, boolean terminatedClient,
+            boolean portsReassigned)
+    {
+        ToolResult errorResult = ToolResult.error("Unexpected error: " //$NON-NLS-1$
+            + PlatformFailures.describe(e)
+            + (portsReassigned
+                ? " NOTE: before this failure EDT had already moved the standalone server to " //$NON-NLS-1$
+                    + "free ports and rewritten its configuration " //$NON-NLS-1$
+                    + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
+                : "") //$NON-NLS-1$
+            + " The update may have applied partially, so do not retry blindly: check the actual " //$NON-NLS-1$
+            + "state with get_applications (updateState) and the EDT Error Log first."); //$NON-NLS-1$
+        if (terminatedClient)
+        {
+            errorResult.put(KEY_TERMINATED_CLIENT, true);
+        }
+        if (portsReassigned)
+        {
+            errorResult.put(KEY_PORTS_REASSIGNED, true);
+        }
         return errorResult.toJson();
     }
 

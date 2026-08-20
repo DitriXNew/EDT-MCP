@@ -28,6 +28,7 @@ import java.util.Optional;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
@@ -53,6 +54,15 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * {@link UpdateDatabaseTool#describeInternalInfoHint} and
  * {@link UpdateDatabaseTool#buildApplicationErrorResult} seams) and the guide's
  * documentation of the long-running-update / {@code get_mcp_history} workflow.
+ * <p>
+ * Issue #453 added {@link UpdateDatabaseTool#buildUnexpectedErrorResult}, the message for a
+ * failure that is not an {@code ApplicationException}: it must describe the platform failure
+ * instead of concatenating a {@code null} message, name the next step for a tool that changed an
+ * infobase irreversibly, and keep the port-reassignment note and the {@code terminatedClient}
+ * flag it already carried. Its pins are deliberately one literal per {@code @Test} — JUnit stops
+ * a method at its first failed assertion, so a method holding several would only ever exercise
+ * the first — and they pin the ABSENCE of each optional field on the false side of its condition,
+ * because a presence-only pin passes just as happily against an unconditional write.
  * <p>
  * Issue #379 added four package-private seams, all reachable without a live EDT:
  * {@link UpdateDatabaseTool#resolveLaunchConfigTarget} (the whole named-configuration
@@ -405,6 +415,220 @@ public class UpdateDatabaseToolTest
 
         assertTrue("result must still carry the credentials hint when InternalInfo does not match", //$NON-NLS-1$
             result.contains("set_infobase_credentials")); //$NON-NLS-1$
+    }
+
+    // ============ Unexpected (non-ApplicationException) failures, #453 ============
+
+    /** Plugin id used for the synthetic statuses below; no live EDT is involved. */
+    private static final String STATUS_PLUGIN_ID = "com.ditrix.edt.mcp.server"; //$NON-NLS-1$
+
+    /**
+     * The port-reassignment note, spelled out in full. Pinning fragments let most of the sentence
+     * be rewritten while two probes still matched; this note states that EDT permanently changed
+     * the address clients must use, so the claim is pinned as the whole sentence it makes. The
+     * em dash goes through {@code \\u2014} so the pin cannot be broken by the source encoding.
+     */
+    private static final String PORT_REASSIGN_NOTE =
+        " NOTE: before this failure EDT had already moved the standalone server to free ports " //$NON-NLS-1$
+            + "and rewritten its configuration (standaloneServerPortConflict=reassign) \u2014 that " //$NON-NLS-1$
+            + "change stands."; //$NON-NLS-1$
+
+    /** The next-step sentence, spelled out in full for the same reason as the note above. */
+    private static final String NEXT_STEP =
+        " The update may have applied partially, so do not retry blindly: check the actual state " //$NON-NLS-1$
+            + "with get_applications (updateState) and the EDT Error Log first."; //$NON-NLS-1$
+
+    @Test
+    public void testUnexpectedFailureWithNoMessageIsNotRenderedAsNull()
+    {
+        // #453: the branch concatenated e.getMessage(), so a platform exception that carries no
+        // message of its own reached the agent as the literal "Unexpected error: null" - from a
+        // tool that had just changed an infobase irreversibly.
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException(), false, false);
+
+        assertFalse("a message-less failure must not render as the literal null", //$NON-NLS-1$
+            result.contains("Unexpected error: null")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureWithNoMessageNamesTheFailureType()
+    {
+        // The other half: not rendering "null" is worthless if what replaces it says nothing. When
+        // the failure carries no text anywhere, the type plus "no message" IS the diagnosis.
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException(), false, false);
+
+        assertTrue("the failure type must be named when there is no text anywhere", //$NON-NLS-1$
+            result.contains("Unexpected error: IllegalStateException " //$NON-NLS-1$
+                + "(the platform reported no message)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureCarriesTheMessageWhenTheExceptionHasOne()
+    {
+        // The ordinary case, which must not be collateral damage of the two above: an exception
+        // that DOES carry text hands that text to the caller unchanged, immediately after the
+        // prefix. (PlatformFailures trims the edges, so a padded message loses only its padding.)
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException("Infobase file is read-only"), false, false); //$NON-NLS-1$
+
+        assertTrue("an exception's own message must reach the caller undistorted", //$NON-NLS-1$
+            result.contains("Unexpected error: Infobase file is read-only")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureReadsTheReasonFromTheStatusTree()
+    {
+        // The realistic platform shape: EDT reports the failure as a MultiStatus whose own message
+        // is empty while the reason sits in a child, and CoreException copies that empty headline
+        // into getMessage(). Concatenating getMessage() emitted "Unexpected error: " and stopped.
+        MultiStatus root = new MultiStatus(STATUS_PLUGIN_ID, 0, "", null); //$NON-NLS-1$
+        root.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID,
+            "Infobase is locked by another session")); //$NON-NLS-1$
+
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new CoreException(root), false, false);
+
+        assertTrue("the child status reason must reach the caller", //$NON-NLS-1$
+            result.contains("Infobase is locked by another session")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureWithANonEmptyHeadlineReportsTheFailingChild()
+    {
+        // A MultiStatus whose headline is NOT empty. PlatformFailures.describe consults the child
+        // statuses BEFORE the throwable's own message whenever the status has children, so here the
+        // caller gets the child's reason instead of the headline the old getMessage() emitted.
+        // This is describe's general behaviour, shared with the catch (ApplicationException) branch
+        // one level up - making both branches behave alike is the point of #453 - so it is pinned
+        // here as a deliberate property, not left to be rediscovered as a surprise.
+        MultiStatus root = new MultiStatus(STATUS_PLUGIN_ID, 0,
+            "Update of application app1 failed", null); //$NON-NLS-1$
+        root.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID, "Connection refused")); //$NON-NLS-1$
+
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new CoreException(root), false, false);
+
+        assertTrue("the failing child names the reason, so it is what reaches the caller", //$NON-NLS-1$
+            result.contains("Unexpected error: Connection refused")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureWithANonEmptyHeadlineDropsTheHeadline()
+    {
+        // The cost of the property pinned above, stated explicitly: the headline the pre-#453 code
+        // would have shown does NOT survive. Accepted knowingly - the headline is the generic
+        // wrapper text, the child is the reason - and identical to what the ApplicationException
+        // branch has already been doing, which is exactly the consistency #453 is after.
+        MultiStatus root = new MultiStatus(STATUS_PLUGIN_ID, 0,
+            "Update of application app1 failed", null); //$NON-NLS-1$
+        root.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID, "Connection refused")); //$NON-NLS-1$
+
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new CoreException(root), false, false);
+
+        assertFalse("the MultiStatus headline is deliberately superseded by the child", //$NON-NLS-1$
+            result.contains("Update of application app1 failed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureNamesTheNextStep()
+    {
+        // update_database is irreversible and can fail after a partial restructuring, so the one
+        // reaction the message must not invite is an immediate blind re-call. Pinned in full: an
+        // error that only diagnoses does not meet this repo's bar of telling the caller what to do.
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException(), false, false);
+
+        assertTrue("the failure must tell the caller what to do next", //$NON-NLS-1$
+            result.contains(NEXT_STEP));
+    }
+
+    @Test
+    public void testUnexpectedFailureStatesThePortReassignmentVerbatim()
+    {
+        // The re-address outlives this call, so it must survive the change of message source: EDT
+        // has already rewritten the standalone server configuration and that change stands.
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new IllegalStateException(), false, true);
+
+        assertTrue("the port-reassignment note must be kept word for word", //$NON-NLS-1$
+            result.contains(PORT_REASSIGN_NOTE));
+    }
+
+    @Test
+    public void testTheNextStepFollowsThePortNoteInsteadOfSplittingIt()
+    {
+        // Position, not just presence: the note qualifies the failure it is attached to, so the
+        // next-step sentence is appended AFTER it and may neither be inserted into the middle of
+        // it nor push it away from the description. The junction is the cheapest witness of both.
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new IllegalStateException(), false, true);
+
+        assertTrue("the next step must come after the intact port note", //$NON-NLS-1$
+            result.contains("change stands. The update may have applied partially")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureReportsThePortsReassignedFlag()
+    {
+        // The machine-readable half of the same fact, for a client that routes on fields.
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new IllegalStateException(), false, true);
+
+        assertTrue("the machine-readable flag must be kept", //$NON-NLS-1$
+            result.contains("standaloneServerPortsReassigned")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureWithoutReassignmentOmitsThePortNote()
+    {
+        // The other half of the same condition: the note is a claim about what EDT did, so it must
+        // not appear when nothing was re-addressed. Pinning only the true branch would let the note
+        // be emitted unconditionally and still pass.
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException(), false, false);
+
+        assertFalse("no re-address happened, so the note must be absent", //$NON-NLS-1$
+            result.contains("moved the standalone server to free ports")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureWithoutReassignmentOmitsThePortsReassignedKey()
+    {
+        // Same for the field: a flag written as false is not the same wire shape as an absent one,
+        // and clients that test for the key's presence would read it as a re-address that never
+        // happened.
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException(), false, false);
+
+        assertFalse("no re-address happened, so the flag must be absent", //$NON-NLS-1$
+            result.contains("standaloneServerPortsReassigned")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureReportsTheTerminatedClient()
+    {
+        // A client was killed to let the update through; that side effect is reported whatever the
+        // update then did, including when it failed for an unrelated reason.
+        String result =
+            UpdateDatabaseTool.buildUnexpectedErrorResult(new IllegalStateException(), true, false);
+
+        assertTrue("the terminatedClient flag must be kept", //$NON-NLS-1$
+            result.contains("terminatedClient")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnexpectedFailureWithoutTerminationOmitsTheTerminatedClientKey()
+    {
+        // The missing half of the pair: nothing was terminated, so the field must be absent rather
+        // than present-and-false. Without this pin an unconditional write passes every other test.
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException(), false, false);
+
+        assertFalse("no client was terminated, so the flag must be absent", //$NON-NLS-1$
+            result.contains("terminatedClient")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (no live launch manager needed) ====================

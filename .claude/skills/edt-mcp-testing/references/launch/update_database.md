@@ -83,7 +83,7 @@ Field meaning (from source):
   "isError": true
 }
 ```
-- Any other unexpected exception: `"Unexpected error: <msg>"`.
+- Any other unexpected exception: `"Unexpected error: <platform description>[<port-reassignment note>] The update may have applied partially, so do not retry blindly: check the actual state with get_applications (updateState) and the EDT Error Log first."` The description comes from `PlatformFailures.describe`, not `getMessage()`: EDT routinely throws a `CoreException` whose reason sits in a child `IStatus` while the exception itself carries an empty or generic message, so the old concatenation emitted `"Unexpected error: null"`. Consequence to assert around: when the failure is a `MultiStatus`, the FAILING CHILD's text is what reaches you and the headline does not — the same rule the `ApplicationException` branch above already follows. Extra fields `terminatedClient` / `standaloneServerPortsReassigned` are present only when true, never `false`.
 
 **Gotchas.**
 - **Destructive at the DB level; source-revert is not enough.** `git checkout`/`git clean` only restores `TestConfiguration/src`. The infobase restructuring is already done — re-running `update_database` is the only way to realign the DB with the reverted source. Run **only** on `TestConfiguration`, **only** on an explicit request.
