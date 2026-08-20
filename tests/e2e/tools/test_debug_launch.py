@@ -72,7 +72,6 @@ import time
 
 from harness import (
     call,
-    assert_contains,
     assert_error,
     assert_error_quality,
     assert_no_diff,
@@ -438,6 +437,38 @@ def test_unknown_external_object_lists_what_the_project_does_have():
     assert_no_diff("a refused launch must not touch the project source")
 
 
+def _assert_object_resolved(err, ctx):
+    """Assert the call got PAST external-object resolution, whatever it then failed on.
+
+    Two outcomes are both correct, and which one appears depends on the machine rather than on
+    the code under test:
+
+    * on a stand with a 1C platform the object resolves, the dump gate passes, and the call
+      goes on to fail on the missing launch configuration;
+    * on a bare CI runner the object still resolves, but EDT reports it cannot generate dumps
+      at all ("parent project must have a developing application with an infobase") - the
+      pre-launch gate firing exactly as designed, because a launch there really would start a
+      session with no /Execute.
+
+    Pinning either one alone would make the test a statement about the environment. What must
+    hold everywhere is the negative: the failure is NOT the object failing to resolve.
+    """
+    for resolution_failure in ("External object not found",
+                               "not an external-objects project",
+                               "is not an external object kind",
+                               "go together"):
+        if resolution_failure in err:
+            raise AssertionError(
+                "%s: the external object must resolve, but the call failed on %r: %s"
+                % (ctx, resolution_failure, err))
+    for expected in ("Launch configuration not found", "cannot build the external object"):
+        if expected in err:
+            return
+    raise AssertionError(
+        "%s: expected either the launch-configuration sentinel or the dump-precondition "
+        "refusal, got: %s" % (ctx, err))
+
+
 @e2e_test(tool="debug_launch", kind="read")
 def test_a_resolvable_external_object_gets_past_the_argument_check():
     """The positive half: a REAL object must not be refused by the argument check.
@@ -454,15 +485,7 @@ def test_a_resolvable_external_object_gets_past_the_argument_check():
         "startupOption": "SomeStartupCommand",
     })
     e = assert_error(r, "a resolvable external object with no launch configuration")
-    assert_error_quality(
-        e,
-        names=["NoSuchLaunchConfig_ZZZ_e2e", "not found"],
-        suggests=["Create it in EDT"],
-        ctx="a valid external object is not what the call fails on",
-    )
-    if "External object not found" in e or "not an external-objects project" in e:
-        raise AssertionError(
-            "a real external object must pass the argument check, got: %s" % e)
+    _assert_object_resolved(e, "a valid external object is not what the call fails on")
     assert_no_diff("a refused launch must not touch the project source")
 
 
@@ -475,14 +498,13 @@ def test_external_object_name_may_be_qualified_by_kind():
     qualified one always works. The fixture holds no collision to trigger the ambiguity refusal,
     but the qualification it would tell the caller to use is exercised here in all three shapes.
     """
-    # Right kind: resolves, so the call fails later, on the missing launch configuration.
+    # Right kind: resolves, so the call fails on something LATER (see _assert_object_resolved).
     e = assert_error(call("debug_launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
         "externalObjectName": "ExternalDataProcessor.ExtProc",
     }), "a qualified name of the right kind")
-    assert_contains(e, "Launch configuration not found",
-                    "a correctly qualified object must pass the argument check")
+    _assert_object_resolved(e, "a correctly qualified object must pass the argument check")
 
     # Right name, WRONG kind: ExtProc is a data processor, not a report.
     e = assert_error(call("debug_launch", {
