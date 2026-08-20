@@ -94,13 +94,14 @@ MODEL_SETTLE_TIMEOUT = int(os.environ.get(
 # landed — 'clean_project ok' + 'project ready' can both hold while the model still carries
 # the previous test's write (see reset_model).
 #
-# It has to be a LIST, and the list has to include what the suite actually RENAMES. A single
-# Catalog probe could not see the one residue that really leaks: rename_metadata_object
-# renames CommonModule.Calc -> Compute, and a probe that only asks for a Catalog answers
-# "baseline is back" while the renamed common module is still in the model. The next tests to
-# depend on model/disk agreement then fail far from the cause — a resync exporting the stale
-# model over the clean tree, or a module whose IFile no longer resolves. So probe the
-# canonical Catalog AND the common modules the write/rename tests touch.
+# It is a LIST because a change INSIDE one object is all this brace can see, and one object is
+# not a representative sample of the fixture. It deliberately does NOT have to enumerate every
+# object the suite RENAMES: naming - an object created, deleted or renamed - is the INVENTORY
+# brace's job (_top_object_inventory), which sees the whole top level in one call and therefore
+# cannot rot as tests are added. Keeping the two braces to their own questions is what stopped
+# this list from being a hand-maintained mirror of the suite: it once had to list the renamed
+# CommonModule.Calc, and the next rename test to be written (CascadeEn) was of course not added
+# to it, so the reset certified a model that still carried the rename.
 #
 # Override the whole set with E2E_BASELINE_PROBE_FQN (comma-separated) if the fixture's
 # canonical objects are ever renamed.
@@ -567,7 +568,7 @@ def _record_outcome(tool, is_error):
 def _mark_model_synced():
     """Called ONLY where the model was just proven to be back on the baseline.
 
-    That proof (reset_model / final_cleanup verifying _baseline_is_back) is what retires an
+    That proof (reset_model verifying _baseline_mismatch) is what retires an
     unknown outcome: whatever the abandoned request may or may not have committed, the model has
     since been re-imported from the clean disk and checked. Nothing else may clear it."""
     global _MUTATIONS_UNRESOLVED
@@ -715,11 +716,11 @@ def model_is_pristine():
         # that as "clean", and rightly so - but here a raise would fail the finished test over its
         # cleanup. It is simply no evidence, and no evidence means the full reset.
         return False
-    if _top_object_inventory() != _BASELINE_INVENTORY:
-        return False
-    # Third brace, and the one the other two cannot give: a change INSIDE an object leaves both
+    # The same question the reset post-condition asks, deliberately in the same words: a shortcut
+    # that skips the reset on weaker evidence than the reset itself accepts is a hole of exactly
+    # the same shape. It carries the third brace with it - a change INSIDE an object leaves both
     # the tree and the top-object list identical.
-    return _BASELINE_DETAILS is None or _baseline_is_back()
+    return _baseline_mismatch() is None
 
 
 def _notify(method, params):
@@ -1091,38 +1092,104 @@ def split_markdown_row(line):
     return [p.strip().replace("\\|", "|") for p in parts]
 
 
-def _baseline_is_back():
-    """Did the model actually return to the committed baseline? (reset post-condition)
+# How many differing objects an abort message names before it says "and N more". A reset that
+# cannot get the model home has usually lost ONE object; a difference of dozens is a different
+# failure entirely (the wrong project, a truncated listing) and the first few names say so just
+# as well as all of them would.
+_MAX_DIFF_NAMES = 12
 
-    'clean_project returned ok' and 'the project reports ready' are both SIGNALS, not
-    proof: they say EDT finished the work it knew about, not that the model now matches
-    the committed fixture. Only reading the model says that. So probe the objects every
-    baseline is guaranteed to have and no test is allowed to leave renamed or deleted — if
-    ALL of BASELINE_PROBE_FQNS resolve, the re-import landed.
 
-    Probing ALL of them, not one, is the point: the residue that actually leaks is a RENAMED
-    COMMON MODULE (rename_metadata_object turns CommonModule.Calc into Compute), and a probe
-    that only asked for a Catalog reported "baseline is back" while that rename was still in
-    the model. One request carries the whole list, so the stronger check costs nothing.
+def _named(lines):
+    """A set of inventory lines as a short, readable list of object names.
 
-    Existence is not enough, so the DETAIL is compared. "The FQN still resolves" says only that
-    the object was not renamed or deleted - a changed property, a new child attribute, an edited
-    synonym all leave every probed name resolving, and the reset was then declared successful
-    over a model that had not come back. When a baseline snapshot was taken (suite start), the
-    probe answers only if the details match it byte for byte; without one it degrades to the
-    existence check it used to be.
-
-    Best-effort by construction: any failure to read them counts as 'not back' and the caller
-    retries the whole revert+clean cycle. A call TIMEOUT still propagates (see call()).
+    The inventory is a markdown TABLE, so its lines are "| Name | Synonym | ... |" - printing them raw
+    turns a one-object difference into a wall of pipes. Only the Name (and the Type, when the row
+    has the width the tool documents) carries diagnosis; anything that is not a row - a heading, a
+    total, the separator - is worth printing verbatim, because a changed total IS the finding.
     """
+    out = []
+    for line in sorted(lines):
+        # split_markdown_row, not a hand split on "|": a synonym or comment cell may contain an
+        # ESCAPED pipe, and splitting on every "|" would shift every cell after it - printing a
+        # confident wrong Type. It returns [] for anything that is not a row.
+        cells = split_markdown_row(line)
+        if cells and cells[0]:
+            # 6 columns, or 7 with the extension Origin column (get_metadata_objects). Any other
+            # width is not the table this reads, so name the object and claim nothing else.
+            out.append("%s (%s)" % (cells[0], cells[3]) if len(cells) in (6, 7) else cells[0])
+        else:
+            out.append(line)
+    if len(out) > _MAX_DIFF_NAMES:
+        return "%s and %d more" % (", ".join(out[:_MAX_DIFF_NAMES]), len(out) - _MAX_DIFF_NAMES)
+    return ", ".join(out)
+
+
+def _inventory_difference(current):
+    """The top objects that differ between `current` and the captured baseline, as prose.
+
+    A reset that cannot get the model home aborts the run, and the abort is the only artifact
+    anyone reads afterwards - so it must say WHAT is wrong. "the model still does not resolve
+    Catalog.Catalog" (a name that was never the problem) cost a full investigation to see
+    through; "in the model but not in the baseline: Reckoner / in the baseline but not in the
+    model: CascadeEn" is the same failure, already diagnosed."""
+    have = set(current.splitlines())
+    want = set((_BASELINE_INVENTORY or "").splitlines())
+    extra = _named(have - want)
+    missing = _named(want - have)
+    parts = []
+    if extra:
+        parts.append("in the model but not in the baseline: %s" % extra)
+    if missing:
+        parts.append("in the baseline but not in the model: %s" % missing)
+    # Equal sets with unequal text means the two rendered the same names differently - possible
+    # only if the listing itself changed shape, which is worth saying rather than swallowing.
+    return "; ".join(parts) or "the top-object listing changed without any name appearing or "\
+        "disappearing"
+
+
+def _baseline_mismatch():
+    """Why the model is not back on the committed baseline, or None when it is.
+
+    'clean_project returned ok' and 'the project reports ready' are both SIGNALS, not proof:
+    they say EDT finished the work it knew about, not that the model now matches the committed
+    fixture. Only reading the model says that.
+
+    ONE definition of "the model is home", asked by both the reset post-condition
+    (reset_model) and the skip-the-reset shortcut (model_is_pristine). They used to ask
+    DIFFERENT questions, and in the wrong direction: the shortcut compared the whole top-object
+    inventory, while the post-condition compared three named FQNs. So a renamed common module
+    correctly forced a reset - and was then certified as reset, because the object it renamed was
+    not one of the three. The run continued on a stale model and the failure surfaced in a later,
+    innocent test (rename_metadata_object::test_unparsable_disable_index_token_is_refused_before
+    _rename, which read a configuration listing that had never come back). A post-condition
+    weaker than the precondition that triggered it can only certify the thing it was called to
+    catch, so the two are now literally the same code.
+
+    Both braces are needed and neither subsumes the other: the INVENTORY sees a top object that
+    appeared, vanished or was renamed; the DETAIL of BASELINE_PROBE_FQNS sees a change INSIDE one
+    - a property, a child, a synonym - which leaves every name identical.
+
+    Best-effort by construction: anything that cannot be read counts as a mismatch and the caller
+    retries the whole revert+clean cycle (or, for the shortcut, simply does not skip it). A call
+    TIMEOUT still propagates - see call().
+    """
+    if _BASELINE_INVENTORY is not None:
+        inventory = _top_object_inventory()
+        if inventory is None:
+            return "the top-object inventory could not be read"
+        if inventory != _BASELINE_INVENTORY:
+            return _inventory_difference(inventory)
     # _probe_details already rejects everything that is not positive evidence - a blank body, a
     # tool error, and a per-object "not found" reported inside a successful one - so there is
     # nothing left to re-check here: either it handed back a real fingerprint or it handed back
     # nothing.
     text = _probe_details()
     if text is None:
-        return False
-    return _BASELINE_DETAILS is None or text == _BASELINE_DETAILS
+        return "the detail of %s could not be read as evidence" % ", ".join(BASELINE_PROBE_FQNS)
+    if _BASELINE_DETAILS is not None and text != _BASELINE_DETAILS:
+        return "%s still resolve, but their detail no longer matches the baseline - something "\
+            "INSIDE one of them changed" % ", ".join(BASELINE_PROBE_FQNS)
+    return None
 
 
 def _revert_and_clean(project, revert):
@@ -1220,9 +1287,10 @@ def reset_model():
     EDT 2026.2 (a renamed Catalog survived a green clean_project and the next test failed
     on the baseline FQN). Hence, per attempt: settle FIRST so any lagging export has landed,
     re-revert the disk, THEN clean, and finally VERIFY the baseline is actually back
-    (_baseline_is_back) instead of assuming it. Verification — not a longer timeout — is
+    (_baseline_mismatch) instead of assuming it. Verification — not a longer timeout — is
     what makes this correct: the failure is a lost write-back race, not slowness.
     """
+    last_mismatch = "the post-condition was never reached"
     for _ in range(MODEL_RESET_ATTEMPTS):
         cleaned, clean_attempts, settle_failures = _revert_and_clean(PROJECT, reset_fixture)
         if not cleaned:
@@ -1240,19 +1308,21 @@ def reset_model():
             raise E2EModelResetFailed(
                 "clean_project succeeded, but the final settle did not report the project ready "
                 "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
-        if _baseline_is_back():
+        mismatch = _baseline_mismatch()
+        if mismatch is None:
             # The one place entitled to say the model is verifiably home again - which is also
             # what retires a write whose outcome was never read back. See _mark_model_synced.
             _mark_model_synced()
             return
+        last_mismatch = mismatch
     # Every attempt reported success and the model STILL does not match the baseline. Continuing
     # would hand the previous test's mutation to the next one (exactly the cascade this reset
     # exists to prevent), and the next failure would be reported against an innocent test.
     raise E2EModelResetFailed(
-        "the model still does not resolve the baseline object %s after %d revert+clean_project "
-        "cycles, even though every clean_project reported ok and the project reported ready. The "
-        "in-memory model does not match the committed fixture; the next test would read the last "
-        "test's write." % (BASELINE_PROBE_FQN, MODEL_RESET_ATTEMPTS))
+        "the model did not come back to the committed fixture after %d revert+clean_project "
+        "cycles, even though every clean_project reported ok and the project reported ready: %s. "
+        "The next test would read the last test's write."
+        % (MODEL_RESET_ATTEMPTS, last_mismatch))
 
 
 def _git_checked(*args):
@@ -1327,7 +1397,7 @@ def final_cleanup():
             "sync." % MODEL_SETTLE_TIMEOUT)
     reset_all_fixtures()
     # Deliberately NOT _mark_model_synced() here. This function cleans and settles but never
-    # VERIFIES the baseline came back (that is reset_model's _baseline_is_back), and only a
+    # VERIFIES the baseline came back (that is reset_model's _baseline_mismatch), and only a
     # verified restore may retire an unknown outcome. Clearing it on a weaker signal is how the
     # flag would come to mean "we tried" instead of "we checked".
 
