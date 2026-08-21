@@ -106,12 +106,21 @@ A comparison nobody comes back to is released by the registry's idle TTL (30 min
 without a lookup), and that reclaim happens as part of answering the next launch — so a
 forgotten comparison delays the next one, it does not block it until EDT restarts.
 
-There is one exception, and it is deliberate: when the reclaim itself does not go through
-— EDT's comparison service is momentarily gone, or the stop throws — the record is KEPT
-rather than dropped. Dropping it would free a slot that is not actually free, and the next
-launch would be accepted only for the platform to refuse it. So in that narrow case the
-refusal keeps naming the comparison and offering `releaseComparisonId`, and the slot stays
-claimed until a later attempt succeeds. A slot that is genuinely stuck is still cleared by
+One rule governs every way a comparison can end, and it is deliberate: **the record is
+dropped exactly when the slot is CONFIRMED free.** When the hand-back does not go through —
+EDT's comparison service is momentarily gone, or the stop throws — the record is KEPT
+rather than dropped, and the answer says so instead of claiming the slot is free. Dropping
+it would free a slot that is not actually free, and the next launch would be accepted only
+for the platform to refuse it.
+
+This holds on every path, not just the idle sweep: a `cancel_job`, an explicit
+`releaseComparisonId`, a comparison that failed, and the sweep itself all go through the
+same hand-back. So an explicit release whose stop did not reach the platform answers **Not
+released** and leaves the comparison still registered and still addressable, rather than
+reporting a free slot nobody verified.
+
+A kept record stays retryable, but nothing retries on its own: the next call that touches
+the registry carries the attempt. A slot that is genuinely stuck is still cleared by
 restarting EDT.
 
 ## Cancelling

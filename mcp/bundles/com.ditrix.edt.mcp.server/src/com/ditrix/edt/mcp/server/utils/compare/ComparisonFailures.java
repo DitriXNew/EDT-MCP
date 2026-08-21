@@ -152,6 +152,34 @@ public final class ComparisonFailures
     }
 
     /**
+     * The comparison is still registered here, but EDT's comparison service could not be asked for
+     * its tree right now.
+     * <p>
+     * A DIFFERENT situation from {@link #sessionGone(String)} and the difference is the whole
+     * reason this exists. "EDT no longer knows this handle" is an answer EDT gave, and it entitles
+     * a caller to say the comparison was ended outside this server; "the service could not be
+     * asked" is a fact about this server's reach at one instant, and saying the first when the
+     * second happened tells the caller their comparison is destroyed when it is merely unreadable
+     * for a moment. The two used to be folded together by an {@code orElse(null)} on the view.
+     * <p>
+     * So the remedy differs too: this one is RETRYABLE and the comparison keeps its slot, its
+     * session and its node ids.
+     *
+     * @param comparisonId the id the caller quoted
+     * @return the refusal
+     */
+    public static ToolResult readUnavailable(String comparisonId)
+    {
+        return ToolResult.error("EDT's configuration-comparison service could not be asked for " //$NON-NLS-1$
+            + "comparison '" + comparisonId + "' just now, so its tree was not read. The " //$NON-NLS-1$ //$NON-NLS-2$
+            + "comparison is still registered and still holds EDT's single comparison slot - " //$NON-NLS-1$
+            + "nothing was ended and its nodeIds still resolve. Wait until EDT has finished " //$NON-NLS-1$
+            + "starting and read it again with get_comparison_node; release it with " //$NON-NLS-1$
+            + "compare_configurations releaseComparisonId='" + comparisonId //$NON-NLS-1$
+            + "' when you no longer want it."); //$NON-NLS-1$
+    }
+
+    /**
      * The platform threw while the tool was doing something specific. The action is named because
      * "the comparison broke" and "reading node 42 broke" send the caller to different places.
      *

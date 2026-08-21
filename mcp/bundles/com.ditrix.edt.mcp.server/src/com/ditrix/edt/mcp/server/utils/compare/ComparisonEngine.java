@@ -183,15 +183,16 @@ public final class ComparisonEngine
      * registered at the moment it was attempted.
      *
      * <h2>Why a throw and not a boolean</h2>
-     * This type is the fix for a defect this facade used to have. The three lifetime calls simply
+     * This type is the fix for a defect this facade used to have. The lifetime calls simply
      * RETURNED when the service had gone, so a caller that had checked availability a moment
      * earlier published "the comparison was started" and "the comparison was cancelled" for work
      * no platform ever saw - the failure was indistinguishable from success at the call site. A
      * {@code boolean} answer states the same fact, but it can be dropped by writing nothing, which
      * is exactly how that defect would come back; a throw cannot be ignored by omission. Both call
      * sites already own an honest state to map this onto - the shared "service unavailable"
-     * refusal for a launch, and the {@code SERVICE_UNAVAILABLE} stop verdict for a cancellation -
-     * so naming the failure costs them no new vocabulary.
+     * refusal for a launch, and {@link SlotHandback.Verdict#UNREACHABLE} for a hand-back, which is
+     * the verdict that keeps the session registered so the attempt can be repeated - so naming the
+     * failure costs them no new vocabulary.
      * <p>
      * It is deliberately NOT thrown by the reading calls: a poll loop that died on one unlucky
      * tick would end a healthy comparison. They say the same thing without throwing, through
@@ -339,7 +340,7 @@ public final class ComparisonEngine
     {
         this.backend = backend;
         this.sessions = new ComparisonSessionRegistry(System::currentTimeMillis, idleTtlMillis,
-            session -> stop(session.handle()), backend::handles);
+            this::end, backend::handles);
     }
 
     /**
@@ -396,6 +397,32 @@ public final class ComparisonEngine
             return Optional.empty();
         }
         return Optional.of(engine);
+    }
+
+    /**
+     * The installed facade, WHETHER OR NOT EDT's comparison service is registered right now.
+     *
+     * <h2>Why a second accessor and not a flag on the first</h2>
+     * {@link #get()} answers "can anything useful be asked of the platform", and refusing on it is
+     * right for a call that is about to WRITE - a launch, a hand-back - because the alternative is
+     * reporting work that never reached EDT. It is wrong for a POLL. A poll that could not reach
+     * the service has observed nothing, and this facade already has a way to say so
+     * ({@link PlatformAnswer#unavailable()} flowing to {@link Phase#UNKNOWN}, which a loop absorbs
+     * as one unreadable tick out of its budget). Going through {@code get()} skipped all of that:
+     * an empty Optional arrived before any question was asked, the caller turned it into a
+     * verdict, and one momentary gap ended a healthy comparison and stranded it holding EDT's
+     * single slot.
+     * <p>
+     * So: a caller that is about to ask the platform to DO something uses {@link #get()}; a caller
+     * that is READING uses this and lets the reading answer for itself. The reading calls on the
+     * returned facade behave correctly with the service absent - every one of them answers
+     * {@code unavailable()} rather than throwing.
+     *
+     * @return the installed facade, or empty only when the bundle is not started
+     */
+    public static Optional<ComparisonEngine> attached()
+    {
+        return Optional.ofNullable(INSTANCE.get());
     }
 
     /**
@@ -645,30 +672,42 @@ public final class ComparisonEngine
     }
 
     /**
-     * Cancels a comparison and gives its virtual project and private BM store back.
+     * Ends one comparison and gives its virtual project and private BM store back.
      *
-     * @param handle the comparison
+     * <h2>Package-scoped, and reached from exactly one caller</h2>
+     * The only code that calls this is {@link ComparisonSessionRegistry}'s hand-back step, which
+     * it is wired into as the registry's releaser. That is not tidiness: ending a comparison and
+     * dropping its record are two halves of ONE decision, and every defect this feature has had in
+     * this area came from a site performing one half and reporting the other. A tool cannot reach
+     * this method - it cannot even name it - so it cannot perform half of anything.
+     *
+     * <h2>One platform call, not two</h2>
+     * EDT offers {@code stop} and {@code cancel} and they are the same operation. Read from
+     * {@code ComparisonManager} bytecode (2026.2, {@code com._1c.g5.v8.dt.compare} 29.0.0): both
+     * stop the running comparison job when the batch is under active comparison, both return early
+     * under an active merge - unreachable here - and both discard the session; they differ in the
+     * tracing call, the telemetry string, and a status literal {@code cancel} stamps onto the
+     * session it is discarding. So {@link SlotHandback.Ending} picks the name EDT records the
+     * hand-back under and changes nothing else. The previous code called cancel and THEN stop, and
+     * the second call always found a session the first had already discarded.
+     *
+     * @param session the session to end
+     * @param ending which of the two verbs to use
      * @throws ServiceUnavailableException when EDT's comparison service is not registered, so the
-     *     comparison was NOT cancelled and may still hold EDT's single slot
+     *     comparison was NOT ended and may still hold EDT's single slot
      */
-    public void cancel(ComparisonProcessHandle handle)
+    void end(ComparisonSessionRegistry.ComparisonSession session, SlotHandback.Ending ending)
     {
-        if (handle != null)
+        ComparisonProcessHandle handle = session == null ? null : session.handle();
+        if (handle == null)
+        {
+            return;
+        }
+        if (ending == SlotHandback.Ending.CANCELLED)
         {
             backend.cancel(handle);
         }
-    }
-
-    /**
-     * Stops a comparison and gives its virtual project and private BM store back.
-     *
-     * @param handle the comparison
-     * @throws ServiceUnavailableException when EDT's comparison service is not registered, so the
-     *     comparison was NOT stopped and its virtual project was not given back
-     */
-    public void stop(ComparisonProcessHandle handle)
-    {
-        if (handle != null)
+        else
         {
             backend.stop(handle);
         }

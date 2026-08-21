@@ -859,10 +859,14 @@ public class GetComparisonNodeTool implements IMcpTool
         public void prioritize(String comparisonId, List<Long> nodeIds)
         {
             ComparisonEngine engine = ComparisonEngine.get().orElse(null);
-            ComparisonView view = viewOf(engine, comparisonId);
-            if (engine != null && view != null)
+            try (ComparisonSessionRegistry.Lease lease =
+                ComparisonSessionRegistry.shared().lease(comparisonId))
             {
-                engine.prioritize(view, nodeIds);
+                ComparisonView view = viewOf(engine, lease);
+                if (engine != null && view != null)
+                {
+                    engine.prioritize(view, nodeIds);
+                }
             }
         }
 
@@ -872,41 +876,52 @@ public class GetComparisonNodeTool implements IMcpTool
             ComparisonEngine engine = ComparisonEngine.get()
                 .orElseThrow(() -> new IllegalStateException(
                     "EDT's comparison service is not available in this workbench")); //$NON-NLS-1$
-            ComparisonView view = viewOf(engine, comparisonId);
-            if (view == null)
+            // LEASED for the whole read. The registry's idle sweep measures idleness from the last
+            // LOOKUP, and a node expansion is one lookup followed by an arbitrarily long BM read;
+            // without the lease a comparison whose read outlasts the idle TTL would be ended
+            // underneath the transaction walking it. The lease also carries the handle, so
+            // liveness is asked once instead of twice with two answers that can disagree.
+            try (ComparisonSessionRegistry.Lease lease =
+                ComparisonSessionRegistry.shared().lease(comparisonId))
             {
-                throw new IllegalStateException(
-                    "comparison '" + comparisonId + "' is no longer registered"); //$NON-NLS-1$ //$NON-NLS-2$
+                ComparisonView view = viewOf(engine, lease);
+                if (view == null)
+                {
+                    throw new IllegalStateException(
+                        "comparison '" + comparisonId + "' is no longer registered"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                // The comparison's OWN read boundary - the tree is in its private BM store.
+                return engine.read(view, "Read comparison node", (transaction, monitor) -> { //$NON-NLS-1$
+                    // The boundary's own transaction is NOT handed to the context: the factory
+                    // that takes one puts it into the MAIN SIDE's slot and turns on the platform's
+                    // merge mode. See ComparisonView.readContext().
+                    ComparisonContext context = view.readContext();
+                    return runThenRelease(new ViewTreeAccess(view, context), task, context::close);
+                });
             }
-            // The comparison's OWN read boundary - the tree is in its private BM store.
-            return engine.read(view, "Read comparison node", (transaction, monitor) -> { //$NON-NLS-1$
-                // The boundary's own transaction is NOT handed to the context: the factory that
-                // takes one puts it into the MAIN SIDE's slot and turns on the platform's merge
-                // mode. See ComparisonView.readContext().
-                ComparisonContext context = view.readContext();
-                return runThenRelease(new ViewTreeAccess(view, context), task, context::close);
-            });
         }
 
         /**
-         * The read view for a live comparison, or {@code null}.
+         * The read view for a leased comparison, or {@code null}.
          *
-         * <p>The registry is reached through its own {@code shared()} entry point rather than
-         * through the engine: {@code ComparisonEngine.get()} also reports "unavailable" while
-         * EDT's service is momentarily unregistered, and answering "no such comparison" during
-         * such a gap would name the wrong fact - the session is alive, the service blinked.</p>
+         * <p>The handle comes from the LEASE rather than from a second lookup: the registry is
+         * reached through its own {@code shared()} entry point - {@code ComparisonEngine.get()}
+         * also reports "unavailable" while EDT's service is momentarily unregistered, and
+         * answering "no such comparison" during such a gap would name the wrong fact - and asking
+         * the liveness question twice can produce two answers that disagree.</p>
          */
-        private static ComparisonView viewOf(ComparisonEngine engine, String comparisonId)
+        private static ComparisonView viewOf(ComparisonEngine engine,
+            ComparisonSessionRegistry.Lease lease)
         {
-            if (engine == null)
+            ComparisonProcessHandle handle = lease.handle();
+            if (engine == null || handle == null)
             {
                 return null;
             }
-            ComparisonProcessHandle handle = ComparisonSessionRegistry.shared().handle(comparisonId);
             // orElse(null) folds "EDT could not be asked" into "no view", and that is safe HERE
             // only because the caller's next step is an IllegalStateException naming the
             // comparison, not a claim about EDT: no verdict is drawn from the difference.
-            return handle == null ? null : engine.view(handle).orElse(null);
+            return engine.view(handle).orElse(null);
         }
     }
 

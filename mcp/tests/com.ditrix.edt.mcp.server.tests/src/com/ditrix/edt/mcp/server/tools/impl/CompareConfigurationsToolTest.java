@@ -35,6 +35,9 @@ import org.junit.Test;
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.EList;
 
+import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
+import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
+import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
@@ -44,14 +47,17 @@ import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Comparison
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Launch;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.LaunchRequest;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Progress;
-import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.StopOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
-import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ReleaseOutcome;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
+import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
+import com.ditrix.edt.mcp.server.utils.compare.SlotHandback;
+import com.ditrix.edt.mcp.server.utils.compare.SlotHandback.Ending;
+import com.ditrix.edt.mcp.server.utils.compare.SlotHandbacks;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -228,7 +234,7 @@ public class CompareConfigurationsToolTest
         assertFalse("a failed comparison must not be published as running:\n" + result, //$NON-NLS-1$
             result.contains("| status | running |")); //$NON-NLS-1$
         // The session must not be left behind when the comparison dies.
-        assertEquals(1, backend.releases());
+        assertEquals(1, backend.handBacks());
     }
 
     @Test
@@ -247,8 +253,7 @@ public class CompareConfigurationsToolTest
         assertContains(result, "# Background job: done"); //$NON-NLS-1$
         assertContains(result, "# Comparison: TestConfiguration"); //$NON-NLS-1$
         // Nothing was stopped and nothing was given back: the comparison ran to its own end.
-        assertEquals(0, backend.cancels());
-        assertEquals(0, backend.releases());
+        assertEquals(0, backend.handBacks());
     }
 
     @Test
@@ -270,8 +275,8 @@ public class CompareConfigurationsToolTest
             result.contains("EDT reported comparison status")); //$NON-NLS-1$
         assertFalse("the tool's own placeholder must never be quoted as a platform status:\n" //$NON-NLS-1$
             + result, result.contains("'starting'")); //$NON-NLS-1$
-        // The slot goes back: cancel() stops the comparison AND releases its session.
-        assertEquals(1, backend.cancels());
+        // The slot goes back: the single exit hands it back and says what that achieved.
+        assertEquals(1, backend.handBacks());
     }
 
     @Test
@@ -284,7 +289,7 @@ public class CompareConfigurationsToolTest
 
         CancellationResult cancellation = jobs.cancel(jobId);
 
-        assertEquals(1, backend.cancels());
+        assertEquals(1, backend.handBacks());
         assertEquals(CancellationOutcome.TERMINATED, cancellation.getOutcome());
         assertContains(cancellation.getDetail(), backend.lastComparisonId());
     }
@@ -296,13 +301,15 @@ public class CompareConfigurationsToolTest
         // and a caller reading it stops looking. Here nothing was stopped: EDT had already let
         // the handle go, so there was nothing to stop at all.
         backend.keepRunning();
-        backend.answerCancelWith(StopOutcome.NOTHING_TO_STOP);
+        backend.answerHandBackWith(SlotHandback.Verdict.ALREADY_FREE);
         String jobId = jobId(tool.execute(request(Map.of("waitSeconds", "0")))); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(backend.awaitStarted());
 
         CancellationResult cancellation = jobs.cancel(jobId);
 
-        assertEquals(CancellationOutcome.ALREADY_COMMITTED, cancellation.getOutcome());
+        // ALREADY_FREE is a free slot, so the registry's TERMINATED is correct here - what the
+        // detail may not do is claim a stop that did not happen.
+        assertEquals(CancellationOutcome.TERMINATED, cancellation.getOutcome());
         assertContains(cancellation.getDetail(), "no longer held comparison"); //$NON-NLS-1$
         assertContains(cancellation.getDetail(), "nothing to stop"); //$NON-NLS-1$
         assertContains(cancellation.getDetail(), backend.lastComparisonId());
@@ -316,36 +323,36 @@ public class CompareConfigurationsToolTest
         // and the caller is the only one who can go and end it - so the detail has to say so
         // rather than close the matter with a verified stop.
         backend.keepRunning();
-        backend.answerCancelWith(StopOutcome.SERVICE_UNAVAILABLE);
+        backend.answerHandBackWith(SlotHandback.Verdict.UNREACHABLE);
         String jobId = jobId(tool.execute(request(Map.of("waitSeconds", "0")))); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(backend.awaitStarted());
 
         CancellationResult cancellation = jobs.cancel(jobId);
 
         assertEquals(CancellationOutcome.ALREADY_COMMITTED, cancellation.getOutcome());
-        assertContains(cancellation.getDetail(), "comparison service was not available"); //$NON-NLS-1$
-        assertContains(cancellation.getDetail(), "could NOT be stopped"); //$NON-NLS-1$
+        assertContains(cancellation.getDetail(), "could not be asked"); //$NON-NLS-1$
+        assertContains(cancellation.getDetail(), "was NOT ended"); //$NON-NLS-1$
         assertContains(cancellation.getDetail(), "single comparison slot"); //$NON-NLS-1$
     }
 
     @Test
     public void testAJobEndedByTheToolSaysWhetherTheComparisonWasActuallyStopped()
     {
-        // Its own test, and its own literal. Every branch that ends a job by stopping the
-        // comparison - this one, the expired job budget, and a cancellation that arrives during
-        // a slow launch - now words its sentence from the SAME stop verdict, so pinning one of
-        // them pins the wording all three share. (The budget branch cannot be reached from a
-        // unit test: its bound is the job's two hours.) They used to claim the stop
+        // Its own test, and its own literal. Every ending that gives the slot back - this one,
+        // the expired job budget, a comparison EDT never started, a cancellation that arrives
+        // during a slow launch - now words its slot sentence from the SAME hand-back value, so
+        // pinning one of them pins the wording they all share. (The budget branch cannot be
+        // reached from a unit test: its bound is the job's two hours.) They used to claim the stop
         // unconditionally, after a call that can fail to reach EDT at all.
-        backend.answerCancelWith(StopOutcome.SERVICE_UNAVAILABLE);
+        backend.answerHandBackWith(SlotHandback.Verdict.UNREACHABLE);
         backend.setPollAnswer(Progress.unknown("EDT answered no status for this comparison")); //$NON-NLS-1$
 
         String result = tool.execute(request(Map.of("waitSeconds", "20"))); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertContains(result, "# Background job: failed"); //$NON-NLS-1$
-        assertContains(result, "could NOT be stopped"); //$NON-NLS-1$
+        assertContains(result, "was NOT ended"); //$NON-NLS-1$
         assertFalse("a stop that never reached EDT must not be reported as done:\n" + result, //$NON-NLS-1$
-            result.contains("has been stopped and its session released")); //$NON-NLS-1$
+            result.contains("temporary workspace released")); //$NON-NLS-1$
     }
 
     @Test
@@ -474,8 +481,10 @@ public class CompareConfigurationsToolTest
         assertContains(result, "# Background job: done"); //$NON-NLS-1$
         // Deliberate, and the reason the release below has to exist: the session outlives
         // the job because get_comparison_node reads it. Releasing it here would make every
-        // expand of the report that was just handed to the caller fail.
-        assertEquals(0, backend.releases());
+        // expand of the report that was just handed to the caller fail. It is also the ONE
+        // ending that keeps the comparison open, so this is the pin that stops the single exit
+        // from handing the slot back on all of them.
+        assertEquals(0, backend.handBacks());
     }
 
     @Test
@@ -485,8 +494,11 @@ public class CompareConfigurationsToolTest
 
         assertContains(result, "**Released:**"); //$NON-NLS-1$
         assertContains(result, "cmp-4"); //$NON-NLS-1$
-        assertEquals(1, backend.releases());
-        assertEquals("cmp-4", backend.lastReleased()); //$NON-NLS-1$
+        assertEquals(1, backend.handBacks());
+        assertEquals("cmp-4", backend.lastHandedBack()); //$NON-NLS-1$
+        // The caller has finished reading it; nobody cancelled anything, and EDT's own record of
+        // the hand-back says so.
+        assertEquals(Ending.CLOSED, backend.lastEnding());
         // A release is not a launch: the three launch parameters are not even read, which
         // is why this form is answered before they are demanded.
         assertEquals(0, backend.starts());
@@ -502,15 +514,18 @@ public class CompareConfigurationsToolTest
     @Test
     public void testAReleaseThatStoppedNothingDoesNotSayTheSlotIsFree()
     {
-        backend.answerReleaseWith(ReleaseOutcome.STOP_FAILED);
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_FREED);
 
         String result = tool.execute(Map.of("releaseComparisonId", "cmp-4")); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertContains(result, "cmp-4"); //$NON-NLS-1$
-        assertContains(result, "stop NOT confirmed"); //$NON-NLS-1$
+        assertContains(result, "**Not released:**"); //$NON-NLS-1$
         assertFalse("a release that stopped nothing must not report a free slot:\n" + result, //$NON-NLS-1$
             result.contains("slot is free again")); //$NON-NLS-1$
-        assertContains(result, "Do NOT assume"); //$NON-NLS-1$
+        assertContains(result, "do NOT assume"); //$NON-NLS-1$
+        // The record is KEPT now, and the caller has to be told so - it is what makes retrying
+        // possible at all, and the previous wording sent them looking in the workbench instead.
+        assertContains(result, "still registered"); //$NON-NLS-1$
     }
 
     @Test
@@ -585,8 +600,13 @@ public class CompareConfigurationsToolTest
     {
         ComparisonEngine.uninstall();
 
-        assertEquals(StopOutcome.SERVICE_UNAVAILABLE,
-            new CompareConfigurationsTool.EngineBackend().cancel("cmp-1")); //$NON-NLS-1$
+        // Nothing is registered with no facade installed, so the honest answer is that the id
+        // names nothing here - and NOT that a slot was freed.
+        SlotHandback handback =
+            new CompareConfigurationsTool.EngineBackend().handBack("cmp-1", Ending.CANCELLED); //$NON-NLS-1$
+
+        assertEquals(SlotHandback.Verdict.NOT_REGISTERED, handback.verdict());
+        assertFalse("nothing was stopped, so no slot may be claimed free", handback.slotIsFree()); //$NON-NLS-1$
     }
 
     /** And a launch it could not perform is a refusal, in the shared wording. */
@@ -688,9 +708,256 @@ public class CompareConfigurationsToolTest
         canceller.join(TimeUnit.SECONDS.toMillis(30));
 
         assertNotNull("the cancellation must have finished", cancellation.get()); //$NON-NLS-1$
-        assertEquals(1, backend.cancels());
-        assertEquals(backend.lastComparisonId(), backend.lastCancelled());
+        assertEquals(1, backend.handBacks());
+        assertEquals(backend.lastComparisonId(), backend.lastHandedBack());
         assertEquals(CancellationOutcome.TERMINATED, cancellation.get().getOutcome());
+    }
+
+    // ============ Every ending goes through ONE exit ============
+
+    /**
+     * The finding, and the one a re-check on every tick cannot fix: the terminal branch read the
+     * report and returned WITHOUT taking an outstanding cancellation. A hand-over that landed while
+     * the comparison was finishing was then owed by nobody - and the caller had already been told
+     * "the request stands and the launch takes it at its next check", of which there was none.
+     * <p>
+     * The hand-over lands on the very tick that answers FINISHED: after the loop's look, before its
+     * ending is turned into an answer. That placement is the whole test, and no real thread
+     * schedule can be made to hit it on purpose.
+     */
+    @Test
+    public void testACancellationHandedOverOnTheFinishingTickIsStillHonoured()
+    {
+        Launch launch = new Launch();
+        backend.requestStopDuringStart(launch);
+        backend.handOverDuringFirstPoll(launch);
+        backend.setPollAnswer(Progress.finished("COMPARISON_PROCESS_FINISHED")); //$NON-NLS-1$
+        backend.setReport("# Comparison: TestConfiguration"); //$NON-NLS-1$
+
+        try
+        {
+            tool.runComparison(launchRequest(), reporter(60_000L), launch);
+            org.junit.Assert.fail("an outstanding cancellation must not be dropped"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            assertContains(e.getMessage(), "was cancelled"); //$NON-NLS-1$
+            assertEquals("the comparison must actually be ended, not merely mentioned", 1, //$NON-NLS-1$
+                backend.handBacks());
+            assertEquals(Ending.CANCELLED, backend.lastEnding());
+        }
+    }
+
+    /**
+     * The control, and the reason the test above is not satisfied by a tool that stopped returning
+     * reports: with NO cancellation outstanding the same finished comparison hands nothing back and
+     * the report is returned. This is the one ending that keeps EDT's slot.
+     */
+    @Test
+    public void testAFinishedComparisonNobodyCancelledKeepsItsSlotAndReturnsTheReport()
+        throws Exception
+    {
+        backend.setPollAnswer(Progress.finished("COMPARISON_PROCESS_FINISHED")); //$NON-NLS-1$
+        backend.setReport("# Comparison: TestConfiguration"); //$NON-NLS-1$
+
+        Object rendered = tool.runComparison(launchRequest(), reporter(60_000L), new Launch());
+
+        assertContains(String.valueOf(rendered), "# Comparison: TestConfiguration"); //$NON-NLS-1$
+        assertEquals(0, backend.handBacks());
+    }
+
+    /**
+     * The finding: the cancelled branch called the hand-back and threw its answer away, so a
+     * comparison EDT had reported as cancelled was published as "**Cancelled:** ..." whether or not
+     * the slot had actually come back. Nothing in that sentence could tell the caller to look.
+     * <p>
+     * It fails on the previous code by construction: there the hand-back's answer reached no
+     * expression at all, so no verdict could change the text.
+     */
+    @Test
+    public void testAPlatformCancellationWhoseHandBackFailedDoesNotClaimTheSlotIsFree()
+        throws Exception
+    {
+        backend.setPollAnswer(Progress.cancelled("EDT reported the comparison as cancelled.")); //$NON-NLS-1$
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_FREED);
+
+        String rendered = String.valueOf(
+            tool.runComparison(launchRequest(), reporter(60_000L), new Launch()));
+
+        assertContains(rendered, "**Cancelled:**"); //$NON-NLS-1$
+        assertContains(rendered, "did NOT complete"); //$NON-NLS-1$
+        assertContains(rendered, "do NOT assume"); //$NON-NLS-1$
+        assertFalse("the slot was not confirmed free, so it must not be claimed free:\n" //$NON-NLS-1$
+            + rendered, rendered.contains("slot is free again")); //$NON-NLS-1$
+    }
+
+    /** The control: the same ending with a hand-back that worked says the slot IS free. */
+    @Test
+    public void testAPlatformCancellationWhoseHandBackWorkedSaysTheSlotIsFree() throws Exception
+    {
+        backend.setPollAnswer(Progress.cancelled("EDT reported the comparison as cancelled.")); //$NON-NLS-1$
+
+        String rendered = String.valueOf(
+            tool.runComparison(launchRequest(), reporter(60_000L), new Launch()));
+
+        assertContains(rendered, "**Cancelled:**"); //$NON-NLS-1$
+        assertContains(rendered, "slot is free again"); //$NON-NLS-1$
+    }
+
+    /**
+     * The same rule on the failed ending: a comparison that died still holds EDT's slot until the
+     * hand-back succeeds, and a failed hand-back may not be silent there either.
+     */
+    @Test
+    public void testAFailedComparisonWhoseHandBackFailedSaysTheSlotMayStillBeHeld()
+    {
+        backend.setPollAnswer(Progress.failed("Cannot open repository")); //$NON-NLS-1$
+        backend.answerHandBackWith(SlotHandback.Verdict.UNREACHABLE);
+
+        String result = tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(result, "# Background job: failed"); //$NON-NLS-1$
+        assertContains(result, "Cannot open repository"); //$NON-NLS-1$
+        assertContains(result, "was NOT ended"); //$NON-NLS-1$
+        assertContains(result, "may still hold"); //$NON-NLS-1$
+    }
+
+    /**
+     * The ending decides which verb EDT records, and it is a property of the ending rather than an
+     * argument the site picks. A comparison that ended by ITSELF is closed, not cancelled.
+     */
+    @Test
+    public void testAComparisonThatEndedByItselfIsClosedRatherThanCancelled()
+    {
+        backend.setPollAnswer(Progress.failed("Cannot open repository")); //$NON-NLS-1$
+
+        tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Ending.CLOSED, backend.lastEnding());
+    }
+
+    /** ...while a comparison THIS job ends early is recorded as a cancellation. */
+    @Test
+    public void testAComparisonThisJobEndsEarlyIsRecordedAsACancellation()
+    {
+        backend.setPollAnswer(Progress.unknown("EDT answered no status for this comparison")); //$NON-NLS-1$
+
+        tool.execute(request(Map.of("waitSeconds", "20"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Ending.CANCELLED, backend.lastEnding());
+    }
+
+    // ============ "Could not read it" is not "somebody ended it" ============
+
+    /**
+     * The finding: the tree read resolved its view with {@code orElse(null)}, so a service that
+     * could not be asked produced the refusal for a comparison EDT had ENDED - telling the caller
+     * their comparison was destroyed when it was merely unreadable for a moment.
+     */
+    @Test
+    public void testAViewTheServiceCouldNotBeAskedForIsNotReportedAsAnEndedComparison()
+    {
+        String message = CompareConfigurationsTool.unreadableTreeMessage(
+            PlatformAnswer.unavailable(), "cmp-7"); //$NON-NLS-1$
+
+        assertNotNull(message);
+        assertContains(message, "could not be asked"); //$NON-NLS-1$
+        assertContains(message, "still registered"); //$NON-NLS-1$
+        assertFalse("nothing was established about the comparison: " + message, //$NON-NLS-1$
+            message.contains("ended outside this server")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: EDT ANSWERING that it no longer knows the handle is still reported as a
+     * comparison ended elsewhere. Without this the test above would pass on a tool that had simply
+     * stopped saying it.
+     */
+    @Test
+    public void testAViewEdtAnsweredNothingForIsStillAnEndedComparison()
+    {
+        String message = CompareConfigurationsTool.unreadableTreeMessage(
+            PlatformAnswer.of(null), "cmp-7"); //$NON-NLS-1$
+
+        assertNotNull(message);
+        assertContains(message, "ended outside this server"); //$NON-NLS-1$
+    }
+
+    /** And an answer that carries a view is not a refusal at all. */
+    @Test
+    public void testAReadableViewIsNotARefusal()
+    {
+        assertNull(CompareConfigurationsTool.unreadableTreeMessage(
+            PlatformAnswer.of("a readable tree"), "cmp-7")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ============ A service gap is not a failed comparison ============
+
+    /**
+     * The finding: the production poll asked {@code ComparisonEngine.get()}, which also reports
+     * "unavailable" while EDT's comparison service is momentarily unregistered, and answered FAILED
+     * before a single question had been asked. The failed ending then ended a HEALTHY comparison -
+     * and, because the hand-back could not reach the platform either, left it running with its
+     * record dropped and no id able to address it.
+     * <p>
+     * Here the facade is installed and the service is absent, which is exactly that gap. The poll
+     * must produce a reading the loop can absorb - one tick of a budget - and not a verdict.
+     */
+    @Test
+    public void testAMomentaryServiceGapIsNotReportedAsAFailedComparison()
+    {
+        ComparisonEngine.install(() -> null);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(
+                new ComparisonProcessHandle(new NamedDataSource("Demo"), //$NON-NLS-1$
+                    new NamedDataSource("Other"), ComparisonScope.EMPTY_SCOPE), //$NON-NLS-1$
+                new CompareMergeProcessBatch(List.of()));
+
+            Progress reading = new CompareConfigurationsTool.EngineBackend().poll(comparisonId);
+
+            assertFalse("a gap in the service says nothing about the comparison", //$NON-NLS-1$
+                reading.isFailed());
+            assertFalse("and it is not evidence the session has gone either", reading.isGone()); //$NON-NLS-1$
+            assertTrue("it is a reading the loop absorbs, on one of its budgets", //$NON-NLS-1$
+                reading.isStarting() || reading.isUnknown());
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * The control: with NO facade installed at all - the bundle not started - there is nothing to
+     * absorb, and the poll says the comparison cannot be reached rather than inventing a phase.
+     */
+    @Test
+    public void testAComparisonWithNoFacadeAtAllIsReportedAsUnreachable()
+    {
+        ComparisonEngine.uninstall();
+
+        Progress reading = new CompareConfigurationsTool.EngineBackend().poll("cmp-1"); //$NON-NLS-1$
+
+        assertTrue(reading.isGone());
+        assertFalse(reading.isFailed());
+    }
+
+    /** A data source that answers only the one method the handle asks it for. */
+    private static final class NamedDataSource
+        implements com._1c.g5.v8.dt.compare.datasource.IComparisonDataSourceDescriptor
+    {
+        private final String name;
+
+        NamedDataSource(String name)
+        {
+            this.name = name;
+        }
+
+        @Override
+        public String getProjectName()
+        {
+            return name;
+        }
     }
 
     // === helpers ===
@@ -797,7 +1064,7 @@ public class CompareConfigurationsToolTest
         assertTrue(message, message.contains("projectName")); //$NON-NLS-1$
         // Neither half may happen: reporting a freed slot while silently dropping the launch is
         // exactly the shape the sibling tools of this change refuse.
-        assertEquals(0, backend.releases());
+        assertEquals(0, backend.handBacks());
         assertEquals(0, backend.starts());
     }
 
@@ -811,7 +1078,7 @@ public class CompareConfigurationsToolTest
         String message = errorMessage(tool.execute(params));
 
         assertTrue(message, message.contains("scope")); //$NON-NLS-1$
-        assertEquals(0, backend.releases());
+        assertEquals(0, backend.handBacks());
     }
 
     @Test
@@ -824,7 +1091,7 @@ public class CompareConfigurationsToolTest
         params.put("waitSeconds", "5"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertContains(tool.execute(params), "**Released:**"); //$NON-NLS-1$
-        assertEquals(1, backend.releases());
+        assertEquals(1, backend.handBacks());
     }
 
     // ==================== The project must live inside the work tree ====================
@@ -898,21 +1165,18 @@ public class CompareConfigurationsToolTest
         /** Answers handed out in order before the standing one, so a tick can differ from its
          * neighbours - which is the only way to tell "tolerated once" from "ignored always". */
         private final ConcurrentLinkedQueue<Progress> pollAnswers = new ConcurrentLinkedQueue<>();
-        private final AtomicReference<String> lastCancelled = new AtomicReference<>();
-        private final AtomicReference<String> lastReleased = new AtomicReference<>();
+        private final AtomicReference<String> lastHandedBack = new AtomicReference<>();
+        private final AtomicReference<Ending> lastEnding = new AtomicReference<>();
         private final AtomicInteger starts = new AtomicInteger();
-        private final AtomicInteger cancels = new AtomicInteger();
-        private final AtomicReference<StopOutcome> cancelOutcome =
-            new AtomicReference<>(StopOutcome.STOPPED);
-        private final AtomicInteger releases = new AtomicInteger();
+        private final AtomicInteger handBacks = new AtomicInteger();
         private final CountDownLatch started = new CountDownLatch(1);
         private final CountDownLatch startEntered = new CountDownLatch(1);
         private final CountDownLatch startGate = new CountDownLatch(1);
         private volatile boolean blockStart;
         private final AtomicReference<Launch> handOverOnPoll = new AtomicReference<>();
         private final AtomicReference<Launch> requestStopDuringStart = new AtomicReference<>();
-        private final AtomicReference<ReleaseOutcome> releaseOutcome =
-            new AtomicReference<>(ReleaseOutcome.RELEASED);
+        private final AtomicReference<SlotHandback.Verdict> handBackVerdict =
+            new AtomicReference<>(SlotHandback.Verdict.FREED);
         private volatile List<String> liveComparisonIds = List.of();
         private final List<String> reports = new ArrayList<>();
         private volatile String report = "# Comparison: TestConfiguration"; //$NON-NLS-1$
@@ -989,19 +1253,12 @@ public class CompareConfigurationsToolTest
         }
 
         @Override
-        public StopOutcome cancel(String comparisonId)
+        public SlotHandback handBack(String comparisonId, Ending ending)
         {
-            lastCancelled.set(comparisonId);
-            cancels.incrementAndGet();
-            return cancelOutcome.get();
-        }
-
-        @Override
-        public ReleaseOutcome release(String comparisonId)
-        {
-            lastReleased.set(comparisonId);
-            releases.incrementAndGet();
-            return releaseOutcome.get();
+            lastHandedBack.set(comparisonId);
+            lastEnding.set(ending);
+            handBacks.incrementAndGet();
+            return SlotHandbacks.of(handBackVerdict.get(), comparisonId);
         }
 
         @Override
@@ -1015,10 +1272,10 @@ public class CompareConfigurationsToolTest
             activeComparisonId.set(id);
         }
 
-        /** Makes the next stop attempt observe {@code outcome} instead of a verified stop. */
-        void answerCancelWith(StopOutcome outcome)
+        /** Makes the next hand-back observe {@code verdict} instead of a freed slot. */
+        void answerHandBackWith(SlotHandback.Verdict verdict)
         {
-            cancelOutcome.set(outcome);
+            handBackVerdict.set(verdict);
         }
 
         void setPollAnswer(Progress progress)
@@ -1083,18 +1340,10 @@ public class CompareConfigurationsToolTest
             startGate.countDown();
         }
 
-        /** Makes release() report that nothing was registered under the id. */
+        /** Makes the hand-back report that nothing was registered under the id. */
         void refuseRelease()
         {
-            releaseOutcome.set(ReleaseOutcome.NOT_REGISTERED);
-        }
-
-        /**
-         * @param outcome what the next release attempt observes
-         */
-        void answerReleaseWith(ReleaseOutcome outcome)
-        {
-            releaseOutcome.set(outcome);
+            handBackVerdict.set(SlotHandback.Verdict.NOT_REGISTERED);
         }
 
         void setLiveComparisonIds(List<String> ids)
@@ -1128,14 +1377,9 @@ public class CompareConfigurationsToolTest
             return starts.get();
         }
 
-        int cancels()
+        int handBacks()
         {
-            return cancels.get();
-        }
-
-        int releases()
-        {
-            return releases.get();
+            return handBacks.get();
         }
 
         String lastComparisonId()
@@ -1143,14 +1387,14 @@ public class CompareConfigurationsToolTest
             return lastComparisonId.get();
         }
 
-        String lastCancelled()
+        String lastHandedBack()
         {
-            return lastCancelled.get();
+            return lastHandedBack.get();
         }
 
-        String lastReleased()
+        Ending lastEnding()
         {
-            return lastReleased.get();
+            return lastEnding.get();
         }
 
         LaunchRequest lastRequest()
@@ -1159,58 +1403,48 @@ public class CompareConfigurationsToolTest
         }
     }
 
-    // ============ A stop is TWO operations, and the verdict is built from both ============
+    // ============ Ending a comparison is ONE operation with ONE verdict ============
 
     /**
-     * The defect: {@code EngineBackend.cancel} assigned the session hand-back's answer to nothing
-     * and returned {@code STOPPED} regardless. A service that disappeared between the cancel and
-     * the hand-back therefore reached {@code cancel_job} as TERMINATED plus "its temporary
-     * workspace released" - over a hand-back that had not completed.
-     */
-    @Test
-    public void testAStopWhoseHandBackFailedIsNotClaimedAsAFullStop()
-    {
-        assertEquals(StopOutcome.STOPPED_NOT_RELEASED,
-            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.STOP_FAILED));
-    }
-
-    /**
-     * The three controls, each in its own assertion because each is a different reason. In
-     * particular ALREADY_GONE is the ORDINARY answer after a successful cancel - the cancel is what
-     * made EDT forget the handle - so reporting it as a failed stop would turn every successful
-     * cancellation into a warning.
-     */
-    @Test
-    public void testAStopWhoseHandBackSucceededOrHadNothingLeftToDoIsAFullStop()
-    {
-        assertEquals(StopOutcome.STOPPED,
-            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.RELEASED));
-        assertEquals(StopOutcome.STOPPED,
-            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.ALREADY_GONE));
-        assertEquals(StopOutcome.STOPPED,
-            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.NOT_REGISTERED));
-    }
-
-    /**
-     * And the consumer half: {@code cancel_job} must not publish the verdict the registry turns
-     * into TERMINATED, and must not repeat the sentence a caller stops reading at.
+     * {@code cancel_job} must not publish the verdict the registry turns into TERMINATED when the
+     * hand-back did not complete, and must not repeat the sentence a caller stops reading at.
+     * <p>
+     * It reads the verdict through {@code slotIsFree()} rather than by listing the literals it
+     * considers good. That is the point of the predicate: the two sites that split the verdicts
+     * themselves split them slightly differently, and one of them counted a failed hand-back as a
+     * stop.
      */
     @Test
     public void testAStopWhoseHandBackFailedIsNotPublishedAsAVerifiedTermination() throws Exception
     {
         backend.keepRunning();
-        backend.answerCancelWith(StopOutcome.STOPPED_NOT_RELEASED);
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_FREED);
         String jobId = jobId(tool.execute(request(Map.of("waitSeconds", "0")))); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(backend.awaitStarted());
 
         CancellationResult result = jobs.cancel(jobId);
 
         assertEquals(CancellationOutcome.ALREADY_COMMITTED, result.getOutcome());
-        assertContains(result.getDetail(), "was stopped, but handing its session back here did " //$NON-NLS-1$
-            + "NOT complete"); //$NON-NLS-1$
+        assertContains(result.getDetail(), "did NOT complete"); //$NON-NLS-1$
         assertFalse("the workspace was not confirmed released, so it must not be claimed: " //$NON-NLS-1$
             + result.getDetail(),
-            result.getDetail().contains("its temporary workspace released")); //$NON-NLS-1$
+            result.getDetail().contains("temporary workspace released")); //$NON-NLS-1$
+    }
+
+    /** The positive control: a hand-back that freed the slot IS a verified termination. */
+    @Test
+    public void testAStopWhoseHandBackSucceededIsPublishedAsATermination() throws Exception
+    {
+        backend.keepRunning();
+        String jobId = jobId(tool.execute(request(Map.of("waitSeconds", "0")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(backend.awaitStarted());
+
+        CancellationResult result = jobs.cancel(jobId);
+
+        assertEquals(CancellationOutcome.TERMINATED, result.getOutcome());
+        assertContains(result.getDetail(), "temporary workspace"); //$NON-NLS-1$
+        assertEquals("a cancellation is recorded on the platform as one", Ending.CANCELLED, //$NON-NLS-1$
+            backend.lastEnding());
     }
 
     // ============ A session that disappeared is not a cancellation EDT performed ============
@@ -1297,7 +1531,7 @@ public class CompareConfigurationsToolTest
 
         assertContains(String.valueOf(rendered), "# Comparison: TestConfiguration"); //$NON-NLS-1$
         assertEquals("a queued comparison must not be cancelled for not having started yet", 0, //$NON-NLS-1$
-            backend.cancels());
+            backend.handBacks());
     }
 
     /**
@@ -1323,7 +1557,7 @@ public class CompareConfigurationsToolTest
         catch (Exception e)
         {
             assertContains(e.getMessage(), "could not be read"); //$NON-NLS-1$
-            assertEquals(1, backend.cancels());
+            assertEquals(1, backend.handBacks());
         }
     }
 
@@ -1360,8 +1594,9 @@ public class CompareConfigurationsToolTest
         catch (Exception e)
         {
             assertContains(e.getMessage(), "ran out of time waiting for the launch"); //$NON-NLS-1$
-            assertEquals(1, backend.cancels());
-            assertEquals(backend.lastComparisonId(), backend.lastCancelled());
+            assertEquals(1, backend.handBacks());
+            assertEquals(backend.lastComparisonId(), backend.lastHandedBack());
+            assertEquals(Ending.CANCELLED, backend.lastEnding());
         }
     }
 

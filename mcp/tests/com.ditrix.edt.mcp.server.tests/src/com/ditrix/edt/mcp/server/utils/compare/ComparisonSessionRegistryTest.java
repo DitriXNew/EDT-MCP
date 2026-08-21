@@ -27,7 +27,6 @@ import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.datasource.IComparisonDataSourceDescriptor;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ComparisonSession;
-import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ReleaseOutcome;
 
 /**
  * Unit tests for {@link ComparisonSessionRegistry}.
@@ -35,8 +34,9 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.Release
  * The registry exists because a comparison's resources - a virtual project and a private BM store -
  * are handed back only by {@code cancel}/{@code stop}, and the obvious place to park the handle
  * cannot own that: background-job records are evicted by a bare map removal with no dispose hook.
- * These tests pin the three release paths and, separately, that liveness is ASKED of EDT rather
- * than remembered.
+ * These tests pin the ONE hand-back the three paths share - a caller asking, the idle sweep, the
+ * bundle stopping - the invariant that a record is dropped exactly when the slot is confirmed free,
+ * and, separately, that liveness is ASKED of EDT rather than remembered.
  */
 public class ComparisonSessionRegistryTest
 {
@@ -77,17 +77,28 @@ public class ComparisonSessionRegistryTest
         long now = 1_000L;
     }
 
-    /** Records what the registry released, and can be told to fail. */
+    /** Records what the registry ended, how, and can be told to fail either way. */
     private static final class RecordingReleaser
         implements ComparisonSessionRegistry.Releaser
     {
         final List<String> released = new ArrayList<>();
+        final List<SlotHandback.Ending> endings = new ArrayList<>();
         boolean explode;
+        /**
+         * Whether the failure is the platform saying "I was never asked". It is a DIFFERENT fact
+         * from a refusal and the registry has to keep them apart, so the fake can produce both.
+         */
+        boolean serviceGone;
 
         @Override
-        public void release(ComparisonSession session)
+        public void release(ComparisonSession session, SlotHandback.Ending ending)
         {
             released.add(session.comparisonId());
+            endings.add(ending);
+            if (serviceGone)
+            {
+                throw new ComparisonEngine.ServiceUnavailableException("ending a comparison"); //$NON-NLS-1$
+            }
             if (explode)
             {
                 throw new IllegalStateException("release refused"); //$NON-NLS-1$
@@ -227,6 +238,11 @@ public class ComparisonSessionRegistryTest
     /**
      * A release that throws must not strand the sessions behind it: {@code releaseAll} runs on the
      * way out of the bundle, and one bad handle would otherwise leak every later one.
+     * <p>
+     * It counts NONE of them, and that is the half worth pinning: the count is "how many were
+     * confirmed free", so a hand-back that failed may not be added to it. The map is still cleared,
+     * because keeping a record so a later call can retry means nothing when there will be no later
+     * call.
      */
     @Test
     public void aFailingReleaseDoesNotStopTheRest()
@@ -236,7 +252,8 @@ public class ComparisonSessionRegistryTest
         String first = registry.register(handle("Trade"), batch()); //$NON-NLS-1$
         String second = registry.register(handle("Erp"), batch()); //$NON-NLS-1$
 
-        assertEquals(2, registry.releaseAll());
+        assertEquals("a hand-back that failed is not a session confirmed free", 0, //$NON-NLS-1$
+            registry.releaseAll());
 
         assertEquals(Arrays.asList(first, second), releaser.released);
         assertEquals(0, registry.size());
@@ -251,7 +268,8 @@ public class ComparisonSessionRegistryTest
         String second = registry.register(keptHandle, batch());
         liveHandles.live = Collections.singletonList(keptHandle);
 
-        assertEquals(ReleaseOutcome.RELEASED, registry.release(first));
+        assertEquals(SlotHandback.Verdict.FREED,
+            registry.handBack(first, SlotHandback.Ending.CLOSED).verdict());
 
         assertEquals(Collections.singletonList(first), releaser.released);
         assertTrue(registry.find(second).isPresent());
@@ -262,8 +280,10 @@ public class ComparisonSessionRegistryTest
     {
         ComparisonSessionRegistry registry = registry();
 
-        assertEquals(ReleaseOutcome.NOT_REGISTERED, registry.release("cmp-does-not-exist")); //$NON-NLS-1$
-        assertEquals(ReleaseOutcome.NOT_REGISTERED, registry.release(null));
+        assertEquals(SlotHandback.Verdict.NOT_REGISTERED,
+            registry.handBack("cmp-does-not-exist", SlotHandback.Ending.CLOSED).verdict()); //$NON-NLS-1$
+        assertEquals(SlotHandback.Verdict.NOT_REGISTERED,
+            registry.handBack(null, SlotHandback.Ending.CLOSED).verdict());
         assertTrue(releaser.released.isEmpty());
     }
 
@@ -659,6 +679,12 @@ public class ComparisonSessionRegistryTest
      * answered {@code true} regardless, and the tool turned that into "EDT's single comparison slot
      * is free again". A caller acting on that sentence launches into a comparison that never
      * stopped.
+     * <p>
+     * The record now STAYS. That reverses what this test used to assert, and the reversal is the
+     * invariant: a record is dropped exactly when the slot is CONFIRMED free. Dropping it here left
+     * a comparison EDT still held with no id able to address it - not even by
+     * {@code releaseComparisonId}, the one remedy - while the refusal that names the live
+     * comparison could no longer name this one either.
      */
     @Test
     public void aReleaseWhoseStopFailedIsNotReportedAsAStop()
@@ -669,11 +695,131 @@ public class ComparisonSessionRegistryTest
         String id = registry.register(handle, batch());
         releaser.explode = true;
 
-        assertEquals(ReleaseOutcome.STOP_FAILED, registry.release(id));
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CLOSED);
 
+        assertEquals(SlotHandback.Verdict.NOT_FREED, handback.verdict());
+        assertFalse("a failed hand-back is not a free slot", handback.slotIsFree()); //$NON-NLS-1$
+        assertTrue("and the record is kept so the caller can retry", handback.recordKept()); //$NON-NLS-1$
         assertEquals("the stop was attempted", Collections.singletonList(id), releaser.released); //$NON-NLS-1$
-        assertEquals("and the record still goes, or it would pin the slot for its whole TTL", 0, //$NON-NLS-1$
+        assertEquals("the session is still registered, so it can still be named and retried", 1, //$NON-NLS-1$
             registry.size());
+        assertEquals("and it still holds EDT's single slot as far as anybody here knows", id, //$NON-NLS-1$
+            registry.activeComparisonId());
+    }
+
+    /**
+     * The hand-back that never reached the platform, which is the finding this whole construction
+     * was rebuilt around.
+     * <p>
+     * The tool's cancellation path used to drop the record unconditionally in its
+     * SERVICE-UNAVAILABLE branch - a comparison EDT was still running lost the only id that could
+     * reach it, and the sentence beside it argued that dropping it was the safe thing to do. It is
+     * told apart from an ordinary refusal because the caller's move differs: this one is retried
+     * once EDT has finished starting.
+     */
+    @Test
+    public void aHandBackThatNeverReachedThePlatformKeepsTheRecordAndSaysSo()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        releaser.serviceGone = true;
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertEquals(SlotHandback.Verdict.UNREACHABLE, handback.verdict());
+        assertFalse("nothing reached EDT, so nothing may be claimed about its slot", //$NON-NLS-1$
+            handback.slotIsFree());
+        assertTrue(handback.recordKept());
+        assertEquals("the session must survive a request the platform never received", 1, //$NON-NLS-1$
+            registry.size());
+        assertTrue("and stay addressable, because retrying is the only way back", //$NON-NLS-1$
+            registry.find(id).isPresent());
+    }
+
+    /**
+     * The sentence is the value's, not the caller's - so a failure cannot be lost by a caller
+     * writing nothing about it. Each verdict is pinned separately: JUnit stops a method at its
+     * first failed assertion, so one method would only ever load-bear on its first pin.
+     */
+    @Test
+    public void aFailedHandBackSaysTheSlotMayStillBeHeld()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        releaser.explode = true;
+
+        String sentence = registry.handBack(id, SlotHandback.Ending.CLOSED).sentence();
+
+        assertTrue("it must not claim the slot is free: " + sentence, //$NON-NLS-1$
+            sentence.contains("do NOT assume")); //$NON-NLS-1$
+        assertTrue("it must name the remedy: " + sentence, //$NON-NLS-1$
+            sentence.contains("releaseComparisonId=" + '\'' + id)); //$NON-NLS-1$
+        assertTrue("it must name the comparison: " + sentence, sentence.contains(id)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aHandBackThatNeverReachedThePlatformSaysToRetryIt()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        releaser.serviceGone = true;
+
+        String sentence = registry.handBack(id, SlotHandback.Ending.CLOSED).sentence();
+
+        assertTrue("it must say the comparison was NOT ended: " + sentence, //$NON-NLS-1$
+            sentence.contains("was NOT ended")); //$NON-NLS-1$
+        assertTrue("it must say the record is kept: " + sentence, //$NON-NLS-1$
+            sentence.contains("KEPT")); //$NON-NLS-1$
+    }
+
+    /**
+     * The positive control for the two above: a hand-back that worked says the slot is free, so the
+     * pins on the failures are pins on a difference rather than on a constant.
+     */
+    @Test
+    public void aHandBackThatWorkedSaysTheSlotIsFree()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CLOSED);
+
+        assertTrue(handback.slotIsFree());
+        assertFalse(handback.recordKept());
+        assertTrue("it must say the slot is free: " + handback.sentence(), //$NON-NLS-1$
+            handback.sentence().contains("slot is free again")); //$NON-NLS-1$
+    }
+
+    /**
+     * The ending picks EDT's verb and nothing else. Both verbs are the same platform operation -
+     * measured from ComparisonManager bytecode, they differ in tracing, a telemetry string and a
+     * status stamp on the session being discarded - so the ACCOUNTING must not vary with it.
+     */
+    @Test
+    public void theEndingReachesThePlatformAndChangesNothingElse()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle first = handle("Trade"); //$NON-NLS-1$
+        ComparisonProcessHandle second = handle("Erp"); //$NON-NLS-1$
+        liveHandles.live = Arrays.asList(first, second);
+        String cancelled = registry.register(first, batch());
+        String closed = registry.register(second, batch());
+
+        SlotHandback afterCancel = registry.handBack(cancelled, SlotHandback.Ending.CANCELLED);
+        SlotHandback afterClose = registry.handBack(closed, SlotHandback.Ending.CLOSED);
+
+        assertEquals(Arrays.asList(SlotHandback.Ending.CANCELLED, SlotHandback.Ending.CLOSED),
+            releaser.endings);
+        assertEquals(afterClose.verdict(), afterCancel.verdict());
+        assertEquals(SlotHandback.Verdict.FREED, afterCancel.verdict());
     }
 
     /**
@@ -691,8 +837,11 @@ public class ComparisonSessionRegistryTest
         assertTrue(registry.find(id).isPresent());
         liveHandles.live = Collections.emptyList();
 
-        assertEquals(ReleaseOutcome.ALREADY_GONE, registry.release(id));
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CLOSED);
 
+        assertEquals(SlotHandback.Verdict.ALREADY_FREE, handback.verdict());
+        assertTrue("a comparison EDT has already forgotten leaves the slot free", //$NON-NLS-1$
+            handback.slotIsFree());
         assertTrue("a handle the platform has forgotten must not be handed back to it", //$NON-NLS-1$
             releaser.released.isEmpty());
         assertEquals(0, registry.size());
@@ -707,7 +856,8 @@ public class ComparisonSessionRegistryTest
         liveHandles.live = Collections.singletonList(handle);
         String id = registry.register(handle, batch());
 
-        assertEquals(ReleaseOutcome.RELEASED, registry.release(id));
+        assertEquals(SlotHandback.Verdict.FREED,
+            registry.handBack(id, SlotHandback.Ending.CLOSED).verdict());
 
         assertEquals(Collections.singletonList(id), releaser.released);
         assertEquals(0, registry.size());
@@ -727,7 +877,8 @@ public class ComparisonSessionRegistryTest
 
         assertNull(shared.handle("cmp-1")); //$NON-NLS-1$
         assertNull(shared.activeComparisonId());
-        assertEquals(ReleaseOutcome.NOT_REGISTERED, shared.release("cmp-1")); //$NON-NLS-1$
+        assertEquals(SlotHandback.Verdict.NOT_REGISTERED,
+            shared.handBack("cmp-1", SlotHandback.Ending.CLOSED).verdict()); //$NON-NLS-1$
 
         try
         {
@@ -796,6 +947,11 @@ public class ComparisonSessionRegistryTest
      * A release attempt that could not be made must not be reported as an already-ended comparison
      * either: with EDT unreachable the liveness question is unanswered, so the handle IS handed
      * back rather than assumed gone, and the failing hand-back is what the verdict names.
+     * <p>
+     * Attempting it is deliberate and not an accident of ordering. The liveness question also goes
+     * unanswered when the PROJECT fails to resolve, with EDT's service perfectly well registered;
+     * skipping the hand-back on an unanswered question would strand a comparison the platform
+     * would have ended without complaint.
      */
     @Test
     public void aReleaseWhilePlatformIsUnreachableIsNotClaimedAsAnAlreadyEndedComparison()
@@ -808,10 +964,107 @@ public class ComparisonSessionRegistryTest
         liveHandles.reachable = false;
         releaser.explode = true;
 
-        assertEquals(ReleaseOutcome.STOP_FAILED, registry.release(id));
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CLOSED);
 
+        assertEquals(SlotHandback.Verdict.NOT_FREED, handback.verdict());
         assertEquals("the hand-back was attempted, not skipped as 'already gone'", //$NON-NLS-1$
             Collections.singletonList(id), releaser.released);
+        assertEquals("and the record is kept, because nothing was confirmed free", 1, //$NON-NLS-1$
+            registry.size());
+    }
+
+    // ============ a read in flight is not idle ============
+
+    /**
+     * The finding: a tree read is ONE lookup followed by minutes of BM work, and the sweep measures
+     * idleness from that lookup. A comparison big enough to outlast the idle TTL was therefore
+     * ended by the sweep underneath the transaction walking it - a failure the caller sees as the
+     * platform throwing inside its own read.
+     */
+    @Test
+    public void aSweepDoesNotEndAComparisonThatIsBeingRead()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+
+        try (ComparisonSessionRegistry.Lease lease = registry.lease(id))
+        {
+            assertTrue(lease.held());
+            assertEquals(handle, lease.handle());
+            clock.now += TTL + 1;
+
+            assertEquals("a leased session is not idle", 0, registry.sweep()); //$NON-NLS-1$
+            assertTrue("and must not have been handed back", releaser.released.isEmpty()); //$NON-NLS-1$
+            assertEquals(1, registry.size());
+        }
+    }
+
+    /**
+     * The control: the very same session, at the very same clock, IS reclaimed once the read ends.
+     * Without this the test above would pass on a registry that had simply stopped sweeping.
+     */
+    @Test
+    public void aSweepReclaimsTheSameSessionOnceTheReadHasEnded()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+
+        ComparisonSessionRegistry.Lease lease = registry.lease(id);
+        clock.now += TTL + 1;
+        lease.close();
+        // Closing TOUCHES the session, so the TTL restarts from the end of the read: a read that
+        // outlasted the TTL has just proved the comparison is in use, and reclaiming it on the very
+        // next sweep would only move the defect one call later.
+        assertEquals("the TTL restarts when the read ends", 0, registry.sweep()); //$NON-NLS-1$
+
+        clock.now += TTL + 1;
+
+        assertEquals(1, registry.sweep());
+        assertEquals(Collections.singletonList(id), releaser.released);
+    }
+
+    /** An unknown id leases nothing, and says so rather than pretending to hold something. */
+    @Test
+    public void leasingAnUnknownComparisonHoldsNothing()
+    {
+        ComparisonSessionRegistry registry = registry();
+
+        try (ComparisonSessionRegistry.Lease lease = registry.lease("cmp-nope")) //$NON-NLS-1$
+        {
+            assertFalse(lease.held());
+            assertNull(lease.handle());
+            assertNull(lease.comparisonId());
+        }
+    }
+
+    /**
+     * Closing twice must not decrement the count twice: a try-with-resources around an explicit
+     * close is ordinary, and a second decrement would expose a read that is still running.
+     */
+    @Test
+    public void closingALeaseTwiceDoesNotReleaseSomebodyElsesHold()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+
+        ComparisonSessionRegistry.Lease outer = registry.lease(id);
+        ComparisonSessionRegistry.Lease inner = registry.lease(id);
+        inner.close();
+        inner.close();
+        clock.now += TTL + 1;
+
+        assertEquals("the outer read still holds it", 0, registry.sweep()); //$NON-NLS-1$
+
+        outer.close();
+        clock.now += TTL + 1;
+
+        assertEquals(1, registry.sweep());
     }
 
     // ============ The sweep may not lose what it could not give back ============

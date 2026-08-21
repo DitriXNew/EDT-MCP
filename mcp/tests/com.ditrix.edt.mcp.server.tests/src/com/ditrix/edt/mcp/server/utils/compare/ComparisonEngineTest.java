@@ -179,25 +179,41 @@ public class ComparisonEngineTest
         assertSame(batch, backend.started.get(0));
     }
 
+    /**
+     * @param handle the comparison the session names
+     * @return a session carrying it, built the way the registry builds one
+     */
+    private static ComparisonSessionRegistry.ComparisonSession session(ComparisonProcessHandle handle)
+    {
+        return new ComparisonSessionRegistry.ComparisonSession("cmp-1", "Main", handle, //$NON-NLS-1$ //$NON-NLS-2$
+            new CompareMergeProcessBatch(Collections.emptyList()), 0L);
+    }
+
+    /**
+     * ONE hand-back call reaches the platform, and the ending decides only which verb EDT records
+     * it under. The exact call list rather than "contains": the previous shape asked the platform
+     * to cancel AND then to stop, and the second call always arrived at a session the first had
+     * already discarded.
+     */
     @Test
-    public void cancelReachesTheHandle()
+    public void aCancelledEndingReachesTheHandleExactlyOnce()
     {
         RecordingBackend backend = new RecordingBackend();
         ComparisonProcessHandle handle = handle("Main", "Other"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        engineOver(backend).cancel(handle);
+        engineOver(backend).end(session(handle), SlotHandback.Ending.CANCELLED);
 
         assertEquals(Collections.singletonList("cancel"), backend.calls); //$NON-NLS-1$
         assertSame(handle, backend.cancelled.get(0));
     }
 
     @Test
-    public void stopReachesTheHandle()
+    public void aClosedEndingReachesTheHandleExactlyOnce()
     {
         RecordingBackend backend = new RecordingBackend();
         ComparisonProcessHandle handle = handle("Main", "Other"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        engineOver(backend).stop(handle);
+        engineOver(backend).end(session(handle), SlotHandback.Ending.CLOSED);
 
         assertEquals(Collections.singletonList("stop"), backend.calls); //$NON-NLS-1$
         assertSame(handle, backend.stopped.get(0));
@@ -209,8 +225,8 @@ public class ComparisonEngineTest
         RecordingBackend backend = new RecordingBackend();
         ComparisonEngine engine = engineOver(backend);
 
-        engine.cancel(null);
-        engine.stop(null);
+        engine.end(null, SlotHandback.Ending.CLOSED);
+        engine.end(session(null), SlotHandback.Ending.CANCELLED);
 
         assertTrue(backend.calls.isEmpty());
     }

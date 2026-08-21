@@ -55,9 +55,11 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ComparisonSession;
-import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ReleaseOutcome;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
+import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
+import com.ditrix.edt.mcp.server.utils.compare.SlotHandback;
+import com.ditrix.edt.mcp.server.utils.compare.SlotHandback.Ending;
 import com.ditrix.edt.mcp.server.utils.git.GitRevisionResolver;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
@@ -359,8 +361,8 @@ public class CompareConfigurationsTool implements IMcpTool
      */
     private String release(String comparisonId)
     {
-        ReleaseOutcome outcome = backend.release(comparisonId);
-        if (outcome == ReleaseOutcome.NOT_REGISTERED)
+        SlotHandback handback = backend.handBack(comparisonId, Ending.CLOSED);
+        if (!handback.wasRegistered())
         {
             // Refused rather than reported as a release: "there was nothing to release" and
             // "the comparison you named is closed" are different facts, and a caller acting
@@ -368,33 +370,18 @@ public class CompareConfigurationsTool implements IMcpTool
             return ComparisonFailures.unknownComparison(comparisonId,
                 backend.liveComparisonIds()).toJson();
         }
-        if (outcome == ReleaseOutcome.ALREADY_GONE)
+        if (!handback.slotIsFree())
         {
-            // EDT had already forgotten the handle, so there was nothing to stop and nothing was
-            // asked of it. That IS a free slot, and it is said plainly - this case used to share
-            // one warning with a failed stop, which sent a caller looking in the workbench for a
-            // comparison that had ended by itself.
-            return "**Released:** comparison `" + comparisonId + "` had already ended on EDT's " //$NON-NLS-1$ //$NON-NLS-2$
-                + "side, so there was nothing to stop; its record here is dropped and EDT's " //$NON-NLS-1$
-                + "single comparison slot is free. Its nodeIds no longer resolve; start a new " //$NON-NLS-1$
-                + "comparison with " + NAME + " when you need one."; //$NON-NLS-1$
+            // The hand-back did not complete, or could not be attempted. Only what happened is
+            // claimed - and the sentence is the hand-back's own, not a second wording of it. This
+            // branch is where "the slot is free again" used to be printed over a stop that never
+            // occurred, which is the one sentence a caller ACTS on.
+            return "**Not released:** " + handback.sentence() //$NON-NLS-1$
+                + " Comparison `" + comparisonId + "` is still registered here, so its nodeIds " //$NON-NLS-1$ //$NON-NLS-2$
+                + "still resolve and this call can be repeated."; //$NON-NLS-1$
         }
-        if (outcome == ReleaseOutcome.STOP_FAILED)
-        {
-            // The bookkeeping happened and the stop did not, so only the bookkeeping is
-            // claimed. Saying "the slot is free again" here is the defect this branch exists
-            // to end: it is the one sentence a caller acts on, and acting on it wrongly means
-            // launching into a comparison that is still open.
-            return "**Record dropped, stop NOT confirmed:** comparison `" + comparisonId //$NON-NLS-1$
-                + "` is no longer registered here, EDT still held it, and the stop did not " //$NON-NLS-1$
-                + "complete - the failure is in the EDT error log. Do NOT assume the slot is " //$NON-NLS-1$
-                + "free: if the next " + NAME + " is refused, look for a comparison still open " //$NON-NLS-1$
-                + "in the workbench and end it there. Its nodeIds no longer resolve here " //$NON-NLS-1$
-                + "either way."; //$NON-NLS-1$
-        }
-        return "**Released:** comparison `" + comparisonId + "` is closed and EDT's single " //$NON-NLS-1$ //$NON-NLS-2$
-            + "comparison slot is free again. Its nodeIds no longer resolve; start a new " //$NON-NLS-1$
-            + "comparison with " + NAME + " when you need one."; //$NON-NLS-1$
+        return "**Released:** " + handback.sentence() + " Its nodeIds no longer resolve; start a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "new comparison with " + NAME + " when you need one."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -558,20 +545,48 @@ public class CompareConfigurationsTool implements IMcpTool
         launch.armed.countDown();
         progress.add("Comparison " + id + " started."); //$NON-NLS-1$ //$NON-NLS-2$
 
+        return conclude(request, progress, launch, id, pollUntilConcluded(progress, launch, id));
+    }
+
+    /**
+     * Watches one comparison until there is nothing left to wait for, and says WHAT it saw.
+     *
+     * <h2>Why it says and does not act</h2>
+     * This loop used to be the place where a comparison was ended: three of its branches called
+     * the stop themselves, two of those threw away what it answered, and the terminal one forgot
+     * that a cancellation could still be owed. Those were three instances of one defect, and the
+     * defect was that each exit decided for itself.
+     * <p>
+     * So the loop performs NO hand-back and publishes NO verdict. It answers a {@link Conclusion},
+     * and {@link #conclude} does both, for every exit, in one place. A branch added here cannot
+     * forget to give EDT's slot back, because giving it back is not something this method is able
+     * to do.
+     *
+     * @param progress the job's reporter
+     * @param launch the state shared with the cancellation handler
+     * @param id this plugin's id for the started comparison
+     * @return how the wait ended; never {@code null}
+     * @throws InterruptedException when the job thread is interrupted while waiting for EDT
+     */
+    private Conclusion pollUntilConcluded(ProgressReporter progress, Launch launch, String id)
+        throws InterruptedException
+    {
         int ticks = 0;
         int unreadableTicks = 0;
         int startingTicks = 0;
         while (true) // NOSONAR the exits are the terminal states below and the job's own budget
         {
-            if (launch.claimHandedOverStop())
+            if (launch.hasHandedOverStop())
             {
                 // A cancellation arrived while the launch was in flight, its handler ran out of
-                // time waiting for the id, and the duty was passed here. Asked on EVERY tick and
-                // not once after the launch: a hand-over that lands just after a single check is
-                // owed by nobody, and the report then promises a stop that never happens.
-                throw new ComparisonException("Comparison '" + id + "' was cancelled: the " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "cancellation ran out of time waiting for the launch, so the launch " //$NON-NLS-1$
-                    + "stopped the comparison instead. " + stopSentence(backend.cancel(id), id)); //$NON-NLS-1$
+                // time waiting for the id, and the duty was passed here. Looked at on EVERY tick
+                // and not once after the launch: a hand-over that lands just after a single check
+                // is owed by nobody, and the report then promises a stop that never happens. It
+                // is only READ here - the atomic claim belongs to the single exit, which makes it
+                // for every ending rather than for this one.
+                return Conclusion.of(Conclusion.Kind.HANDED_OVER_STOP, "the cancellation ran " //$NON-NLS-1$
+                    + "out of time waiting for the launch, so the launch ended the comparison " //$NON-NLS-1$
+                    + "instead."); //$NON-NLS-1$
             }
             Progress state = backend.poll(id);
             // Counted CONSECUTIVELY and reset by any tick that did get an answer: a status the
@@ -583,63 +598,33 @@ public class CompareConfigurationsTool implements IMcpTool
             startingTicks = state.isStarting() ? startingTicks + 1 : 0;
             if (state.isGone())
             {
-                // The session is no longer registered. WHY decides what may be said: a
-                // cancellation this launch took part in is first-hand evidence and is reported as
-                // one; without it, all that is established is that the comparison can no longer
-                // be read, and calling that an EDT cancellation would put words in the platform's
-                // mouth.
-                if (launch.stopWasRequested())
-                {
-                    return "**Cancelled:** comparison `" + id + "` was stopped before it " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "finished. " + state.getDetail(); //$NON-NLS-1$
-                }
-                throw new ComparisonException("Comparison '" + id + "' can no longer be read: " //$NON-NLS-1$ //$NON-NLS-2$
-                    + state.getDetail() + " Nobody asked this job to stop, so the comparison " //$NON-NLS-1$
-                    + "was ended outside it - in the workbench, through " //$NON-NLS-1$
-                    + "releaseComparisonId, or by the idle sweep. Start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
+                return Conclusion.of(Conclusion.Kind.VANISHED, state.getDetail());
             }
             if (state.isFailed())
             {
-                backend.release(id);
-                throw new ComparisonException("Comparison '" + id + "' failed: " //$NON-NLS-1$ //$NON-NLS-2$
-                    + state.getDetail() + ". Check the revisions with list_git_branches and " //$NON-NLS-1$
-                    + "the project state with get_project_errors, then start " + NAME //$NON-NLS-1$
-                    + " again."); //$NON-NLS-1$
+                return Conclusion.of(Conclusion.Kind.FAILED, state.getDetail());
             }
             if (state.isCancelled())
             {
-                backend.release(id);
-                return "**Cancelled:** comparison `" + id + "` was stopped before it finished. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + state.getDetail();
+                return Conclusion.of(Conclusion.Kind.CANCELLED, state.getDetail());
             }
             if (state.isFinished())
             {
-                progress.add("Comparison finished; reading the tree."); //$NON-NLS-1$
-                return backend.report(id, request);
+                return Conclusion.of(Conclusion.Kind.FINISHED, state.getDetail());
             }
             if (startingTicks >= MAX_STARTING_TICKS)
             {
                 // EDT accepted the batch and then never listed the handle. Named as itself: this
                 // is not an unreadable comparison, it is one the platform never began, so the
                 // remedy is different too.
-                throw new ComparisonException("Comparison '" + id + "' was accepted by EDT but " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "never started: EDT has not listed it once in " //$NON-NLS-1$
-                    + TimeUnit.MILLISECONDS.toSeconds(MAX_STARTING_TICKS * POLL_INTERVAL_MS)
-                    + " seconds (" + state.getDetail() + "). " //$NON-NLS-1$ //$NON-NLS-2$
-                    + stopSentence(backend.cancel(id), id)
-                    + " Check EDT for a stuck background task, then start " + NAME //$NON-NLS-1$
-                    + " again."); //$NON-NLS-1$
+                return Conclusion.of(Conclusion.Kind.NEVER_STARTED, state.getDetail());
             }
             if (unreadableTicks >= MAX_UNREADABLE_TICKS)
             {
                 // Not "EDT said something odd" - EDT said NOTHING, several times running. The
-                // message says exactly that and names what WAS observed, because quoting a
-                // status here would credit the platform with a report it never made.
-                throw new ComparisonException("Comparison '" + id + "' could not be read: EDT " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "gave no status for " + MAX_UNREADABLE_TICKS + " polls in a row (" //$NON-NLS-1$ //$NON-NLS-2$
-                    + state.getDetail() + "). " + stopSentence(backend.cancel(id), id) //$NON-NLS-1$
-                    + " Check the EDT error log for the failure that was logged, then start " //$NON-NLS-1$
-                    + NAME + " again."); //$NON-NLS-1$
+                // detail names what WAS observed, because quoting a status here would credit the
+                // platform with a report it never made.
+                return Conclusion.of(Conclusion.Kind.UNREADABLE, state.getDetail());
             }
             if (Thread.currentThread().isInterrupted())
             {
@@ -649,14 +634,10 @@ public class CompareConfigurationsTool implements IMcpTool
             // The job is COMMITTED, so the registry's own deadline will not fail it - a
             // committed job is left to finish on purpose. That makes this loop the only thing
             // bounding the wait, and an unbounded one would hold a shared worker until EDT
-            // restarts. Spend the budget, then stop the comparison and say so.
+            // restarts. Spend the budget, then end the comparison and say so.
             if (progress.remainingMillis() <= 0L)
             {
-                throw new ComparisonException("Comparison '" + id + "' did not finish within " //$NON-NLS-1$ //$NON-NLS-2$
-                    + TimeUnit.MILLISECONDS.toMinutes(JOB_TIMEOUT_MS) + " minutes. " //$NON-NLS-1$
-                    + stopSentence(backend.cancel(id), id)
-                    + " Narrow the comparison with scope, or check EDT for a stuck background " //$NON-NLS-1$
-                    + "task, and start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
+                return Conclusion.of(Conclusion.Kind.OUT_OF_TIME, state.getDetail());
             }
             if (++ticks % PROGRESS_EVERY_TICKS == 0)
             {
@@ -666,6 +647,115 @@ public class CompareConfigurationsTool implements IMcpTool
                 progress.add(progressLine(state));
             }
             Thread.sleep(POLL_INTERVAL_MS);
+        }
+    }
+
+    /**
+     * The ONE exit from a comparison: it claims an outstanding cancellation, gives EDT's single
+     * slot back when the ending calls for it, and words the answer.
+     *
+     * <h2>Why one exit</h2>
+     * Eight things can end a comparison, and each of them used to answer three questions on its
+     * own - is a stop still owed, does the slot go back, and what may be claimed about it. Three
+     * review rounds found the same mistake in a different one of them each time, because there
+     * were eight places to make it. Here there is one, and a ninth ending added to
+     * {@link Conclusion.Kind} inherits all three answers instead of restating them.
+     *
+     * <h2>The claim comes first, for every ending</h2>
+     * {@link Launch#claimHandedOverStop()} is asked here and nowhere else, before the ending is
+     * even looked at. The terminal branch used to skip it entirely - it read the report and
+     * returned - so a cancellation handed over while the comparison was finishing was owed by
+     * nobody, and the caller had been told a stop was coming that never came. Re-checking on every
+     * tick cannot fix that: after the last tick there is no next tick.
+     * <p>
+     * An outstanding cancellation is HONOURED rather than noted, the finished ending included. The
+     * handler has already told the caller "the request stands and the launch takes it at its next
+     * check", so returning the report and keeping the comparison open would leave that promise
+     * unkept while the slot stayed taken under an id the caller believes is closing.
+     *
+     * <h2>The slot goes back by default</h2>
+     * Exactly one ending keeps the comparison open - a FINISHED one nobody asked to cancel -
+     * because its tree is what {@code get_comparison_node} reads and its nodeIds are in the report
+     * being returned. Every other ending hands the slot back, and the wording of what that
+     * achieved comes from {@link SlotHandback#sentence()} rather than from this method, so no
+     * ending can be described here as a stop that did not happen.
+     *
+     * @param request the validated request
+     * @param progress the job's reporter
+     * @param launch the state shared with the cancellation handler
+     * @param id this plugin's id for the started comparison
+     * @param conclusion how the wait ended
+     * @return the rendered report, or the sentence describing what else happened
+     * @throws ComparisonException when the comparison did not produce a readable tree
+     */
+    private Object conclude(LaunchRequest request, ProgressReporter progress, Launch launch,
+        String id, Conclusion conclusion) throws ComparisonException
+    {
+        // Claimed ONCE, here, before anything is decided. Atomic, and only of a duty that was
+        // HANDED to the launch: a duty the handler still holds is left with the handler, which
+        // can then report a verified stop of its own.
+        boolean owesStop = launch.claimHandedOverStop()
+            || conclusion.kind() == Conclusion.Kind.HANDED_OVER_STOP;
+        if (conclusion.kind() == Conclusion.Kind.FINISHED && !owesStop)
+        {
+            progress.add("Comparison finished; reading the tree."); //$NON-NLS-1$
+            return backend.report(id, request);
+        }
+        SlotHandback handback = backend.handBack(id,
+            owesStop || conclusion.kind().endsItEarly() ? Ending.CANCELLED : Ending.CLOSED);
+        if (owesStop)
+        {
+            String because = conclusion.kind() == Conclusion.Kind.FINISHED
+                ? "it had just finished when the cancellation was honoured, so its report was " //$NON-NLS-1$
+                    + "not returned." //$NON-NLS-1$
+                : conclusion.detail();
+            throw new ComparisonException("Comparison '" + id + "' was cancelled: " + because //$NON-NLS-1$ //$NON-NLS-2$
+                + ' ' + handback.sentence() + " Start " + NAME + " again when you want one."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        switch (conclusion.kind())
+        {
+            case VANISHED:
+                // The session is no longer registered. WHY decides what may be said: a
+                // cancellation this launch took part in is first-hand evidence and is reported as
+                // one; without it, all that is established is that the comparison can no longer
+                // be read, and calling that an EDT cancellation would put words in the platform's
+                // mouth.
+                if (launch.stopWasRequested())
+                {
+                    return "**Cancelled:** comparison `" + id + "` was stopped before it " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "finished. " + conclusion.detail() + ' ' + handback.sentence(); //$NON-NLS-1$
+                }
+                throw new ComparisonException("Comparison '" + id + "' can no longer be read: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + conclusion.detail() + " Nobody asked this job to stop, so the comparison " //$NON-NLS-1$
+                    + "was ended outside it - in the workbench, through releaseComparisonId, or " //$NON-NLS-1$
+                    + "by the idle sweep. " + handback.sentence() + " Start " + NAME //$NON-NLS-1$ //$NON-NLS-2$
+                    + " again."); //$NON-NLS-1$
+            case CANCELLED:
+                return "**Cancelled:** comparison `" + id + "` was stopped before it finished. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + conclusion.detail() + ' ' + handback.sentence();
+            case FAILED:
+                throw new ComparisonException("Comparison '" + id + "' failed: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + conclusion.detail() + ". " + handback.sentence() //$NON-NLS-1$
+                    + " Check the revisions with list_git_branches and the project state with " //$NON-NLS-1$
+                    + "get_project_errors, then start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
+            case NEVER_STARTED:
+                throw new ComparisonException("Comparison '" + id + "' was accepted by EDT but " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "never started: EDT has not listed it once in " //$NON-NLS-1$
+                    + TimeUnit.MILLISECONDS.toSeconds(MAX_STARTING_TICKS * POLL_INTERVAL_MS)
+                    + " seconds (" + conclusion.detail() + "). " + handback.sentence() //$NON-NLS-1$ //$NON-NLS-2$
+                    + " Check EDT for a stuck background task, then start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
+            case UNREADABLE:
+                throw new ComparisonException("Comparison '" + id + "' could not be read: EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "gave no status for " + MAX_UNREADABLE_TICKS + " polls in a row (" //$NON-NLS-1$ //$NON-NLS-2$
+                    + conclusion.detail() + "). " + handback.sentence() //$NON-NLS-1$
+                    + " Check the EDT error log for the failure that was logged, then start " //$NON-NLS-1$
+                    + NAME + " again."); //$NON-NLS-1$
+            default:
+                throw new ComparisonException("Comparison '" + id + "' did not finish within " //$NON-NLS-1$ //$NON-NLS-2$
+                    + TimeUnit.MILLISECONDS.toMinutes(JOB_TIMEOUT_MS) + " minutes. " //$NON-NLS-1$
+                    + handback.sentence()
+                    + " Narrow the comparison with scope, or check EDT for a stuck background " //$NON-NLS-1$
+                    + "task, and start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -730,16 +820,16 @@ public class CompareConfigurationsTool implements IMcpTool
                 + "just as this cancellation arrived, and the stop was already taken. Confirm " //$NON-NLS-1$
                 + "with get_job_status.", null); //$NON-NLS-1$
         }
-        StopOutcome outcome = backend.cancel(id);
-        if (outcome == StopOutcome.STOPPED)
+        SlotHandback handback = backend.handBack(id, Ending.CANCELLED);
+        if (handback.slotIsFree())
         {
-            return CommittedCancellation.stopped("Comparison '" + id //$NON-NLS-1$
-                + "' was cancelled and its temporary workspace released.", null); //$NON-NLS-1$
+            return CommittedCancellation.stopped(handback.sentence(), null);
         }
         // NOT stopped, and said as such: a STOPPED verdict is what the job registry turns into
-        // TERMINATED, and a caller reading TERMINATED stops looking. Neither remaining case
-        // reached the comparison at all, so both are reported as work this tool could not stop.
-        return CommittedCancellation.notStopped(stopSentence(outcome, id));
+        // TERMINATED, and a caller reading TERMINATED stops looking. The hand-back's own sentence
+        // is used verbatim - this site used to word the outcome itself, and worded a stop that
+        // had not happened.
+        return CommittedCancellation.notStopped(handback.sentence());
     }
 
     /**
@@ -764,37 +854,45 @@ public class CompareConfigurationsTool implements IMcpTool
     }
 
     /**
-     * The one place that turns a stop verdict into a sentence, so every caller of
-     * {@link Backend#cancel} says the same thing about the same observation.
+     * Why a comparison tree could not be read, or {@code null} when it can be.
      *
-     * @param outcome what the stop attempt observed
-     * @param comparisonId the comparison it was aimed at
-     * @return a sentence stating what really happened, and what is left to do about it
+     * <h2>Three answers, not two</h2>
+     * The view used to be resolved with {@code orElse(null)}, which folded "EDT's comparison
+     * service could not be asked" into "EDT says it no longer knows this handle" - and the refusal
+     * then told the caller their comparison had been ended outside this server. That is a claim
+     * about the comparison built out of a fact about this server's reach, and the two send the
+     * caller to opposite places: one starts a new comparison, the other waits a moment and reads
+     * the same one again. The comparison is still registered, still holds EDT's slot and still
+     * resolves its nodeIds.
+     * <p>
+     * A pure function of the answer, and separate so it can be pinned for every input - the same
+     * reason the launch's refusal decision is one.
+     *
+     * Generic in what the platform answered with, because that payload is not what it decides on:
+     * the three cases are "could not ask", "asked and got nothing" and "asked and got something",
+     * and only the last one is a readable tree whatever type carries it.
+     *
+     * @param <T> what the platform answers with
+     * @param answer what the facade said when asked for the view
+     * @param comparisonId the comparison the caller quoted
+     * @return the refusal message, or {@code null} when {@code answer} carries a usable view
      */
-    private static String stopSentence(StopOutcome outcome, String comparisonId)
+    static <T> String unreadableTreeMessage(PlatformAnswer<T> answer, String comparisonId)
     {
-        if (outcome == StopOutcome.STOPPED)
+        if (answer.isUnavailable())
         {
-            return "Comparison '" + comparisonId //$NON-NLS-1$
-                + "' was stopped and its temporary workspace released."; //$NON-NLS-1$
+            // Retryable, and the comparison is untouched: nothing about it was established.
+            return messageOf(ComparisonFailures.readUnavailable(comparisonId));
         }
-        if (outcome == StopOutcome.STOPPED_NOT_RELEASED)
+        if (answer.orElse(null) == null)
         {
-            return "Comparison '" + comparisonId + "' was stopped, but handing its session " //$NON-NLS-1$ //$NON-NLS-2$
-                + "back here did NOT complete, so its temporary workspace is not confirmed " //$NON-NLS-1$
-                + "released; the failure is in the EDT error log. If the next " + NAME //$NON-NLS-1$
-                + " is refused, look for a comparison still open in the workbench and end it " //$NON-NLS-1$
-                + "there."; //$NON-NLS-1$
+            // EDT ANSWERED, and its answer was that it no longer knows the handle - the comparison
+            // was ended outside this server. Named as itself, because reading on through the null
+            // throws a NullPointerException, and "NullPointerException" is not a fact the caller
+            // can act on while "it was ended outside this server" is.
+            return messageOf(ComparisonFailures.sessionGone(comparisonId));
         }
-        if (outcome == StopOutcome.NOTHING_TO_STOP)
-        {
-            return "EDT no longer held comparison '" + comparisonId //$NON-NLS-1$
-                + "', so there was nothing to stop; its session record here has been dropped."; //$NON-NLS-1$
-        }
-        return "EDT's comparison service was not available, so comparison '" + comparisonId //$NON-NLS-1$
-            + "' could NOT be stopped and may still hold EDT's single comparison slot. Its " //$NON-NLS-1$
-            + "session record here has been dropped. Once EDT has finished starting, check " //$NON-NLS-1$
-            + "for a comparison still open in the workbench and end it there."; //$NON-NLS-1$
+        return null;
     }
 
     /**
@@ -987,55 +1085,103 @@ public class CompareConfigurationsTool implements IMcpTool
     }
 
     /**
-     * The verdict for a cancellation that DID reach the platform, built from what handing the
-     * session back then reported.
-     * <p>
-     * A pure function of the second operation's answer, and separate so it can be pinned for
-     * every input: the defect it replaces was not a wrong mapping but a MISSING one - the
-     * hand-back's answer was assigned to nothing and {@code STOPPED} was returned regardless, so
-     * no input could change the verdict.
+     * How the wait for one comparison ended, before anything has been said about it and before
+     * EDT's single slot has been touched.
      *
-     * @param handBack what giving the session back observed
-     * @return what the caller may claim about the stop as a whole
+     * <h2>Why the endings are a type</h2>
+     * They used to be eight {@code return} and {@code throw} statements scattered through the poll
+     * loop, and each of them re-answered "does the slot go back", "is a cancellation still owed"
+     * and "what may I claim". Three review rounds found the same defect in a different one of them
+     * each time. Naming the endings turns those three questions into properties of the ending -
+     * answered once, in {@link CompareConfigurationsTool#conclude} - so the loop can only REPORT
+     * an ending and a new one cannot come with its own answers.
      */
-    static StopOutcome stopVerdict(ReleaseOutcome handBack)
+    static final class Conclusion
     {
-        if (handBack == ReleaseOutcome.STOP_FAILED)
+        /** The eight ways the wait can end. */
+        enum Kind
         {
-            // EDT still held the comparison and the hand-back did not complete. The cancel
-            // reached the platform, so this is not "nothing happened" - but the workspace is not
-            // confirmed released, and TERMINATED plus "released" is what a caller stops reading at.
-            return StopOutcome.STOPPED_NOT_RELEASED;
-        }
-        // RELEASED, ALREADY_GONE and NOT_REGISTERED are all stops. ALREADY_GONE is in particular
-        // the ORDINARY path: the cancel is what made EDT forget the handle, so finding it gone a
-        // moment later is that cancel working, not a failure to give anything back.
-        return StopOutcome.STOPPED;
-    }
+            /** The comparison finished; its tree can be read. */
+            FINISHED(false),
+            /** The comparison failed; the detail carries the platform's reason. */
+            FAILED(false),
+            /** EDT reported the comparison as cancelled. */
+            CANCELLED(false),
+            /** The session is no longer registered here. */
+            VANISHED(false),
+            /** EDT accepted the batch and never listed the handle; this job ends it. */
+            NEVER_STARTED(true),
+            /** EDT gave no status for the whole unreadable budget; this job ends it. */
+            UNREADABLE(true),
+            /** The job's own time budget ran out; this job ends it. */
+            OUT_OF_TIME(true),
+            /** A cancellation was handed to the launch; this job ends it. */
+            HANDED_OVER_STOP(true);
 
-    /**
-     * What an attempt to stop a comparison actually observed.
-     * <p>
-     * A stop is TWO operations - cancelling the comparison on the platform and handing its
-     * session back here - and the verdict is built from both. It used to be built from the first
-     * alone, with the second's answer discarded: a service that disappeared between them left
-     * {@code cancel_job} publishing TERMINATED and the sentence "its temporary workspace
-     * released" over a hand-back that never completed.
-     */
-    enum StopOutcome
-    {
-        /** EDT was asked to stop the comparison and the session was given back. */
-        STOPPED,
+            private final boolean endsItEarly;
+
+            Kind(boolean endsItEarly)
+            {
+                this.endsItEarly = endsItEarly;
+            }
+
+            /**
+             * Whether THIS JOB is ending a comparison that had not ended by itself.
+             * <p>
+             * It selects which of EDT's two hand-back verbs the platform records, and nothing
+             * else - see {@link SlotHandback.Ending}, which carries the bytecode reading showing
+             * the two are one operation. It is a property of the ending rather than an argument
+             * at the call site, because "did I end this or did it end?" is exactly the kind of
+             * question eight sites answered eight ways.
+             *
+             * @return {@code true} when the comparison was still going and this job ended it
+             */
+            boolean endsItEarly()
+            {
+                return endsItEarly;
+            }
+        }
+
+        private final Kind kind;
+        private final String detail;
+
+        private Conclusion(Kind kind, String detail)
+        {
+            this.kind = kind;
+            this.detail = detail;
+        }
+
         /**
-         * EDT was asked to stop the comparison and did not refuse, but handing the session back
-         * here did NOT complete. The comparison is cancelled; the workspace is not confirmed
-         * released, so the caller must not be told it is.
+         * @param kind how the wait ended
+         * @param detail what was observed, in the words the caller will read
+         * @return the ending
          */
-        STOPPED_NOT_RELEASED,
-        /** EDT no longer held the comparison, so there was nothing to stop. */
-        NOTHING_TO_STOP,
-        /** EDT's comparison service was not registered, so nothing could reach the comparison. */
-        SERVICE_UNAVAILABLE
+        static Conclusion of(Kind kind, String detail)
+        {
+            return new Conclusion(kind, detail);
+        }
+
+        /**
+         * @return how the wait ended
+         */
+        Kind kind()
+        {
+            return kind;
+        }
+
+        /**
+         * @return what was observed - never a status EDT did not give
+         */
+        String detail()
+        {
+            return detail;
+        }
+
+        @Override
+        public String toString()
+        {
+            return kind + "(" + detail + ')'; //$NON-NLS-1$
+        }
     }
 
     /**
@@ -1057,13 +1203,24 @@ public class CompareConfigurationsTool implements IMcpTool
      * and the comparison kept EDT's single slot. A state with no representable "owed by nobody",
      * moved only by {@code compareAndSet}, cannot reach that.
      *
-     * <h2>The hand-over needs somebody still looking</h2>
+     * <h2>The hand-over needs somebody still looking, and looking is not taking</h2>
      * One atomic state is necessary and not sufficient: a hand-over that lands after the launch's
-     * only look is still lost. So the launch does not look once - {@link #claimHandedOverStop()}
-     * is asked at the top of EVERY poll, for as long as the comparison runs. The remaining and
-     * stated limit is the last tick: a hand-over arriving after it, while the comparison is
-     * already finishing, is answered by the job's own result, which is why the handler's sentence
-     * promises only that the request stands and sends the caller to {@code get_job_status}.
+     * only look is still lost. So the launch does not look once - {@link #hasHandedOverStop()} is
+     * asked at the top of EVERY poll, for as long as the comparison runs.
+     * <p>
+     * Looking is deliberately separate from taking. {@link #claimHandedOverStop()} is called from
+     * exactly one place, {@link CompareConfigurationsTool#conclude}, and it is called for EVERY
+     * ending rather than only for the one the loop noticed. The terminal ending is why: it used to
+     * read the report and return without claiming anything, so a hand-over that landed while the
+     * comparison was FINISHING - after the loop's last look, before the answer was built - was
+     * owed by nobody, and the caller had been promised a stop that never came. A loop that claimed
+     * as it looked could not fix that, because after the last tick there is no next tick.
+     * <p>
+     * The remaining and stated limit is narrower but real: a hand-over that lands after
+     * {@code conclude} has made its one claim is owed by nobody, and is answered only by the job's
+     * own result - which is exactly what the handler's sentence promises, no more, when it sends
+     * the caller to {@code get_job_status}. Closing it needs the handler and the job to share one
+     * commit point, which is a change to the background-job registry rather than to this class.
      */
     static final class Launch
     {
@@ -1120,6 +1277,22 @@ public class CompareConfigurationsTool implements IMcpTool
         boolean claimHandedOverStop()
         {
             return duty.compareAndSet(StopDuty.LAUNCH, StopDuty.TAKEN);
+        }
+
+        /**
+         * Whether a duty has been handed to the launch, WITHOUT taking it.
+         * <p>
+         * The poll loop looks with this and the single exit claims with
+         * {@link #claimHandedOverStop()}. Splitting looking from taking is what lets the claim
+         * happen exactly once, at the one place every ending passes through: a loop that claimed
+         * as it looked would leave the endings it does not run through - the terminal one above
+         * all - with no claim at all, which is the defect this split removes.
+         *
+         * @return {@code true} while the launch owes an outstanding cancellation
+         */
+        boolean hasHandedOverStop()
+        {
+            return duty.get() == StopDuty.LAUNCH;
         }
 
         /**
@@ -1442,33 +1615,28 @@ public class CompareConfigurationsTool implements IMcpTool
         String report(String comparisonId, LaunchRequest request) throws ComparisonException;
 
         /**
-         * Stops the comparison and releases its session, and says which of those actually
-         * happened.
-         * <p>
-         * It returns a verdict rather than nothing because every caller of it publishes a
-         * sentence about the comparison, and two of the three things this can observe are not
-         * a stop at all: EDT's comparison service can be unregistered at that moment, and the
-         * handle can already be gone. A {@code void} answer left those cases indistinguishable
-         * from a stop, so the tool reported a stop that had not happened.
+         * Ends the comparison, gives EDT's single slot back, and says what that achieved.
+         *
+         * <h2>One method where there were two</h2>
+         * This used to be a {@code cancel} for a running comparison and a {@code release} for one
+         * that had ended, and every caller picked between them from what it believed the state
+         * to be. The two were the same operation - EDT's own {@code cancel} and {@code stop}
+         * differ only in what they record, see {@link SlotHandback.Ending} - and picking wrongly
+         * was invisible, because both answered "done". Now the platform's answer decides what
+         * happened and the caller decides only what to call it.
+         *
+         * <h2>Why it answers a value and not nothing</h2>
+         * Every caller publishes a sentence about EDT's single slot, and three of the five things
+         * this can observe are not a freed slot at all: the service can be unregistered at that
+         * moment, the hand-back can fail, and the id can name nothing. A {@code void} answer left
+         * those indistinguishable from a stop, and the tool reported stops that had not happened.
+         * The answer carries its own sentence so no caller has to word one.
          *
          * @param comparisonId the started comparison
+         * @param ending why the comparison is ending; it selects EDT's verb and nothing else
          * @return what was observed; never {@code null}
          */
-        StopOutcome cancel(String comparisonId);
-
-        /**
-         * Releases the session of a comparison that already stopped by itself, or one the
-         * caller has finished reading.
-         * <p>
-         * It answers what was OBSERVED rather than merely whether a record existed, for the
-         * same reason {@link #cancel(String)} does: dropping the registry entry always
-         * succeeds, and the sentence the caller publishes is about EDT's single slot, which
-         * only a stop frees.
-         *
-         * @param comparisonId the started comparison
-         * @return what was observed; never {@code null}
-         */
-        ReleaseOutcome release(String comparisonId);
+        SlotHandback handBack(String comparisonId, Ending ending);
 
         /** @return the comparison ids a caller may still quote, oldest first */
         List<String> liveComparisonIds();
@@ -1640,16 +1808,19 @@ public class CompareConfigurationsTool implements IMcpTool
                 // this line. Nothing reached the platform, so nothing is reported as started -
                 // this used to return normally and the job went on to publish "Comparison
                 // cmp-N started." for a comparison that did not exist.
-                engine.sessions().release(id);
-                throw new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable()), e);
+                throw new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())
+                    + ' ' + engine.sessions().handBack(id, Ending.CLOSED).sentence(), e);
             }
             catch (RuntimeException e)
             {
-                // Registered before the launch and released here: a session that outlives a
-                // failed launch would hold the slot against every later attempt.
-                engine.sessions().release(id);
+                // Registered before the launch and given back here: a session that outlives a
+                // failed launch would hold the slot against every later attempt. The hand-back's
+                // own answer is part of the message and not dropped on the floor - a rollback that
+                // failed leaves a registration behind, and the caller is the only one who can act
+                // on that.
                 throw new ComparisonException("EDT refused to start the comparison: " //$NON-NLS-1$
-                    + ComparisonFailures.describe(e), e);
+                    + ComparisonFailures.describe(e) + ' '
+                    + engine.sessions().handBack(id, Ending.CLOSED).sentence(), e);
             }
             return id;
         }
@@ -1657,11 +1828,20 @@ public class CompareConfigurationsTool implements IMcpTool
         @Override
         public Progress poll(String comparisonId)
         {
-            Optional<ComparisonEngine> engine = ComparisonEngine.get();
+            // The INSTALLED facade, not the available one. A poll that cannot reach EDT's
+            // comparison service has observed nothing about the comparison, and this facade
+            // already has a word for that: every reading call answers PlatformAnswer.unavailable(),
+            // which becomes Phase.UNKNOWN and costs the loop one tick of its unreadable budget.
+            // Going through ComparisonEngine.get() short-circuited all of it - a service
+            // unregistered for a moment produced a FAILED verdict before a single question was
+            // asked, and the failed branch then ended a healthy comparison and stranded it holding
+            // EDT's single slot under an id nobody could quote. The one case left here is a facade
+            // that was never installed, which is the bundle not being started at all.
+            Optional<ComparisonEngine> engine = ComparisonEngine.attached();
             if (engine.isEmpty())
             {
-                return Progress.failed("EDT's comparison service disappeared while the " //$NON-NLS-1$
-                    + "comparison was running."); //$NON-NLS-1$
+                return Progress.gone("This server's comparison facade is not installed, so the " //$NON-NLS-1$
+                    + "comparison cannot be reached at all."); //$NON-NLS-1$
             }
             ComparisonSessionRegistry sessions = engine.get().sessions();
             // ONE lookup, not three. Each of them re-asks EDT for the live handles and can answer
@@ -1754,30 +1934,47 @@ public class CompareConfigurationsTool implements IMcpTool
         {
             ComparisonEngine engine = ComparisonEngine.get().orElseThrow(
                 () -> new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())));
-            ComparisonProcessHandle handle = engine.sessions().handle(comparisonId);
-            if (handle == null)
+            // LEASED for the whole read, not looked up for an instant at the start of it. The
+            // sweep measures idleness from the last lookup, and walking a large configuration is
+            // one lookup followed by minutes of BM reads: a comparison whose tree takes longer
+            // than the idle TTL would be ended underneath the very read that is walking it. The
+            // lease also carries the handle, so the liveness question is asked once rather than
+            // twice with two answers that can disagree.
+            try (ComparisonSessionRegistry.Lease lease = engine.sessions().lease(comparisonId))
             {
-                throw new ComparisonException(
-                    messageOf(ComparisonFailures.sessionGone(comparisonId)));
+                if (!lease.held())
+                {
+                    throw new ComparisonException(
+                        messageOf(ComparisonFailures.sessionGone(comparisonId)));
+                }
+                return renderTree(engine, lease.handle(), comparisonId, request);
             }
+        }
+
+        /**
+         * Walks one leased comparison tree and renders it.
+         *
+         * @param engine the read-only facade
+         * @param handle the leased comparison's handle
+         * @param comparisonId this plugin's id for it
+         * @param request the request, for the page size and the filter
+         * @return the rendered Markdown report
+         * @throws ComparisonException when the tree could not be read
+         */
+        private static String renderTree(ComparisonEngine engine, ComparisonProcessHandle handle,
+            String comparisonId, LaunchRequest request) throws ComparisonException
+        {
             ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(
                 request.getLimit(), request.isChangedOnly());
             try
             {
-                // orElse(null) folds "the service could not be asked" into "no view", and the
-                // refusal below covers both: either way the tree cannot be read now, and the
-                // caller's move - start again - is the same.
-                ComparisonView view = engine.view(handle).orElse(null);
-                if (view == null)
+                PlatformAnswer<ComparisonView> answer = engine.view(handle);
+                String unreadable = unreadableTreeMessage(answer, comparisonId);
+                if (unreadable != null)
                 {
-                    // EDT no longer knows the handle - the comparison was ended outside this
-                    // server between the lookup above and this line. Named as itself, because
-                    // reading on through the null throws a NullPointerException, and
-                    // "NullPointerException" is not a fact the caller can act on while "it was
-                    // ended outside this server" is.
-                    throw new ComparisonException(
-                        messageOf(ComparisonFailures.sessionGone(comparisonId)));
+                    throw new ComparisonException(unreadable);
                 }
+                ComparisonView view = answer.orElse(null);
                 // Read through the comparison's OWN transaction: the nodes are objects of the
                 // comparison's private BM store, and BmTransactions.read(project, ...) would open
                 // a transaction on a different store entirely (CLAUDE.md don't #1).
@@ -1841,57 +2038,23 @@ public class CompareConfigurationsTool implements IMcpTool
         }
 
         @Override
-        public StopOutcome cancel(String comparisonId)
+        public SlotHandback handBack(String comparisonId, Ending ending)
         {
-            Optional<ComparisonEngine> engine = ComparisonEngine.get();
-            if (engine.isEmpty())
-            {
-                // EDT's comparison service is not registered, so nothing here can reach the
-                // comparison to stop it. The session is still given back - through the shared
-                // registry, the same door release() uses, because a session outlives a momentary
-                // service gap and would otherwise sit on EDT's single slot until its idle TTL -
-                // but this is NOT a stop, and the caller is told so.
-                ComparisonSessionRegistry.shared().release(comparisonId);
-                return StopOutcome.SERVICE_UNAVAILABLE;
-            }
-            ComparisonProcessHandle handle = engine.get().sessions().handle(comparisonId);
-            // Cancelling the comparison does NOT deregister it: the facade cancels, the registry
-            // owns. Both have to happen, or the slot reads as taken forever.
-            if (handle == null)
-            {
-                engine.get().sessions().release(comparisonId);
-                return StopOutcome.NOTHING_TO_STOP;
-            }
-            try
-            {
-                engine.get().cancel(handle);
-            }
-            catch (ComparisonEngine.ServiceUnavailableException e)
-            {
-                // The service disappeared between the lookup above and this call. The session
-                // is still given back - it would otherwise sit on EDT's single slot until its
-                // idle TTL - but nothing was cancelled, and reporting STOPPED here is what let
-                // cancel_job answer TERMINATED for a comparison that went on running.
-                Activator.logError("Could not cancel comparison " + comparisonId, e); //$NON-NLS-1$
-                ComparisonSessionRegistry.shared().release(comparisonId);
-                return StopOutcome.SERVICE_UNAVAILABLE;
-            }
-            // A stop is BOTH operations, so the verdict is built from both. This answer used to
-            // be discarded and STOPPED returned regardless: a service that went away between the
-            // cancel and the hand-back left cancel_job publishing TERMINATED and "its temporary
-            // workspace released" over a hand-back that never completed.
-            return stopVerdict(engine.get().sessions().release(comparisonId));
-        }
-
-        @Override
-        public ReleaseOutcome release(String comparisonId)
-        {
-            // The registry's own release stops the handle, and stopping it is what gives the
-            // virtual project and the private BM store back - the same path the idle sweep
-            // takes. Reached through the registry rather than ComparisonEngine.get() so that
-            // a session stays releasable while EDT's service is momentarily unregistered: it
-            // still owns a virtual project across that gap.
-            return ComparisonSessionRegistry.shared().release(comparisonId);
+            // ONE line, and it is the whole implementation on purpose. Ending a comparison and
+            // dropping its record are halves of one decision, and this file used to make that
+            // decision in two methods and five call sites: one branch stopped the platform and
+            // let the record go on a hand-back that had failed, another dropped the record with
+            // no stop attempted at all because EDT's service had blinked, and a third threw the
+            // answer away. None of those is expressible now - the registry owns the decision, its
+            // verdict says what happened, and the platform's two lifetime verbs cannot even be
+            // named from here.
+            //
+            // Reached through the registry's own entry point rather than through
+            // ComparisonEngine.get(): get() also reports "unavailable" while EDT's service is
+            // momentarily unregistered, and a session must stay addressable across such a gap -
+            // it still owns a virtual project, and the hand-back is exactly the thing that has to
+            // be able to say "I could not ask" instead of dropping it.
+            return ComparisonSessionRegistry.shared().handBack(comparisonId, ending);
         }
 
         @Override
