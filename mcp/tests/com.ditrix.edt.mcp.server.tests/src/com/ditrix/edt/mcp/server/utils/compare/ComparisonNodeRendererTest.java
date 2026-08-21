@@ -25,6 +25,7 @@ import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
@@ -255,6 +256,75 @@ public class ComparisonNodeRendererTest
             text.contains("OnCreateAtServer")); //$NON-NLS-1$
         assertTrue("the section type must be rendered by its locale-free literal name: " + text, //$NON-NLS-1$
             text.contains(BslModuleSectionType.PROCEDURE.getName()));
+    }
+
+    @Test
+    public void testTheFormSnapshotDropsTheRowsTheCallersLimitCannotHold()
+    {
+        // The snapshot is rendered INSIDE a document that promises "maximum rows per table", so
+        // its tables are that document's tables too. Handing the reader no limit left them
+        // unbounded: limit=1 still produced every attribute the form has.
+        String text = renderForm(formWithAttributes(3), 1);
+
+        assertTrue("the first row must survive the cap: " + text, text.contains("Attr0")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a row past the cap must not be rendered: " + text, //$NON-NLS-1$
+            text.contains("Attr2")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFormSnapshotThatDroppedRowsSaysSo()
+    {
+        // A cut table that looks whole is the same lie as "no differences" over an uncompared
+        // subtree: the reader concludes the form has one attribute.
+        String text = renderForm(formWithAttributes(3), 1);
+
+        assertTrue("the cap must be named where it bit: " + text, //$NON-NLS-1$
+            text.contains("truncated: only the first 1 are shown")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFormSnapshotWithinTheLimitCarriesNoTruncationNote()
+    {
+        // The control that keeps the note from being unconditional: exactly `limit` rows is a
+        // complete table, and telling the caller to raise the limit would send them after a page
+        // that is already whole.
+        String text = renderForm(formWithAttributes(3), 3);
+
+        assertTrue(text.contains("Attr2")); //$NON-NLS-1$
+        assertFalse("a complete table must not be flagged as truncated: " + text, //$NON-NLS-1$
+            text.contains("truncated")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testModuleSectionsBeyondTheLimitAreAnnouncedAsTruncated()
+    {
+        // flatten() raised the flag; until now nothing in this block read it, so the table was cut
+        // and looked complete - while the child outline and the problem table beside it both
+        // announce the very same cap.
+        String text = render(moduleWithSections(3), ComparisonNodeStatus.FINISHED, access(null), 2);
+
+        assertTrue("the module section table must announce its cap: " + text, //$NON-NLS-1$
+            sectionOf(text, "## Module sections").contains(Pagination.limitReachedNotice(2))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testModuleSectionsWithinTheLimitAreNotAnnouncedAsTruncated()
+    {
+        // Exactly `limit` sections drains the budget without declining anything, and a notice here
+        // would point at a page that is already complete.
+        String text = render(moduleWithSections(2), ComparisonNodeStatus.FINISHED, access(null), 2);
+
+        assertFalse("a complete section table must not be flagged as truncated: " + text, //$NON-NLS-1$
+            sectionOf(text, "## Module sections").contains("limit reached")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheModuleSectionCountIsACountOfRenderedRows()
+    {
+        String text = render(moduleWithSections(3), ComparisonNodeStatus.FINISHED, access(null), 2);
+
+        assertTrue("the header must count the rows the table actually holds: " + text, //$NON-NLS-1$
+            text.contains("**Sections shown:** 2")); //$NON-NLS-1$
     }
 
     // ==================== Support state ====================
@@ -569,6 +639,64 @@ public class ComparisonNodeRendererTest
         when(parent.<ComparisonNode> getChildren()).thenReturn(list);
     }
 
+    /** Renders a FORM node whose main side carries {@code form}, at {@code limit} rows per table. */
+    private static String renderForm(EObject form, int limit)
+    {
+        FormComparisonNode node = mock(FormComparisonNode.class);
+        when(node.eClass()).thenReturn(MODEL.formNodeClass);
+        return render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(form, null, null)), limit);
+    }
+
+    /** A form-like object carrying {@code count} attributes named {@code Attr0..Attr(n-1)}. */
+    private static EObject formWithAttributes(int count)
+    {
+        EObject form = new DynamicEObjectImpl(MODEL.formClass);
+        form.eSet(MODEL.formName, "ItemForm"); //$NON-NLS-1$
+        @SuppressWarnings("unchecked")
+        List<EObject> attributes = (List<EObject>)form.eGet(MODEL.formAttributes);
+        for (int i = 0; i < count; i++)
+        {
+            EObject attribute = new DynamicEObjectImpl(MODEL.mdClass);
+            attribute.eSet(MODEL.mdName, "Attr" + i); //$NON-NLS-1$
+            attributes.add(attribute);
+        }
+        return form;
+    }
+
+    /** A module node carrying {@code count} distinct sections, so a dropped one is identifiable. */
+    private static BslModuleComparisonNode moduleWithSections(int count)
+    {
+        BslModuleComparisonNode module = mock(BslModuleComparisonNode.class);
+        when(module.eClass()).thenReturn(MODEL.moduleNodeClass);
+        EList<BslModuleSectionComparisonNode> sections = new BasicEList<>();
+        for (int i = 0; i < count; i++)
+        {
+            BslModuleSectionComparisonNode section = mock(BslModuleSectionComparisonNode.class);
+            when(section.getSectionType()).thenReturn(BslModuleSectionType.PROCEDURE);
+            when(section.getName(ComparisonSide.MAIN)).thenReturn("Section" + i); //$NON-NLS-1$
+            sections.add(section);
+        }
+        when(module.getChildren()).thenReturn(sections);
+        return module;
+    }
+
+    /**
+     * The text of ONE {@code ## } section of the document, so an assertion about one table cannot
+     * be satisfied by a sentence printed under another heading.
+     *
+     * @param text the whole document
+     * @param heading the section heading, including its {@code ##}
+     * @return everything from that heading up to the next one
+     */
+    private static String sectionOf(String text, String heading)
+    {
+        int start = text.indexOf(heading);
+        assertTrue("the document must carry " + heading + ":\n" + text, start >= 0); //$NON-NLS-1$ //$NON-NLS-2$
+        int end = text.indexOf("\n## ", start + heading.length()); //$NON-NLS-1$
+        return end < 0 ? text.substring(start) : text.substring(start, end);
+    }
+
     private static StubAccess access(IComparedObjects<EObject> objects)
     {
         StubAccess stub = new StubAccess();
@@ -627,6 +755,7 @@ public class ComparisonNodeRendererTest
         final EAttribute mdComment;
         final EClass formClass;
         final EAttribute formName;
+        final EReference formAttributes;
         final EClass formNodeClass;
         final EClass moduleNodeClass;
         private final EPackage pkg;
@@ -651,6 +780,14 @@ public class ComparisonNodeRendererTest
             formClass.setName("FormLike"); //$NON-NLS-1$
             formName = stringAttribute(factory, "name"); //$NON-NLS-1$
             formClass.getEStructuralFeatures().add(formName);
+            // The feature the form reader looks for by NAME; the element type only has to carry a
+            // 'name', which the md-like class already does.
+            formAttributes = factory.createEReference();
+            formAttributes.setName("attributes"); //$NON-NLS-1$
+            formAttributes.setEType(mdClass);
+            formAttributes.setContainment(true);
+            formAttributes.setUpperBound(-1);
+            formClass.getEStructuralFeatures().add(formAttributes);
             pkg.getEClassifiers().add(formClass);
 
             formNodeClass = nodeClass("FormComparisonNode"); //$NON-NLS-1$

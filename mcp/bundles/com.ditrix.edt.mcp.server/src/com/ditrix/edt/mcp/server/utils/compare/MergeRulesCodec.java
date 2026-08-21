@@ -352,10 +352,40 @@ public final class MergeRulesCodec
      * a privilege the build does not have, and a test that is skipped proves nothing about the
      * loop it was written for.
      *
+     * <h2>Declared limitation: a relative destination is resolved LEXICALLY</h2>
+     * <b>What is not guaranteed.</b> For a DANGLING chain - the only chain that reaches this walk,
+     * since a chain whose every hop exists is resolved by {@code Path.toRealPath()} one level up -
+     * a hop whose recorded destination is RELATIVE is resolved against {@code current.getParent()}
+     * and then {@code normalize()}d. Both steps are string operations. {@code getParent()} returns
+     * the parent COMPONENT of the path as written, which is a name for the directory and not the
+     * directory itself; {@code normalize()} then collapses {@code ..} before any filesystem lookup
+     * happens. Where the containing directory is itself reached through a symbolic link, the
+     * operating system would resolve the same destination against the directory the link POINTS
+     * AT, and the two answers can name different files. The walk can therefore end on a path the
+     * kernel would not have arrived at, and the rules are then written there.
+     * <p>
+     * <b>When it shows.</b> Only when all three hold at once: the chain is dangling (so
+     * {@code toRealPath()} could not answer), a hop's destination is relative, and the directory
+     * containing that hop is reached through a symbolic link to somewhere else - or the
+     * destination climbs out of it with {@code ..}. The everyday cases are unaffected: an absolute
+     * destination never consults the parent, a relative destination inside a real directory
+     * resolves identically either way, and a chain that fully exists never gets here.
+     * <p>
+     * <b>Why it is declared rather than patched.</b> An honest answer requires resolving EVERY
+     * containing directory through the filesystem - the walk would have to canonicalise the parent
+     * at each hop before joining the destination, and fall back to the lexical form only for the
+     * parts of the path that do not exist yet, which is a different algorithm from this loop
+     * rather than a stricter version of it. Three rounds of review each removed one lexical
+     * assumption from this walk (one link, then the whole chain, then this parent), and each fix
+     * exposed the next one, so the family is closed here: the remaining case is named, bounded and
+     * left to the caller, who can avoid it entirely by passing the path of the file itself.
+     *
      * @param start the path to start from, absolute
      * @param links answers each hop's recorded destination, or {@code null} when the path is not
      *            a link
-     * @return the first path in the chain that is not a link
+     * @return the first path in the chain that is not a link; for a relative destination this is
+     *             the LEXICALLY resolved path, which can differ from the kernel's answer - see the
+     *             declared limitation above
      * @throws IOException when a link cannot be read, or the chain rings or runs past
      *             {@link #MAX_SYMLINK_HOPS}
      */
@@ -371,6 +401,10 @@ public final class MergeRulesCodec
             {
                 return current;
             }
+            // LEXICAL on purpose, and its cost is stated in this method's javadoc: getParent() is
+            // the parent component of the path as written, and normalize() collapses '..' before
+            // the filesystem ever resolves a directory, so a relative destination under a
+            // symlinked parent can name a file the kernel would not have chosen.
             Path base = current.getParent();
             Path next = destination.isAbsolute() || base == null ? destination.toAbsolutePath()
                 : base.resolve(destination).toAbsolutePath().normalize();

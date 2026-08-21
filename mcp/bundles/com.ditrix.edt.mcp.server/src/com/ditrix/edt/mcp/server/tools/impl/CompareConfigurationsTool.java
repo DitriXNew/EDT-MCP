@@ -61,6 +61,7 @@ import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback.Ending;
 import com.ditrix.edt.mcp.server.utils.git.GitRevisionResolver;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 
@@ -315,6 +316,12 @@ public class CompareConfigurationsTool implements IMcpTool
                 .toJson();
         }
 
+        String scopeError =
+            validateScopeArgument(params == null ? null : params.get(KEY_SCOPE));
+        if (scopeError != null)
+        {
+            return scopeError;
+        }
         List<String> scope = JsonUtils.extractArrayArgument(params, KEY_SCOPE);
         String mergeRulesFile =
             trimToNull(JsonUtils.extractStringArgument(params, KEY_MERGE_RULES_FILE));
@@ -382,6 +389,142 @@ public class CompareConfigurationsTool implements IMcpTool
         }
         return "**Released:** " + handback.sentence() + " Its nodeIds no longer resolve; start a " //$NON-NLS-1$ //$NON-NLS-2$
             + "new comparison with " + NAME + " when you need one."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Checks the RAW 'scope' argument before it is parsed, because parsing is where the danger is.
+     * <p>
+     * {@code JsonUtils.extractArrayArgument} keeps only the PRIMITIVE elements of a JSON array and
+     * drops the rest without a word, so {@code [null]} and {@code [{}]} arrive here as an EMPTY
+     * list - and an empty scope is not "nothing was asked for", it is
+     * {@link ComparisonScopeBuilder}'s spelling of COMPARE THE WHOLE CONFIGURATION, the heaviest
+     * run this tool can start and the one that takes EDT's single slot for minutes. A broken
+     * request would therefore have been answered with the most expensive thing the tool does. The
+     * same silent drop turns a comma-separated {@code ",,"} into no entries at all, which lands in
+     * exactly the same place.
+     * <p>
+     * So every element the caller PASSED has to be a string, refused BY POSITION when it is not -
+     * the shape {@code merge_rules} already uses for the segments of a decision path, and the shape
+     * {@link ComparisonScopeBuilder} already uses for a blank entry. An explicitly EMPTY array
+     * {@code []} is left alone: no element was dropped there, so it is read as the omitted scope it
+     * looks like.
+     *
+     * @param raw the argument exactly as it arrived, or {@code null} when it was omitted
+     * @return an error result, or {@code null} when the argument can be parsed without losing
+     *         anything
+     */
+    private static String validateScopeArgument(String raw)
+    {
+        if (raw == null || raw.trim().isEmpty())
+        {
+            return null;
+        }
+        String value = raw.trim();
+        if (value.startsWith("[")) //$NON-NLS-1$
+        {
+            JsonArray array = asJsonArray(value);
+            if (array == null)
+            {
+                // Not parseable as JSON: extractArrayArgument falls through to comma-separated
+                // parsing, so this text is checked by the branch below rather than here.
+                return commaSeparatedScopeError(value);
+            }
+            for (int i = 0; i < array.size(); i++)
+            {
+                JsonElement element = array.get(i);
+                if (element == null || !element.isJsonPrimitive()
+                    || !element.getAsJsonPrimitive().isString())
+                {
+                    return nonStringScopeEntryError(i, element);
+                }
+            }
+            return null;
+        }
+        return commaSeparatedScopeError(value);
+    }
+
+    /**
+     * @param value the raw argument, already trimmed and known not to be a JSON array
+     * @return the refusal when the comma-separated form carries no usable entry, else {@code null}
+     */
+    private static String commaSeparatedScopeError(String value)
+    {
+        for (String part : value.split(",")) //$NON-NLS-1$
+        {
+            if (!part.trim().isEmpty())
+            {
+                return null;
+            }
+        }
+        return ToolResult.error("'" + KEY_SCOPE + "' was sent but names no object: every entry in " //$NON-NLS-1$ //$NON-NLS-2$
+            + "it is empty. Nothing was started. Each entry must be a metadata full name such as " //$NON-NLS-1$
+            + "'Catalog.Products'. To compare the WHOLE configuration, omit '" + KEY_SCOPE //$NON-NLS-1$
+            + "' entirely - an empty scope is never read that way, because a whole-configuration " //$NON-NLS-1$
+            + "comparison is the heaviest run this tool can start and has to be asked for.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * The refusal for an array element that is not a string.
+     * <p>
+     * It names the POSITION and the JSON KIND that was found, and quotes neither the element nor
+     * the array: the caller knows what they sent, and echoing arbitrary caller text back into a
+     * Markdown answer is a defect family this tree has paid for once already.
+     *
+     * @param index the zero-based position of the offending element
+     * @param element the offending element, or {@code null}
+     * @return the actionable message
+     */
+    private static String nonStringScopeEntryError(int index, JsonElement element)
+    {
+        return ToolResult.error("Scope entry #" + (index + 1) + " is " + jsonKindOf(element) //$NON-NLS-1$ //$NON-NLS-2$
+            + ", not a metadata full name. Nothing was started. Every '" + KEY_SCOPE //$NON-NLS-1$
+            + "' entry must be a string such as 'Catalog.Products'; an entry that is not one is " //$NON-NLS-1$
+            + "dropped when the array is read, and a scope that ends up empty means COMPARE THE " //$NON-NLS-1$
+            + "WHOLE CONFIGURATION - the heaviest run this tool can start. To compare everything, " //$NON-NLS-1$
+            + "omit '" + KEY_SCOPE + "' entirely.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * @param value the raw argument, known to start with {@code [}
+     * @return the parsed array, or {@code null} when the text is not a JSON array
+     */
+    private static JsonArray asJsonArray(String value)
+    {
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(value);
+            return parsed.isJsonArray() ? parsed.getAsJsonArray() : null;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * @param element the element to describe
+     * @return the JSON kind, in words, for a message that quotes no caller text
+     */
+    private static String jsonKindOf(JsonElement element)
+    {
+        if (element == null || element.isJsonNull())
+        {
+            return "null"; //$NON-NLS-1$
+        }
+        if (element.isJsonObject())
+        {
+            return "an object"; //$NON-NLS-1$
+        }
+        if (element.isJsonArray())
+        {
+            return "an array"; //$NON-NLS-1$
+        }
+        if (element.getAsJsonPrimitive().isBoolean())
+        {
+            return "a boolean"; //$NON-NLS-1$
+        }
+        return "a number"; //$NON-NLS-1$
     }
 
     /**

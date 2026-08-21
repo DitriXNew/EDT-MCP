@@ -460,6 +460,93 @@ public class CompareConfigurationsToolTest
         assertEquals(1, backend.starts());
     }
 
+    /**
+     * A scope whose elements are all non-primitive parses to an EMPTY list, and an empty scope is
+     * the platform's spelling of "compare the whole configuration" - so the broken request used to
+     * be answered with the heaviest run the tool can start, holding EDT's single slot for minutes.
+     * Each fact is pinned in its own method: JUnit stops a method at its first failed assertion,
+     * so bundling them would only ever load-bear on the first.
+     */
+    @Test
+    public void testAScopeOfOnlyNonStringElementsStartsNothing()
+    {
+        String result = tool.execute(request(Map.of("scope", "[null]", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        errorMessage(result);
+        assertEquals(0, backend.starts());
+        assertNull(backend.lastRequest());
+    }
+
+    @Test
+    public void testAScopeOfOnlyNonStringElementsNamesTheOffendingPosition()
+    {
+        String error = errorMessage(tool.execute(request(Map.of("scope", "[null]", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(error, "Scope entry #1"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAScopeRefusalSaysWhatTheDroppedEntryWouldHaveMeant()
+    {
+        String error = errorMessage(tool.execute(request(Map.of("scope", "[null]", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(error, "WHOLE CONFIGURATION"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAScopeRefusalNamesTheKindThatWasFoundWithoutEchoingIt()
+    {
+        // The kind, never the element: echoing caller text back into a Markdown answer is a defect
+        // family this tree has already paid for once.
+        String error = errorMessage(tool.execute(request(Map.of("scope", "[{\"fqn\":\"x\"}]", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(error, "is an object"); //$NON-NLS-1$
+        assertFalse("the offending element must not be quoted back: " + error, //$NON-NLS-1$
+            error.contains("fqn")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABrokenEntryAfterAGoodOneIsRefusedAtItsOwnPosition()
+    {
+        // The dangerous case is not only the all-broken array: one dropped element silently
+        // NARROWS the comparison instead of widening it, which is just as wrong a report.
+        String error = errorMessage(tool.execute(request(Map.of("scope", //$NON-NLS-1$
+            "[\"Catalog.Products\", 42]", "waitSeconds", "10")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertContains(error, "Scope entry #2"); //$NON-NLS-1$
+        assertContains(error, "is a number"); //$NON-NLS-1$
+        assertEquals(0, backend.starts());
+    }
+
+    @Test
+    public void testACommaSeparatedScopeOfNothingButSeparatorsStartsNothing()
+    {
+        // The same silent drop in the other parse branch: extractArrayArgument keeps no empty
+        // part, so ",," arrives as no scope at all and would have compared everything.
+        String error = errorMessage(tool.execute(request(Map.of("scope", ",,", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(error, "names no object"); //$NON-NLS-1$
+        assertEquals(0, backend.starts());
+    }
+
+    @Test
+    public void testAnExplicitlyEmptyScopeArrayIsStillAWholeConfigurationRequest()
+    {
+        // The negative control that keeps the check from overreaching: '[]' dropped NOTHING, so it
+        // is read as the omitted scope it looks like rather than refused.
+        tool.execute(request(Map.of("scope", "[]", "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        LaunchRequest seen = backend.lastRequest();
+        assertNotNull(seen);
+        assertTrue(seen.getScope().isEmpty());
+        assertEquals(1, backend.starts());
+    }
+
     @Test
     public void testTheDescriptionSaysHowToFreeTheSlotOfAFinishedComparison()
     {

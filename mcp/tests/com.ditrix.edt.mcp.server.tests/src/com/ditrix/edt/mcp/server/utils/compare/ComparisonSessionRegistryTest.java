@@ -847,6 +847,61 @@ public class ComparisonSessionRegistryTest
         assertEquals(0, registry.size());
     }
 
+    /**
+     * What ALREADY_FREE actually observed is the absence of ONE handle - ours. The slot is
+     * EDT-wide: the platform drops its active batch the moment any comparison ends, and a
+     * comparison launched from EDT's own comparison window is never registered here, so it would
+     * hold the slot under no id this server knows. The sentence used to close with "EDT's single
+     * comparison slot is free", which is the one clause a caller ACTS on, and it was reached from
+     * an observation that cannot support it. Three separate methods, because JUnit stops a method
+     * at its first failed assertion.
+     */
+    @Test
+    public void anAlreadyFreeHandBackDoesNotClaimTheSlotItselfIsFree()
+    {
+        String sentence = alreadyFreeSentence();
+
+        assertFalse("absence of OUR handle is not a reading of the slot: " + sentence, //$NON-NLS-1$
+            sentence.contains("slot is free")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anAlreadyFreeHandBackSaysWhichComparisonStoppedOccupyingTheSlot()
+    {
+        String sentence = alreadyFreeSentence();
+
+        assertTrue("it must still say what WAS established: " + sentence, //$NON-NLS-1$
+            sentence.contains("does not occupy")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anAlreadyFreeHandBackSaysTheSlotItselfWasNotAskedAbout()
+    {
+        String sentence = alreadyFreeSentence();
+
+        assertTrue("the unasked question has to be named, not left to be assumed: " + sentence, //$NON-NLS-1$
+            sentence.contains("NOT asked")); //$NON-NLS-1$
+    }
+
+    /** @return the sentence of a hand-back for a session EDT has already forgotten */
+    private String alreadyFreeSentence()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        // The lookup is part of the fixture, not decoration: "gone" means EDT was seen holding the
+        // handle FIRST, so without one reading that saw it live, a later absence is read as "not
+        // listed yet" and the hand-back reaches the platform instead.
+        assertTrue(registry.find(id).isPresent());
+        liveHandles.live = Collections.emptyList();
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CLOSED);
+
+        assertEquals(SlotHandback.Verdict.ALREADY_FREE, handback.verdict());
+        return handback.sentence();
+    }
+
     /** The positive control: a live session that stops cleanly is the one case that IS a release. */
     @Test
     public void releasingALiveSessionReportsItReleased()

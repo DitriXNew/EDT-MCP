@@ -630,6 +630,78 @@ public class MergeRulesToolTest
         assertErrorNaming(result, "$$Root$$ / commonModules", "cmp-7"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ the authority is held for the whole pass, and only for it ============
+
+    /**
+     * The pass is one BM read per decision IN THE FILE, and a file built from {@code basedOn} can
+     * carry hundreds. The production authority holds a registry lease across them, so that the idle
+     * sweep - which any comparison-tool call in another thread can fire, counting its TTL from the
+     * last touch rather than from the start of this pass - cannot reclaim the session being read
+     * and stop the comparison under an active validation. A lease is only correct if it is also
+     * GIVEN BACK, on every exit, which is what these four pin. They are separate methods because
+     * JUnit stops at the first failed assertion.
+     */
+    @Test
+    public void testTheAuthorityIsReleasedAfterAWriteThatPassedValidation()
+    {
+        RecordingAuthority authority = new RecordingAuthority("cmp-7", List.of("DoNotMerge")); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(authority));
+
+        String result = tool.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+            "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertEquals("the pass ended, so what it held must be given back", 1, authority.closes); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAuthorityIsReleasedAfterAWriteThatWasRefused()
+    {
+        RecordingAuthority authority = new RecordingAuthority("cmp-7", List.of("DoNotMerge")); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(authority));
+
+        String result = tool.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+            "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "GetFromOther"); //$NON-NLS-1$
+        assertEquals("a refusal ends the pass too", 1, authority.closes); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAuthorityIsReleasedWhenTheComparisonAnswersWithAFailure()
+    {
+        RecordingAuthority authority = new RecordingAuthority("cmp-7", List.of("DoNotMerge")); //$NON-NLS-1$ //$NON-NLS-2$
+        authority.explode = true;
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(authority));
+
+        String result = tool.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+            "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Nothing was written"); //$NON-NLS-1$
+        assertEquals("the failure path must not leak what the pass held", 1, authority.closes); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryDecisionIsCheckedBeforeTheAuthorityIsReleased()
+    {
+        // The one that distinguishes "held for the pass" from "closed as soon as it was obtained":
+        // a release placed before the loop would leave every read running on a session the sweep is
+        // free to reclaim, which is exactly the window this change closes.
+        RecordingAuthority authority = new RecordingAuthority("cmp-7", List.of("DoNotMerge")); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(authority));
+
+        tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}," //$NON-NLS-1$ //$NON-NLS-2$
+                + "{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertEquals("both decisions must be checked", 2, authority.reads); //$NON-NLS-1$
+        assertEquals("no rule may be checked once the pass has released its hold", 0, //$NON-NLS-1$
+            authority.readsAfterClose);
+    }
+
     @Test
     public void testANamedComparisonThatIsNotLiveIsRefusedRatherThanQuietlyUnvalidated()
     {
@@ -865,6 +937,54 @@ public class MergeRulesToolTest
         EList<ComparisonNode> list = new BasicEList<>();
         list.addAll(List.of(children));
         when(parent.<ComparisonNode> getChildren()).thenReturn(list);
+    }
+
+    /**
+     * An authority that records what the pass did with it: how many nodes it asked about, whether
+     * any of them were asked AFTER the hold was given back, and how many times it was released.
+     */
+    private static final class RecordingAuthority
+        implements MergeRuleAuthority
+    {
+        private final String id;
+        private final List<String> allowed;
+        int reads;
+        int readsAfterClose;
+        int closes;
+        boolean explode;
+
+        RecordingAuthority(String id, List<String> allowed)
+        {
+            this.id = id;
+            this.allowed = allowed;
+        }
+
+        @Override
+        public String comparisonId()
+        {
+            return id;
+        }
+
+        @Override
+        public Optional<List<String>> availableRules(List<String> nodePath)
+        {
+            reads++;
+            if (closes > 0)
+            {
+                readsAfterClose++;
+            }
+            if (explode)
+            {
+                throw new IllegalStateException("the comparison store is closed"); //$NON-NLS-1$
+            }
+            return Optional.of(allowed);
+        }
+
+        @Override
+        public void close()
+        {
+            closes++;
+        }
     }
 
     private static MergeRuleAuthority authority(String id, List<String> allowed)

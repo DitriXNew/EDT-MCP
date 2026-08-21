@@ -499,7 +499,7 @@ public class MergeRulesTool implements IMcpTool
         }
 
         boolean idGiven = isSet(comparisonId);
-        Optional<MergeRuleAuthority> authority;
+        Optional<MergeRuleAuthority> authority = Optional.empty();
         String refusal;
         try
         {
@@ -520,6 +520,16 @@ public class MergeRulesTool implements IMcpTool
                 + "found illegal. Retry once the comparison answers, or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
                 + " to author the file from names alone - the report then says the rules were NOT " //$NON-NLS-1$
                 + "validated.").toJson(); //$NON-NLS-1$
+        }
+        finally
+        {
+            // The authority is held for the WHOLE pass and released the moment the pass is over -
+            // on the refusal path, on the failure path and on the way to the write alike. What it
+            // holds is a lease on the comparison session (see MergeRuleAuthority#close), and a
+            // lease outliving its read would keep a finished comparison out of the idle sweep's
+            // reach for as long as the server runs. Everything the report still needs from it -
+            // the comparison id - is a value it already carries.
+            authority.ifPresent(MergeRuleAuthority::close);
         }
         if (idGiven && authority.isEmpty())
         {
@@ -1106,6 +1116,7 @@ public class MergeRulesTool implements IMcpTool
      * allows nothing" are different facts and only one of them is a refusal.
      */
     public interface MergeRuleAuthority
+        extends AutoCloseable
     {
         /**
          * The comparison this authority speaks for, as the report should name it.
@@ -1121,6 +1132,28 @@ public class MergeRulesTool implements IMcpTool
          * @return the allowed literals, or empty when the comparison has no such node
          */
         Optional<List<String>> availableRules(List<String> nodePath);
+
+        /**
+         * Ends whatever the authority held open for the length of the validation pass.
+         * <p>
+         * It exists because the pass is not one question but one per decision in the FILE, each of
+         * them its own read on the comparison's BM store, and a file built from {@code basedOn} can
+         * carry hundreds. Between two of those reads the idle sweep can reclaim the very session
+         * being read - it fires from any comparison-tool call in another thread, and its TTL is
+         * counted from the last touch, not from the start of this pass - which would stop the
+         * comparison under an active validation and fail the write half way through. The production
+         * binding therefore holds a {@code ComparisonSessionRegistry.Lease} from the first lookup
+         * to this call.
+         * <p>
+         * Declared with no checked exception, and empty by default: an authority that holds nothing
+         * has nothing to end, and a caller must be able to close one in a {@code finally} without
+         * an exception path that could mask the refusal it is carrying.
+         */
+        @Override
+        default void close()
+        {
+            // an authority that holds nothing open has nothing to release
+        }
     }
 
     /**
@@ -1198,20 +1231,40 @@ public class MergeRulesTool implements IMcpTool
             {
                 return Optional.empty();
             }
-            ComparisonProcessHandle handle = registry.handle(id);
-            if (handle == null)
+            // LEASED, not merely looked up: the validation pass reads the tree once per decision in
+            // the file, and the session must survive from here to the last of those reads. The
+            // lease also carries the handle it leased - asking the registry for it separately would
+            // be a second liveness question, and the two can disagree.
+            ComparisonSessionRegistry.Lease lease = registry.lease(id);
+            boolean handedOver = false;
+            try
             {
-                return Optional.empty();
+                ComparisonProcessHandle handle = lease.handle();
+                if (handle == null)
+                {
+                    return Optional.empty();
+                }
+                // Both "the service could not be asked" and "EDT no longer knows the handle" land
+                // the same way HERE and only here: this path degrades to no validation, which the
+                // report states, so it draws no conclusion from either and needs to tell them apart
+                // nowhere.
+                ComparisonView view = engine.view(handle).orElse(null);
+                if (view == null || !isTreeFinished(engine, view))
+                {
+                    return Optional.empty();
+                }
+                handedOver = true;
+                return Optional.of(new LiveComparisonAuthority(engine, view, id, lease));
             }
-            // Both "the service could not be asked" and "EDT no longer knows the handle" land the
-            // same way HERE and only here: this path degrades to no validation, which the report
-            // states, so it draws no conclusion from either and needs to tell them apart nowhere.
-            ComparisonView view = engine.view(handle).orElse(null);
-            if (view == null || !isTreeFinished(engine, view))
+            finally
             {
-                return Optional.empty();
+                if (!handedOver)
+                {
+                    // Every path that answers "no validation" gives the lease back here; only the
+                    // authority that was actually handed out owns one, and it closes it itself.
+                    lease.close();
+                }
             }
-            return Optional.of(new LiveComparisonAuthority(engine, view, id));
         }
 
         /** Whether the whole tree has been compared, read inside the comparison's own boundary. */
@@ -1243,17 +1296,30 @@ public class MergeRulesTool implements IMcpTool
 
         private final String comparisonId;
 
-        LiveComparisonAuthority(ComparisonEngine engine, ComparisonView view, String comparisonId)
+        /** Held for the whole validation pass, so the idle sweep cannot reclaim it mid-read. */
+        private final ComparisonSessionRegistry.Lease lease;
+
+        LiveComparisonAuthority(ComparisonEngine engine, ComparisonView view, String comparisonId,
+            ComparisonSessionRegistry.Lease lease)
         {
             this.engine = engine;
             this.view = view;
             this.comparisonId = comparisonId;
+            this.lease = lease;
         }
 
         @Override
         public String comparisonId()
         {
             return comparisonId;
+        }
+
+        @Override
+        public void close()
+        {
+            // Lease.close() is idempotent, so a caller that closes in a finally AND in a
+            // try-with-resources cannot decrement the count twice and expose a live read.
+            lease.close();
         }
 
         @Override

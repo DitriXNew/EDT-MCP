@@ -119,10 +119,17 @@ public final class SlotHandback
         FREED,
         /**
          * EDT no longer held the comparison, so nothing was asked of it and nothing was left to
-         * give back. The record is gone and the slot is free.
+         * give back. The record is gone and THIS comparison holds nothing.
          * <p>
          * This is the ORDINARY answer after a cancellation, not a warning: ending a comparison is
          * what makes EDT forget its handle.
+         * <p>
+         * <b>It is not a reading of the slot.</b> What was observed is the absence of ONE handle -
+         * ours - and the slot is EDT-wide: the platform drops its active batch when a comparison
+         * ends, and a comparison launched from EDT's own comparison window is never registered
+         * here, so the slot can be occupied by something this server cannot name at the very
+         * moment this verdict is produced. The sentence says only what was seen, and the next
+         * launch is what actually establishes whether the slot can be taken.
          */
         ALREADY_FREE,
         /**
@@ -187,11 +194,19 @@ public final class SlotHandback
     }
 
     /**
-     * Whether EDT's single comparison slot is free as a RESULT of this hand-back.
+     * Whether THIS comparison is done with EDT's single comparison slot as a RESULT of this
+     * hand-back.
      * <p>
      * The one predicate a caller is meant to branch on, and the reason the verdicts are not
      * branched on outside the owner: "free" is a two-way question and the verdicts answer a
      * five-way one, so every site that split them itself split them slightly differently.
+     * <p>
+     * It is a statement about the NAMED comparison and not a reading of the slot. {@link
+     * Verdict#FREED} saw EDT take the hand-back; {@link Verdict#ALREADY_FREE} saw that EDT no
+     * longer held this handle at all. Neither observation can see a comparison started from EDT's
+     * own comparison window, which this server never registers - see {@link Verdict#ALREADY_FREE}.
+     * What the predicate is FOR is the record-dropping invariant: the record goes exactly when
+     * this comparison is known to hold nothing.
      *
      * @return {@code true} for {@link Verdict#FREED} and {@link Verdict#ALREADY_FREE} only
      */
@@ -244,8 +259,12 @@ public final class SlotHandback
                     + "released, so EDT's single comparison slot is free again."; //$NON-NLS-1$
             case ALREADY_FREE:
                 return "EDT no longer held comparison '" + comparisonId + "', so there was " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "nothing to stop; its record here is dropped and EDT's single comparison " //$NON-NLS-1$
-                    + "slot is free."; //$NON-NLS-1$
+                    + "nothing to stop and its record here is dropped. That is the whole of what " //$NON-NLS-1$
+                    + "was observed: comparison '" + comparisonId + "' does not occupy EDT's " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "single comparison slot. Whether the slot is taken by something else was " //$NON-NLS-1$
+                    + "NOT asked - a comparison started from EDT's own comparison window is never " //$NON-NLS-1$
+                    + "registered here, so it would hold the slot under no id this server knows. " //$NON-NLS-1$
+                    + "compare_configurations names the occupant when the next start is refused."; //$NON-NLS-1$
             case NOT_REGISTERED:
                 return "Nothing is registered here under comparison '" + comparisonId //$NON-NLS-1$
                     + "', so nothing was stopped and nothing is claimed about EDT's single " //$NON-NLS-1$

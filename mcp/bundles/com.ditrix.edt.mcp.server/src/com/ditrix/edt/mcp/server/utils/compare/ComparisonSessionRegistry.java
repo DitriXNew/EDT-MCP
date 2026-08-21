@@ -74,7 +74,8 @@ import com.ditrix.edt.mcp.server.Activator;
  * <p>
  * A session that EDT has already forgotten is dropped WITHOUT being ended: asking the platform to
  * end a handle it no longer knows is not a no-op everywhere, and there is nothing left to give
- * back. That is the {@link SlotHandback.Verdict#ALREADY_FREE} answer, and it is a free slot.
+ * back. That is the {@link SlotHandback.Verdict#ALREADY_FREE} answer: this comparison holds
+ * nothing, which is what lets the record go - not a reading that EDT's slot stands empty.
  *
  * <h2>Nothing has to remember to sweep</h2>
  * The TTL sweep is not a separate chore a caller may forget: {@link #find(String)},

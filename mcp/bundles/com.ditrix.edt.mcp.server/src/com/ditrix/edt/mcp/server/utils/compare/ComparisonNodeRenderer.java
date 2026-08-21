@@ -404,7 +404,14 @@ public final class ComparisonNodeRenderer
             // The SHARED form reader, on the per-side model object the comparison already resolved.
             // Its FQN-based entry point is deliberately not used: it addresses our workspace project,
             // not the comparison's virtual one, so it would render the wrong side's form.
-            sb.append(FormStructureReader.render(request.address, form, request.language));
+            //
+            // The caller's row limit is HANDED DOWN. This document promises "maximum rows per
+            // table", and these are its tables too - up to three of them per node, one per side.
+            // Without the limit the reader applied only its own MAX_NODES guard, so limit=1 still
+            // produced every attribute, command, parameter and event handler the form has and an
+            // item outline of up to 5000 lines, in a section the caller had asked to keep small.
+            sb.append(FormStructureReader.render(request.address, form, request.language,
+                request.limit));
             sb.append('\n');
         }
     }
@@ -432,7 +439,11 @@ public final class ComparisonNodeRenderer
                 .append(" in the module sections._\n\n"); //$NON-NLS-1$
             return;
         }
-        sb.append(MarkdownUtils.tableHeader("Depth", "Type", "Main", "Other", "Ancestor", "State")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        // The rows are built FIRST so the count above them is a count of rows actually rendered:
+        // `flat` may carry a node that is not a section, and a header that promised more rows than
+        // the table holds is the same kind of wrong number as a capped count read as a total.
+        StringBuilder rows = new StringBuilder();
+        int shown = 0;
         for (int i = 0; i < flat.size(); i++)
         {
             if (!(flat.get(i) instanceof BslModuleSectionComparisonNode))
@@ -440,12 +451,22 @@ public final class ComparisonNodeRenderer
                 continue;
             }
             BslModuleSectionComparisonNode section = (BslModuleSectionComparisonNode)flat.get(i);
-            sb.append(MarkdownUtils.tableRow(depths.get(i).toString(),
+            rows.append(MarkdownUtils.tableRow(depths.get(i).toString(),
                 sectionType(section), dashIfEmpty(section.getName(ComparisonSide.MAIN)),
                 dashIfEmpty(section.getName(ComparisonSide.OTHER)),
                 dashIfEmpty(section.getName(ComparisonSide.COMMON_ANCESTOR)),
                 stateOf(section, finished)));
+            shown++;
         }
+        // `flatten` raises the flag when a section was DECLINED, and until this line nothing read
+        // it: the table was cut and looked whole, while the child outline and the problem table
+        // beside it both announce the very same cap. A module whose sections were cut is exactly
+        // the case where a reader concludes "that procedure is not in the module".
+        sb.append("**Sections shown:** ").append(shown) //$NON-NLS-1$
+            .append(truncated[0] ? Pagination.limitReachedNotice(request.limit) : "") //$NON-NLS-1$
+            .append("\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Depth", "Type", "Main", "Other", "Ancestor", "State")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        sb.append(rows);
         sb.append('\n');
     }
 
