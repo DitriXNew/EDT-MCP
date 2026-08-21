@@ -65,13 +65,30 @@ searches before treating their results as complete.
 
 1. Read the Role FQN with `get_metadata_details`; page the rights matrix only
    when needed.
-2. Apply the smallest `rights`, `templates`, or `roleProperties` payload through
-   `modify_metadata`.
-3. Re-read the role because submitted entries can be pruned when they equal the
-   current role default.
-4. Treat a partially refused role payload as potentially partially applied;
+2. `modify_metadata` has no general dry-run or confirmation gate. Preview a
+   role change by using the read result to compute and show the exact proposed
+   payload/diff; do not describe this local/read-only preview as a tool mutation.
+3. When changing `setForNewObjects` or `setForAttributesByDefault` together
+   with intended per-object exceptions, preview and apply a payload containing
+   only `roleProperties` in the first `modify_metadata` call. Never send that
+   default flip together with the intended `rights[]`: the implementation
+   applies rights before role properties, and rights equal to the then-current
+   default can be pruned.
+4. Re-read the role with `get_metadata_details`, continuing
+   `roleObjectOffset` pages when needed, and confirm that the new role-wide
+   defaults persisted. If the call failed or readback differs, stop: the first
+   mutation may already have changed the defaults, so do not apply exceptions
+   or retry blindly. Report that residue; restore the saved old values only
+   with explicit rollback authority.
+5. Recompute and preview the smallest `rights[]` exceptions against the
+   confirmed new defaults, then apply them in a second `modify_metadata` call.
+   Re-read the complete affected matrix and validate the resulting effective
+   rights, not merely the submitted entries or `applied` count.
+6. Apply a smallest standalone `rights`, `templates`, or `roleProperties`
+   payload directly only when no default/exception ordering dependency exists.
+7. Treat a partially refused role payload as potentially partially applied;
    re-read before retrying.
-5. Runtime-test under the relevant user and role when access behavior is the
+8. Runtime-test under the relevant user and role when access behavior is the
    acceptance criterion. Static role structure is not RLS runtime proof.
 
 ## Extensions and external-object projects

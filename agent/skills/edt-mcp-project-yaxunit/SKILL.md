@@ -42,9 +42,11 @@ client configuration.
 ## Selectors
 
 Current `run_yaxunit_tests` supports selectors for extensions, modules, tests,
-and tags. Values inside one selector family are alternatives; different
-families combine. Confirm exact array/string forms with
-`get_tool_guide('run_yaxunit_tests')` when the installed version differs.
+and tags. Pass arrays (a comma-separated string is also accepted). A test path
+is the programmatic `Module.Method`; a module filter is the programmatic module
+name. Values inside one selector family are alternatives; different families
+combine. Confirm exact forms with `get_tool_guide('run_yaxunit_tests')` when the
+installed version differs.
 
 Use the smallest selection that proves the requested behavior. Pin a single
 test when debugging.
@@ -56,13 +58,28 @@ test when debugging.
    Before permitting an update, require explicit update/restructure authority
    or a disposable test infobase where those effects are acceptable; update
    dialogs may be accepted automatically.
-2. Choose `externalInfobaseChanges` explicitly when external configuration
-   changes must be preserved or refused.
-3. On standalone-server applications, let the coordinated test launch perform
+2. When `updateBeforeLaunch=true`, inspect the configuration's dependent
+   extension projects and the project-policy Git/dirty state before the call.
+   Pass an explicit `updateScope`: `configuration` for only the launch project;
+   `extension:<ProjectName>` for the configuration plus that case-sensitive
+   dependent extension name (comma-separate several); or `all` only when the
+   configuration and every dependent extension are intentionally included.
+   Within the selected scope the tool recomputes only projects whose sources
+   changed, but the broad default is `all`, so never omit this parameter. Do not
+   include an unrelated dirty/dependent extension without explicit authority.
+   Unknown extension names are a hard error. If the required dependency graph
+   cannot be expressed by these supported values, stop and explain the
+   limitation instead of silently broadening the scope.
+3. When `updateBeforeLaunch=true`, pass `externalInfobaseChanges` explicitly.
+   `override` writes the infobase and discards its external configuration
+   changes; `import` rewrites project sources; `cancel` refuses the divergence.
+   Require authority for the chosen effect rather than inheriting `override`.
+4. On standalone-server applications, let the coordinated test launch perform
    the update; do not pre-run a bare `update_database`, which can start the
    server in run mode.
-4. Do not authorize standalone-server port reassignment implicitly.
-5. Use `updateBeforeLaunch=false` only when the application is already prepared
+5. Pass `standaloneServerPortConflict='cancel'` unless explicit authority allows
+   `reassign`, which rewrites the standalone-server configuration.
+6. Use `updateBeforeLaunch=false` only when the application is already prepared
    or the task intentionally delegates freshness elsewhere.
 
 ## Run and poll
@@ -78,23 +95,43 @@ test when debugging.
 ## Debug
 
 Set the exact source breakpoint before starting the selected test and retain
-the `breakpointId` returned by `set_breakpoint`. Then use the current debug
-mode of `run_yaxunit_tests` with `debug=true`; the separate
-`debug_yaxunit_tests` name is a compatibility alias. Before
+the `breakpointId` returned by `set_breakpoint`. Before the run, retain the
+exact target and its `running` state from `list_configurations`; do not treat a
+pre-existing user/shared launch as task-owned. With
+`updateBeforeLaunch=true`, the tool may terminate such an existing client
+during its fresh-run sweep, so stop unless that side effect is explicitly
+authorized. Then use the current debug mode of `run_yaxunit_tests` with
+`debug=true`; the separate `debug_yaxunit_tests` name is a compatibility alias.
+Before
 `wait_for_break`, `get_variables`, or `evaluate_expression`, require a
 sanitized/non-production target, adequate enabled server redaction for the
 requested values, or explicit authorization for the specific disclosure.
 Redaction is optional and incomplete; post-filtering cannot undo disclosure.
-This call returns a
-launch handle after spawning the run, not a completed test result with totals
-or failures. Follow the safe order `set_breakpoint` ->
-`run_yaxunit_tests(debug=true)` -> `wait_for_break` -> inspect, step, or
-resume with `get_variables`, `evaluate_expression`, `step`, and `resume` ->
-if execution is suspended, resume it -> remove the temporary breakpoint by
-its retained `breakpointId`. Perform this cleanup after success, failure,
-timeout, or interruption. A step can suspend execution again, so check the
-final state before cleanup. Do not confuse a suspended debugger with a hung
-test job.
+The call returns a launch handle after spawning the run, not a completed test
+result with totals or failures. If preparation is still pending, retain its
+`jobId` and poll it with `get_job_status` until that handle is returned. Retain
+the handle's `projectName` and `applicationId` (plus the exact configuration
+name when that target form was used): the background job may already be
+terminal while the spawned 1C client is still alive.
+
+Use this complete order: `set_breakpoint` ->
+`run_yaxunit_tests(debug=true)` -> poll only its `jobId` when pending ->
+`wait_for_break` -> bounded inspect/step -> cleanup. Cleanup after success,
+failure, timeout, or interruption is unambiguous: first resume the exact thread
+or application if it is suspended; second remove the temporary breakpoint by
+its retained `breakpointId`; third, if the client did not exit naturally,
+terminate only the launch proven to have been spawned by this call using
+`terminate_launch` with either the retained exact `launchConfigurationName` or
+the returned `projectName` plus `applicationId` (set `includeAttach=false`). A
+step can suspend execution again, so check the final state before cleanup. If
+termination times out, report it; use `force=true` only with separate authority
+because it can lose client state. Never terminate a pre-existing user/shared
+launch without explicit authorization.
+
+`cancel_job` addresses a still-running background job and its destructive
+cancellation contract; it is not launch cleanup after the debug job has already
+returned its terminal launch handle. Do not confuse a suspended debugger with
+a hung test job, or a terminal job with a terminated client.
 
 If the user task explicitly requires pass/fail verification after debugging,
 run one separate focused normal execution with `debug=false` after debugger
@@ -115,8 +152,9 @@ For a completed normal run, record application/infobase, selectors, update
 policy, job ID when one was used, pass/fail/skip totals, failing tests, report
 path when provided, cleanup, and whether test or cancellation behavior may
 have changed runtime data. For a debug-only run, record the launch handle,
-breakpoint or frame evidence, and debugger cleanup; do not claim completed-run
-totals or failures.
+breakpoint or frame evidence, job state, natural-exit/`terminate_launch`
+outcome, and ordered debugger cleanup; do not claim completed-run totals or
+failures.
 
 ## Stop conditions
 

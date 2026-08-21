@@ -48,11 +48,32 @@ objects.
 ## Build
 
 Use `build_external_objects` for one named object or all objects. Establish the
-associated infobase and resolvable runtime first. Before invoking the tool,
-require either explicit authority to update and restructure that infobase or a
-disposable build infobase where those effects are acceptable. Association alone
-is not authority: EDT preparation may update/restructure the infobase and
-automatically accept the corresponding dialogs.
+exact associated base infobase and resolvable runtime first. Call
+`get_applications` for the external-object project: applications are inherited,
+so retain its `inheritedFromProject`, the chosen `applications[].id`, and the
+`defaultApplicationId`. `build_external_objects` has no application selector;
+therefore proceed only when the associated build target is unambiguous (for
+example, the sole application or an explicitly confirmed default). Stop instead
+of guessing when several applications remain possible. The current MCP surface
+does not enumerate installed 1C runtimes, so confirm the exact registered
+runtime from the established EDT/project environment; if that cannot be
+established, stop before using the build as a probe.
+
+Determine before the build whether that same infobase requires authentication.
+When it does, require an existing user and available credentials, then call
+`set_infobase_credentials` with the base `projectName` from
+`inheritedFromProject` and that exact `applicationId`. Verify the returned
+`project` and `applicationId`; `clientConfigured=false` is expected for this
+agent-only target and is sufficient for the unattended build. Never put the
+user's password or another secret value in logs, reports, examples, or committed
+files. Stop if authentication requirements are unknown, credentials are
+unavailable, or the credential result names another target.
+
+Before invoking the build, require either explicit authority to update and
+restructure that exact infobase or a disposable build infobase where those
+effects are acceptable. Association alone is not authority: EDT preparation
+may update/restructure the infobase and automatically accept the corresponding
+dialogs.
 
 `objectName` accepts only a simple name, not a qualified FQN. If both
 `ExternalDataProcessor.X` and `ExternalReport.X` exist, passing `X` can select
@@ -87,18 +108,36 @@ external infobase changes requires explicit authority. Pass both chosen values
 explicitly rather than relying on defaults, and stop when the current guide and
 available authority do not establish a safe combination.
 
-Call `debug_launch` against the base configuration application and pass
-`externalObjectProjectName` plus `externalObjectName`. EDT builds the object
-for debugging; a prebuilt file cannot provide source breakpoints.
+Resolve the base runtime before `debug_launch`. Call `get_applications` for the
+external-object project to obtain the inherited base project and real
+`applicationId`, and call `list_configurations` with `type='client'` and that
+base `projectName`. Confirm exactly one of the two target shapes accepted by
+`debug_launch`: either the exact returned configuration `name` as
+`launchConfigurationName`, or the base `projectName` plus the real
+`applicationId`. Treat a synthetic `launch:<name>` value only as a launch
+identifier, never as a real application ID. Stop when multiple applications or
+runtime-client configurations remain unresolved; the external-object project
+name alone does not identify an infobase/runtime.
 
 If authentication is required, confirm the existing infobase user and configure
-credentials before launch. Target `set_infobase_credentials` by the exact
-`launchConfigurationName` when the launched client also needs credentials, then
-require `clientConfigured=true`; a project/application target configures only
-the update agent. A local launch stores a non-empty password in clear-text
-workspace metadata, while a shared launch refuses it; use such storage only
-with explicit authority or choose OS authentication, an empty password, or
-secure manual client configuration.
+credentials before launch against that same confirmed base target. Target
+`set_infobase_credentials` by the exact `launchConfigurationName` when the
+launched client also needs credentials, then require `clientConfigured=true`;
+otherwise use the base `projectName` plus its exact real `applicationId`, which
+configures only the update agent. Verify the returned target identity. A local
+launch stores a non-empty password in clear-text workspace metadata, while a
+shared launch refuses it; use such storage only with explicit authority or
+choose OS authentication, an empty password, or secure manual client
+configuration.
+
+Call `debug_launch` against that confirmed base-runtime target and pass the
+external-object project as `externalObjectProjectName` plus the object name as
+`externalObjectName`. Qualify the latter as
+`ExternalDataProcessor.<Name>` or `ExternalReport.<Name>` when the simple name
+collides. EDT resolves and builds that project's object, then applies its built
+file as `/Execute`; a prebuilt file cannot provide source breakpoints. Verify
+the echoed `externalObjectProjectName` and resolved `externalObjectName` before
+claiming that the intended object was launched.
 
 Use `startupOption` only for the current launch's `/C` payload. It is applied to
 a working copy and does not persistently change the saved EDT launch
