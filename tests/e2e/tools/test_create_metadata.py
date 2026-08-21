@@ -25,7 +25,7 @@ reset: kind="write-metadata" -> the orchestrator runs reset_model() (clean_proje
 discarding the unsaved create) AFTER each test, so each test starts clean.
 
 Fixture inventory (TestConfiguration, English Names):
-  Catalog.Catalog (attribute "Attribute", form ItemForm), CommonModule.Error/OK/Calc,
+  Catalog.Catalog (attribute "Attribute", form ItemForm), CommonModule.Error/OK/Calc/DrySignal,
   CommonForm.Form, Subsystem.Subsystem, CommonAttribute.CommonAttribute,
   SessionParameter.SessionParameter. (No register / enum in the baseline -> tests that
   need one create it first.)

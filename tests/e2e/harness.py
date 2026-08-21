@@ -796,7 +796,7 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) < 5 or cells[0].lower() == "name":
             continue  # header row, or a table shape this parse does not know
-    rows.append(cells)
+        rows.append(cells)
     if not rows:
         low = list_projects_markdown.lower()
         blocking_states = [state for state in ("building", "not_available") if state in low]

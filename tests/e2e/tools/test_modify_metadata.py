@@ -15,7 +15,7 @@ get_metadata_details(assignable:true).
 
 reset: kind="write-metadata" -> reset_model() after each test.
 
-Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc, ...
+Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc/DrySignal, ...
 """
 
 import os
