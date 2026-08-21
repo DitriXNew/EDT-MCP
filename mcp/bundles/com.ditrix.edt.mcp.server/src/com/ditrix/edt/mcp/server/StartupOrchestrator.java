@@ -22,12 +22,13 @@ import com.ditrix.edt.mcp.server.utils.WorkmateChatSessionPublisher;
  * <ol>
  *   <li>create + activate the {@link IGroupService};</li>
  *   <li>(non-headless) initialize {@code FilterByTagManager} to reset toggle state;</li>
- *   <li>(non-headless) initialize {@code NavigatorToolbarCustomizer} on the UI thread
+ *   <li>(non-headless) initialize the Navigator enhancement activation manager and
+ *       {@code NavigatorToolbarCustomizer} on the UI thread
  *       via {@code Display.asyncExec}.</li>
  * </ol>
- * Teardown reverses these on {@link #stop()}: dispose the navigator toolbar
- * customizer (non-headless, only when already on a live UI thread), deactivate
- * the group service, then stop the {@code UpdateChecker} scheduler.
+ * Teardown reverses these on {@link #stop()}: dispose the Navigator integrations
+ * (non-headless, only when already on a live UI thread), deactivate the group
+ * service, then stop the {@code UpdateChecker} scheduler.
  * <p>
  * This class owns the {@link IGroupService} reference; {@link Activator}
  * delegates {@code getGroupService()} to {@link #getGroupService()} so all
@@ -64,11 +65,24 @@ public class StartupOrchestrator
             // Initialize filter manager to reset toggle state on startup
             com.ditrix.edt.mcp.server.tags.ui.FilterByTagManager.getInstance();
 
-            // Initialize navigator toolbar customizer to hide standard Collapse All button
+            // Initialize Navigator integrations.
             org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-                try {
+                try
+                {
+                    com.ditrix.edt.mcp.server.groups.ui.NavigatorEnhancementManager
+                        .getInstance().initialize();
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("Failed to initialize NavigatorEnhancementManager", e); //$NON-NLS-1$
+                }
+
+                try
+                {
                     com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().initialize();
-                } catch (Exception e) {
+                }
+                catch (Exception e)
+                {
                     Activator.logError("Failed to initialize NavigatorToolbarCustomizer", e); //$NON-NLS-1$
                 }
             });
@@ -99,6 +113,16 @@ public class StartupOrchestrator
             org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getCurrent();
             if (display != null && !display.isDisposed())
             {
+                try
+                {
+                    com.ditrix.edt.mcp.server.groups.ui.NavigatorEnhancementManager
+                        .getInstance().dispose();
+                }
+                catch (Exception e)
+                {
+                    // Ignore - workbench may be closing
+                }
+
                 try
                 {
                     com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
