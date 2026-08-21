@@ -8,11 +8,15 @@ package com.ditrix.edt.mcp.server.groups.ui;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.jface.util.IPropertyChangeListener;
+import org.eclipse.jface.viewers.StructuredViewer;
+import org.eclipse.jface.viewers.ViewerFilter;
+import org.eclipse.swt.SWTException;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IPageListener;
 import org.eclipse.ui.IPartListener2;
@@ -24,8 +28,10 @@ import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.navigator.CommonNavigator;
+import org.eclipse.ui.navigator.ICommonFilterDescriptor;
 import org.eclipse.ui.navigator.INavigatorActivationService;
 import org.eclipse.ui.navigator.INavigatorContentService;
+import org.eclipse.ui.navigator.INavigatorFilterService;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
@@ -42,9 +48,8 @@ public final class NavigatorEnhancementManager
         "com.ditrix.edt.mcp.server.groups.groupedObjectsFilter"; //$NON-NLS-1$
 
     // The tag search filter is intentionally excluded: it is inert until a search starts with #.
-    private static final String[] STRUCTURE_EXTENSION_IDS = {
-        GROUPS_CONTENT_ID,
-        GROUPED_OBJECTS_FILTER_ID
+    private static final String[] GROUPS_CONTENT_EXTENSION_IDS = {
+        GROUPS_CONTENT_ID
     };
 
     private static NavigatorEnhancementManager instance;
@@ -57,7 +62,8 @@ public final class NavigatorEnhancementManager
     private IPropertyChangeListener preferenceListener;
     private IPreferenceStore store;
     private Display display;
-    private boolean initialized;
+    private volatile boolean initialized;
+    private boolean disposePending;
 
     private NavigatorEnhancementManager()
     {
@@ -75,9 +81,9 @@ public final class NavigatorEnhancementManager
     /**
      * Starts preference and workbench listeners. Must be called on the UI thread.
      */
-    public void initialize()
+    public synchronized void initialize()
     {
-        if (initialized)
+        if (initialized || disposePending)
         {
             return;
         }
@@ -146,7 +152,7 @@ public final class NavigatorEnhancementManager
             @Override
             public void partVisible(IWorkbenchPartReference partRef)
             {
-                // Not needed.
+                apply(partRef);
             }
 
             @Override
@@ -314,9 +320,15 @@ public final class NavigatorEnhancementManager
 
     private void apply(CommonNavigator navigator)
     {
+        if (!initialized)
+        {
+            return;
+        }
+
         try
         {
-            applyPreference(store, navigator.getNavigatorContentService());
+            applyPreference(store, navigator.getNavigatorContentService(),
+                navigator.getCommonViewer());
         }
         catch (RuntimeException e)
         {
@@ -325,10 +337,10 @@ public final class NavigatorEnhancementManager
     }
 
     /**
-     * Applies the preference through CNF's public activation API.
+     * Applies the preference through CNF's public content and filter APIs.
      */
     static void applyPreference(IPreferenceStore preferenceStore,
-        INavigatorContentService contentService)
+        INavigatorContentService contentService, StructuredViewer viewer)
     {
         if (contentService == null)
         {
@@ -337,12 +349,30 @@ public final class NavigatorEnhancementManager
 
         boolean enabled = isEnabled(preferenceStore);
         INavigatorActivationService activationService = contentService.getActivationService();
-        if (activationService == null || !requiresChange(activationService, enabled))
+        boolean changed = applyContentPreference(activationService, enabled);
+
+        INavigatorFilterService filterService = contentService.getFilterService();
+        if (applyFilterPreference(filterService, viewer, enabled))
         {
-            return;
+            changed = true;
         }
 
-        String[] extensionIds = STRUCTURE_EXTENSION_IDS.clone();
+        if (changed)
+        {
+            // The plugin preference is the source of truth; do not persist duplicate CNF state.
+            contentService.update();
+        }
+    }
+
+    private static boolean applyContentPreference(INavigatorActivationService activationService,
+        boolean enabled)
+    {
+        if (activationService == null || !requiresContentChange(activationService, enabled))
+        {
+            return false;
+        }
+
+        String[] extensionIds = GROUPS_CONTENT_EXTENSION_IDS.clone();
         if (enabled)
         {
             activationService.activateExtensions(extensionIds, false);
@@ -351,15 +381,13 @@ public final class NavigatorEnhancementManager
         {
             activationService.deactivateExtensions(extensionIds, false);
         }
-
-        // The plugin preference is the source of truth; do not persist duplicate CNF state.
-        contentService.update();
+        return true;
     }
 
-    private static boolean requiresChange(INavigatorActivationService activationService,
+    private static boolean requiresContentChange(INavigatorActivationService activationService,
         boolean enabled)
     {
-        for (String extensionId : STRUCTURE_EXTENSION_IDS)
+        for (String extensionId : GROUPS_CONTENT_EXTENSION_IDS)
         {
             if (activationService.isNavigatorExtensionActive(extensionId) != enabled)
             {
@@ -367,6 +395,67 @@ public final class NavigatorEnhancementManager
             }
         }
         return false;
+    }
+
+    private static boolean applyFilterPreference(INavigatorFilterService filterService,
+        StructuredViewer viewer, boolean enabled)
+    {
+        if (filterService == null
+            || filterService.isActive(GROUPED_OBJECTS_FILTER_ID) == enabled)
+        {
+            return false;
+        }
+
+        // setActiveFilterIds replaces the complete set, so retain every active bound filter.
+        Set<String> activeFilterIds = new LinkedHashSet<>();
+        ICommonFilterDescriptor groupedObjectsDescriptor = null;
+        ICommonFilterDescriptor[] descriptors = filterService.getVisibleFilterDescriptors();
+        if (descriptors != null)
+        {
+            for (ICommonFilterDescriptor descriptor : descriptors)
+            {
+                if (descriptor != null)
+                {
+                    String filterId = descriptor.getId();
+                    if (GROUPED_OBJECTS_FILTER_ID.equals(filterId))
+                    {
+                        groupedObjectsDescriptor = descriptor;
+                    }
+                    if (filterId != null && filterService.isActive(filterId))
+                    {
+                        activeFilterIds.add(filterId);
+                    }
+                }
+            }
+        }
+
+        if (enabled)
+        {
+            activeFilterIds.add(GROUPED_OBJECTS_FILTER_ID);
+        }
+        else
+        {
+            activeFilterIds.remove(GROUPED_OBJECTS_FILTER_ID);
+        }
+
+        // The convenience update method persists CNF state, so update state and viewer separately.
+        filterService.setActiveFilterIds(activeFilterIds.toArray(String[]::new));
+        if (viewer != null && groupedObjectsDescriptor != null)
+        {
+            ViewerFilter groupedObjectsFilter = filterService.getViewerFilter(groupedObjectsDescriptor);
+            if (groupedObjectsFilter != null)
+            {
+                if (enabled)
+                {
+                    viewer.addFilter(groupedObjectsFilter);
+                }
+                else
+                {
+                    viewer.removeFilter(groupedObjectsFilter);
+                }
+            }
+        }
+        return true;
     }
 
     /**
@@ -382,22 +471,55 @@ public final class NavigatorEnhancementManager
         return preferenceStore.getBoolean(PreferenceConstants.PREF_ENHANCE_NAVIGATOR);
     }
 
-    /**
-     * Removes workbench and preference listeners. Must be called on the UI thread.
-     */
+    /** Removes workbench and preference listeners. */
     public void dispose()
     {
-        if (!initialized)
+        Display uiDisplay;
+        IPreferenceStore preferenceStore;
+        IPropertyChangeListener propertyChangeListener;
+        synchronized (this)
         {
-            return;
+            if (!initialized || disposePending)
+            {
+                return;
+            }
+            initialized = false;
+            disposePending = true;
+            uiDisplay = display;
+            preferenceStore = store;
+            propertyChangeListener = preferenceListener;
         }
-        initialized = false;
 
-        if (store != null && preferenceListener != null)
+        clearInstance(this);
+        if (preferenceStore != null && propertyChangeListener != null)
         {
-            store.removePropertyChangeListener(preferenceListener);
+            preferenceStore.removePropertyChangeListener(propertyChangeListener);
         }
 
+        if (uiDisplay == null || uiDisplay.isDisposed())
+        {
+            clearReferences();
+        }
+        else if (Display.getCurrent() == uiDisplay)
+        {
+            disposeWorkbenchListeners();
+        }
+        else
+        {
+            try
+            {
+                uiDisplay.asyncExec(this::disposeWorkbenchListeners);
+            }
+            catch (SWTException e)
+            {
+                // The display was disposed between the check and asyncExec.
+                clearReferences();
+            }
+        }
+    }
+
+    private void disposeWorkbenchListeners()
+    {
         try
         {
             IWorkbench workbench = PlatformUI.getWorkbench();
@@ -437,11 +559,26 @@ public final class NavigatorEnhancementManager
         }
         registeredPages.clear();
 
+        clearReferences();
+    }
+
+    private synchronized void clearReferences()
+    {
+        pageListeners.clear();
+        registeredPages.clear();
         partListener = null;
         windowListener = null;
         preferenceListener = null;
         store = null;
         display = null;
-        instance = null; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
+        disposePending = false;
+    }
+
+    private static synchronized void clearInstance(NavigatorEnhancementManager manager)
+    {
+        if (instance == manager)
+        {
+            instance = null;
+        }
     }
 }

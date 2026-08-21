@@ -27,8 +27,8 @@ import com.ditrix.edt.mcp.server.utils.WorkmateChatSessionPublisher;
  *       via {@code Display.asyncExec}.</li>
  * </ol>
  * Teardown reverses these on {@link #stop()}: dispose the Navigator integrations
- * (non-headless, only when already on a live UI thread), deactivate the group
- * service, then stop the {@code UpdateChecker} scheduler.
+ * (non-headless), deactivate the group service, then stop the {@code UpdateChecker}
+ * scheduler.
  * <p>
  * This class owns the {@link IGroupService} reference; {@link Activator}
  * delegates {@code getGroupService()} to {@link #getGroupService()} so all
@@ -100,29 +100,28 @@ public class StartupOrchestrator
         chatSessionPublisher.stop();
 
         // Dispose UI components only in non-headless mode.
-        // Never block on the UI thread from here: stop() runs on the OSGi
-        // framework shutdown thread after the workbench event loop has exited,
-        // so a syncExec never returns and pins the JVM — EDT keeps running as
-        // a background process (#135). Display.getDefault() is also forbidden
-        // here: with the display already disposed it would CREATE a new one on
-        // the shutdown thread. Listener teardown is best-effort — widgets die
-        // with the display — so run it inline only when already on a live UI
-        // thread and skip it otherwise.
+        // Never wait for the UI thread from here: during full shutdown stop()
+        // can run after the workbench event loop has exited, so a syncExec never
+        // returns and pins the JVM — EDT keeps running as a background process
+        // (#135). Display.getDefault() is also forbidden here: with the display
+        // already disposed it would CREATE a new one on the shutdown thread.
+        // NavigatorEnhancementManager posts its listener teardown to its captured
+        // UI display during a live bundle update and never blocks this thread.
         if (!headless)
         {
+            try
+            {
+                com.ditrix.edt.mcp.server.groups.ui.NavigatorEnhancementManager
+                    .getInstance().dispose();
+            }
+            catch (Exception e)
+            {
+                // Ignore - workbench may be closing
+            }
+
             org.eclipse.swt.widgets.Display display = org.eclipse.swt.widgets.Display.getCurrent();
             if (display != null && !display.isDisposed())
             {
-                try
-                {
-                    com.ditrix.edt.mcp.server.groups.ui.NavigatorEnhancementManager
-                        .getInstance().dispose();
-                }
-                catch (Exception e)
-                {
-                    // Ignore - workbench may be closing
-                }
-
                 try
                 {
                     com.ditrix.edt.mcp.server.ui.NavigatorToolbarCustomizer.getInstance().dispose();
