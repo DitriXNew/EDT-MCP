@@ -338,11 +338,24 @@ public class CodeReviewTool implements IMcpTool
         String scope = modulePath == null || modulePath.isEmpty() ? projectName : projectName + " / " + modulePath; //$NON-NLS-1$
         md.append("# Code review — ").append(scope).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        md.append("**").append(scoped.size()).append("** finding(s): ") //$NON-NLS-1$ //$NON-NLS-2$
+        // The counts describe the SCOPE, not the filtered table: a reader must not conclude that a
+        // project is clean because they filtered the rows. But a bare scope total above a shorter
+        // table is its own trap - "26 finding(s)" over four rows reads as a rendering bug - so when
+        // a filter actually removed rows, the line says how many are being shown as well. Both
+        // numbers, no ambiguity either way.
+        md.append("**").append(scoped.size()).append("** finding(s) in scope: ") //$NON-NLS-1$ //$NON-NLS-2$
             .append(countBySeverity(scoped, Severity.ERROR)).append(" error, ") //$NON-NLS-1$
             .append(countBySeverity(scoped, Severity.WARNING)).append(" warning, ") //$NON-NLS-1$
             .append(countBySeverity(scoped, Severity.INFORMATION)).append(" information, ") //$NON-NLS-1$
-            .append(countBySeverity(scoped, Severity.HINT)).append(" hint.\n\n"); //$NON-NLS-1$
+            .append(countBySeverity(scoped, Severity.HINT)).append(" hint."); //$NON-NLS-1$
+        if (filtered.size() != scoped.size())
+        {
+            // "match", not "showing": the table below is additionally capped at 'limit' rows, so a
+            // "showing N" phrasing would contradict the row count whenever the cap bites.
+            md.append(" **").append(filtered.size()) //$NON-NLS-1$
+                .append("** of them match the severity/rule filters."); //$NON-NLS-1$
+        }
+        md.append("\n\n"); //$NON-NLS-1$
 
         if (scoped.isEmpty())
         {

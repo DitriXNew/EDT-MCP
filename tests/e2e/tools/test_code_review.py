@@ -23,7 +23,7 @@ dir (cleaned up) and must never mutate the project on disk.
 """
 
 from harness import (
-    call, assert_ok, assert_contains, assert_not_contains, assert_error,
+    call, assert_ok, assert_contains, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, PROJECT, E2ESkip, _fail,
     split_markdown_row, PROJECT_DIR,
 )
@@ -64,17 +64,19 @@ def _run_or_skip(args, ctx):
 
 @e2e_test(tool="code_review", kind="read")
 def test_reports_metric_findings_for_project():
-    """A whole-project review runs the engine and reports its METRIC findings — the
-    delta over get_project_errors. MagicNumber is present in TestConfiguration, so a
-    working tool renders it; a no-op/broken tool fails the content assertions."""
+    """A whole-project review runs the engine and reports its METRIC findings — the delta
+    over get_project_errors. A no-op/broken tool fails here: an empty report is a FAILURE,
+    never a skip. Only the metric example itself (MagicNumber) may legitimately be absent on
+    an engine whose catalog a local config retuned, and that case skips instead of lying."""
     r = _run_or_skip({"projectName": PROJECT}, "whole-project review")
     assert_ok(r, "code_review whole-project happy path")
     assert_contains(r.text, "Code review — " + PROJECT, "must render the scope heading naming the project")
     assert_contains(r.text, "finding(s)", "must render the findings summary line")
-    # The metric delta the whole tool exists for.
-    assert_contains(r.text, "MagicNumber", "the engine's MagicNumber metric must be reported")
     # The auto-remediation steering (fix at Module path + Line, then re-verify).
     assert_contains(r.text, "write_module_source", "output must steer to fixing via write_module_source")
+    # The metric delta the whole tool exists for.
+    rules = _require_findings(r.text, "whole-project review")
+    _rule_present_or_skip(rules, "MagicNumber", "whole-project review")
     assert_no_diff("reviewing code must not touch the project on disk")
 
 
@@ -86,33 +88,68 @@ def test_module_scope_echoes_path_and_finds_metric():
     r = _run_or_skip({"projectName": PROJECT, "modulePath": CALC_MODULE}, "single-module review")
     assert_ok(r, "code_review single-module happy path")
     assert_contains(r.text, CALC_MODULE, "the heading must echo the requested module path")
-    assert_contains(r.text, "MagicNumber", "the module's MagicNumber finding must be reported")
+    rules = _require_findings(r.text, "single-module review")
+    _rule_present_or_skip(rules, "MagicNumber", "single-module review")
     assert_no_diff("reviewing one module must not touch the project on disk")
 
 
 @e2e_test(tool="code_review", kind="read")
 def test_rule_filter_narrows_to_matching_rule():
-    """rule='Magic' keeps only magic-number diagnostics: the MagicNumber doc link is
-    present and an unrelated rule's doc link (UnusedLocalVariable, which Calc also has)
-    is filtered out. Proves the rule filter is applied, not dropped."""
-    r = _run_or_skip({"projectName": PROJECT, "rule": "Magic"}, "rule-filtered review")
+    """`rule` keeps only the matching diagnostics. Both the rule that must survive and the
+    rule that must disappear are taken from an unfiltered scan of the same fixture rather than
+    assumed of the engine's catalog, so a local .bsl-language-server.json that retunes the rule
+    set cannot paint a correctly working filter red."""
+    base = _run_or_skip({"projectName": PROJECT}, "unfiltered project review")
+    assert_ok(base, "unfiltered project review")
+    distinct = sorted(set(_require_findings(base.text, "unfiltered project review")))
+    # The pair must not nest: `rule` matches by SUBSTRING, so a rule containing the other would
+    # legitimately survive the filter and the assertion below would be wrong, not the tool.
+    keep = distinct[0]
+    drop = next((x for x in distinct[1:]
+                 if keep.lower() not in x.lower() and x.lower() not in keep.lower()), None)
+    if drop is None:
+        raise E2ESkip("the fixture reports no two rules distinct enough for a substring rule "
+                      "filter; reported: " + ", ".join(distinct[:8]))
+
+    r = _run_or_skip({"projectName": PROJECT, "rule": keep}, "rule-filtered review")
     assert_ok(r, "code_review rule filter happy path")
-    assert_contains(r.text, "diagnostics/Magic", "a MagicNumber row must survive rule='Magic'")
-    assert_not_contains(r.text, "diagnostics/UnusedLocalVariable",
-                        "a non-matching rule must be filtered out by rule='Magic'")
+    remaining = _finding_rules(r.text)
+    if keep not in remaining:
+        raise AssertionError("rule=%r dropped its own rule - the filter is muting, not narrowing. "
+                             "Rows left: %r" % (keep, remaining[:5]))
+    if drop in remaining:
+        raise AssertionError("rule=%r left %r in the table, so the filter is not reaching the "
+                             "report at all" % (keep, drop))
     assert_no_diff("a filtered review must not touch the project on disk")
 
 
 @e2e_test(tool="code_review", kind="read")
 def test_severity_filter_drops_lower_severities():
-    """severity='error' (minimum) keeps Error-level diagnostics (ParseError exists in
-    TestConfiguration) and drops the Information-level MagicNumber. Proves the
-    minimum-severity filter, not just that some rows appear."""
+    """severity='error' is a MINIMUM: Error rows stay, everything below it goes. Asserted
+    over EVERY surviving row instead of one named rule, and the precondition - that the fixture
+    really reports both an Error and something below it - is read from an unfiltered scan rather
+    than assumed of the engine's catalog."""
+    base = _run_or_skip({"projectName": PROJECT}, "unfiltered project review")
+    assert_ok(base, "unfiltered project review")
+    rows = _finding_rows(base.text)
+    if not rows:
+        _fail("unfiltered project review -> no findings at all on a fixture expected to have some")
+    severities = {row["severity"].lower() for row in rows}
+    if "error" not in severities or severities <= {"error"}:
+        raise E2ESkip("this engine configuration reports no Error-plus-lower mix on the fixture "
+                      "(%s), so a minimum-severity filter cannot be observed"
+                      % ", ".join(sorted(severities)))
+
     r = _run_or_skip({"projectName": PROJECT, "severity": "error"}, "severity-filtered review")
     assert_ok(r, "code_review severity filter happy path")
-    assert_contains(r.text, "ParseError", "an Error-level diagnostic must remain at severity='error'")
-    assert_not_contains(r.text, "diagnostics/MagicNumber",
-                        "an Information-level finding must be dropped at severity='error'")
+    kept = _finding_rows(r.text)
+    if not kept:
+        raise AssertionError("severity='error' emptied the table although the unfiltered scan "
+                             "reported Error-level findings")
+    below = [row for row in kept if row["severity"].lower() != "error"]
+    if below:
+        raise AssertionError("severity='error' is a minimum, but %d row(s) below Error survived: "
+                             "%r" % (len(below), below[:3]))
     assert_no_diff("a filtered review must not touch the project on disk")
 
 
@@ -172,6 +209,61 @@ def test_nonexistent_module_is_rejected():
     assert_no_diff("a rejected call must not touch the project on disk")
 
 
+def _finding_rows(text):
+    """Every finding row as a {severity, rule} dict, in table order.
+
+    Columns are located by their names in the HEADER, so the parser does not depend on the
+    column order and a caller can ask for severity and rule together — which is what lets the
+    severity test check EVERY surviving row instead of one named rule.
+    """
+    rows = []
+    at = None
+    for line in (text or "").splitlines():
+        cells = [c.strip() for c in split_markdown_row(line)]
+        if len(cells) < 3:
+            continue
+        lowered = [c.lower() for c in cells]
+        if "rule" in lowered and "severity" in lowered:
+            at = {"rule": lowered.index("rule"), "severity": lowered.index("severity")}
+            continue
+        if at is None or max(at.values()) >= len(cells):
+            continue
+        rule = cells[at["rule"]].strip("`")
+        if not rule or set(rule) <= set("-:"):       # the header separator row
+            continue
+        rows.append({"rule": rule, "severity": cells[at["severity"]].strip("`")})
+    return rows
+
+
+def _require_findings(text, ctx):
+    """The rules this run reported — and a hard FAILURE when it reported none.
+
+    "Nothing at all" is never an unmet precondition: a tool that silently returns an empty
+    report has to fail here. Only the CHOICE of which rule to assert on may adapt to the
+    engine's catalog — see _rule_present_or_skip.
+    """
+    rules = [row["rule"] for row in _finding_rows(text)]
+    if not rules:
+        _fail(ctx + " -> the engine reported no findings at all on a fixture that is expected "
+                    "to produce some; that is a broken run, not a tuned diagnostic catalog")
+    return rules
+
+
+def _rule_present_or_skip(rules, needle, ctx):
+    """One reported rule whose id contains `needle`, else SKIP naming what was reported.
+
+    The suite must not assume the engine's DEFAULT catalog. BslLsRunner deliberately honours a
+    project / engine-home / user-home `.bsl-language-server.json`, so a machine whose config
+    disables or retunes a rule would otherwise paint a correctly working tool red. Skipping is
+    only safe because _require_findings has already failed the "nothing at all" case.
+    """
+    for r in rules:
+        if needle.lower() in r.lower():
+            return r
+    raise E2ESkip("this engine configuration reports no %r rule on the fixture (%s); it did "
+                  "report: %s" % (needle, ctx, ", ".join(sorted(set(rules))[:8])))
+
+
 def _finding_rules(text):
     """The Rule column of every finding row, in table order.
 
@@ -184,23 +276,7 @@ def _finding_rules(text):
     Parsing goes through the shared escape-aware splitter because MarkdownUtils.escapeForTable
     writes a literal pipe as an escaped one, which a naive split would cut in the wrong place.
     """
-    rules = []
-    rule_at = None
-    for line in (text or "").splitlines():
-        cells = [c.strip() for c in split_markdown_row(line)]
-        if len(cells) < 3:
-            continue
-        lowered = [c.lower() for c in cells]
-        if "rule" in lowered and "severity" in lowered:
-            rule_at = lowered.index("rule")          # the header row: fixes the column position
-            continue
-        if rule_at is None or rule_at >= len(cells):
-            continue
-        cell = cells[rule_at].strip("`")
-        if not cell or set(cell) <= set("-:"):       # the header separator row
-            continue
-        rules.append(cell)
-    return rules
+    return [row["rule"] for row in _finding_rows(text)]
 
 
 @e2e_test(tool="code_review", kind="read")

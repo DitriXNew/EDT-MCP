@@ -33,7 +33,7 @@ The rows are defects to FIX, not just a report:
 - `severity` — minimum severity to report: `error` > `warning` > `information` > `hint`. Omit to report every severity. (These are the engine's LSP severities, independent of EDT's BLOCKER/MAJOR/… taxonomy.)
 - `rule` — report only diagnostics whose rule id contains this substring, case-insensitive (e.g. `Magic`, `Complexity`, `Unused`). Handy for a focused pass or a targeted re-verify.
 - `excludeRule` — drop diagnostics whose rule id contains this substring, case-insensitive — e.g. to exclude rules you already get from `get_project_errors` and avoid reviewing the same issue twice.
-- `limit` — maximum number of rows to render; default 100, capped at 1000. The summary counts above the table reflect the requested SCOPE (the whole project, or just the target module when `modulePath` narrows it) — `severity`/`rule`/`excludeRule` narrow only which rows are DISPLAYED in the table below, not the summary counts.
+- `limit` — maximum number of rows to render; default 100, capped at 1000. The summary counts above the table reflect the requested SCOPE (the whole project, or just the target module when `modulePath` narrows it) — `severity`/`rule`/`excludeRule` narrow only which rows are DISPLAYED in the table below, not the summary counts, so a filtered report never makes a project look cleaner than it is. When such a filter does remove rows, the same line also states how many findings match them.
 
 ## Output
 - Markdown. A heading with the scope, a one-line summary of counts per severity, a short instruction to fix-and-re-verify, then a table with columns: `Severity`, `Rule`, `Module path`, `Line`, `Message`, `Docs` (the rule's documentation URL).

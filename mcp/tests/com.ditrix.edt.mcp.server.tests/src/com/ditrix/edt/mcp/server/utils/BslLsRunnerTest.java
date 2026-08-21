@@ -21,6 +21,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.List;
 import java.util.stream.Stream;
 import java.util.jar.Attributes;
@@ -590,6 +594,53 @@ public class BslLsRunnerTest
             result.errorMessage().contains(String.valueOf(BslLsRunner.MAX_REPORT_BYTES)));
     }
 
+    @Test
+    public void testASecondConcurrentRunIsRefusedInsteadOfStartingASecondEngine() throws Exception
+    {
+        // The engine is a whole JVM analysing a configuration; two of them at once fight EDT for
+        // heap. run() must therefore REFUSE the second caller with an actionable answer rather than
+        // launch a second process - and the first must still complete normally.
+        File fixtureJar = buildFixtureJar();
+        Assume.assumeTrue("no system Java compiler available to build the fixture jar - skip", //$NON-NLS-1$
+            fixtureJar != null);
+        File srcDir = newFolder("fixture-src-slow"); //$NON-NLS-1$
+        Files.write(srcDir.toPath().resolve("FIXTURE_BEHAVIOR.txt"), "slow".getBytes()); //$NON-NLS-1$ //$NON-NLS-2$
+        Path started = srcDir.toPath().resolve("STARTED.txt"); //$NON-NLS-1$
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try
+        {
+            Future<BslLsRunner.Result> first = pool.submit(() -> BslLsRunner.run(
+                new BslLsRunner.Request(srcDir).jarOverride(fixtureJar)
+                    .javaOverride(currentJavaExecutable()).timeoutSeconds(60)));
+
+            // Wait for the fixture to SIGNAL that it is running, rather than sleeping a guessed
+            // interval: the second call must be made while the slot is genuinely held, or the test
+            // would pass for the wrong reason on a slow machine.
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (!Files.isRegularFile(started) && System.currentTimeMillis() < deadline)
+            {
+                Thread.sleep(50);
+            }
+            assertTrue("the fixture engine never signalled that it had started", //$NON-NLS-1$
+                Files.isRegularFile(started));
+
+            BslLsRunner.Result second = BslLsRunner.run(new BslLsRunner.Request(srcDir)
+                .jarOverride(fixtureJar).javaOverride(currentJavaExecutable()).timeoutSeconds(60));
+
+            assertFalse("a second concurrent review must be refused, not started", second.ok()); //$NON-NLS-1$
+            assertNotNull(second.errorMessage());
+            assertTrue("the refusal must say another review is running: " + second.errorMessage(), //$NON-NLS-1$
+                second.errorMessage().contains("Another code review is already running")); //$NON-NLS-1$
+            assertTrue("the first review must still finish normally", //$NON-NLS-1$
+                first.get(60, TimeUnit.SECONDS).ok());
+        }
+        finally
+        {
+            pool.shutdownNow();
+        }
+    }
+
     /** @return the {@code java(.exe)} launching THIS test JVM, for spawning the fixture jar. */
     private static File currentJavaExecutable()
     {
@@ -655,6 +706,10 @@ public class BslLsRunnerTest
             + "      for (int i = 0; i < 60; i++) out.write(chunk);\n" //$NON-NLS-1$
             + "      out.write(\"\\\"}]}\".getBytes());\n" //$NON-NLS-1$
             + "      out.close();\n" //$NON-NLS-1$
+            + "    } else if (\"slow\".equals(behavior)) {\n" //$NON-NLS-1$
+            + "      new java.io.File(srcDir, \"STARTED.txt\").createNewFile();\n" //$NON-NLS-1$
+            + "      Thread.sleep(9000);\n" //$NON-NLS-1$
+            + "      java.nio.file.Files.write(report.toPath(), \"{\\\"fileinfos\\\":[]}\".getBytes());\n" //$NON-NLS-1$
             + "    } else if (\"nonzero-exit\".equals(behavior)) {\n" //$NON-NLS-1$
             + "      java.nio.file.Files.write(report.toPath(), \"{\\\"fileinfos\\\":[]}\".getBytes());\n" //$NON-NLS-1$
             + "      System.exit(7);\n" //$NON-NLS-1$

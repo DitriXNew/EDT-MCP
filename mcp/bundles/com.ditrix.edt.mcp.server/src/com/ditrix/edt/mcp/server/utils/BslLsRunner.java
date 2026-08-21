@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 import com._1c.g5.v8.dt.common.FileUtil;
@@ -70,6 +71,27 @@ public final class BslLsRunner
      * reason). A configuration too large to analyse inside this window cannot be reviewed whole
      * through MCP at all - {@link #narrowingAdvice} says so, and says it in time to be delivered.
      */
+    /**
+     * How many engine processes may run at once. ONE, deliberately.
+     * <p>
+     * The engine is a full JVM analysing a whole configuration; several of them started by
+     * concurrent MCP calls compete for the same heap as the EDT process hosting them, and the
+     * failure mode is not a slow review but a dead IDE. Serializing costs a queued caller some
+     * latency; not serializing costs everyone their workbench.
+     */
+    private static final Semaphore ENGINE_SLOT = new Semaphore(1, true);
+
+    /**
+     * How long a caller waits for the slot before being told the engine is busy.
+     * <p>
+     * Short on purpose. It exists for calls that land nearly together, not as a real queue: this
+     * wait is spent INSIDE the caller's MCP request, so it has to fit alongside
+     * {@link #DEFAULT_TIMEOUT_SECONDS} under the transport ceiling that made that value 45 in the
+     * first place. Waiting longer would just replace an actionable "busy" answer with a timeout
+     * the caller cannot interpret.
+     */
+    private static final int QUEUE_WAIT_SECONDS = 5;
+
     private static final int DEFAULT_TIMEOUT_SECONDS = 45;
 
     /**
@@ -296,37 +318,70 @@ public final class BslLsRunner
             config = discoverableConfig(resolveWorkspaceDir(request));
         }
 
-        Path outputDir;
+        // Taken AFTER every cheap rejection above: an unconfigured engine or a missing source
+        // directory must answer immediately, not wait behind someone else's analysis.
         try
         {
-            outputDir = Files.createTempDirectory("bslls"); //$NON-NLS-1$
+            if (!ENGINE_SLOT.tryAcquire(QUEUE_WAIT_SECONDS, TimeUnit.SECONDS))
+            {
+                return Result.error(busyMessage());
+            }
         }
-        catch (IOException e)
+        catch (InterruptedException e)
         {
-            return Result.error("Could not create a temporary output directory for the BSL Language Server: " //$NON-NLS-1$
-                + e.getMessage());
+            Thread.currentThread().interrupt();
+            return Result.error("Interrupted while waiting for the BSL Language Server to become free."); //$NON-NLS-1$
         }
-
         try
         {
-            File safeConfig;
+            Path outputDir;
             try
             {
-                safeConfig = withoutFileWritingKeys(config, outputDir);
+                outputDir = Files.createTempDirectory("bslls"); //$NON-NLS-1$
             }
-            catch (RuntimeException e)
+            catch (IOException e)
             {
-                // Sanitizing is the read-only guarantee; when it cannot be made, refusing is the
-                // answer. Converted here rather than thrown on, because run() is documented never
-                // to throw for an operational problem (CLAUDE.md don't #8).
-                return Result.error(e.getMessage());
+                return Result.error("Could not create a temporary output directory for the BSL Language Server: " //$NON-NLS-1$
+                    + e.getMessage());
             }
-            return execute(java, jar, safeConfig, request, outputDir);
+
+            try
+            {
+                File safeConfig;
+                try
+                {
+                    safeConfig = withoutFileWritingKeys(config, outputDir);
+                }
+                catch (RuntimeException e)
+                {
+                    // Sanitizing is the read-only guarantee; when it cannot be made, refusing is
+                    // the answer. Converted here rather than thrown on, because run() is documented
+                    // never to throw for an operational problem (CLAUDE.md don't #8).
+                    return Result.error(e.getMessage());
+                }
+                return execute(java, jar, safeConfig, request, outputDir);
+            }
+            finally
+            {
+                deleteQuietly(outputDir);
+            }
         }
         finally
         {
-            deleteQuietly(outputDir);
+            ENGINE_SLOT.release();
         }
+    }
+
+    /**
+     * @return the answer a caller gets when another review already holds the engine slot
+     */
+    private static String busyMessage()
+    {
+        return "Another code review is already running. The BSL Language Server is a separate JVM " //$NON-NLS-1$
+            + "analysing a whole configuration, so reviews are run ONE at a time on purpose - " //$NON-NLS-1$
+            + "starting several at once competes for the memory EDT itself needs. Retry when the " //$NON-NLS-1$
+            + "running review finishes, or scope this one to a single module with 'modulePath', " //$NON-NLS-1$
+            + "which finishes sooner."; //$NON-NLS-1$
     }
 
     /**
@@ -624,15 +679,27 @@ public final class BslLsRunner
                 + MAX_REPORT_BYTES + "-byte limit; not read into memory." + narrowingAdvice(request)); //$NON-NLS-1$
         }
 
-        String json;
+        byte[] raw;
         try
         {
-            json = new String(Files.readAllBytes(reportPath), StandardCharsets.UTF_8);
+            // Bounded read rather than readAllBytes: the size check above is only a cheap
+            // pre-filter. The engine's own child/background writer can still be appending to the
+            // report after the parent process exited, so a file that PASSED that check can be over
+            // the cap by the time it is read - and readAllBytes would then pull all of it into the
+            // EDT heap. Reading cap+1 bytes is what makes the ceiling real instead of advisory; the
+            // engine configuration above is already read this way.
+            raw = readAtMost(reportPath, MAX_REPORT_BYTES + 1);
         }
         catch (IOException e)
         {
             return Result.error("Could not read the BSL Language Server report: " + e.getMessage()); //$NON-NLS-1$
         }
+        if (raw.length > MAX_REPORT_BYTES)
+        {
+            return Result.error("BSL Language Server report grew past the " + MAX_REPORT_BYTES //$NON-NLS-1$
+                + "-byte limit while it was being read; not parsed." + narrowingAdvice(request)); //$NON-NLS-1$
+        }
+        String json = new String(raw, StandardCharsets.UTF_8);
 
         try
         {
