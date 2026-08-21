@@ -51,6 +51,7 @@ public class GeneralTab
     private Button allowRemoteCheck;
     private Text authTokenText;
     private Button plainTextCheck;
+    private Button enhanceNavigatorCheck;
     private Button showTagsCheck;
     private Combo tagStyleCombo;
     private Combo consentLevelCombo;
@@ -183,6 +184,16 @@ public class GeneralTab
         sepGd.horizontalSpan = 3;
         sepGd.verticalIndent = 5;
         separator.setLayoutData(sepGd);
+
+        // Navigator tree contributions
+        enhanceNavigatorCheck = new Button(composite, SWT.CHECK);
+        enhanceNavigatorCheck.setText(Messages.GeneralTab_EnhanceNavigator);
+        enhanceNavigatorCheck.setToolTipText(Messages.GeneralTab_EnhanceNavigator_Tooltip);
+        enhanceNavigatorCheck.setSelection(
+            store.getBoolean(PreferenceConstants.PREF_ENHANCE_NAVIGATOR));
+        GridData enhanceNavigatorGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        enhanceNavigatorGd.horizontalSpan = 3;
+        enhanceNavigatorCheck.setLayoutData(enhanceNavigatorGd);
 
         // Show tags in navigator
         showTagsCheck = new Button(composite, SWT.CHECK);
@@ -437,6 +448,8 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS, allowRemoteCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_AUTH_TOKEN, authTokenText.getText());
+        store.setValue(PreferenceConstants.PREF_ENHANCE_NAVIGATOR,
+            enhanceNavigatorCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, showTagsCheck.getSelection());
 
         int styleIdx = tagStyleCombo.getSelectionIndex();
@@ -469,6 +482,7 @@ public class GeneralTab
         plainTextCheck.setSelection(PreferenceConstants.DEFAULT_PLAIN_TEXT_MODE);
         allowRemoteCheck.setSelection(PreferenceConstants.DEFAULT_ALLOW_REMOTE_ACCESS);
         authTokenText.setText(PreferenceConstants.DEFAULT_AUTH_TOKEN);
+        enhanceNavigatorCheck.setSelection(PreferenceConstants.DEFAULT_ENHANCE_NAVIGATOR);
         showTagsCheck.setSelection(PreferenceConstants.DEFAULT_TAGS_SHOW_IN_NAVIGATOR);
 
         // Find index for default style

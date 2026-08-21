@@ -89,9 +89,9 @@ def test_lists_xdto_packages_the_xdto_tools_need_the_fqn_of():
 
 @e2e_test(tool="get_metadata_objects", kind="read")
 def test_filter_commonmodules_returns_both_fixture_modules():
-    # metadataType=commonModules must return ONLY common modules; the fixture has
-    # exactly two: "Error" and "OK". Both Names must appear -> proves the collector
-    # ran and the filter selected the right family.
+    # metadataType=commonModules must return ONLY common modules. "Error" and "OK" are two
+    # stable fixture probes; both Names must appear -> proves the collector ran and the filter
+    # selected the right family without asserting the fixture's full common-module inventory.
     r = call("get_metadata_objects",
              {"projectName": PROJECT, "metadataType": "commonModules"})
     assert_ok(r, "get_metadata_objects commonModules")

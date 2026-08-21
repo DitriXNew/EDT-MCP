@@ -370,6 +370,7 @@
    </extension>
 
    <!-- Tag Search Filter for EDT Navigator -->
+   <!-- Intentionally excluded from Enhance Navigator: inert until the user searches with #. -->
    <extension point="org.eclipse.ui.navigator.navigatorContent">
       <commonFilter
             id="com.ditrix.edt.mcp.server.tags.TagSearchFilter"
@@ -577,13 +578,14 @@
    
    <!-- Navigator Content Extension for Groups -->
    <extension point="org.eclipse.ui.navigator.navigatorContent">
+      <!-- Equal highest priorities fall back to extension-id hash order, so this must stay at high. -->
       <navigatorContent
             id="com.ditrix.edt.mcp.server.groups.navigatorContent"
             name="Navigator Groups"
             contentProvider="com.ditrix.edt.mcp.server.groups.ui.GroupContentProvider"
             labelProvider="com.ditrix.edt.mcp.server.groups.ui.GroupLabelProvider"
             activeByDefault="true"
-            priority="highest">
+            priority="high">
          <triggerPoints>
             <or>
                <!-- Use IWorkbenchAdapter which all EDT navigator elements implement -->
@@ -591,11 +593,7 @@
             </or>
          </triggerPoints>
          <possibleChildren>
-            <or>
-               <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
-               <instanceof value="org.eclipse.ui.model.IWorkbenchAdapter"/>
-               <instanceof value="org.eclipse.emf.ecore.EObject"/>
-            </or>
+            <instanceof value="com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"/>
          </possibleChildren>
       </navigatorContent>
       

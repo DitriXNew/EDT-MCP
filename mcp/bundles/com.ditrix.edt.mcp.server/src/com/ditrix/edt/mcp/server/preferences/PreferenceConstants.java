@@ -48,6 +48,14 @@ public final class PreferenceConstants
     
     /** Default plain text mode (disabled - use embedded resources by default) */
     public static final boolean DEFAULT_PLAIN_TEXT_MODE = false;
+
+    // === Navigator preferences ===
+
+    /** Enable this plugin's Navigator tree-structure contributions. */
+    public static final String PREF_ENHANCE_NAVIGATOR = "navigator.enhance"; //$NON-NLS-1$
+
+    /** Default: preserve the current enhanced Navigator behavior. */
+    public static final boolean DEFAULT_ENHANCE_NAVIGATOR = true;
     
     // === Tag decoration preferences ===
     
