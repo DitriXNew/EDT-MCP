@@ -32,6 +32,9 @@ prebuilt `.epf`/`.erf` outside an EDT project.
 3. For a build, resolve the qualified target and compare its simple name across
    both external-object kinds. `objectName` is a simple-name selector; stop on
    a processor/report collision unless building both is explicitly authorized.
+   Before building, obtain explicit update/restructure authority for the
+   associated build infobase, or confirm that it is disposable; the platform
+   dumper may prepare and update that infobase even for an ordinary build.
    Call `build_external_objects` into a fresh empty staging directory, omitting
    `objectName` only for an authorized build-all. Set `recordBuildTime=false`
    unless changing the source object's Comment was requested. Verify the result

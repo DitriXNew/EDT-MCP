@@ -1,8 +1,8 @@
 # Business-project skill capability matrix
 
-This matrix records only tools named by the shipped skills. Current MCP help,
-schema, and [`docs/tools/`](../docs/tools/) remain authoritative. The validator
-enforces an exact skill-to-matrix match.
+This matrix records only tools named by the shipped skills. The registered
+implementation, current MCP help/schema, and [`docs/tools/`](../docs/tools/)
+remain authoritative. The validator enforces agreement among them.
 
 | Skill | Named tools |
 |---|---|
@@ -14,8 +14,8 @@ enforces an exact skill-to-matrix match.
 | `edt-mcp-project-query-dcs` | `search_in_code`, `get_module_structure`, `read_method_source`, `get_metadata_details`, `validate_query`, `modify_metadata`, `get_project_errors` |
 | `edt-mcp-project-external-objects` | `list_projects`, `get_applications`, `list_configurations`, `build_external_objects`, `set_infobase_credentials`, `set_breakpoint`, `debug_launch`, `debug_status`, `wait_for_break`, `get_variables`, `resume`, `remove_breakpoint`, `terminate_launch` |
 | `edt-mcp-project-runtime-debug` | `get_event_log`, `get_applications`, `list_configurations`, `debug_status`, `list_breakpoints`, `set_infobase_credentials`, `set_breakpoint`, `debug_launch`, `wait_for_break`, `get_variables`, `evaluate_expression`, `set_variable`, `step`, `resume`, `remove_breakpoint`, `terminate_launch` |
-| `edt-mcp-project-yaxunit` | `list_configurations`, `get_applications`, `run_yaxunit_tests`, `set_infobase_credentials`, `get_job_status`, `set_breakpoint`, `wait_for_break`, `resume`, `remove_breakpoint`, `terminate_launch`, `cancel_job` |
-| `edt-mcp-project-maintenance` | `get_project_errors`, `get_problem_summary`, `revalidate_objects`, `apply_quick_fix`, `clean_project`, `resync_to_disk`, `get_applications`, `list_configurations`, `update_database`, `get_job_status`, `cancel_job`, `import_configuration_from_xml`, `export_configuration_to_xml`, `list_git_branches`, `create_git_branch`, `switch_git_branch` |
+| `edt-mcp-project-yaxunit` | `list_configurations`, `get_applications`, `run_yaxunit_tests`, `set_infobase_credentials`, `get_job_status`, `set_breakpoint`, `wait_for_break`, `debug_status`, `resume`, `remove_breakpoint`, `terminate_launch`, `cancel_job` |
+| `edt-mcp-project-maintenance` | `get_project_errors`, `get_problem_summary`, `revalidate_objects`, `apply_quick_fix`, `clean_project`, `list_projects`, `resync_to_disk`, `get_applications`, `list_configurations`, `update_database`, `get_job_status`, `cancel_job`, `import_configuration_from_xml`, `export_configuration_to_xml`, `list_git_branches`, `create_git_branch`, `switch_git_branch` |
 | `edt-mcp-project-profiling` | `debug_status`, `get_profiling_results`, `start_profiling`, `stop_profiling` |
 | `edt-mcp-project-workmate` | `get_tool_guide`, `ask_workmate`, `get_job_status` |
 | `edt-mcp-project-translation` | `list_projects`, `get_configuration_properties`, `get_translation_project_info`, `generate_translation_strings`, `translate_configuration`, `get_metadata_details` |

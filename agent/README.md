@@ -36,11 +36,14 @@ project instructions
 Copy or link the skill directories under `agent/skills/` into the skill
 directory recognized by the chosen client, and install `agent/skills/COMMON.md`
 as their shared sibling. Keep the folder names unchanged so the `name` in each
-`SKILL.md` remains stable. Also copy or link `agent/ROUTER.md` into the target
+`SKILL.md` remains stable, and verify that every skill's `../COMMON.md` link
+resolves after installation. Also copy or link `agent/ROUTER.md` into the target
 project, for example as `.agents/edt-mcp/ROUTER.md`, and reference that actual
 installed path from the target root instruction file. Alternatively, copy the
 router's compact routing table into the root instruction file. Do not retain a
 source-relative `agent/ROUTER.md` reference unless that path was installed too.
+The router contains no location-dependent links, so it may be installed at the
+referenced path independently of the client-specific skill directory.
 
 Typical skill locations include a user or workspace `.agents/skills`,
 `.claude/skills`, or another client-specific skill directory. The exact path

@@ -14,6 +14,23 @@ SKILLS = AGENT / "skills"
 MATRIX = AGENT / "TOOL_CAPABILITY_MATRIX.md"
 ROUTER = AGENT / "ROUTER.md"
 TOOL_DOCS = ROOT / "docs" / "tools"
+SERVER_SOURCE = (
+    ROOT
+    / "mcp"
+    / "bundles"
+    / "com.ditrix.edt.mcp.server"
+    / "src"
+)
+REGISTRAR = (
+    SERVER_SOURCE
+    / "com"
+    / "ditrix"
+    / "edt"
+    / "mcp"
+    / "server"
+    / "tools"
+    / "BuiltInToolRegistrar.java"
+)
 PROXY_TOOLS = {"router_status"}
 
 BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
@@ -35,6 +52,14 @@ def read_text(path: Path, errors: list[str]) -> str:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         fail(errors, f"{path.relative_to(ROOT)}: invalid UTF-8: {exc}")
+        return ""
+
+
+def read_java_source(path: Path, errors: list[str]) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        fail(errors, f"{path.relative_to(ROOT)}: invalid Java source encoding: {exc}")
         return ""
 
 
@@ -102,10 +127,74 @@ def parse_matrix(errors: list[str]) -> dict[str, set[str]]:
     return rows
 
 
+def resolve_java_string(expression: str, errors: list[str], owner: Path) -> str | None:
+    literal = re.fullmatch(r'"([a-z0-9_]+)"', expression)
+    if literal:
+        return literal.group(1)
+
+    constant = re.fullmatch(r"([A-Za-z0-9_]+)\.([A-Z0-9_]+)", expression)
+    if not constant:
+        fail(errors, f"{owner.relative_to(ROOT)}: unsupported NAME expression {expression!r}")
+        return None
+    class_name, constant_name = constant.groups()
+    candidates = list(SERVER_SOURCE.rglob(f"{class_name}.java"))
+    if len(candidates) != 1:
+        fail(errors, f"implementation constant owner {class_name}: expected one source, got {len(candidates)}")
+        return None
+    source = read_java_source(candidates[0], errors)
+    match = re.search(
+        rf"public\s+static\s+final\s+String\s+{constant_name}\s*=\s*\"([a-z0-9_]+)\"\s*;",
+        source,
+    )
+    if not match:
+        fail(errors, f"{candidates[0].relative_to(ROOT)}: cannot resolve {constant_name}")
+        return None
+    return match.group(1)
+
+
+def registered_tool_names(errors: list[str]) -> set[str]:
+    registrar = read_java_source(REGISTRAR, errors)
+    classes = re.findall(r"catalogue\.add\(new\s+([A-Za-z0-9_]+)\s*\(", registrar)
+    if not classes:
+        fail(errors, f"{REGISTRAR.relative_to(ROOT)}: no registered tool classes found")
+        return set()
+
+    names: set[str] = set()
+    for class_name in classes:
+        candidates = list(SERVER_SOURCE.rglob(f"{class_name}.java"))
+        if len(candidates) != 1:
+            fail(errors, f"registered class {class_name}: expected one source, got {len(candidates)}")
+            continue
+        source_path = candidates[0]
+        source = read_java_source(source_path, errors)
+        match = re.search(
+            r"public\s+static\s+final\s+String\s+NAME\s*=\s*([^;]+);",
+            source,
+        )
+        if not match:
+            fail(errors, f"{source_path.relative_to(ROOT)}: public NAME constant not found")
+            continue
+        name = resolve_java_string(match.group(1).strip(), errors, source_path)
+        if name is None:
+            continue
+        if name in names:
+            fail(errors, f"{REGISTRAR.relative_to(ROOT)}: duplicate registered name {name}")
+        names.add(name)
+    return names
+
+
 def main() -> int:
     errors: list[str] = []
-    tool_names = {path.stem for path in TOOL_DOCS.glob("*.md") if path.name != "README.md"}
-    tool_names |= PROXY_TOOLS
+    documented_names = {path.stem for path in TOOL_DOCS.glob("*.md") if path.name != "README.md"}
+    registered_names = registered_tool_names(errors)
+    if documented_names != registered_names:
+        fail(
+            errors,
+            "tool docs/implementation differ: "
+            f"docs-only={sorted(documented_names - registered_names)} "
+            f"registered-only={sorted(registered_names - documented_names)}",
+        )
+    tool_names = registered_names | PROXY_TOOLS
     agent_text = {path: read_text(path, errors) for path in sorted(AGENT.rglob("*.md"))}
 
     skill_files = sorted(SKILLS.glob("*/SKILL.md"))
@@ -146,7 +235,10 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print(f"Validated {len(skills)} skills, {len(tool_names)} documented/proxy tools, router, matrix, and links.")
+    print(
+        f"Validated {len(skills)} skills, {len(registered_names)} registered/documented tools "
+        f"+ {len(PROXY_TOOLS)} proxy tool, router, matrix, and links."
+    )
     return 0
 
 

@@ -30,7 +30,9 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    inspect its diff. Before `clean_project`, prove the exact project has no
    unsaved in-memory model edits; preserve any through the current supported,
    authorized save/resync route, or stop if safety cannot be proved. Always pass
-   the exact project; omission rebuilds every EDT project.
+   the exact project; omission rebuilds every EDT project. After any clean,
+   call `list_projects` with `format=json` until that exact project reports `ready`;
+   do not trust the clean result or continue against an unsettled/unknown state.
 2. Resolve application identity with `get_applications` and
    `list_configurations`. For `update_database`, review the current preview and
    side effects with `terminateRunningClients=false`, obtain authority, execute

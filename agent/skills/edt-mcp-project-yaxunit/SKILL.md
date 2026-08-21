@@ -27,20 +27,24 @@ tests or an unidentified/shared production infobase.
    `set_infobase_credentials` only when authorized and required.
 2. Select at least one intended test, module, extension, or tag; settle update,
    external-change, launch, disclosure, and dependency scope before execution.
-   Before any `updateBeforeLaunch=true` route, discover and obtain authority
-   for every affected project/application launch and project Attach launch;
-   otherwise use a proven no-sweep route or stop.
-3. Call `run_yaxunit_tests`. If pending, retain its job ID and poll only that
-   job with `get_job_status`; never rerun merely to check status.
+   With `updateBeforeLaunch=true`, pass an explicit `updateScope` of
+   `configuration` or exact `extension:<ProjectName>` targets; use `all` only
+   when every dependent extension is intentionally included and authorized.
+   Obtain authority for every affected project/application launch and project
+   Attach launch; otherwise use a proven no-sweep route or stop.
+3. Call `run_yaxunit_tests` with the resolved update values. If pending, retain
+   its job ID and poll only that job with `get_job_status`; never rerun merely
+   to check status.
 4. For a completed normal run, require at least one intended test to have
    executed. Treat zero executed tests as inconclusive unless an empty
    selection was explicitly requested.
 5. For debugging, first prove the intended debug target can remain unambiguous
    under current help. Then use `set_breakpoint` -> debug-mode
    `run_yaxunit_tests` -> `wait_for_break` -> bounded inspection -> `resume` and
-   `remove_breakpoint`. After the run or any target race, refresh status and
-   resume every uniquely attributable task-caused suspension before removing
-   the task breakpoint; never resume an unrelated or ambiguously owned target.
+   `remove_breakpoint`. After the run or any target race, call `debug_status`
+   and resume every uniquely attributable task-caused suspension before
+   removing the task breakpoint; never resume an unrelated or ambiguously
+   owned target.
    Use `terminate_launch` only for a uniquely identified, task-owned launch
    whose termination is authorized.
 6. Use `cancel_job` only for the retained running job and follow its current

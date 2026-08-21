@@ -51,7 +51,7 @@ In plugin settings (`Window -> Preferences -> MCP Server -> Tools`) the user sel
 | **All Tools** | Nothing (all currently enabled tools) |
 | **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Available: Core/Project (except export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | Same as Analysis Only, **plus** all BSL Code tools become available **except** `write_module_source`. So available: `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Development** | Only the Debugging group (including `run_yaxunit_tests(debug=true)`, `start_profiling`, `get_profiling_results`). Refactoring, Translation, BSL Code, Applications are all available |
+| **Development** | The Debugging group and default-off tools (currently raw `git`). `run_yaxunit_tests` remains available from Applications for normal runs; although `debug=true` can start, its inspection and cleanup tools are disabled, so do not start a debug run until Debugging is enabled. Refactoring, Translation, BSL Code, Applications are available |
 
 ## Configurable parameter defaults
 
@@ -118,7 +118,7 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `debug_launch` | Launch in debug mode. Same identification: `launchConfigurationName` (incl. Attach to 1C:Enterprise Debug Server) **or** `projectName + applicationId` | On request |
 | `run_yaxunit_tests` | Run YAxUnit tests, parse JUnit XML, Markdown report | After edits, if the project has tests |
 
-### 6. Debugging (12)
+### 6. Debugging (13 non-deprecated tools)
 
 | Tool | Purpose |
 |---|---|
@@ -127,12 +127,13 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `list_breakpoints` | Active breakpoints, optionally filtered by project |
 | `wait_for_break` | Blocking wait for suspend (e.g. breakpoint hit) |
 | `get_variables` | Read variables of a stack frame (lazy expand for nested) |
+| `set_variable` | Mutate a variable in a suspended stack frame when explicitly authorized |
 | `step` | Step over/into/out, returns a new snapshot |
 | `resume` | Resume a thread or all threads of a target |
 | `evaluate_expression` | Execute a BSL expression in frame context |
-| `run_yaxunit_tests` with `debug: true` | Run YAxUnit tests in DEBUG mode after setting the required breakpoint |
 | `debug_status` | Status of active debug launches: mode, suspend, threads, top frame |
 | `start_profiling` | Start performance profiling on the active debug target; use `stop_profiling` to finish |
+| `stop_profiling` | Stop profiling on the selected active debug target |
 | `get_profiling_results` | Profiling results: per-module / per-line, call counts, timing, coverage |
 
 Typical cycle — see `edt-mcp-workflows.md`, section "Debugging".
