@@ -32,13 +32,14 @@ tool catalog or repeat bootstrap calls while the evidence remains current.
    `router_status` once.
 4. Call `get_server_status` only when version, EDT state, progressive
    disclosure, or renderer flags matter.
-5. If a capability is hidden, inspect `list_toolsets`. Use `enable_toolset`
-   only when the current client supports dynamic MCP tool-catalog refresh,
-   then refresh its catalog. A server-side visibility change does not make a
-   newly revealed tool callable in clients that materialize schemas only at
-   session start. For those clients, configure server-side visibility before
-   a new handshake, then reconnect or restart the client/session; if that is
-   not possible, report the limitation instead of depending on the tool.
+5. If a capability is hidden, inspect `list_toolsets`. A client that supports
+   dynamic MCP tool-catalog refresh may call `enable_toolset`, refresh the
+   catalog, and use the revealed tool in the current session. A client that
+   materializes schemas only at session start may call `enable_toolset`, then
+   reconnect or start a new session so the enabled schemas arrive in the next
+   handshake. Disabling Progressive Disclosure before server startup remains
+   an alternative. Do not assume that every client can refresh schemas in the
+   current session.
 6. Use `get_tool_guide` for an unfamiliar operation or before the first
    destructive or cascading mutation in the task.
 
@@ -68,10 +69,10 @@ address those objects by their qualified FQNs and pass the external project as
   namespace.
 - Do not require Progressive Disclosure; the complete tool surface may be
   visible from session start.
-- A hidden tool is not necessarily unsupported, but it may remain unavailable
-  for the current session when the client catalog cannot refresh dynamically.
-  An administratively disabled tool cannot be enabled by repeated discovery
-  calls.
+- A hidden tool is not necessarily unsupported. A static client may need to
+  enable its toolset and reconnect before the tool becomes callable, while a
+  dynamic client may refresh in the current session. An administratively
+  disabled tool cannot be enabled by repeated discovery calls.
 - Optional tools such as Git or Workmate are not prerequisites for ordinary
   project work.
 

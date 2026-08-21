@@ -1,6 +1,6 @@
 ---
 name: edt-mcp-project-external-objects
-description: Work with external data processor/report projects through EDT-MCP: metadata, forms, builds, and one-run debug launch. Not for prebuilt files outside an EDT project.
+description: "Work with external data processor/report projects through EDT-MCP: metadata, forms, builds, and one-run debug launch. Not for prebuilt files outside an EDT project."
 ---
 
 # EDT-MCP external objects
@@ -57,7 +57,9 @@ all-objects build is not proof that a requested named object exists.
 
 ## Debug launch
 
-Use `debug_launch` against the base configuration application and pass
+Set the smallest required source breakpoint with `set_breakpoint`, passing the
+external-object project as `projectName`, before starting the object. Then use
+`debug_launch` against the base configuration application and pass
 `externalObjectProjectName` plus `externalObjectName`. EDT builds the object for
 debugging; a prebuilt file cannot provide source breakpoints.
 
@@ -65,8 +67,8 @@ Use `startupOption` only for the current launch's `/C` payload. It is applied to
 a working copy and does not persistently change the saved EDT launch
 configuration. It is valid for runtime-client launches, not Attach launches.
 
-Check `debug_status` after the asynchronous start. Use `restartIfRunning` only
-when terminating the current client is authorized.
+Check `debug_status` after the asynchronous start, then use `wait_for_break`.
+Use `restartIfRunning` only when terminating the current client is authorized.
 
 ## Verification
 

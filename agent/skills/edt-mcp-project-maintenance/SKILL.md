@@ -1,6 +1,6 @@
 ---
 name: edt-mcp-project-maintenance
-description: Perform bounded EDT project maintenance through current EDT-MCP: diagnostics, revalidation, clean/resync, applications, database update, import/export, and Git when enabled.
+description: "Perform bounded EDT project maintenance through current EDT-MCP: diagnostics, revalidation, clean/resync, applications, database update, import/export, and Git when enabled."
 ---
 
 # EDT-MCP project maintenance

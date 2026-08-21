@@ -39,8 +39,15 @@ whole project or turning research into implementation.
 6. Resolve only the relationships needed for the conclusion:
    - `go_to_definition`;
    - `find_references`;
-   - `get_method_call_hierarchy` with bounded depth;
-   - `get_outgoing_structures` for structured contracts;
+   - `get_method_call_hierarchy` with bounded depth, remembering that it scans
+     only the selected project's source and does not include callers from
+     extensions or other projects. When related extensions matter, discover
+     them, search each project separately with bounded calls, and identify any
+     projects that remain unverified;
+   - `get_outgoing_structures` only as a lower bound for structured contracts.
+     It observes limited literal insertion patterns and qualified calls, with
+     only shallow helper expansion. Read the bounded caller and callee source
+     before claiming a complete structure contract;
    - `get_symbol_info` when the symbol identity is unclear.
 7. Use `get_platform_documentation` when the conclusion depends on a platform
    API rather than project code.

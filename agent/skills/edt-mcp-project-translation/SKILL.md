@@ -26,11 +26,14 @@ existing storage topology without translating programmatic identifiers.
 ## Preflight
 
 1. Resolve the exact project.
-2. Call `get_translation_project_info` and record declared source/target
-   languages, dictionaries, and storages.
-3. Distinguish language codes from display names.
-4. Confirm whether generating strings will write translation storage.
-5. Consult `get_tool_guide` for `generate_translation_strings` or
+2. Call `get_configuration_properties` and record `defaultLanguage` plus the
+   declared configuration `languages`.
+3. Treat every target language as explicit caller or user input, distinguish
+   language codes from display names, and verify it is declared.
+4. Use `get_translation_project_info` only to discover translation storages
+   and providers and to select the configured route.
+5. Confirm whether generating strings will write translation storage.
+6. Consult `get_tool_guide` for `generate_translation_strings` or
    `translate_configuration` when parameters or side effects are uncertain.
 
 ## Workflow

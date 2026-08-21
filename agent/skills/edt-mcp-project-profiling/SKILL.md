@@ -26,17 +26,22 @@ measurement, refactoring, and unrelated runtime activity.
 
 1. Define one scenario, expected start/end, and performance question.
 2. Resolve the exact debug target and application.
-3. Check current debug status and ensure unrelated profiling is not active.
-4. Read guides for `start_profiling`, `stop_profiling`, and
+3. Check `debug_status` and require an active debug session/application before
+   `start_profiling`. Otherwise launch or Attach through the runtime-debug
+   workflow and wait for readiness, or stop and route there.
+4. Call `get_profiling_results` without `applicationId` and check its global
+   `profilingActive` before starting. Require an exclusive profiling window
+   with no other session allowed to publish a result.
+5. Read guides for `start_profiling`, `stop_profiling`, and
    `get_profiling_results` when target or result semantics are uncertain.
-5. Decide how the scenario will be triggered and what data volume it uses.
+6. Decide how the scenario will be triggered and what data volume it uses.
 
 ## Workflow
 
 1. Start with `start_profiling` for the exact target.
 2. Execute only the bounded scenario.
 3. Stop with `stop_profiling` even when the scenario fails.
-4. Read `get_profiling_results`.
+4. Read `get_profiling_results` immediately after stopping.
 5. Correlate hot methods and lines with exact project source using module/method
    readers.
 6. Repeat only when a controlled comparison is necessary and the first run's
@@ -44,10 +49,12 @@ measurement, refactoring, and unrelated runtime activity.
 
 ## Attribution
 
-Current result storage may expose the latest profiling result rather than a
-perfect per-application history. Confirm the target identity, timestamps, and
-guide before attributing the result. Treat concurrent runtime activity as a
-confounder.
+`get_profiling_results` exposes the latest global result without reliable
+result identity or timestamps. It cannot prove which application produced a
+result after another session publishes one. Use the preflight global
+`profilingActive` check, an exclusive profiling window, and the immediate
+stop-then-read sequence for attribution; do not require identity or timestamp
+fields that the API does not return.
 
 ## Evidence boundary
 

@@ -25,10 +25,13 @@ project instructions
 
 ## Installation
 
-Copy or link only `agent/skills/*` into the skill directory recognized by the
+Copy or link `agent/skills/*` into the skill directory recognized by the
 chosen client. Keep the folder names unchanged so the `name` in each
-`SKILL.md` remains stable. Then reference `agent/ROUTER.md` from the client's
-root instruction file, or copy its compact routing table into that file.
+`SKILL.md` remains stable. Also copy or link `agent/ROUTER.md` into the target
+project, for example as `.agents/edt-mcp/ROUTER.md`, and reference that actual
+installed path from the target root instruction file. Alternatively, copy the
+router's compact routing table into the root instruction file. Do not retain a
+source-relative `agent/ROUTER.md` reference unless that path was installed too.
 
 Typical skill locations include a user or workspace `.agents/skills`,
 `.claude/skills`, or another client-specific skill directory. The exact path
@@ -43,12 +46,11 @@ clients that flatten all installed skills into one list.
 - The pack does not require Progressive Disclosure; all tools may be visible
   when the client session starts.
 - Server-side tool visibility may be reduced by toolsets or administrator
-  policy, but changing it does not guarantee that a client with a static MCP
-  catalog can call newly revealed tools in the same session. Use
-  `enable_toolset` only when the client supports a dynamic catalog refresh;
-  otherwise configure the server to expose the required surface before a new
-  handshake, then reconnect or restart the client/session. If that is not
-  possible, report the limitation.
+  policy. A client with dynamic catalog refresh may call `enable_toolset` and
+  refresh in the current session. A static client may call `enable_toolset`,
+  then reconnect or start a new session so the enabled schemas arrive in the
+  next handshake. Disabling Progressive Disclosure before server startup is
+  another option. Do not assume same-session refresh support in every client.
 - The current client catalog, `list_toolsets`, and `get_tool_guide` outrank
   copied examples when the installed server differs from this repository
   version.

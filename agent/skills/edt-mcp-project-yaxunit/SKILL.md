@@ -64,10 +64,12 @@ test when debugging.
 
 ## Debug
 
-Use the current debug mode of `run_yaxunit_tests`; the separate
-`debug_yaxunit_tests` name is a compatibility alias. Continue with
-`wait_for_break`, `get_variables`, `evaluate_expression`, `step`, and `resume`.
-Do not confuse a suspended debugger with a hung test job.
+Set the exact source breakpoint before starting the selected test. Then use the
+current debug mode of `run_yaxunit_tests` with `debug=true`; the separate
+`debug_yaxunit_tests` name is a compatibility alias. Follow the safe order
+`set_breakpoint` -> `run_yaxunit_tests(debug=true)` -> `wait_for_break` ->
+inspect, step, or resume with `get_variables`, `evaluate_expression`, `step`,
+and `resume`. Do not confuse a suspended debugger with a hung test job.
 
 ## Cancellation
 

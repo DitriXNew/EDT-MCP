@@ -32,21 +32,23 @@ experiment, then clean up temporary state.
    especially standalone servers or external objects.
 4. Decide whether database update, external-infobase changes, client restart,
    or standalone-server port reassignment is authorized.
+5. Resolve the exact source location and place the smallest required
+   `set_breakpoint` calls before `debug_launch` or an Attach launch.
 
 ## Launch and probe
 
-1. Use `debug_launch` in one supported targeting mode.
+1. After placing breakpoints, use `debug_launch` in one supported targeting
+   mode.
 2. For server-side code, use an Attach launch configuration; a runtime client
    cannot hit server breakpoints by itself.
 3. Poll `debug_status` because launch is asynchronous and later failures are
    reported there.
-4. Set the smallest breakpoint set with `set_breakpoint`.
-5. Wait with `wait_for_break`.
-6. Read variables with `get_variables`.
-7. Use `evaluate_expression` only when necessary; it executes BSL and may have
+4. Wait with `wait_for_break`.
+5. Read variables with `get_variables`.
+6. Use `evaluate_expression` only when necessary; it executes BSL and may have
    side effects.
-8. Use `set_variable` only for an explicitly authorized experiment.
-9. Step or resume minimally.
+7. Use `set_variable` only for an explicitly authorized experiment.
+8. Step or resume minimally.
 
 ## Standalone-server lifecycle
 
@@ -58,8 +60,13 @@ reassignment unless changing the server configuration is authorized.
 ## Event log
 
 Use `get_event_log` with narrow time, severity, event, and application filters.
-Logs can contain user, business, or connection data; return only evidence
-needed for the question.
+For a FILE infobase, the tool can resolve its event-log location from the
+selected application. For a SERVER infobase, require a caller-confirmed
+absolute `logDir` that points to an accessible copy of `1Cv8Log` in supported
+`text-2.0` format. Neither `projectName` nor `applicationId` automatically
+resolves the server log directory; stop explicitly when a suitable `logDir`
+is unavailable. Logs can contain user, business, or connection data; return
+only evidence needed for the question.
 
 ## Cleanup
 

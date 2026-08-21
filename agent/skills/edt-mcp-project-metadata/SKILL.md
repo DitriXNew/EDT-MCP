@@ -29,8 +29,11 @@ operations.
 1. Resolve exact `projectName` and FQN.
 2. Read with `get_metadata_details`; request assignable properties when the
    write surface is uncertain.
-3. Use `find_references` before a change that can cascade or leave dangling
-   references.
+3. Use `find_references` before a change to a top-level metadata object whose
+   FQN has the form `Type.Name` and that can cascade or leave dangling
+   references. `find_references` does not accept nested member FQNs. For an
+   attribute, form element, or other nested member, use the relevant mutation
+   preview to inspect cascade and blocking information instead.
 4. For forms, switch to `edt-mcp-project-forms`; for reports/DCS, pair with
    `edt-mcp-project-query-dcs`.
 5. Call the relevant `get_tool_guide` before the first uncommon, destructive,
