@@ -32,8 +32,13 @@ tool catalog or repeat bootstrap calls while the evidence remains current.
    `router_status` once.
 4. Call `get_server_status` only when version, EDT state, progressive
    disclosure, or renderer flags matter.
-5. If a capability is hidden, call `list_toolsets`, enable only the relevant
-   toolset with `enable_toolset`, and refresh discovery once.
+5. If a capability is hidden, inspect `list_toolsets`. Use `enable_toolset`
+   only when the current client supports dynamic MCP tool-catalog refresh,
+   then refresh its catalog. A server-side visibility change does not make a
+   newly revealed tool callable in clients that materialize schemas only at
+   session start. For those clients, configure server-side visibility before
+   a new handshake, then reconnect or restart the client/session; if that is
+   not possible, report the limitation instead of depending on the tool.
 6. Use `get_tool_guide` for an unfamiliar operation or before the first
    destructive or cascading mutation in the task.
 
@@ -61,8 +66,12 @@ address those objects by their qualified FQNs and pass the external project as
   route is unambiguous.
 - Do not assume a fixed server port, tool count, toolset membership, or client
   namespace.
-- A hidden tool is not necessarily unsupported; an administratively disabled
-  tool cannot be enabled by repeated discovery calls.
+- Do not require Progressive Disclosure; the complete tool surface may be
+  visible from session start.
+- A hidden tool is not necessarily unsupported, but it may remain unavailable
+  for the current session when the client catalog cannot refresh dynamically.
+  An administratively disabled tool cannot be enabled by repeated discovery
+  calls.
 - Optional tools such as Git or Workmate are not prerequisites for ordinary
   project work.
 
@@ -71,7 +80,6 @@ address those objects by their qualified FQNs and pass the external project as
 - Read one method before one module.
 - Read one metadata object before a subsystem or configuration.
 - Read a compact form layout before a full layout or screenshot.
-- Enable one toolset before several.
 - Do not bulk-call `get_tool_guide`.
 
 ## Verification

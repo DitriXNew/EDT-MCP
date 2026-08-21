@@ -40,9 +40,18 @@ clients that flatten all installed skills into one list.
 
 ## Operating assumptions
 
-- Tool visibility may be reduced by toolsets or administrator policy.
-- Current `tools/list`, `list_toolsets`, and `get_tool_guide` outrank copied
-  examples when the installed server differs from this repository version.
+- The pack does not require Progressive Disclosure; all tools may be visible
+  when the client session starts.
+- Server-side tool visibility may be reduced by toolsets or administrator
+  policy, but changing it does not guarantee that a client with a static MCP
+  catalog can call newly revealed tools in the same session. Use
+  `enable_toolset` only when the client supports a dynamic catalog refresh;
+  otherwise configure the server to expose the required surface before a new
+  handshake, then reconnect or restart the client/session. If that is not
+  possible, report the limitation.
+- The current client catalog, `list_toolsets`, and `get_tool_guide` outrank
+  copied examples when the installed server differs from this repository
+  version.
 - A successful model or static validation call is not runtime evidence.
 - Destructive or cascading work still requires the user's authority and the
   current tool's preview/confirmation contract.
