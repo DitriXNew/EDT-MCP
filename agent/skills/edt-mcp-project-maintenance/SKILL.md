@@ -102,6 +102,23 @@ project-approved Git route for the missing operation. If that route lacks the
 required authority, stop with one concrete question; do not demand that the
 owner commit unrelated work.
 
+Before any EDT-MCP mutation, import or open the linked checkout as a distinct
+EDT workspace project through a distinct server route and give it a unique
+`projectName`. Re-run project discovery and verify that this project resolves
+to the intended linked-worktree path. Never reuse a `projectName` belonging to
+the active or another foreign checkout. A technical project that merely links
+`src` from the worktree is not sufficient unless the checkout itself is
+resolved and shared correctly. If a distinct route to the intended worktree
+cannot be established, stop and ask a concrete question instead of mutating
+the active project.
+
+For an EDT/EGit-shared project, prefer the typed Git tools. The general MCP
+`git` tool is project-routed and cannot be used to open an unregistered or
+unshared linked worktree. If the current MCP surface does not support a
+required repository operation, use system Git only with explicit authorization
+and only inside the exact linked worktree, when project policy permits it.
+Perform all 1C artifact work through the distinct EDT project route.
+
 When the general `git` tool is deliberately enabled, follow its current guide
 and the project's branch/publish policy. Import/export, project deletion,
 infobase deletion, and deletion of database files require exact targets,

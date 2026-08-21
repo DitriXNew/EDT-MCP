@@ -32,8 +32,9 @@ experiment, then clean up temporary state.
    especially standalone servers or external objects.
 4. Decide whether database update, external-infobase changes, client restart,
    or standalone-server port reassignment is authorized.
-5. Resolve the exact source location and place the smallest required
-   `set_breakpoint` calls before `debug_launch` or an Attach launch.
+5. Resolve the exact source location, place the smallest required
+   `set_breakpoint` calls before `debug_launch` or an Attach launch, and
+   retain every returned `breakpointId`.
 
 ## Launch and probe
 
@@ -48,7 +49,8 @@ experiment, then clean up temporary state.
 6. Use `evaluate_expression` only when necessary; it executes BSL and may have
    side effects.
 7. Use `set_variable` only for an explicitly authorized experiment.
-8. Step or resume minimally.
+8. Step or resume minimally. A step suspends execution again, so track whether
+   the session remains suspended.
 
 ## Standalone-server lifecycle
 
@@ -75,9 +77,14 @@ business, or connection data; return only evidence needed for the question.
 
 ## Cleanup
 
-Remove temporary breakpoints. Terminate only sessions owned by or explicitly
-authorized for the task using `terminate_launch`. Do not stop a shared debug
-server merely because a client probe is complete.
+Before cleanup or handoff, resume any task-owned or shared session that this
+workflow leaves suspended, including suspension caused by the final step. Then
+remove every temporary breakpoint by its retained `breakpointId`. Perform this
+cleanup on success, failure, and timeout paths.
+
+Terminate task-owned sessions only when termination is within scope. Never
+terminate or detach a shared or user-owned session without explicit
+authorization.
 
 ## Evidence report
 

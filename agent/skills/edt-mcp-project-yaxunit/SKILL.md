@@ -64,12 +64,23 @@ test when debugging.
 
 ## Debug
 
-Set the exact source breakpoint before starting the selected test. Then use the
-current debug mode of `run_yaxunit_tests` with `debug=true`; the separate
-`debug_yaxunit_tests` name is a compatibility alias. Follow the safe order
-`set_breakpoint` -> `run_yaxunit_tests(debug=true)` -> `wait_for_break` ->
-inspect, step, or resume with `get_variables`, `evaluate_expression`, `step`,
-and `resume`. Do not confuse a suspended debugger with a hung test job.
+Set the exact source breakpoint before starting the selected test and retain
+the `breakpointId` returned by `set_breakpoint`. Then use the current debug
+mode of `run_yaxunit_tests` with `debug=true`; the separate
+`debug_yaxunit_tests` name is a compatibility alias. This call returns a
+launch handle after spawning the run, not a completed test result with totals
+or failures. Follow the safe order `set_breakpoint` ->
+`run_yaxunit_tests(debug=true)` -> `wait_for_break` -> inspect, step, or
+resume with `get_variables`, `evaluate_expression`, `step`, and `resume` ->
+if execution is suspended, resume it -> remove the temporary breakpoint by
+its retained `breakpointId`. Perform this cleanup after success, failure, or
+timeout. A step can suspend execution again, so check the final state before
+cleanup. Do not confuse a suspended debugger with a hung test job.
+
+If the user task explicitly requires pass/fail verification after debugging,
+run one separate focused normal execution with `debug=false` after debugger
+cleanup and report totals, failures, and the report path from that completed
+run. Do not start this additional run otherwise.
 
 ## Cancellation
 
@@ -79,9 +90,12 @@ no rollback is implied.
 
 ## Verification
 
-Record application/infobase, selectors, update policy, job ID, pass/fail/skip
-totals, failing tests, report path when provided, debugger cleanup, and whether
-test or cancellation behavior may have changed runtime data.
+For a completed normal run, record application/infobase, selectors, update
+policy, job ID when one was used, pass/fail/skip totals, failing tests, report
+path when provided, cleanup, and whether test or cancellation behavior may
+have changed runtime data. For a debug-only run, record the launch handle,
+breakpoint or frame evidence, and debugger cleanup; do not claim completed-run
+totals or failures.
 
 ## Stop conditions
 

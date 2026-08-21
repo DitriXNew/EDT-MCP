@@ -49,8 +49,11 @@ objects.
 
 Use `build_external_objects` for one named object or all objects. Establish the
 associated infobase and resolvable runtime first. Choose `recordBuildTime`
-deliberately: its default records a timestamp in the object's comment and
-therefore changes metadata; set it to false for a non-mutating build.
+deliberately. When it is omitted or `true`, the tool replaces the object's
+entire `Comment` with a build timestamp before dumping the external file. If
+dumping then fails, the original comment can already be lost. Use
+`recordBuildTime=false` to preserve the comment. Replacing the comment with a
+timestamp requires an explicit user choice.
 
 Record the output directory and built/failed object counts. A successful empty
 all-objects build is not proof that a requested named object exists.
@@ -58,7 +61,8 @@ all-objects build is not proof that a requested named object exists.
 ## Debug launch
 
 Set the smallest required source breakpoint with `set_breakpoint`, passing the
-external-object project as `projectName`, before starting the object. Then use
+external-object project as `projectName`, before starting the object, and
+retain the returned `breakpointId`. Then use
 `get_tool_guide('debug_launch')` and resolve both `updateBeforeLaunch` and
 `externalInfobaseChanges` before starting. Any database update or override of
 external infobase changes requires explicit authority. Pass both chosen values
@@ -76,11 +80,12 @@ configuration. It is valid for runtime-client launches, not Attach launches.
 Check `debug_status` after the asynchronous start, then use `wait_for_break`.
 On a hit, inspect the returned frames and read only the bounded variables needed
 for the question with `get_variables`; the break notification alone is not
-runtime evidence. Resume the suspended thread with `resume`, remove the
-temporary breakpoint with `remove_breakpoint`, and use `terminate_launch` only
-when ending a task-owned launch is appropriate. Hand deeper stepping or
-expression work to `edt-mcp-project-runtime-debug`. Use `restartIfRunning` only
-when terminating the current client is authorized.
+runtime evidence. After the probe, including failure or timeout, resume first
+if execution is suspended, then remove the temporary breakpoint by its retained
+`breakpointId`. Use `terminate_launch` only when ending a task-owned launch is
+appropriate. Hand deeper stepping or expression work to
+`edt-mcp-project-runtime-debug`. Use `restartIfRunning` only when terminating
+the current client is authorized.
 
 ## Verification
 
