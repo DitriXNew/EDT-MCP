@@ -19,8 +19,8 @@ Sample rule pack for AI assistants (Claude Code, Cursor, GitHub Copilot, Gemini 
 1. Скопируйте папку `rules/` в свой 1С-проект. Рекомендуемые места:
    - в корень проекта (`<project>/rules/`),
    - либо в `<project>/.claude/rules/` (тогда поправьте пути в `INDEX.md`).
-2. Возьмите `rules/CLAUDE.md.example`, переименуйте в нужное имя для своего клиента и положите в корень проекта (см. таблицу ниже).
-3. Откройте `rules/ru/INDEX.md` (или `en/INDEX.md`) и удалите строки на файлы, которых нет в вашем процессе. По умолчанию опционален только `bsl-ssl.md` (если проект не использует БСП).
+2. Возьмите `rules/CLAUDE.md.example`, переименуйте в нужное имя для своего клиента и положите в корень проекта (см. таблицу ниже). Шаблон по умолчанию ссылается на английскую машинную ветку `rules/en/INDEX.md`; для русской локализованной ветки замените ссылку на `rules/ru/INDEX.md`.
+3. Откройте выбранный `INDEX.md` и удалите строки на файлы, которых нет в вашем процессе. По умолчанию опционален только `bsl-ssl.md` (если проект не использует БСП).
 4. Допишите в свой корневой файл свои проектные правила: название конфигурации, версия БСП, договорённости команды.
 5. Перезапустите AI-клиент или откройте новый чат — правила подхватятся.
 
@@ -34,7 +34,7 @@ Sample rule pack for AI assistants (Claude Code, Cursor, GitHub Copilot, Gemini 
 | Gemini CLI | `GEMINI.md` в корне проекта |
 | Cline / Continue / Antigravity | см. документацию клиента; обычно файл с инструкциями в корне проекта |
 
-Содержание во всех файлах одинаковое — это просто markdown с одной директивой «всегда читай `rules/ru/INDEX.md`» и блоком для ваших проектных дополнений.
+Содержание во всех файлах одинаковое — это просто markdown с одной директивой «всегда читай выбранный `rules/<язык>/INDEX.md`» и блоком для ваших проектных дополнений.
 
 ### Поддержка
 
@@ -59,7 +59,7 @@ When an AI client reads the root instruction file (`CLAUDE.md` for Claude, `.cur
 1. Copy the `rules/` folder into your 1C project. Recommended locations:
    - project root (`<project>/rules/`),
    - or `<project>/.claude/rules/` (then fix the paths in `INDEX.md`).
-2. Take `rules/CLAUDE.md.example`, rename it for your client (see table below), and place it at the project root. **Important:** by default this template references the Russian `rules/ru/INDEX.md`. If you work in English, edit the line accordingly to point to `rules/en/INDEX.md` (the file itself contains a note about this).
+2. Take `rules/CLAUDE.md.example`, rename it for your client (see table below), and place it at the project root. The template uses the canonical English machine-facing branch `rules/en/INDEX.md` by default. To use the localized Russian branch, change that reference to `rules/ru/INDEX.md`.
 3. Open `rules/en/INDEX.md` (or `ru/INDEX.md`) and remove lines referencing files you do not need. By default only `bsl-ssl.md` is optional (skip it if your project does not use SSL/БСП).
 4. Add your project-specific rules into the root file: configuration name, SSL version, team conventions.
 5. Restart the AI client or start a new chat — the rules will be picked up.

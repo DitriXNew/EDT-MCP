@@ -20,6 +20,11 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 > [!TIP]
 > **Contributing / making changes?** Read [CLAUDE.md](CLAUDE.md) first — it's the code-conduct "minefield map": hard don'ts and the stop-and-think-twice zones for this codebase (BM transactions, the bilingual ru/en model, cascading rename, etc.). Detailed how-to lives in the skills under `.claude/skills/`.
 
+> [!TIP]
+> **Using EDT-MCP on a 1C business project?** The client-neutral
+> [business-project skills pack](agent/README.md) routes common project tasks to
+> compact workflows. It is separate from the plugin-contributor skills above.
+
 > [!IMPORTANT]
 > **EDT version compatibility:**
 > Supports 1C:EDT **2026.1 and 2026.2** (Ruby) from a single build. The plugin is
