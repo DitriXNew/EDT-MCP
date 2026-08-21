@@ -1152,6 +1152,115 @@ public class CompareConfigurationsToolTest
         }
     }
 
+
+    // ============ The canonical paths must reach the PLATFORM, not only the guard ============
+
+    /**
+     * The paths the two git data sources are built from all come back in their real form.
+     * <p>
+     * Canonicalising for the guard alone left the descriptors holding the original spellings, and
+     * the platform's git source has to subtract the work tree out of the project path to find the
+     * project inside the repository. Two spellings of one place do not subtract, both git sides
+     * read empty, and the comparison reports every object as added on main - the very outcome the
+     * guard was added to prevent, reached past it.
+     */
+    @Test
+    public void testEveryDescriptorPathComesBackCanonicalNotOnlyTheGuardedOne() throws Exception
+    {
+        Path workTree = Files.createTempDirectory("cmp-worktree").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createDirectory(workTree.resolve("project")); //$NON-NLS-1$
+        try
+        {
+            // The same three places, each reached by a detour instead of directly - what a
+            // workspace location recorded one way and a repository discovered another way look
+            // like to a path comparison.
+            CompareConfigurationsTool.GitSidePaths sides = CompareConfigurationsTool.gitSidePaths(
+                "Demo", workTree.resolve("project").resolve("..").resolve("project"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                workTree.resolve("project").resolve(".."), //$NON-NLS-1$
+                workTree.resolve(".")); //$NON-NLS-1$
+
+            assertEquals("the project path handed to both git sources must be canonical", //$NON-NLS-1$
+                project.toRealPath(), sides.projectPath());
+            assertEquals("the other side's work tree must be canonical too", workTree, //$NON-NLS-1$
+                sides.otherWorkTree());
+            assertEquals("and the ancestor's, or the two git sides disagree about where the " //$NON-NLS-1$
+                + "repository is and only one of them finds the project", workTree, //$NON-NLS-1$
+                sides.ancestorWorkTree());
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(workTree);
+        }
+    }
+
+    @Test
+    public void testTheAncestorWorkTreeIsCanonicalisedIndependentlyOfTheOther() throws Exception
+    {
+        // Its own test: the guard only ever looks at the OTHER side, so an ancestor left raw
+        // would pass every check the guard makes and still read nothing.
+        Path workTree = Files.createTempDirectory("cmp-worktree").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createDirectory(workTree.resolve("project")); //$NON-NLS-1$
+        try
+        {
+            CompareConfigurationsTool.GitSidePaths sides = CompareConfigurationsTool.gitSidePaths(
+                "Demo", project, workTree, workTree.resolve("project").resolve("..")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+            assertEquals(workTree, sides.ancestorWorkTree());
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(workTree);
+        }
+    }
+
+    @Test
+    public void testAWorkTreeNobodyResolvedStaysUnknownRatherThanBecomingAPath() throws Exception
+    {
+        // A resolver that produced no work tree is not a path to canonicalise, and turning it
+        // into one would hand the platform a directory nobody named.
+        Path workTree = Files.createTempDirectory("cmp-worktree").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createDirectory(workTree.resolve("project")); //$NON-NLS-1$
+        try
+        {
+            CompareConfigurationsTool.GitSidePaths sides =
+                CompareConfigurationsTool.gitSidePaths("Demo", project, null, null); //$NON-NLS-1$
+
+            assertNull(sides.otherWorkTree());
+            assertNull(sides.ancestorWorkTree());
+            assertEquals(project.toRealPath(), sides.projectPath());
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(workTree);
+        }
+    }
+
+    @Test
+    public void testTheGuardStillFiresThroughTheOnePlaceThatBuildsThePaths() throws Exception
+    {
+        // The canonicalisation and the refusal are one call, so a launch cannot get the paths
+        // without also getting the check.
+        Path workTree = Files.createTempDirectory("cmp-worktree").toRealPath(); //$NON-NLS-1$
+        Path outside = Files.createTempDirectory("cmp-outside").toRealPath(); //$NON-NLS-1$
+        try
+        {
+            CompareConfigurationsTool.gitSidePaths("Demo", outside, workTree, workTree); //$NON-NLS-1$
+            org.junit.Assert.fail("expected a refusal for a project outside the work tree"); //$NON-NLS-1$
+        }
+        catch (ComparisonException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains(outside.toString()));
+        }
+        finally
+        {
+            Files.deleteIfExists(workTree);
+            Files.deleteIfExists(outside);
+        }
+    }
+
     /** A comparison backend that answers from the test instead of from EDT. */
     private static final class StubBackend implements Backend
     {

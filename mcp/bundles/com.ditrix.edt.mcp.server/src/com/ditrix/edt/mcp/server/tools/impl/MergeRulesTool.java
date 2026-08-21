@@ -429,15 +429,23 @@ public class MergeRulesTool implements IMcpTool
         // named: 'basedOn' one file and writing over ANOTHER discards the target's decisions just
         // as completely as writing over it with a fresh document, and the report would then name
         // only the decisions that were carried in.
-        if (Files.exists(file) && !isSameFile(file, base))
+        if (Files.exists(file))
         {
-            String startedElsewhere = base == null ? "" //$NON-NLS-1$
-                : " (" + KEY_BASED_ON + " names a DIFFERENT file, " + base //$NON-NLS-1$ //$NON-NLS-2$
-                    + ", whose decisions would be written over the ones already there)"; //$NON-NLS-1$
-            return ToolResult.error("A file already exists at " + file + startedElsewhere //$NON-NLS-1$
-                + " and would be replaced, discarding the decisions it holds. Either pass " //$NON-NLS-1$
-                + KEY_BASED_ON + " with the SAME path, " + file //$NON-NLS-1$
-                + ", to update it in place, or choose another " + KEY_FILE_PATH + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!isSameFile(file, base))
+            {
+                String startedElsewhere = base == null ? "" //$NON-NLS-1$
+                    : " (" + KEY_BASED_ON + " names a DIFFERENT file, " + base //$NON-NLS-1$ //$NON-NLS-2$
+                        + ", whose decisions would be written over the ones already there)"; //$NON-NLS-1$
+                return ToolResult.error("A file already exists at " + file + startedElsewhere //$NON-NLS-1$
+                    + " and would be replaced, discarding the decisions it holds. Either pass " //$NON-NLS-1$
+                    + KEY_BASED_ON + " with the SAME path, " + file //$NON-NLS-1$
+                    + ", to update it in place, or choose another " + KEY_FILE_PATH + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            String detached = separateNameRefusal(file, base);
+            if (detached != null)
+            {
+                return detached;
+            }
         }
 
         MergeRulesDocument document;
@@ -688,7 +696,23 @@ public class MergeRulesTool implements IMcpTool
 
         List<String> path = new ArrayList<>();
         JsonElement pathElement = raw.get(FIELD_PATH);
-        if (pathElement != null && pathElement.isJsonArray())
+        if (pathElement == null || pathElement.isJsonNull())
+        {
+            // The widest rule this tool can write is the one it must never write by accident. An
+            // absent (or misspelled, or null) 'path' used to leave the key chain empty, which is
+            // the SAME chain an explicit [] produces - so a typo in the field name silently turned
+            // a decision meant for one object into a rule over the whole configuration, and the
+            // report called it a root decision as if that had been asked for. It is refused by
+            // position, like every other malformed decision, and [] stays the one way to say
+            // "everything".
+            return ParsedDecision.refused(ToolResult.error("Decision #" + position + " has no '" //$NON-NLS-1$ //$NON-NLS-2$
+                + FIELD_PATH + "'. Nothing was written. The whole configuration is addressed by an " //$NON-NLS-1$
+                + "EXPLICIT empty array - {\"" + FIELD_PATH + "\": [], \"" + FIELD_RULE //$NON-NLS-1$ //$NON-NLS-2$
+                + "\": \"" + rule + "\"} - so that a rule over everything is never the result of a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "missing field. For one collection send [\"commonModules\"], for one object " //$NON-NLS-1$
+                + "[\"commonModules\", \"Main:Main:Main\"].").toJson()); //$NON-NLS-1$
+        }
+        if (pathElement.isJsonArray())
         {
             JsonArray array = pathElement.getAsJsonArray();
             for (JsonElement segment : array)
@@ -704,7 +728,7 @@ public class MergeRulesTool implements IMcpTool
                 path.add(segment.getAsString().trim());
             }
         }
-        else if (pathElement != null && !pathElement.isJsonNull())
+        else
         {
             return ParsedDecision.refused(ToolResult.error("Decision #" + position + " has a '" //$NON-NLS-1$ //$NON-NLS-2$
                 + FIELD_PATH
@@ -926,6 +950,54 @@ public class MergeRulesTool implements IMcpTool
     private static boolean isSet(String value)
     {
         return value != null && !value.isBlank();
+    }
+
+    /**
+     * Refuses an in-place update whose two paths are SEPARATE names for one file - hard links.
+     * <p>
+     * {@link #isSameFile} accepts them, and rightly so: they are one file, and the identity check
+     * is asking whether the write replaces something the caller did not mean to lose. What the
+     * identity check cannot see is that the write replaces a directory ENTRY rather than the
+     * content behind it, so afterwards the two names are two different files - {@code filePath}
+     * carrying the new rules and {@code basedOn} still carrying the old ones - while the report
+     * says the file was updated in place. A symbolic link is not this case and is not refused: the
+     * codec follows it, so the file it names is the file that gets written and the link survives.
+     * <p>
+     * The two are told apart WITHOUT any platform-specific attribute: one file reached through a
+     * link resolves to one real path, whereas two hard links are two real paths of equal identity.
+     * A filesystem that cannot answer is not evidence of anything and is left alone - the identity
+     * was already established, and inventing a refusal from a failed question would refuse correct
+     * input.
+     *
+     * @param file the target, known to exist and to be the same file as {@code base}
+     * @param base the {@code basedOn} file, never {@code null} here
+     * @return the refusal, or {@code null} when the two paths are one name for one file
+     */
+    private static String separateNameRefusal(Path file, Path base)
+    {
+        Path realFile;
+        Path realBase;
+        try
+        {
+            realFile = file.toRealPath();
+            realBase = base.toRealPath();
+        }
+        catch (IOException e)
+        {
+            return null;
+        }
+        if (realFile.equals(realBase))
+        {
+            return null;
+        }
+        return ToolResult.error(KEY_FILE_PATH + " " + realFile + " and " + KEY_BASED_ON + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + realBase + " are two names for ONE file (hard links). Nothing was written. A write " //$NON-NLS-1$
+            + "replaces a directory entry, not the content behind it, so it would leave " + realFile //$NON-NLS-1$
+            + " holding the new rules and " + realBase //$NON-NLS-1$
+            + " still holding the old ones - the two names would stop being the same file, and " //$NON-NLS-1$
+            + "this report would have called that an update in place. Pass the SAME path as " //$NON-NLS-1$
+            + KEY_FILE_PATH + " and " + KEY_BASED_ON + " to update that one file, or write to a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "path that is not a second name for it.").toJson(); //$NON-NLS-1$
     }
 
     /**

@@ -1007,11 +1007,15 @@ public class CompareConfigurationsTool implements IMcpTool
      * The real, canonical form of a path, falling back to a normalised absolute path when the file
      * system cannot answer (a path that does not exist yet, or a link that cannot be read).
      *
-     * @param path the path
-     * @return the most canonical form obtainable
+     * @param path the path, may be {@code null}
+     * @return the most canonical form obtainable, or {@code null} for a {@code null} path
      */
     private static Path toRealForm(Path path)
     {
+        if (path == null)
+        {
+            return null;
+        }
         try
         {
             return path.toRealPath();
@@ -1019,6 +1023,85 @@ public class CompareConfigurationsTool implements IMcpTool
         catch (IOException e)
         {
             return path.toAbsolutePath().normalize();
+        }
+    }
+
+    /**
+     * The three paths the two git data sources are built from, ALL in their real form, and the
+     * only place they are produced.
+     * <p>
+     * Canonicalising them for the guard alone was half a fix. The guard decides path identity the
+     * way git does, so it stops answering "outside the work tree" for a project that is inside it
+     * under a different spelling - but the descriptors were then handed the ORIGINAL, mutually
+     * inconsistent paths, and the platform's git data source has to derive the project's location
+     * RELATIVE TO the repository out of exactly those two. When the two disagree in form - a
+     * workspace location recorded through a symlink against a canonical work tree - that
+     * subtraction yields nothing, both git sides read empty, and the comparison reports every
+     * object as added on main: a wrong answer presented as a good one, which is the very outcome
+     * the guard exists to prevent. So the canonical forms are what the descriptors get, and the
+     * raw ones are consumed here and never seen again.
+     * <p>
+     * BOTH git sides are canonicalised, not just the one the guard looks at. The two revisions are
+     * resolved independently, so they can arrive spelled differently; a comparison whose "other"
+     * side reads the project and whose "ancestor" side reads nothing would report the ancestor as
+     * empty and every object as added since it - a difference that is an artefact of the spelling.
+     *
+     * @param projectName the project name, for the message
+     * @param projectPath the project location as the workspace records it
+     * @param otherWorkTree the work tree the other revision resolved to, may be {@code null}
+     * @param ancestorWorkTree the work tree the ancestor revision resolved to, may be {@code null}
+     * @return the canonical paths to build the data sources from
+     * @throws ComparisonException when the project provably lies outside the work tree
+     */
+    // Package-private so the canonicalisation can be pinned without an EDT workspace, the same way
+    // requireProjectInsideWorkTree is.
+    static GitSidePaths gitSidePaths(String projectName, Path projectPath, Path otherWorkTree,
+        Path ancestorWorkTree) throws ComparisonException
+    {
+        GitSidePaths sides = new GitSidePaths(toRealForm(projectPath), toRealForm(otherWorkTree),
+            toRealForm(ancestorWorkTree));
+        requireProjectInsideWorkTree(projectName, sides.projectPath(), sides.otherWorkTree());
+        return sides;
+    }
+
+    /** The canonical paths one launch hands to the platform's two git data sources. */
+    static final class GitSidePaths
+    {
+        private final Path projectPath;
+
+        private final Path otherWorkTree;
+
+        private final Path ancestorWorkTree;
+
+        GitSidePaths(Path projectPath, Path otherWorkTree, Path ancestorWorkTree)
+        {
+            this.projectPath = projectPath;
+            this.otherWorkTree = otherWorkTree;
+            this.ancestorWorkTree = ancestorWorkTree;
+        }
+
+        /**
+         * @return the project location, in real form
+         */
+        Path projectPath()
+        {
+            return projectPath;
+        }
+
+        /**
+         * @return the other side's work tree, in real form, or {@code null} when unknown
+         */
+        Path otherWorkTree()
+        {
+            return otherWorkTree;
+        }
+
+        /**
+         * @return the ancestor side's work tree, in real form, or {@code null} when unknown
+         */
+        Path ancestorWorkTree()
+        {
+            return ancestorWorkTree;
         }
     }
 
@@ -1761,14 +1844,14 @@ public class CompareConfigurationsTool implements IMcpTool
                     + "list_projects to see the projects EDT has loaded."); //$NON-NLS-1$
             }
 
-            Path projectPath = project.getLocation().toFile().toPath();
-            requireProjectInsideWorkTree(request.getProjectName(), projectPath, other.workTree());
+            GitSidePaths sides = gitSidePaths(request.getProjectName(),
+                project.getLocation().toFile().toPath(), other.workTree(), ancestor.workTree());
             ComparisonProcessHandle handle = new ComparisonProcessHandle(
                 new V8ProjectComparisonDataSourceDescriptor(v8Project),
-                new GitComparisonDataSourceDescriptor(other.workTree(), other.commitId(),
-                    projectPath),
-                new GitComparisonDataSourceDescriptor(ancestor.workTree(), ancestor.commitId(),
-                    projectPath),
+                new GitComparisonDataSourceDescriptor(sides.otherWorkTree(), other.commitId(),
+                    sides.projectPath()),
+                new GitComparisonDataSourceDescriptor(sides.ancestorWorkTree(), ancestor.commitId(),
+                    sides.projectPath()),
                 scope);
 
             ComparisonProcessSettings settings =

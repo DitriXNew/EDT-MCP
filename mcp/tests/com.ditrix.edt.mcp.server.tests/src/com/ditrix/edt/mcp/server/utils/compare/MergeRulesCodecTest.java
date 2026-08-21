@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -29,6 +30,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -599,5 +601,241 @@ public class MergeRulesCodecTest
         assertEquals("a write that returned left bytes no writer ever serialized (" //$NON-NLS-1$
             + refused.get() + " writes were refused by the OS)", 0, splices.get()); //$NON-NLS-1$
         assertTrue("the test proves nothing unless writes actually landed", landed.get() > 0); //$NON-NLS-1$
+    }
+
+    // ============ Mixed content: text keeps its place among the children ============
+
+    /**
+     * A payload section with text BOTH before and after a child element - the shape a single text
+     * buffer per parse cannot express.
+     * <p>
+     * Already in the canonical layout, so "round trip" here means byte for byte and not "modulo
+     * whitespace": that is the codec's stated promise for a file it has written or read.
+     */
+    private static final String MIXED_CONTENT_FIXTURE = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+        + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+        + "  <Correspondences>\n" //$NON-NLS-1$
+        + "    a note before the child\n" //$NON-NLS-1$
+        + "    <Correspondence>\n" //$NON-NLS-1$
+        + "      <MainConfiguration>Catalog.Alpha</MainConfiguration>\n" //$NON-NLS-1$
+        + "    </Correspondence>\n" //$NON-NLS-1$
+        + "    a note after the child\n" //$NON-NLS-1$
+        + "  </Correspondences>\n" //$NON-NLS-1$
+        + "  <MergeSettings>\n" //$NON-NLS-1$
+        + "    <Node Key=\"$$Root$$\">\n" //$NON-NLS-1$
+        + "      <Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/>\n" //$NON-NLS-1$
+        + "    </Node>\n" //$NON-NLS-1$
+        + "  </MergeSettings>\n" //$NON-NLS-1$
+        + "</Settings>\n"; //$NON-NLS-1$
+
+    @Test
+    public void testMixedContentSurvivesARewriteByteForByte() throws Exception
+    {
+        assertEquals("a payload block with text around a child element is exactly the payload the " //$NON-NLS-1$
+            + "codec promises to carry through verbatim", MIXED_CONTENT_FIXTURE, //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(MIXED_CONTENT_FIXTURE)));
+    }
+
+    /**
+     * Its own test rather than a second assertion in the one above: JUnit stops a method at the
+     * first failed assertion, so a byte comparison that fails would hide which half broke - and
+     * the two halves broke for different reasons (one run was dropped, the other was moved).
+     */
+    @Test
+    public void testTextBeforeAChildElementIsNotDropped() throws Exception
+    {
+        assertTrue("the run that precedes a child element used to be cleared and lost", //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(MIXED_CONTENT_FIXTURE))
+                .contains("a note before the child")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextAfterAChildElementStaysAfterIt() throws Exception
+    {
+        String rewritten = MergeRulesCodec.serialize(MergeRulesCodec.parse(MIXED_CONTENT_FIXTURE));
+        assertTrue("the trailing run used to be re-emitted as the parent's own text, i.e. BEFORE " //$NON-NLS-1$
+            + "every child: " + rewritten, //$NON-NLS-1$
+            rewritten.indexOf("a note after the child") //$NON-NLS-1$
+                > rewritten.indexOf("</Correspondence>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMixedContentIsIdempotentOnASecondRewrite() throws Exception
+    {
+        String once = MergeRulesCodec.serialize(MergeRulesCodec.parse(MIXED_CONTENT_FIXTURE));
+        assertEquals("a second round trip must not drift", once, //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(once)));
+    }
+
+    @Test
+    public void testInteriorTextIsNotCountedAsAPreservedSection() throws Exception
+    {
+        // Character data is the text of the element it sits in. Counting it would report blocks a
+        // reader cannot find in the file - the count is what tells a caller their payload is still
+        // there, so it may not be inflated by the payload's own words.
+        assertEquals("only the Correspondences section is a block this tool does not interpret", 1, //$NON-NLS-1$
+            MergeRulesCodec.parse(MIXED_CONTENT_FIXTURE).preservedSectionCount());
+    }
+
+    // ============ A write must not destroy the identity of its target ============
+
+    @Test
+    public void testWriteFollowsASymbolicLinkInsteadOfReplacingIt() throws Exception
+    {
+        Path real = workDir.resolve("real.xml"); //$NON-NLS-1$
+        Files.write(real, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        Path link = workDir.resolve("link.xml"); //$NON-NLS-1$
+        try
+        {
+            Files.createSymbolicLink(link, real);
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            Assume.assumeNoException("this filesystem or account cannot create symbolic links", e); //$NON-NLS-1$
+        }
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesCodec.write(link, document);
+
+        assertTrue("moving over a link replaces the ENTRY, deleting the link and leaving the file " //$NON-NLS-1$
+            + "it named untouched - while the report says the rules were written", //$NON-NLS-1$
+            Files.isSymbolicLink(link));
+        assertTrue("the file the link names is the file that had to be updated", //$NON-NLS-1$
+            new String(Files.readAllBytes(real), StandardCharsets.UTF_8)
+                .contains("Key=\"catalogs\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWriteStillReplacesAPlainExistingFile() throws Exception
+    {
+        // The control for the link handling above: an ordinary target must still be replaced.
+        Path file = workDir.resolve("plain.xml"); //$NON-NLS-1$
+        Files.write(file, "stale".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
+        assertEquals(FIXTURE, new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+    }
+
+    // ============ A zip entry may not inflate without a bound ============
+
+    @Test
+    public void testAZipEntryThatExpandsPastTheBoundIsRefusedNamingIt() throws Exception
+    {
+        Path zip = workDir.resolve("bomb.zip"); //$NON-NLS-1$
+        writeInflatingZip(zip, "Main_Other_Ancestor.xml", 20 * 1024 * 1024); //$NON-NLS-1$
+        // The archive itself is tiny; what it unpacks to is not. Reading it whole would spend the
+        // workbench's heap before a single tag had been looked at.
+        assertTrue("the point of the fixture is that a small file expands hugely", //$NON-NLS-1$
+            Files.size(zip) < 256 * 1024);
+
+        try
+        {
+            MergeRulesCodec.read(zip);
+            fail("an entry that unpacks past the bound must be refused, not inflated"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the entry it stopped on: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("Main_Other_Ancestor.xml")); //$NON-NLS-1$
+            assertTrue("and say what to do instead: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("Extract the entry")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testALyingZipHeaderDoesNotRaiseTheBound() throws Exception
+    {
+        // The declared size comes from the archive, so it is the attacker's own number. The bound
+        // is counted on bytes actually read, and this entry declares a small one while unpacking
+        // far past it.
+        Path zip = workDir.resolve("liar.zip"); //$NON-NLS-1$
+        try (OutputStream out = Files.newOutputStream(zip);
+            ZipOutputStream zipOut = new ZipOutputStream(out))
+        {
+            ZipEntry entry = new ZipEntry("Main_Other_Ancestor.xml"); //$NON-NLS-1$
+            entry.setSize(FIXTURE.length());
+            zipOut.putNextEntry(entry);
+            writeFiller(zipOut, 20 * 1024 * 1024);
+            zipOut.closeEntry();
+        }
+
+        try
+        {
+            MergeRulesCodec.read(zip);
+            fail("the bound may not be taken from the header the archive supplies"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertNotNull(e.getMessage());
+        }
+    }
+
+    @Test
+    public void testAnOrdinaryZipEntryIsStillReadWhole() throws Exception
+    {
+        // The control: the bound must not have turned into a smaller read. Thousands of real
+        // decisions are an ordinary file and have to come back complete.
+        Path zip = workDir.resolve("large-but-real.zip"); //$NON-NLS-1$
+        StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\">\n  <MergeSettings>\n    <Node Key=\"$$Root$$\">\n"); //$NON-NLS-1$
+        int decisions = 8000;
+        for (int i = 0; i < decisions; i++)
+        {
+            xml.append("      <Node Key=\"catalogs").append(i) //$NON-NLS-1$
+                .append("\" MergeRule=\"GetFromOther\"/>\n"); //$NON-NLS-1$
+        }
+        xml.append("    </Node>\n  </MergeSettings>\n</Settings>\n"); //$NON-NLS-1$
+        try (OutputStream out = Files.newOutputStream(zip);
+            ZipOutputStream zipOut = new ZipOutputStream(out))
+        {
+            zipOut.putNextEntry(new ZipEntry("Main_Other_Ancestor.xml")); //$NON-NLS-1$
+            zipOut.write(xml.toString().getBytes(StandardCharsets.UTF_8));
+            zipOut.closeEntry();
+        }
+
+        assertEquals("every decision must come back - the bound guards the heap, it does not " //$NON-NLS-1$
+            + "truncate a real file", decisions, MergeRulesCodec.read(zip).decisions().size()); //$NON-NLS-1$
+    }
+
+    /**
+     * Writes a zip whose single entry unpacks to {@code expandedBytes} of highly compressible
+     * data, so the archive on disk stays small.
+     *
+     * @param zip the archive to create
+     * @param entryName the entry name
+     * @param expandedBytes how much the entry unpacks to
+     * @throws IOException when the archive cannot be written
+     */
+    private static void writeInflatingZip(Path zip, String entryName, int expandedBytes)
+        throws IOException
+    {
+        try (OutputStream out = Files.newOutputStream(zip);
+            ZipOutputStream zipOut = new ZipOutputStream(out))
+        {
+            zipOut.putNextEntry(new ZipEntry(entryName));
+            writeFiller(zipOut, expandedBytes);
+            zipOut.closeEntry();
+        }
+    }
+
+    /**
+     * Writes compressible filler that also happens to open a well-formed document, so a refusal
+     * cannot be mistaken for "this was not XML".
+     *
+     * @param out the stream
+     * @param bytes how much to write
+     * @throws IOException when the stream cannot be written
+     */
+    private static void writeFiller(OutputStream out, int bytes) throws IOException
+    {
+        out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+            .getBytes(StandardCharsets.UTF_8));
+        byte[] chunk = new byte[64 * 1024];
+        Arrays.fill(chunk, (byte)' ');
+        for (int written = 0; written < bytes; written += chunk.length)
+        {
+            out.write(chunk);
+        }
+        out.write("</Settings>\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
     }
 }

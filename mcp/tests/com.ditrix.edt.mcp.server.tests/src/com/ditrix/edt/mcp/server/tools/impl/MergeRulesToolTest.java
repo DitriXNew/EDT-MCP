@@ -894,6 +894,161 @@ public class MergeRulesToolTest
         assertFalse(Files.exists(target));
     }
 
+
+    // ============ 'path' is required: the widest rule is never an accident ============
+
+    @Test
+    public void testADecisionWithNoPathIsRefusedInsteadOfRulingTheWholeConfiguration()
+        throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // An absent chain used to be the SAME chain an explicit [] produces, so a decision meant
+        // for one object silently became a rule over everything - which the report then presented
+        // as a root decision, as if it had been asked for.
+        assertErrorNaming(result, "#1", "path"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMisspelledPathFieldIsRefusedRatherThanTreatedAsTheRoot() throws IOException
+    {
+        // The scenario the refusal exists for: the caller aimed at one object and mistyped the
+        // field name. Nothing about 'paths' says "the whole configuration".
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"paths\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "#1", "path"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANullPathIsRefusedToo() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":null,\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "#1", "path"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusalForAMissingPathNamesTheExplicitEmptyArray() throws IOException
+    {
+        String result = call(params("mode", "write", "filePath", file("rules.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The refusal has to hand back the call that WOULD have meant what the tool guessed
+        // before, or a caller who really wanted the whole configuration has nothing to do next.
+        assertErrorNaming(result, "\"path\": []"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheSecondDecisionIsRefusedByItsOwnPosition() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"},{\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "#2"); //$NON-NLS-1$
+        assertFalse("nothing is written until every decision has passed", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExplicitEmptyPathStillAddressesTheWholeConfiguration() throws IOException
+    {
+        // The control: [] is the ONE way to say "everything", and it must keep working, or the
+        // refusal above would have removed the capability instead of making it deliberate.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an explicit [] is a decision the caller made: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue("and it lands on the root node", //$NON-NLS-1$
+            read(target).contains("<Node Key=\"$$Root$$\" MergeRule=\"DoNotMerge\"/>")); //$NON-NLS-1$
+    }
+
+    // ============ An in-place update may not detach two names of one file ============
+
+    @Test
+    public void testAHardLinkedTargetIsRefusedInsteadOfDetachingTheTwoNames() throws IOException
+    {
+        Path base = seedFixture();
+        Path target = file("hard-link.xml"); //$NON-NLS-1$
+        try
+        {
+            Files.createLink(target, base);
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            org.junit.Assume.assumeNoException("this filesystem has no hard links", e); //$NON-NLS-1$
+        }
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", base.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The identity check accepts them - they ARE one file - but the write replaces a directory
+        // entry rather than the content behind it, so afterwards they would be two files while the
+        // report called it an update in place.
+        assertErrorNaming(result, "hard links", target.toRealPath().toString(), //$NON-NLS-1$
+            base.toRealPath().toString());
+        assertEquals("nothing may be written", FIXTURE, read(base)); //$NON-NLS-1$
+        assertEquals("nothing may be written", FIXTURE, read(target)); //$NON-NLS-1$
+        assertTrue("the two names must still be one file", Files.isSameFile(target, base)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheHardLinkRefusalSaysWhatToSendInstead() throws IOException
+    {
+        Path base = seedFixture();
+        Path target = file("hard-link.xml"); //$NON-NLS-1$
+        try
+        {
+            Files.createLink(target, base);
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            org.junit.Assume.assumeNoException("this filesystem has no hard links", e); //$NON-NLS-1$
+        }
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", base.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Pass the SAME path"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUpdatingOneFileInPlaceUnderOneNameStillWorks() throws IOException
+    {
+        // The control: the refusal above may not catch an ordinary in-place update, which is the
+        // only way this tool edits an existing file at all.
+        Path file = seedFixture();
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an in-place update is the point of basedOn: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue("the decision carried in must still be there", //$NON-NLS-1$
+            read(file).contains("Key=\"Alpha:Beta:Gamma\"")); //$NON-NLS-1$
+        assertTrue("and the new one added", read(file).contains("Key=\"catalogs\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private String call(Map<String, String> params)
     {
         return new MergeRulesTool().execute(params);

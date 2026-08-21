@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;
@@ -69,6 +70,22 @@ public final class MergeRulesCodec
     private static final String INDENT = "  "; //$NON-NLS-1$
 
     private static final String NEW_LINE = "\n"; //$NON-NLS-1$
+
+    /**
+     * Largest number of bytes one zip entry may expand to before this codec stops reading it.
+     * <p>
+     * The number is a ceiling on damage, not a guess at a real file. A merge-settings file is
+     * SPARSE - one {@code Node} line per decision somebody actually made, around a hundred bytes -
+     * so even a configuration-wide set of tens of thousands of decisions stays in the low
+     * megabytes; the files saved off real comparisons are orders of magnitude under this. What the
+     * bound is for is the other direction: a zip entry is decompressed by the JVM the workbench
+     * itself runs in, so a small archive of highly compressible bytes would otherwise exhaust
+     * EDT's heap on the way to being parsed, and the IDE - not just this call - would go down.
+     */
+    private static final int MAX_ZIP_ENTRY_BYTES = 16 * 1024 * 1024;
+
+    /** Working buffer size for the bounded read. */
+    private static final int READ_CHUNK_BYTES = 64 * 1024;
 
     private MergeRulesCodec()
     {
@@ -169,6 +186,13 @@ public final class MergeRulesCodec
      * one set of rules and nobody could tell whose. A per-operation temporary makes the two writes
      * independent; the last move still wins, which is what "replace" means, but each call's move
      * now carries its OWN bytes.
+     * <p>
+     * <b>A symbolic link is FOLLOWED, never replaced.</b> A move replaces a directory ENTRY, not
+     * the content of the file behind it, so moving over a link would delete the link, leave the
+     * file it named untouched, and still report the rules as written - the write would land on a
+     * brand-new file nobody asked for while the caller's real rules file kept its old content. The
+     * target is therefore resolved first and the bytes land on the file the link names, which is
+     * the same file identity the caller's own guard accepted.
      *
      * @param file the target file
      * @param document the document
@@ -176,7 +200,7 @@ public final class MergeRulesCodec
      */
     public static void write(Path file, MergeRulesDocument document) throws IOException
     {
-        Path target = file.toAbsolutePath();
+        Path target = followSymbolicLink(file.toAbsolutePath());
         Path parent = target.getParent();
         if (parent == null)
         {
@@ -216,6 +240,38 @@ public final class MergeRulesCodec
                 e.addSuppressed(suppressed);
             }
             throw e;
+        }
+    }
+
+    /**
+     * The file the bytes must actually land on: the target itself, or - when the target is a
+     * symbolic link - the file that link names.
+     * <p>
+     * A DANGLING link is resolved through its own recorded destination rather than through the
+     * filesystem, which cannot answer for a file that is not there: the write then creates the
+     * file the link points at, which is what following the link means, instead of turning the link
+     * into a regular file.
+     *
+     * @param file an absolute path
+     * @return the path to write, never {@code null}
+     * @throws IOException when the link cannot be read
+     */
+    private static Path followSymbolicLink(Path file) throws IOException
+    {
+        if (!Files.isSymbolicLink(file))
+        {
+            return file;
+        }
+        try
+        {
+            return file.toRealPath();
+        }
+        catch (IOException e)
+        {
+            Path linkTarget = Files.readSymbolicLink(file);
+            Path base = file.getParent();
+            return linkTarget.isAbsolute() || base == null ? linkTarget.toAbsolutePath()
+                : base.resolve(linkTarget).toAbsolutePath().normalize();
         }
     }
 
@@ -268,12 +324,53 @@ public final class MergeRulesCodec
             byte[] content;
             try (InputStream in = zip.getInputStream(entry))
             {
-                content = in.readAllBytes();
+                content = readAtMost(in, MAX_ZIP_ENTRY_BYTES);
+            }
+            if (content == null)
+            {
+                throw new MergeRulesFormatException("The zip entry '" + entry.getName() //$NON-NLS-1$
+                    + "' expands past " + (MAX_ZIP_ENTRY_BYTES / (1024 * 1024)) //$NON-NLS-1$
+                    + " MB and was not read. A merge-settings file records one line per decision " //$NON-NLS-1$
+                    + "somebody made, so a real one is orders of magnitude smaller; an archive that " //$NON-NLS-1$
+                    + "unpacks to more than this is not one, and unpacking it would spend the " //$NON-NLS-1$
+                    + "workbench's heap on it. Extract the entry, check what it actually holds, and " //$NON-NLS-1$
+                    + "read it as '.xml'."); //$NON-NLS-1$
             }
             MergeRulesDocument document = parse(new ByteArrayInputStream(content));
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
             return document;
         }
+    }
+
+    /**
+     * Reads a stream fully, but refuses to grow past a bound.
+     * <p>
+     * The bound is measured on what is ACTUALLY READ and never on what the container claims: a zip
+     * header carries an uncompressed size the archive itself supplies, so trusting it would let a
+     * hostile archive declare any size it likes and still inflate without limit. Reading stops one
+     * byte past the bound, so an oversized entry costs the bound and not the entry.
+     *
+     * @param in the stream, closed by the caller
+     * @param limit the largest number of bytes that may be returned
+     * @return the bytes, or {@code null} when the stream holds more than {@code limit}
+     * @throws IOException when the stream cannot be read
+     */
+    private static byte[] readAtMost(InputStream in, int limit) throws IOException
+    {
+        byte[] buffer = new byte[READ_CHUNK_BYTES];
+        ByteArrayOutputStream collected = new ByteArrayOutputStream();
+        int total = 0;
+        int read;
+        while ((read = in.read(buffer, 0, Math.min(buffer.length, limit + 1 - total))) > 0)
+        {
+            total += read;
+            if (total > limit)
+            {
+                return null;
+            }
+            collected.write(buffer, 0, read);
+        }
+        return collected.toByteArray();
     }
 
     private static XMLInputFactory newSecureFactory()
@@ -320,17 +417,35 @@ public final class MergeRulesCodec
         }
     }
 
+    /**
+     * Reads the whole document into an element tree, keeping character data IN DOCUMENT ORDER
+     * among the child elements.
+     * <p>
+     * The runs are accumulated in one buffer, but that buffer is FLUSHED INTO THE ELEMENT THAT
+     * OWNS IT at every element boundary, which is the difference that matters: a single buffer
+     * merely cleared at each boundary loses the run that precedes a child element and re-attaches
+     * the run that follows one to the parent as a whole - so a section with mixed content came
+     * back with its leading text deleted and its trailing text moved in front of every child. The
+     * codec's promise is that a payload block it does not interpret survives a rewrite verbatim,
+     * and mixed content is precisely where a payload block puts its text.
+     *
+     * @param reader the stream reader positioned before the document
+     * @return the root element, or {@code null} for an empty document
+     * @throws XMLStreamException when the stream is not well-formed XML
+     */
     private static Element readTree(XMLStreamReader reader) throws XMLStreamException
     {
         Element root = null;
         Deque<Element> stack = new ArrayDeque<>();
-        StringBuilder text = new StringBuilder();
+        StringBuilder pending = new StringBuilder();
         while (reader.hasNext())
         {
             int event = reader.next();
             if (event == XMLStreamConstants.START_ELEMENT)
             {
-                text.setLength(0);
+                // Whatever has been read so far belongs to the element still open above, and it is
+                // followed by a child - so it is interior text, never the element's whole value.
+                flushText(stack.peek(), pending, false);
                 Element element = new Element(reader.getLocalName());
                 for (int i = 0; i < reader.getAttributeCount(); i++)
                 {
@@ -348,24 +463,60 @@ public final class MergeRulesCodec
             }
             else if (event == XMLStreamConstants.CHARACTERS || event == XMLStreamConstants.CDATA)
             {
-                text.append(reader.getText());
+                pending.append(reader.getText());
             }
             else if (event == XMLStreamConstants.END_ELEMENT)
             {
-                Element element = stack.pop();
-                String content = text.toString();
-                // Between child elements the characters are the layout's own indentation, which
-                // carries no meaning here. On a LEAF they are the value - and a payload leaf keeps
-                // it verbatim even when it is blank, because a Properties entry's value is data,
-                // whereas a blank structural element is just how somebody laid the file out.
-                if (!content.isBlank() || (element.children().isEmpty() && !isStructural(element)))
-                {
-                    element.setText(content);
-                }
-                text.setLength(0);
+                flushText(stack.peek(), pending, true);
+                stack.pop();
             }
         }
         return root;
+    }
+
+    /**
+     * Attaches the character data read so far to the element that owns it.
+     * <p>
+     * Two kinds of run are told apart, because they are not the same thing:
+     * <ul>
+     * <li>the element's WHOLE content ({@code closing} and no child seen yet) is its value and is
+     * kept byte for byte - a {@code Properties} entry's value is data, and even a blank one is,
+     * whereas a blank STRUCTURAL element is just how somebody laid the file out;</li>
+     * <li>a run sitting between child elements is mixed content: its meaningful part is kept as a
+     * text node in document order and the layout whitespace around it is dropped, exactly as the
+     * indentation between two child elements is. Keeping that whitespace instead would make the
+     * canonical re-emit differ from a file already in the canonical layout.</li>
+     * </ul>
+     *
+     * @param owner the element the run belongs to, or {@code null} for text outside the root
+     * @param pending the accumulated run, cleared by this call
+     * @param closing whether the run ends at the owner's own end tag
+     */
+    private static void flushText(Element owner, StringBuilder pending, boolean closing)
+    {
+        if (pending.length() == 0)
+        {
+            return;
+        }
+        String content = pending.toString();
+        pending.setLength(0);
+        if (owner == null)
+        {
+            return;
+        }
+        if (closing && owner.children().isEmpty())
+        {
+            if (!content.isBlank() || !isStructural(owner))
+            {
+                owner.children().add(Element.text(content));
+            }
+            return;
+        }
+        String interior = content.strip();
+        if (!interior.isEmpty())
+        {
+            owner.children().add(Element.text(interior));
+        }
     }
 
     private static boolean isStructural(Element element)
@@ -384,29 +535,33 @@ public final class MergeRulesCodec
             out.append(' ').append(attribute.getKey()).append("=\"") //$NON-NLS-1$
                 .append(escapeAttribute(attribute.getValue())).append('"');
         }
-        boolean hasChildren = !element.children().isEmpty();
-        String text = element.text();
-        boolean hasText = text != null && !text.isEmpty();
-        if (!hasChildren && !hasText)
+        List<Element> content = element.children();
+        if (content.isEmpty())
         {
             out.append("/>").append(NEW_LINE); //$NON-NLS-1$
             return;
         }
         out.append('>');
-        if (!hasChildren)
+        Element only = content.size() == 1 ? content.get(0) : null;
+        if (only != null && only.isText())
         {
-            out.append(escapeText(text)).append("</").append(element.tag()).append('>').append(NEW_LINE); //$NON-NLS-1$
+            // The element's whole content is its value: it goes back on the one line it came from.
+            out.append(escapeText(only.textValue())).append("</").append(element.tag()).append('>') //$NON-NLS-1$
+                .append(NEW_LINE);
             return;
         }
         out.append(NEW_LINE);
-        if (hasText)
+        for (Element child : content)
         {
-            indent(out, depth + 1);
-            out.append(escapeText(text)).append(NEW_LINE);
-        }
-        for (Element child : element.children())
-        {
-            writeElement(out, child, depth + 1);
+            if (child.isText())
+            {
+                indent(out, depth + 1);
+                out.append(escapeText(child.textValue())).append(NEW_LINE);
+            }
+            else
+            {
+                writeElement(out, child, depth + 1);
+            }
         }
         indent(out, depth);
         out.append("</").append(element.tag()).append('>').append(NEW_LINE); //$NON-NLS-1$

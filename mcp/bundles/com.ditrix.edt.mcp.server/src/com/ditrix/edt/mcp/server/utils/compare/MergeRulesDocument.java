@@ -264,6 +264,12 @@ public final class MergeRulesDocument
         int count = 0;
         for (Element child : settings.children())
         {
+            if (child.isText())
+            {
+                // Character data is not a section: it is the text of the element it sits in, and
+                // counting it would report a "preserved block" a reader cannot find in the file.
+                continue;
+            }
             if (TAG_MERGE_SETTINGS.equals(child.tag()))
             {
                 count += countNonNodeElements(child);
@@ -405,6 +411,10 @@ public final class MergeRulesDocument
         int count = 0;
         for (Element child : element.children())
         {
+            if (child.isText())
+            {
+                continue;
+            }
             if (TAG_NODE.equals(child.tag()))
             {
                 count += countNonNodeElements(child);
@@ -418,18 +428,26 @@ public final class MergeRulesDocument
     }
 
     /**
-     * A generic XML element: tag, ordered attributes, ordered children, optional text. Kept
-     * deliberately dumb so that anything the plugin does not understand still round-trips.
+     * A generic XML node: either an element (tag, ordered attributes, ordered children) or a run
+     * of character data. Kept deliberately dumb so that anything the plugin does not understand
+     * still round-trips.
+     * <p>
+     * <b>Character data is a NODE in the child list, not a field beside it.</b> A single text
+     * field per element cannot express mixed content - text before a child element and text after
+     * it - and the shape that could not be expressed was silently mangled: the leading run was
+     * dropped and the trailing one re-emitted BEFORE every child. A payload section this plugin
+     * does not interpret is exactly where such content can appear, and preserving it verbatim is
+     * the codec's whole promise, so text takes its place in {@link #children()} in document order.
      */
     public static final class Element
     {
         private final String tag;
 
+        private final String textValue;
+
         private final Map<String, String> attributes = new LinkedHashMap<>();
 
         private final List<Element> children = new ArrayList<>();
-
-        private String text;
 
         /**
          * Creates an element.
@@ -438,13 +456,51 @@ public final class MergeRulesDocument
          */
         public Element(String tag)
         {
+            this(tag, null);
+        }
+
+        private Element(String tag, String textValue)
+        {
             this.tag = tag;
+            this.textValue = textValue;
+        }
+
+        /**
+         * Creates a text node - a run of character data holding its place among the siblings.
+         *
+         * @param value the character data, never {@code null}
+         * @return the node
+         */
+        public static Element text(String value)
+        {
+            return new Element(null, value == null ? "" : value); //$NON-NLS-1$
+        }
+
+        /**
+         * Whether this node is character data rather than an element. A text node has no tag, no
+         * attributes and no children.
+         *
+         * @return {@code true} for a text node
+         */
+        public boolean isText()
+        {
+            return tag == null;
+        }
+
+        /**
+         * The character data of a text node.
+         *
+         * @return the text, or {@code null} when this node is an element
+         */
+        public String textValue()
+        {
+            return textValue;
         }
 
         /**
          * The tag name.
          *
-         * @return the tag
+         * @return the tag, or {@code null} for a text node
          */
         public String tag()
         {
@@ -489,33 +545,13 @@ public final class MergeRulesDocument
         }
 
         /**
-         * The child elements, in document order. Live list.
+         * The child nodes, in document order - child elements and text runs alike. Live list.
          *
          * @return the children
          */
         public List<Element> children()
         {
             return children;
-        }
-
-        /**
-         * The element's text content.
-         *
-         * @return the text, or {@code null} when the element has none
-         */
-        public String text()
-        {
-            return text;
-        }
-
-        /**
-         * Sets the element's text content.
-         *
-         * @param text the text
-         */
-        public void setText(String text)
-        {
-            this.text = text;
         }
     }
 
