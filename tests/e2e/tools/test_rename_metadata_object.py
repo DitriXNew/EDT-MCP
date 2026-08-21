@@ -134,17 +134,17 @@ def _catalog_names():
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_common_module_and_readback_shows_new_name():
     _settle_before_rename()  # the flake this file is known for — see the helper
-    # Rename CommonModule.Calc -> Compute. The new name deliberately shares NO
-    # substring with "Calc", so an "old name absent" check on the row marker "| Calc "
-    # is unambiguous. A broken/no-op rename would leave "Calc" present and "Compute"
-    # absent -> this test FAILS.
+    # Keep this target out of the extension fixture's BSL. Renaming a referenced module makes EDT
+    # rewrite and re-index extension code; that cross-project work can exceed the settle budget on
+    # a slow runner. Metadata-only adoption is tolerable. DrySignal and Compute share no substring,
+    # so the old row-marker absence check stays unambiguous.
     r = call("rename_metadata_object", {
         "projectName": PROJECT,
-        "objectFqn": "CommonModule.Calc",
+        "objectFqn": "CommonModule.DrySignal",
         "newName": "Compute",
         "confirm": True,
     })
-    assert_ok(r, "execute rename CommonModule.Calc -> Compute")
+    assert_ok(r, "execute rename CommonModule.DrySignal -> Compute")
     # Execute-mode markers (performRename): YAML action + completion header.
     assert_contains(r.text, "action: executed", "execute mode must emit YAML action: executed")
     assert_contains(r.text, "Rename Completed", "execute mode must emit the completion header")
@@ -152,12 +152,13 @@ def test_confirm_renames_common_module_and_readback_shows_new_name():
     # PRIMARY proof: the in-memory model now reports the new module, not the old one.
     after_new = _commonmodule_names(name_filter="Compute")
     assert_contains(after_new, "Compute", "model read-back must show the renamed module 'Compute'")
-    after_old = _commonmodule_names(name_filter="Calc")
-    # The Name cell renders as "| Calc " at the start of a row; its absence proves
+    after_old = _commonmodule_names(name_filter="DrySignal")
+    # The Name cell renders as "| DrySignal " at the start of a row; its absence proves
     # the old object is gone from the model (not merely filtered out — a still-present
-    # 'Calc' would match nameFilter='Calc' and re-appear here).
-    assert_not_contains(after_old, "| Calc ", "the old module 'Calc' must be ABSENT after the rename")
-    # ON DISK: the rename persists (the folder/.mdo were renamed Calc/ -> Compute/, and
+    # 'DrySignal' would match nameFilter='DrySignal' and re-appear here).
+    assert_not_contains(after_old, "| DrySignal ",
+                        "the old module 'DrySignal' must be ABSENT after the rename")
+    # ON DISK: the rename persists (the folder/.mdo were renamed DrySignal/ -> Compute/, and
     # Configuration.mdo's reference updated). Assert WHAT changed: the Configuration
     # collection element gains the new FQN, and the renamed object's own .mdo carries
     # <name>Compute</name>. The export lags a beat, so poll. ("Compute" appears nowhere

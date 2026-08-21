@@ -346,17 +346,17 @@ def main():
           % (len(tests), shard_note, harness.MCP_URL, harness.PROJECT))
     harness.wait_for_server()
     harness.initialize()     # proper MCP handshake (captures Mcp-Session-Id if issued)
-    if not harness.wait_for_project_ready():
-        # The config never reached 'ready' (still building / not_available). Every
+    ready_failure = []
+    if not harness.wait_for_project_ready(failure_details=ready_failure):
+        # At least one EDT project never reached 'ready'. Every
         # metadata tool would then fail with "Could not get configuration", so running
         # the suite produces a wall of cascade failures that hides the real cause.
         # Abort with ONE actionable message + the project state, instead.
-        print("\nERROR: the configuration did not finish indexing (no project reached "
-              "'ready') within the wait_for_project_ready timeout. Metadata tools cannot "
-              "resolve the configuration yet, so the suite is aborted before it starts.\n"
+        print("\nERROR: %s. Metadata tools cannot resolve the configuration yet, so the suite "
+              "is aborted before it starts.\n"
               "If the runner is just slow (a cold cloud runner indexes the whole config "
               "from scratch), raise E2E_PROJECT_READY_TIMEOUT. If it never goes ready, the "
-              "project import/build is broken — check the EDT log.")
+              "project import/build is broken — check the EDT log." % ready_failure[0])
         try:
             print("---- list_projects ----")
             print(harness.call("list_projects", {}).text)

@@ -769,7 +769,7 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
-def _all_edt_projects_ready(list_projects_markdown):
+def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
     """True when every EDT project in the list_projects table reads 'ready'.
 
     Only rows KNOWN to be non-EDT (`EDT Project` = No) are skipped; "-" (a closed project, or one
@@ -783,8 +783,10 @@ def _all_edt_projects_ready(list_projects_markdown):
     succeeds on such a workspace: the suite waited out the full timeout and aborted with "the
     configuration did not finish indexing" while every real project had been ready all along.
 
-    Falls back to the substring scan when no row can be parsed (an output-format change must
-    degrade to the old behaviour, not to a permanent "ready").
+    Falls back to a conservative substring scan when no row can be parsed (an output-format
+    change must not degrade to a permanent "ready"). When `not_ready` is supplied,
+    fill it with the blocking (project name, state) pairs from this same parse so timeout callers
+    can report which project prevented progress without parsing the table again.
     """
     rows = []
     for line in list_projects_markdown.splitlines():
@@ -794,23 +796,33 @@ def _all_edt_projects_ready(list_projects_markdown):
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) < 5 or cells[0].lower() == "name":
             continue  # header row, or a table shape this parse does not know
-        rows.append(cells)
+    rows.append(cells)
     if not rows:
         low = list_projects_markdown.lower()
-        return "building" not in low and "not_available" not in low
+        blocking_states = [state for state in ("building", "not_available") if state in low]
+        if not_ready is not None:
+            not_ready[:] = [("<unparsed project table>", state) for state in blocking_states]
+        return not blocking_states
+    blocking_projects = []
     for cells in rows:
         state, edt_project = cells[1].strip().lower(), cells[4].strip().lower()
         if edt_project == "no":
             continue  # a KNOWN non-EDT project (the standalone server's "Servers" container)
-        # Anything else - "-" for a closed project, or one whose natures could not be read - still
-        # blocks: treating unknown as non-EDT would let a real project that is genuinely building
-        # be ignored, and the suite would start mutating the model during a reload.
+        # Preserve the legacy predicate: despite the docstring's "-" claim, only these two states
+        # block. Reconciling that mismatch is deliberately out of scope for this diagnostic fix.
         if state in ("building", "not_available"):
-            return False
-    return True
+            blocking_projects.append((cells[0], state))
+    if not_ready is not None:
+        not_ready[:] = blocking_projects
+    return not blocking_projects
 
 
-def wait_for_project_ready(timeout=None):
+def _projects_not_ready_message(timeout, projects):
+    states = ", ".join("%s=%s" % (name, state) for name, state in projects)
+    return "projects not ready after %ds: %s" % (timeout, states or "states unavailable")
+
+
+def wait_for_project_ready(timeout=None, failure_details=None):
     """Wait until every EDT project is fully indexed (state 'ready') — i.e. none is still
     'building' its derived data AND none is 'not_available' (mid (re)load). Non-EDT projects
     are ignored (see _all_edt_projects_ready): a standalone server's "Servers" container is
@@ -831,8 +843,10 @@ def wait_for_project_ready(timeout=None):
     logged periodically so a slow cloud run is visibly "still indexing", not hung.
 
     Best-effort: returns True once ready (or if state cannot be read), False on timeout.
-    The per-tool ProjectStateChecker guard is the real safety net — this only removes the
-    test-timing flake so a normal run starts on a fully-indexed workspace.
+    If `failure_details` is a list, a timeout replaces its contents with one diagnostic naming
+    the last parsed blocking projects and their states. The per-tool ProjectStateChecker guard
+    is the real safety net — this only removes the test-timing flake so a normal run starts on a
+    fully-indexed workspace.
     """
     if timeout is None:
         timeout = int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180"))
@@ -846,11 +860,16 @@ def wait_for_project_ready(timeout=None):
     # suppresses that churn and makes the counter visibly count DOWN during a genuine
     # long cold-index wait.
     last_log = start
+    last_not_ready = []
     while time.time() < deadline:
         try:
             text = call("list_projects", {}).text or ""
-            if text and _all_edt_projects_ready(text):
-                return True
+            if text:
+                not_ready = []
+                if _all_edt_projects_ready(text, not_ready=not_ready):
+                    return True
+                if not_ready:
+                    last_not_ready = not_ready
         except E2ECallTimeout:
             # The one failure a best-effort catch must NOT swallow: the server is still running
             # that call, so retrying - or reporting success - hides it from the runner, the only
@@ -864,6 +883,8 @@ def wait_for_project_ready(timeout=None):
                   % (int(now - start), int(deadline - now), timeout), flush=True)
             last_log = now
         time.sleep(2)
+    if failure_details is not None:
+        failure_details[:] = [_projects_not_ready_message(timeout, last_not_ready)]
     return False
 
 
@@ -883,9 +904,10 @@ def settle_or_fail(what):
 
     @param what a short phrase naming what was about to run, for the message
     """
-    if not wait_for_project_ready():
-        _fail("the project never reported ready, so EDT is still recomputing derived data - %s "
-              "would be measuring that recompute, not itself." % what)
+    failure_details = []
+    if not wait_for_project_ready(failure_details=failure_details):
+        _fail("%s, so EDT is still recomputing derived data - %s would be measuring that "
+              "recompute, not itself." % (failure_details[0], what))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1204,10 +1226,12 @@ def _revert_and_clean(project, revert):
 
     @param revert the disk revert to re-run once the project has settled - the base fixture for a
            per-test reset, every fixture for the end-of-run cleanup
-    @return (cleaned, clean_attempts, settle_failures) - the counts are the diagnosis material
-            the caller turns into a message, so an abort always names what actually ran out."""
+    @return (cleaned, clean_attempts, settle_failures, last_settle_failure) - the counts and the
+            last project-state diagnostic are the material the caller turns into a message, so
+            an abort always names what actually ran out and which project blocked it."""
     clean_attempts = 0
     settle_failures = 0
+    last_settle_failure = None
     deadline = time.time() + MODEL_RESET_BUDGET
     while (clean_attempts < MODEL_CLEAN_ATTEMPTS and settle_failures < MODEL_SETTLE_ATTEMPTS
            and time.time() < deadline):
@@ -1216,8 +1240,11 @@ def _revert_and_clean(project, revert):
         # A settle that TIMED OUT means the export may still be in flight, so reverting now
         # would not be the last write: retry the whole cycle instead of building on it. The
         # verification the caller does afterwards is what finally decides.
-        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+        failure_details = []
+        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
+                                      failure_details=failure_details):
             settle_failures += 1
+            last_settle_failure = failure_details[0]
             continue
         # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
         # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
@@ -1227,7 +1254,7 @@ def _revert_and_clean(project, revert):
         clean_attempts += 1
         try:
             if not call("clean_project", {"projectName": project}).is_error:
-                return (True, clean_attempts, settle_failures)
+                return (True, clean_attempts, settle_failures, last_settle_failure)
         except E2ECallTimeout:
             # The one failure a best-effort catch must NOT swallow: the server is still running
             # that call, so retrying - or reporting success - hides it from the runner, the only
@@ -1242,20 +1269,22 @@ def _revert_and_clean(project, revert):
             # one that actually died. Re-raise and keep the cause attached to its effect.
             if calls_aborted():
                 raise
-    return (False, clean_attempts, settle_failures)
+    return (False, clean_attempts, settle_failures, last_settle_failure)
 
 
-def _clean_failure_cause(clean_attempts, settle_failures):
+def _clean_failure_cause(clean_attempts, settle_failures, last_settle_failure):
     """Name the budget that actually ran out, for the abort message."""
     exhausted = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or settle_failures >= MODEL_SETTLE_ATTEMPTS)
     if clean_attempts == 0:
-        return ("the project never reported ready (%d settle attempts of %ds each%s), so "
+        return ("%s (%d settle attempts of %ds each%s), so "
                 "clean_project was never even accepted for an attempt"
-                % (settle_failures, MODEL_SETTLE_TIMEOUT,
+                % (last_settle_failure or "projects never reported ready",
+                   settle_failures, MODEL_SETTLE_TIMEOUT,
                    "" if exhausted else "; the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
     return ("clean_project was refused in all %d attempts%s%s"
             % (clean_attempts,
-               " (plus %d settle timeouts)" % settle_failures if settle_failures else "",
+               " (plus %d settle timeouts; %s)" % (settle_failures, last_settle_failure)
+               if settle_failures else "",
                "" if exhausted else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
 
 
@@ -1292,22 +1321,26 @@ def reset_model():
     """
     last_mismatch = "the post-condition was never reached"
     for _ in range(MODEL_RESET_ATTEMPTS):
-        cleaned, clean_attempts, settle_failures = _revert_and_clean(PROJECT, reset_fixture)
+        cleaned, clean_attempts, settle_failures, settle_failure = \
+            _revert_and_clean(PROJECT, reset_fixture)
         if not cleaned:
             # The model still carries the finished test's write, and the next test would read it.
             # That is the cascade this reset exists to prevent, so stop the run instead of
             # continuing on a model we know is stale.
             raise E2EModelResetFailed(
                 "%s, so the in-memory model still carries the last test's write. Continuing would "
-                "hand it to the next test." % _clean_failure_cause(clean_attempts, settle_failures))
+                "hand it to the next test."
+                % _clean_failure_cause(clean_attempts, settle_failures, settle_failure))
         # Final settle: clean_project's revalidation re-triggers derived data; make sure the
         # next test starts on a fully-indexed model regardless of which branch above we took.
         # A negative result here is the same hazard as the exhausted-retries branch above (the
         # model is not guaranteed to be back in sync) and must not be swallowed either.
-        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+        failure_details = []
+        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
+                                      failure_details=failure_details):
             raise E2EModelResetFailed(
-                "clean_project succeeded, but the final settle did not report the project ready "
-                "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
+                "clean_project succeeded, but %s, so the model is not guaranteed to be back in "
+                "sync." % failure_details[0])
         mismatch = _baseline_mismatch()
         if mismatch is None:
             # The one place entitled to say the model is verifiably home again - which is also
@@ -1384,17 +1417,19 @@ def final_cleanup():
     itself re-touched (e.g. a CRLF/marker touch). Run at startup AND at the end."""
     reset_all_fixtures()
     for proj in (PROJECT, TESTS_PROJECT):
-        cleaned, clean_attempts, settle_failures = _revert_and_clean(proj, reset_all_fixtures)
+        cleaned, clean_attempts, settle_failures, settle_failure = \
+            _revert_and_clean(proj, reset_all_fixtures)
         if not cleaned:
             raise E2EModelResetFailed(
                 "%s for project %r, so its in-memory model may still carry an unsynchronised "
                 "change - reporting this run clean would be a lie."
-                % (_clean_failure_cause(clean_attempts, settle_failures), proj))
-    if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+                % (_clean_failure_cause(clean_attempts, settle_failures, settle_failure), proj))
+    failure_details = []
+    if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
+                                  failure_details=failure_details):
         raise E2EModelResetFailed(
-            "clean_project succeeded for every project, but the final settle did not report "
-            "every project ready within %ds, so the model is not guaranteed to be back in "
-            "sync." % MODEL_SETTLE_TIMEOUT)
+            "clean_project succeeded for every project, but %s, so the model is not guaranteed "
+            "to be back in sync." % failure_details[0])
     reset_all_fixtures()
     # Deliberately NOT _mark_model_synced() here. This function cleans and settles but never
     # VERIFIES the baseline came back (that is reset_model's _baseline_mismatch), and only a

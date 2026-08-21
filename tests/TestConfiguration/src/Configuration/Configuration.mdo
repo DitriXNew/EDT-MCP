@@ -43,6 +43,7 @@
   <commonModules>CommonModule.Calc</commonModules>
   <commonModules>CommonModule.CascadeEn</commonModules>
   <commonModules>CommonModule.CascadeUser</commonModules>
+  <commonModules>CommonModule.DrySignal</commonModules>
   <commonModules>CommonModule.Error</commonModules>
   <commonModules>CommonModule.OK</commonModules>
   <commonModules>CommonModule.Вычисление</commonModules>

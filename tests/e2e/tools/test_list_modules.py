@@ -12,11 +12,12 @@ ListModulesTool.java):
   - objectName / nameFilter are filters: a non-matching value is NOT an error,
     it yields "No modules found." (so that is a happy call, not a negative).
 
-Fixture (TestConfiguration) modules actually on disk:
+Fixture (TestConfiguration) modules used by the broad-listing assertions:
   CommonModules/Error/Module.bsl   (CommonModule, type Module)
   CommonModules/OK/Module.bsl      (CommonModule, type Module)
   Configuration/ManagedApplicationModule.bsl
 Catalog.Catalog / CommonForm.Form have .mdo but no .bsl, so they do not appear.
+Other fixture modules exist; these tests deliberately do not pin the full inventory.
 
 A read tool must never mutate the project: every test ends with assert_no_diff().
 """
