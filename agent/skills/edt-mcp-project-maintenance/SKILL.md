@@ -29,6 +29,9 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
 1. Diagnose with `get_project_errors`, `get_problem_summary`, and targeted
    `revalidate_objects`; use `apply_quick_fix`, `clean_project`, or
    `resync_to_disk` only when current evidence and help select that operation.
+   Apply a quick fix only for an authorized exact marker and variant, then
+   inspect its diff. Always pass the exact project to `clean_project`; omission
+   rebuilds every EDT project.
 2. Resolve application identity with `get_applications` and
    `list_configurations`. For `update_database`, review the current preview and
    side effects, obtain authority, execute once, and verify the final state.
@@ -43,6 +46,9 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    diff through the project-approved Git route and prove it clean, free, and not
    needed for parallel work. Use `list_git_branches` only for branch/binding
    identity, then use `create_git_branch` or `switch_git_branch` as appropriate.
+   A task branch must be checked out explicitly; verify the returned
+   `checkedOut`/current branch before any mutation because branch creation alone
+   leaves the working tree on its previous branch by default.
 6. When the active project has foreign changes or parallel work is required,
    do not switch it. Use a separate Git worktree through the project-approved
    Git route and resolve that checkout as a distinct EDT project before MCP

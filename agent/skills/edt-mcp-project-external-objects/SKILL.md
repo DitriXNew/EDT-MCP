@@ -31,8 +31,10 @@ prebuilt `.epf`/`.erf` outside an EDT project.
 2. Inspect or change the object through current metadata, code, and form tools;
    re-read and validate the exact owning object after a mutation.
 3. For a build, confirm an unambiguous object and authorized build target, call
-   `build_external_objects`, and verify the returned identity, counts, and
-   intended artifacts before promotion or replacement.
+   `build_external_objects` with the exact `objectName`; omit it only for an
+   authorized build-all. Set `recordBuildTime=false` unless changing the
+   source object's Comment was explicitly requested. Verify the returned
+   identity, counts, and intended artifacts before promotion or replacement.
 4. For a debug run, complete target, launch-policy, disclosure, and credential
    preflight first, using `set_infobase_credentials` only when authorized.
    Then call `set_breakpoint` before `debug_launch` and retain task-owned IDs.

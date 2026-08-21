@@ -34,13 +34,18 @@ evidence alone answers the question.
 3. Use `set_infobase_credentials` only for the confirmed target and only when
    authorized. Set the smallest `set_breakpoint` before `debug_launch` or the
    Attach start, retaining task-owned identifiers.
-4. Refresh `debug_status`. Before `wait_for_break`, `get_variables`,
+4. If `debug_launch` reports `alreadyRunning=true`, do not claim that launch,
+   update, restart, or startup options ran. Continue only when the existing
+   session is the authorized target and no fresh-start effect is required;
+   otherwise remove task-owned state and stop. Terminate and relaunch only
+   with explicit user authority.
+5. Refresh `debug_status`. Before `wait_for_break`, `get_variables`,
    `evaluate_expression`, `set_variable`, `step`, or `resume`, require the
    current help and status to identify one unambiguous intended debug target.
    Otherwise remove only task-owned temporary state and stop.
-5. Collect only the bounded evidence needed. Treat expression evaluation and
+6. Collect only the bounded evidence needed. Treat expression evaluation and
    variable mutation as potentially state-changing.
-6. Resume execution if this task suspended it, call `remove_breakpoint`, and
+7. Resume execution if this task suspended it, call `remove_breakpoint`, and
    use `terminate_launch` only for a uniquely identified, task-owned launch
    whose termination is authorized.
 

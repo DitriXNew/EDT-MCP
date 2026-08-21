@@ -29,7 +29,9 @@ Git, production-write, or proof route.
 2. Establish whether the configured service and shared tools enforce the
    intended read/write boundary; otherwise use an isolated disposable target or
    obtain explicit authority for possible effects.
-3. Submit one `ask_workmate` request and retain its returned job identity.
+3. Submit one `ask_workmate` request with the resolved exact `projectName` and
+   retain its returned job identity; do not omit the project and fall back to
+   Workmate's default context.
 4. Poll only that job with `get_job_status`; do not duplicate a committed
    request to discover progress or recover from ambiguity.
 5. Verify target identity and load-bearing claims with direct read-only
