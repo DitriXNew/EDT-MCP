@@ -56,7 +56,9 @@ supported properties through `modify_metadata`.
 ## Level C: visual, dynamic-list, or unknown form
 
 Add a compact `get_form_layout_snapshot`. Use `get_form_screenshot` only when
-appearance is part of acceptance. After a structural or visual change, call
+appearance is part of acceptance and opening or activating the form editor is
+an acceptable UI side effect when `formPath` is supplied. After a structural
+or visual change, call
 `get_form_screenshot(refresh=true)` for acceptance verification. Treat a
 render error as an error; do not accept a stale previously rendered image as
 evidence of the changed form. For a dynamic list, verify:

@@ -32,6 +32,9 @@ whole project or turning research into implementation.
    method names.
 2. Locate candidates with `get_metadata_objects`, `list_modules`, and
    `search_in_code`.
+   Inspect the completeness, truncation, and paging fields each result actually
+   returns. Page, narrow, or split the search before claiming complete coverage;
+   otherwise report the observed result as a capped lower bound.
 3. Inspect `get_module_structure` before reading bodies.
 4. Prefer `read_method_source`; use `read_module_source` only for module-level
    initialization, variables, directives, or ordering.

@@ -41,9 +41,12 @@ measurement, refactoring, and unrelated runtime activity.
 1. Start with `start_profiling` for the exact target.
 2. Execute only the bounded scenario.
 3. Stop with `stop_profiling` even when the scenario fails.
-4. Read `get_profiling_results` immediately after stopping.
-5. Correlate hot methods and lines with exact project source using module/method
-   readers.
+4. Read `get_profiling_results` immediately after stopping. Request the detailed
+   format when method identity or duration fields are needed.
+5. Treat each module's returned lines as capped and partial: the tool can retain
+   only the first 200 qualifying executed lines per module, does not guarantee
+   cost ordering, and exposes no per-module truncation flag. Correlate candidate
+   methods and lines with exact project source using module/method readers.
 6. Repeat only when a controlled comparison is necessary and the first run's
    target and conditions are known.
 
@@ -65,13 +68,15 @@ fields that the API does not return.
 
 ## Output
 
-Report scenario, application/target, data conditions, duration, hottest
-methods/lines, evidence linking them to source, confounders, optimization
-hypothesis, and the validation experiment for any future change.
+Report scenario, application/target, data conditions, duration, candidate costly
+methods/lines, evidence linking them to source, result-cap limitations,
+confounders, optimization hypothesis, and the validation experiment for any
+future change. Do not make an absolute hottest-line or hottest-method claim
+unless a narrowed measurement establishes it.
 
 ## Safety and stop conditions
 
 Do not refactor during the measurement step. Stop and clean up when the target
 changes, another session starts profiling, the scenario mutates prohibited
-data, or results cannot be attributed. Always attempt to stop profiling before
-handing control back.
+data, or results cannot be attributed. Always attempt to stop profiling on
+success, failure, timeout, and interruption before handing control back.

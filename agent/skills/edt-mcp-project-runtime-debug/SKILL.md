@@ -32,11 +32,27 @@ experiment, then clean up temporary state.
    especially standalone servers or external objects.
 4. Decide whether database update, external-infobase changes, client restart,
    or standalone-server port reassignment is authorized.
-5. Resolve the exact source location, place the smallest required
+5. If authentication is required, confirm the existing infobase user. Target
+   `set_infobase_credentials` by the exact `launchConfigurationName` when the
+   launched client also needs credentials and require `clientConfigured=true`;
+   a project/application target configures only the update agent. A local
+   launch stores a non-empty password in clear-text workspace metadata, while a
+   shared launch refuses it; use such storage only with explicit authority or
+   choose OS authentication, an empty password, or secure manual client setup.
+6. Resolve the exact source location, place the smallest required
    `set_breakpoint` calls before `debug_launch` or an Attach launch, and
    retain every returned `breakpointId`.
 
 ## Launch and probe
+
+Before `wait_for_break`, `get_variables`, or `get_event_log` can return
+infobase data, require one of: a confirmed non-production or sanitized target;
+enabled server-side redaction adequate for the requested values; or explicit
+user authorization for the specific disclosure from the named target. Current
+redaction is optional, defaults off, covers debugger outputs but not
+`get_event_log`, and can miss free-form names from `evaluate_expression`.
+Post-filtering cannot undo disclosure after raw values leave the server. Keep
+server-side filters and returned data bounds mandatory.
 
 1. After placing breakpoints, use `debug_launch` in one supported targeting
    mode.
@@ -63,10 +79,14 @@ reassignment unless changing the server configuration is authorized.
 
 Use `get_event_log` with only the narrow filters exposed by its current input
 schema: `from`/`to`, `severity`, `event`/`eventContains`, `user`,
-`metadataContains`, and `session`. For a FILE infobase, `applicationId` selects
-which infobase log directory is read; it does not filter the per-event
-`events[].application` value. When application-level narrowing is needed,
-post-filter the returned `events[].application` values on the client side.
+`commentContains`, `metadataContains`, and `session`. Prefer
+`commentContains` when message text can narrow evidence before transmission.
+For a FILE infobase, `applicationId` selects which infobase log directory is
+read; it does not filter the per-event `events[].application` value. When
+application-level narrowing is needed, page across the complete server-filtered
+set with `offset` before post-filtering returned `events[].application` values.
+The default `limit` is 100. If `truncated=true`, narrow the time window and
+repeat; never claim completeness after post-filtering only the first page.
 
 For a SERVER infobase, require a caller-confirmed absolute `logDir` that points
 to an accessible copy of `1Cv8Log` in supported `text-2.0` format. `logDir`
@@ -81,6 +101,7 @@ Before cleanup or handoff, resume any task-owned or shared session that this
 workflow leaves suspended, including suspension caused by the final step. Then
 remove every temporary breakpoint by its retained `breakpointId`. Perform this
 cleanup on success, failure, and timeout paths.
+Also perform it when the workflow is interrupted.
 
 Terminate task-owned sessions only when termination is within scope. Never
 terminate or detach a shared or user-owned session without explicit

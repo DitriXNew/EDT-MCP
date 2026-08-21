@@ -47,8 +47,8 @@ conventions, and a clear validation boundary.
 
 1. Re-read the changed method.
 2. Confirm the intended fragment changed exactly once.
-3. Run targeted `get_project_errors` or `revalidate_objects` for the affected
-   object when model state requires refresh.
+3. When model state requires refresh, run targeted `revalidate_objects` for the
+   affected object, then read current markers with `get_project_errors`.
 4. Revalidate the final query after writing when query text changed.
 5. Run the smallest focused test or runtime probe that proves changed behavior
    when acceptance depends on runtime state.

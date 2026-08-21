@@ -32,8 +32,11 @@ operations.
 3. Use `find_references` before a change to a top-level metadata object whose
    FQN has the form `Type.Name` and that can cascade or leave dangling
    references. `find_references` does not accept nested member FQNs. For an
-   attribute, form element, or other nested member, use the relevant mutation
-   preview to inspect cascade and blocking information instead.
+    attribute, form element, or other nested member, use the relevant mutation
+    preview to inspect whatever cascade and blocking information it actually
+    returns. Form-member and XDTO-member deletion does not discover or cascade
+    cross-object references and can report an empty preview while leaving them
+    broken; inspect likely consumers separately and revalidate after deletion.
 4. For forms, switch to `edt-mcp-project-forms`; for reports/DCS, pair with
    `edt-mcp-project-query-dcs`.
 5. Call the relevant `get_tool_guide` before the first uncommon, destructive,
@@ -55,7 +58,8 @@ assignable view and current validation errors.
 Treat preview and confirmation as separate phases. Review the exact affected
 targets and references before confirmation. Do not add a new destructive flag
 only on the confirm call. A forced delete that may leave dangling references
-requires explicit authority.
+requires explicit authority. Inspect paging and truncation fields from reference
+searches before treating their results as complete.
 
 ## Roles and RLS
 

@@ -40,6 +40,8 @@ existing storage topology without translating programmatic identifiers.
 
 1. Use `generate_translation_strings` only when requested and only for the
    intended project/storage; its `storageId` is the storage-selection route.
+   Before `fillUpType=FROM_PROVIDER`, identify the selected provider and obtain
+   authority to transmit source text when that provider is external.
 2. Reuse existing dictionaries and storage bindings; do not create or redirect
    them by assumption.
 3. `translate_configuration` has no `storageId` selector and uses all storages

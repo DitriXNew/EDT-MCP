@@ -34,7 +34,10 @@ the exact current marker and re-read validation afterward.
 
 `clean_project` refreshes disk into the model and triggers broad validation; it
 is not a harmless save. Pass the exact project unless the entire workspace is
-explicitly in scope, and account for unsaved editor/model state.
+explicitly in scope, and account for unsaved editor/model state. A timeout does
+not prove the EDT clean stopped, and even `success=true` may precede completion
+of derived-data recomputation. Poll `list_projects` until the exact project is
+`ready` before relying on its model.
 
 Consult `get_tool_guide('resync_to_disk')` before use. It exports only the
 addressed project's model to disk: missing objects by default, or every object
@@ -51,17 +54,27 @@ store credentials, and create launch configurations. These operations alter
 EDT application state and sometimes filesystem/runtime state; use exact
 targets and current guides.
 
+When authentication is required, select an existing infobase user before an
+update or launch. Target `set_infobase_credentials` by
+`launchConfigurationName` only when the launched client also needs credentials,
+verify `clientConfigured`, and follow the current clear-text/refused shared
+launch secret-storage contract before supplying a non-empty password.
+
 ## Database update
 
 1. Resolve the application and inspect its update state.
 2. Review `get_tool_guide('update_database')`.
-3. Preview, then confirm the same update intent.
+3. Preview, obtain explicit authority for the same update/restructure intent,
+   then confirm it. Structural updates may delete data and the restructure
+   dialog is accepted automatically after confirmation.
 4. Choose external-infobase-change policy deliberately.
 5. Do not terminate clients or reassign standalone-server ports without
    authority.
 6. For standalone servers, prefer coordinated `debug_launch` or YAXUnit launch
    with update enabled; a bare update starts the server in run mode.
-7. Verify final update state and later asynchronous failure surfaces.
+7. Verify final update state and later asynchronous failure surfaces. A client
+   timeout does not cancel the EDT update; do not reissue it. Read the completed
+   call through `get_mcp_history` and re-check application state instead.
 
 ## Background jobs
 

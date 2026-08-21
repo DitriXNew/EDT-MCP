@@ -48,15 +48,33 @@ objects.
 ## Build
 
 Use `build_external_objects` for one named object or all objects. Establish the
-associated infobase and resolvable runtime first. Choose `recordBuildTime`
-deliberately. When it is omitted or `true`, the tool replaces the object's
-entire `Comment` with a build timestamp before dumping the external file. If
-dumping then fails, the original comment can already be lost. Use
-`recordBuildTime=false` to preserve the comment. Replacing the comment with a
-timestamp requires an explicit user choice.
+associated infobase and resolvable runtime first. Before invoking the tool,
+require either explicit authority to update and restructure that infobase or a
+disposable build infobase where those effects are acceptable. Association alone
+is not authority: EDT preparation may update/restructure the infobase and
+automatically accept the corresponding dialogs.
 
-Record the output directory and built/failed object counts. A successful empty
-all-objects build is not proof that a requested named object exists.
+`objectName` accepts only a simple name, not a qualified FQN. If both
+`ExternalDataProcessor.X` and `ExternalReport.X` exist, passing `X` can select
+both, so stop and report the ambiguity or build both only with explicit user
+authority.
+
+Choose `recordBuildTime` deliberately. When it is omitted or `true`, the tool
+replaces the object's entire `Comment` with a build timestamp before dumping the
+external file. If dumping then fails, the original comment can already be lost.
+Use `recordBuildTime=false` to preserve the comment. Replacing the comment with
+a timestamp requires an explicit user choice.
+
+Build into a fresh unique staging directory because the tool deletes an
+existing target artifact before the replacement dump completes. Promote the
+new EPF/ERF only after every intended object built successfully. Promotion is a
+separate, explicitly authorized filesystem or repository operation; EDT-MCP
+does not provide an atomic promotion primitive. Rebuild in place only with
+explicit authority and after preserving the last good artifact.
+
+Record the staging/output directory and built/failed object counts. A
+successful empty all-objects build is not proof that a requested named object
+exists.
 
 ## Debug launch
 
@@ -73,17 +91,30 @@ Call `debug_launch` against the base configuration application and pass
 `externalObjectProjectName` plus `externalObjectName`. EDT builds the object
 for debugging; a prebuilt file cannot provide source breakpoints.
 
+If authentication is required, confirm the existing infobase user and configure
+credentials before launch. Target `set_infobase_credentials` by the exact
+`launchConfigurationName` when the launched client also needs credentials, then
+require `clientConfigured=true`; a project/application target configures only
+the update agent. A local launch stores a non-empty password in clear-text
+workspace metadata, while a shared launch refuses it; use such storage only
+with explicit authority or choose OS authentication, an empty password, or
+secure manual client configuration.
+
 Use `startupOption` only for the current launch's `/C` payload. It is applied to
 a working copy and does not persistently change the saved EDT launch
 configuration. It is valid for runtime-client launches, not Attach launches.
 
-Check `debug_status` after the asynchronous start, then use `wait_for_break`.
-On a hit, inspect the returned frames and read only the bounded variables needed
-for the question with `get_variables`; the break notification alone is not
-runtime evidence. After the probe, including failure or timeout, resume first
-if execution is suspended, then remove the temporary breakpoint by its retained
-`breakpointId`. Use `terminate_launch` only when ending a task-owned launch is
-appropriate. Hand deeper stepping or expression work to
+Check `debug_status` after the asynchronous start. Before `wait_for_break` or
+`get_variables` can return infobase data, require a confirmed sanitized or
+non-production target, enabled server-side redaction adequate for the requested
+values, or explicit authorization for the specific disclosure from the named
+target. Redaction is optional and incomplete, so keep reads bounded; filtering
+after a raw response cannot undo disclosure. On a hit, inspect only the frames
+and variables needed for the question; the break notification alone is not
+runtime evidence. After the probe, including failure, timeout, or interruption,
+resume first if execution is suspended, then remove the temporary breakpoint by
+its retained `breakpointId`. Use `terminate_launch` only when ending a task-owned
+launch is appropriate. Hand deeper stepping or expression work to
 `edt-mcp-project-runtime-debug`. Use `restartIfRunning` only when terminating
 the current client is authorized.
 

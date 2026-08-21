@@ -36,6 +36,11 @@ final artifacts.
    identities and evidence.
 5. Review whether Workmate may contact an external model service or invoke
    tools under the user's Workmate configuration.
+6. Before `ask_workmate` can share write-capable MCP tools, require one of: a
+   configuration proven to expose read-only operations only; an isolated
+   disposable checkout/project; or explicit authority for possible code or
+   metadata mutations. Stop if none is established. A read-only prompt and an
+   after-the-fact diff are not enforcement controls.
 
 ## Dispatch and poll
 
