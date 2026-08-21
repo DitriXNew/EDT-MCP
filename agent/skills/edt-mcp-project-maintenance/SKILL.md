@@ -30,8 +30,10 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    `revalidate_objects`; use `apply_quick_fix`, `clean_project`, or
    `resync_to_disk` only when current evidence and help select that operation.
    Apply a quick fix only for an authorized exact marker and variant, then
-   inspect its diff. Always pass the exact project to `clean_project`; omission
-   rebuilds every EDT project.
+   inspect its diff. Before `clean_project`, prove the exact project has no
+   unsaved in-memory model edits; preserve any through the current supported,
+   authorized save/resync route, or stop if safety cannot be proved. Always pass
+   the exact project; omission rebuilds every EDT project.
 2. Resolve application identity with `get_applications` and
    `list_configurations`. For `update_database`, review the current preview and
    side effects, obtain authority, execute once, and verify the final state.

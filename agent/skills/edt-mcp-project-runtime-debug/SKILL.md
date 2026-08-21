@@ -32,13 +32,18 @@ evidence alone answers the question.
    `list_configurations`, and `debug_status`; settle update, external-change,
    restart, credential, and data-disclosure authority before launching.
 3. Use `set_infobase_credentials` only for the confirmed target and only when
-   authorized. Set the smallest `set_breakpoint` before `debug_launch` or the
-   Attach start, retaining task-owned identifiers.
-4. If `debug_launch` reports `alreadyRunning=true`, do not claim that launch,
-   update, restart, or startup options ran. Continue only when the existing
-   session is the authorized target and no fresh-start effect is required;
-   otherwise remove task-owned state and stop. Terminate and relaunch only
-   with explicit user authority.
+   authorized. Decide from `debug_status` whether to use an existing session or
+   start a fresh one before installing the smallest `set_breakpoint`. Use an
+   existing session directly only when it is the exact authorized target and no
+   fresh-start effect is required; install the breakpoint and continue without
+   `debug_launch`, or stop. For a fresh launch or Attach, set the breakpoint
+   before starting it and retain task-owned identifiers.
+4. If a preflight race makes `debug_launch` report `alreadyRunning=true`, do not
+   claim that launch, update, restart, or startup options ran. Refresh the
+   uniquely identified target, resume only a suspension caused by the task's
+   breakpoint, remove task-owned temporary state, and stop unless a fresh
+   relaunch was explicitly authorized. Never resume an ambiguous or unrelated
+   suspension.
 5. Refresh `debug_status`. Before `wait_for_break`, `get_variables`,
    `evaluate_expression`, `set_variable`, `step`, or `resume`, require the
    current help and status to identify one unambiguous intended debug target.

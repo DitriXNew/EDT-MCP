@@ -26,9 +26,11 @@ Git, production-write, or proof route.
 ## Primary workflow
 
 1. Resolve the project and inspect `get_tool_guide` for `ask_workmate`.
-2. Establish whether the configured service and shared tools enforce the
-   intended read/write boundary; otherwise use an isolated disposable target or
-   obtain explicit authority for possible effects.
+2. Treat `projectName` as Workmate context, not an authorization or isolation
+   boundary. For a bridge/tool-capable call that could write, require a proven
+   project-scoped/read-only surface or a workspace isolated to the exact
+   disposable or authorized target; otherwise do not delegate mutations and
+   stop for authority or isolation.
 3. Submit one `ask_workmate` request with the resolved exact `projectName` and
    retain its returned job identity; do not omit the project and fall back to
    Workmate's default context.
