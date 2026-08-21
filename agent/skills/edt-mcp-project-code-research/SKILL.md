@@ -5,87 +5,55 @@ description: Investigate 1C BSL behavior, dependencies, impact, and implementati
 
 # EDT-MCP code research
 
-## Goal
+## Purpose and trigger
 
-Produce a bounded, evidence-backed map of a 1C mechanism without loading the
-whole project or turning research into implementation.
+Use this skill to produce a bounded, evidence-backed explanation of 1C project
+code, dependencies, impact, or implementation differences.
 
-## Use when
+## Operating rule
 
-- locating an entry point or explaining current behavior;
-- tracing callers, definitions, structured outputs, or exception routes;
-- preparing a change or impact analysis;
-- comparing current and reference implementations;
-- assembling a compact context bundle for one feature.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- the exact target is known and the request is one bounded correction; use
-  `edt-mcp-project-local-fix`;
-- the task is solely a form layout or DCS investigation;
-- the user already requested implementation and no research uncertainty
-  remains.
+Keep the task read-only and tied to exact project, metadata FQN, module, method,
+or symbol targets. Route a known bounded correction to
+`edt-mcp-project-local-fix`; do not turn research into implementation without
+authorization.
 
-## Workflow
+## Primary workflow
 
-1. Normalize the business term into exact project, metadata FQN, module, and
-   method names.
-2. Locate candidates with `get_metadata_objects`, `list_modules`, and
+1. Resolve candidates with `get_metadata_objects`, `list_modules`, and
    `search_in_code`.
-   Inspect the completeness, truncation, and paging fields each result actually
-   returns. Page, narrow, or split the search before claiming complete coverage;
-   otherwise report the observed result as a capped lower bound.
-3. Inspect `get_module_structure` before reading bodies.
-4. Prefer `read_method_source`; use `read_module_source` only for module-level
-   initialization, variables, directives, or ordering.
-5. Preserve a returned `contentHash` if research may lead to a later write.
-6. Resolve only the relationships needed for the conclusion:
-   - `go_to_definition`;
-   - `find_references`;
-   - `get_method_call_hierarchy` with bounded depth, remembering that it scans
-     only the selected project's source and does not include callers from
-     extensions or other projects. When related extensions matter, discover
-     them, search each project separately with bounded calls, and identify any
-     projects that remain unverified;
-   - `get_outgoing_structures` only as a lower bound for structured contracts.
-     It observes limited literal insertion patterns and qualified calls, with
-     only shallow helper expansion. Read the bounded caller and callee source
-     before claiming a complete structure contract;
-   - `get_symbol_info` when the symbol identity is unclear.
-7. Use `get_platform_documentation` when the conclusion depends on a platform
-   API rather than project code.
-8. Inspect exception, logging, fallback, transaction, and client/server routes
-   explicitly when they affect behavior.
-9. For a comparison, keep the reference side read-only and compare contracts,
-   not formatting.
-10. Stop with findings and unknowns unless implementation was requested.
+2. Narrow with `get_module_structure`, then prefer `read_method_source` over
+   `read_module_source` unless module-level context is required.
+3. Follow only the relationships needed using `go_to_definition`,
+   `find_references`, `get_method_call_hierarchy`, `get_outgoing_structures`,
+   or `get_symbol_info`.
+4. Treat every single-hop or depth-1 caller result as a lower bound. When the
+   conclusion requires completeness, use the current completeness-capable
+   route from the authoritative guide and report any remaining gaps.
+5. Treat structured-output analysis and cross-project impact as potentially
+   partial; inspect the bounded source and relevant projects before claiming a
+   complete contract.
+6. Use `get_platform_documentation` when the conclusion depends on platform
+   behavior rather than project code.
 
-## Impact analysis
+## Authority rule
 
-For a proposed change, define the exact signature, FQN, form member, query
-field, or property first. Classify each impact as proven static, likely,
-runtime-only, or unknown. Static traversal can miss dynamic calls, strings,
-event subscriptions, functional options, runtime-selected forms, and external
-integrations.
+Do not write code, metadata, runtime data, or Git state. Request a new task
+boundary before any implementation or runtime experiment.
 
-## Evidence classification
+## Stop rule
 
-- **Platform**: confirmed platform or EDT contract.
-- **SSL/BSP**: confirmed call into a public library mechanism.
-- **Configuration-specific**: tied to project metadata or private code.
-- **Reusable pattern**: portable without private state.
-- **Uncertain**: evidence is insufficient.
+Stop when the exact target cannot be resolved, required project evidence is
+unavailable, or the conclusion needs unauthorized runtime proof.
 
-Do not classify from naming alone.
+## Completion signal
 
-## Verification
-
-Return exact targets, entry points, main call/data flow, client/server context,
-dependencies, exceptions, likely change seams, existing tests, runtime gaps,
-and the smallest useful validation plan.
-
-## Safety and stop conditions
-
-Do not modify code in a research-only task. Stop when the target cannot be
-resolved, a required project is unavailable, or the conclusion would require
-runtime evidence that the current scope does not authorize.
+Return exact targets, the evidenced call/data flow, relevant dependencies and
+exceptions, impact classification, partial-result caveats, unknowns, and the
+smallest useful next validation step.

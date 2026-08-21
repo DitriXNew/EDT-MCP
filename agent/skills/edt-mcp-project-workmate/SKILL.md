@@ -5,77 +5,49 @@ description: Use EDT-MCP ask_workmate for explicitly requested 1C project resear
 
 # EDT-MCP Workmate research
 
-## Goal
+## Purpose and trigger
 
-Send one bounded project-research question to a compatible 1C:Workmate
-installation and retain responsibility for target identity, verification, and
-final artifacts.
+Use this skill only when the user explicitly asks for Workmate research or an
+authorized second opinion on an exact 1C project question.
 
-## Use when
+## Operating rule
 
-- the user explicitly asks to use Workmate;
-- an authorized second opinion or broad read-only research pass is useful;
-- the current server exposes `ask_workmate` and the target project is ready.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- ordinary direct EDT-MCP research is sufficient;
-- the user excludes delegation;
-- the initial request is a production mutation, database update, or destructive
-  operation;
-- Workmate compatibility or authorization is unknown.
+Keep one bounded subject-matter question, exact project/object identity, and
+requested answer mode in scope. Workmate is not a default implementation,
+Git, production-write, or proof route.
 
-## Preflight
+## Primary workflow
 
-1. Resolve the exact EDT project and confirm it is open and ready.
-2. Inspect `get_tool_guide('ask_workmate')`; the tool is optional and may be
-   disabled.
-3. Separate the subject-matter question from executor mechanics, Git workflow,
-   report paths, and later implementation.
-4. State a read-only research boundary and request exact project/object
-   identities and evidence.
-5. Review whether Workmate may contact an external model service or invoke
-   tools under the user's Workmate configuration.
-6. Before `ask_workmate` can share write-capable MCP tools, require one of: a
-   configuration proven to expose read-only operations only; an isolated
-   disposable checkout/project; or explicit authority for possible code or
-   metadata mutations. Stop if none is established. A read-only prompt and an
-   after-the-fact diff are not enforcement controls.
+1. Resolve the project and inspect `get_tool_guide` for `ask_workmate`.
+2. Establish whether the configured service and shared tools enforce the
+   intended read/write boundary; otherwise use an isolated disposable target or
+   obtain explicit authority for possible effects.
+3. Submit one `ask_workmate` request and retain its returned job identity.
+4. Poll only that job with `get_job_status`; do not duplicate a committed
+   request to discover progress or recover from ambiguity.
+5. Verify target identity and load-bearing claims with direct read-only
+   EDT-MCP evidence before using the answer.
 
-## Dispatch and poll
+## Authority rule
 
-1. Use answer mode when the result must return to the caller; chat mode hands
-   the task to Workmate's UI and does not return the answer here.
-2. Start one `ask_workmate` job and retain its `jobId`.
-3. Poll only that job with `get_job_status`; do not submit a duplicate question
-   to check progress.
-4. Respect the current timeout and continuation semantics from the guide.
-5. Do not treat an intermediate plan, silence, elapsed time, or a completion
-   warning as a confirmed final answer.
+External model contact, shared write-capable tools, project mutations, and any
+retry after uncertain dispatch require the relevant user authority. A
+read-only prompt alone is not an enforcement boundary.
 
-## Finality and retry safety
+## Stop rule
 
-Current Workmate integration can continue across assistant turns until its
-finality contract is satisfied. If the result says completion is unconfirmed,
-the job timed out after dispatch, or the request was already committed to
-Workmate, inspect the returned state before retrying. A blind retry can run the
-same research twice or overlap work still executing in Workmate.
+Stop when Workmate is unavailable, compatibility or target identity is unclear,
+completion is unconfirmed, unexpected writes appear, or the next step needs new
+material authorization.
 
-## Verification
+## Completion signal
 
-Check the reported project and object identity. Verify the load-bearing or
-ambiguous claims with direct read-only EDT-MCP calls. Workmate's answer is
-research input, not proof that files, metadata, runtime data, or Git state were
-changed correctly.
-
-## Safety
-
-The read-only instruction is a workflow boundary, not a hard sandbox around
-Workmate's own tools. Inspect unexpected project changes before continuing.
-Do not delegate production writes without separate, explicit authority.
-
-## Stop conditions
-
-Stop when the tool is unavailable, the project is not ready, target identity
-differs, completion is unconfirmed, unexpected writes are detected, or the
-next step requires a new material authorization.
+Return the exact question/target, confirmed Workmate final state, directly
+verified claims, unresolved uncertainty, and any detected project effects.

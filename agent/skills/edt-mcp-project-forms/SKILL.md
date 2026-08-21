@@ -5,93 +5,52 @@ description: Research and safely change managed 1C forms through EDT-MCP, includ
 
 # EDT-MCP managed forms
 
-## Goal
+## Purpose and trigger
 
-Use the smallest inspection and verification level that can detect a defect
-introduced by the requested form change.
+Use this skill to inspect or change a managed form's structure, data,
+commands, handlers, dynamic lists, or visible layout.
 
-## Use when
+## Operating rule
 
-- researching form data, items, commands, handlers, or layout;
-- creating or changing form objects and members;
-- changing bindings, event handlers, or dynamic lists;
-- verifying visible form structure.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- only a non-form BSL method changes;
-- the task is DCS output structure rather than the form presenting it;
-- a filesystem edit of `.form` is proposed despite structured support.
+Work on the exact project and form FQN through structured EDT-MCP operations.
+Route code-only fixes to `edt-mcp-project-local-fix` and DCS changes to
+`edt-mcp-project-query-dcs`; never edit form XML directly.
 
-## Level A: form-module code only
+## Primary workflow
 
-Use when no form item, attribute, command, event binding, data path, dynamic
-list, or visible layout changes.
+1. Read the form with `get_metadata_details` and inspect only relevant handlers
+   with `get_module_structure` and `read_method_source`.
+2. Consult the current guide, then use the narrowest supported
+   `create_metadata`, `modify_metadata`, or `delete_metadata` operation.
+3. Re-read the form and verify the requested ownership, binding, data-path,
+   command, and handler relationships; validate changed query text with
+   `validate_query` when applicable.
+4. Use `get_form_layout_snapshot` when layout structure matters and
+   `get_form_screenshot` only when rendered appearance is acceptance evidence.
+5. Run targeted validation and an authorized runtime UI scenario only when
+   interaction behavior must be proven.
 
-1. Read the exact method and keep its content hash.
-2. Apply the bounded BSL workflow.
-3. Re-read and run targeted form/object validation.
-4. Add runtime evidence only when behavior changed.
+## Authority rule
 
-Do not render the whole form merely because the method belongs to a form.
+Do not broaden a form mutation, leave dangling bindings, activate UI, launch a
+client, or change runtime data without the authority required for that effect.
 
-## Level B: structural or binding change
+## Stop rule
 
-1. Read the exact form FQN with `get_metadata_details`.
-2. Build only the affected data, visual, command, and event maps.
-3. Read relevant handlers with `get_module_structure` and
-   `read_method_source`.
-4. Consult current guides for `create_metadata`, `modify_metadata`, or
-   `delete_metadata` before the first structural write.
-5. Apply the narrowest supported structured mutation.
-6. Re-read the form and verify parent, data path, command, handler, and owner
-   invariants.
-7. Run targeted validation.
+Stop when the form target is ambiguous, the structured writer cannot represent
+the requested change, required references cannot be preserved, or necessary
+visual/runtime evidence is unavailable.
 
-Form parameters are addressed as form members using a `Parameter` segment.
-Current parameters expose `valueType`, `keyParameter`, and `comment`; they do
-not have a title or visual position. Create the parameter first, then set its
-supported properties through `modify_metadata`.
+## Completion signal
 
-## Level C: visual, dynamic-list, or unknown form
-
-Add a compact `get_form_layout_snapshot`. Use `get_form_screenshot` only when
-appearance is part of acceptance and opening or activating the form editor is
-an acceptable UI side effect when `formPath` is supplied. After a structural
-or visual change, call
-`get_form_screenshot(refresh=true)` for acceptance verification. Treat a
-render error as an error; do not accept a stale previously rendered image as
-evidence of the changed form. For a dynamic list, verify:
-
-1. owning form attribute;
-2. main table or custom query;
-3. selected query fields;
-4. visible item data paths;
-5. settings/filter handlers;
-6. refresh or requery behavior.
-
-Validate changed query text before writing and ensure every visible
-`List.Field` path resolves afterward.
-
-## External-object forms
-
-For an external data processor/report, pass the external-object project as
-`projectName` and use the qualified object/form FQN. Current metadata scope
-resolution handles those forms without pretending the project has its own
-configuration root.
-
-## Verification boundary
-
-- A structural read proves model relationships, not user interaction.
-- A screenshot proves one rendered state, not event behavior.
-- Runtime UI acceptance requires an authorized runtime scenario.
-- Blank form rendering may reflect missing EDT renderer prerequisites; check
-  `get_server_status` and the current form guide before diagnosing the form.
-
-## Safety and stop conditions
-
-Do not invent element IDs, rebuild a whole form for one item, assume a
-same-named procedure is bound, or edit form XML directly. Stop when the current
-structured writer cannot represent the requested operation, a reference would
-be left dangling without authority, or required runtime/visual evidence is
-unavailable.
+Return the exact form target, confirmed structural/source diff, targeted
+validation, requested layout or runtime evidence, and explicit gaps. A model
+read or screenshot proves only the state it actually reports, not user
+interaction.

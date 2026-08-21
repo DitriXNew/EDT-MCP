@@ -5,72 +5,49 @@ description: Locate, inspect, validate, and safely change 1C queries or Data Com
 
 # EDT-MCP query and DCS workflow
 
-## Goal
+## Purpose and trigger
 
-Preserve the query's business grain and use only the DCS mutations supported by
-the current structured tool surface.
+Use this skill to locate, inspect, validate, or change a 1C query or supported
+Data Composition Schema surface.
 
-## Use when
+## Operating rule
 
-- locating or changing a query in BSL;
-- inspecting a report or DCS template;
-- validating query syntax and metadata resolution;
-- authoring supported DCS datasets, fields, or parameters;
-- diagnosing duplicate or missing report output.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- the task is only form layout around a report;
-- the requested DCS setting is absent from the current writer;
-- runtime data execution would require an unrelated external server.
+Resolve the exact project, owning method or Report FQN, dataset, and business
+grain. Route form-only work elsewhere and never edit `.dcs` directly to bypass
+an unsupported structured operation.
 
-## Query workflow
+## Primary workflow
 
-1. Locate the owner with `search_in_code`, module structure, or metadata
-   details.
-2. Read the complete method or DCS dataset that owns the query.
-3. Extract the complete query text, including package-query stages.
-4. Call `validate_query` with the exact project; use DCS mode for a DCS query.
-5. Treat incomplete model resolution or fallback parsing as insufficient for a
-   metadata-sensitive conclusion.
-6. Apply the smallest supported source or DCS mutation.
-7. Validate the final query again and re-read the owning artifact.
+1. Locate the owner with `search_in_code`, `get_module_structure`,
+   `read_method_source`, or `get_metadata_details`.
+2. Read the complete owning method or dataset and validate the complete query
+   with `validate_query` in the exact project.
+3. Preserve business grain and cardinality, then apply the smallest supported
+   source route or `modify_metadata` DCS mutation after consulting current help.
+4. Re-read the owner, validate the final query, and inspect targeted
+   `get_project_errors` when markers matter.
+5. Run an authorized report/runtime check only when rows, totals, RLS,
+   parameters, performance, or presentation are part of acceptance.
 
-## DCS read and write boundary
+## Authority rule
 
-`get_metadata_details` on a DCS template can expose data sources, datasets,
-full query text, fields, calculated and total fields, parameters, and parts of
-the default settings variant.
+Do not broaden source/DCS changes, bypass access restrictions, execute against
+runtime data, or alter report settings beyond the authorized target.
 
-Current structured DCS writes use the `modify_metadata` DCS payload on a Report
-FQN. Confirm the current guide before writing. Do not infer that every readable
-setting is writable. If grouping structure, resource placement, selected-field
-layout, variants, advanced filters/order, conditional appearance, or another
-requested setting is absent from the guide, report a capability gap.
+## Stop rule
 
-Never edit `.dcs` directly to bypass that gap.
+Stop on ambiguous ownership, unresolved model validation, unsupported DCS
+write capability, unsafe cardinality, or missing runtime target/read authority.
 
-## Query design checks
+## Completion signal
 
-- State the dataset business grain.
-- Aggregate one-to-many sources to the required key before joining.
-- Do not use `DISTINCT` to hide unknown cardinality.
-- Treat the final SELECT of a package query as the dataset output.
-- Preserve access restrictions and required volume predicates.
-- Validate field aliases against DCS fields and visible consumers.
-
-## Verification
-
-After a write, re-read the DCS or method, compare intended schema sections,
-run targeted project validation, and execute the report only when visible data
-semantics are part of acceptance.
-
-Parser/model validation proves syntax and project metadata compatibility. It
-does not prove rows, totals, RLS, performance, parameter behavior, or runtime
-presentation.
-
-## Stop conditions
-
-Stop when query ownership is ambiguous, validation cannot resolve the current
-model, the writer lacks the requested DCS capability, or runtime data proof is
-required but the target infobase and read authority are not established.
+Return the exact owner and dataset, confirmed source/schema diff, successful
+readback and static validation, business-grain reasoning, and explicit gaps.
+Static validation never proves returned rows, totals, RLS, performance, or UI.

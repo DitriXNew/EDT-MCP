@@ -5,82 +5,53 @@ description: Inspect and run EDT translation workflows through EDT-MCP while pre
 
 # EDT-MCP translation workflow
 
-## Goal
+## Purpose and trigger
 
-Apply translation operations only to the intended project, languages, and
-existing storage topology without translating programmatic identifiers.
+Use this skill to inspect configured translation resources, generate strings,
+run translation, and verify localized metadata for an exact project.
 
-## Use when
+## Operating rule
 
-- inspecting EDT translation project configuration;
-- generating translation strings;
-- running configured translation through EDT-MCP;
-- verifying localized metadata after translation.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- the request is ordinary editing of one localized synonym;
-- the project has no configured translation storage;
-- machine translation or dictionary changes are outside scope.
+Keep the exact project, declared language codes, existing storage/provider
+topology, and localized human-facing fields in scope. Never translate
+programmatic metadata names, FQNs, BSL identifiers, query fields, or 1C tokens.
 
-## Preflight
+## Primary workflow
 
-1. Resolve the exact project with `list_projects(format='json')` and inspect its
-   reported `natures`. String generation is supported only when the selected
-   project has `V8ConfigurationNature`. If it has `V8ExtensionNature`, stop
-   explicitly: `generate_translation_strings` does not support configuration
-   extensions. Route to an owning configuration project only when that is the
-   user's explicit intended target and the ownership relation is proven by
-   current project evidence; never silently substitute another project.
-2. Call `get_configuration_properties` and record `defaultLanguage` plus the
-   declared configuration `languages`.
-3. Treat every target language as explicit caller or user input, distinguish
-   language codes from display names, and verify it is declared.
-4. Use `get_translation_project_info` to discover all translation storages and
-   providers. A storage can be selected only for string generation.
-5. Confirm whether generating strings will write translation storage.
-6. Consult `get_tool_guide` for `generate_translation_strings` or
-   `translate_configuration` when parameters or side effects are uncertain.
+1. Resolve project identity/kind with `list_projects`, declared languages with
+   `get_configuration_properties`, and configured translation routes with
+   `get_translation_project_info`.
+2. Confirm the intended languages, project support, storage/provider scope, and
+   write or external-service authority using current help.
+3. Call `generate_translation_strings` or `translate_configuration` only for
+   the confirmed route and requested operation.
+4. Re-read representative localized metadata with `get_metadata_details`,
+   inspect the repository diff when applicable, and run targeted validation.
+5. Report only identities, counts, status, and affected samples that current
+   tool output actually confirms; successful execution is not proof of
+   translation quality or complete coverage.
 
-## Workflow
+## Authority rule
 
-1. Use `generate_translation_strings` only when requested and only for the
-   intended project/storage; its `storageId` is the storage-selection route.
-   Before `fillUpType=FROM_PROVIDER`, identify the selected provider and obtain
-   authority to transmit source text when that provider is external.
-2. Reuse existing dictionaries and storage bindings; do not create or redirect
-   them by assumption.
-3. `translate_configuration` has no `storageId` selector and uses all storages
-   bound to the project. Run it only when every bound storage is in scope; do
-   not describe it as a selected single-storage route.
-4. Re-read affected metadata with `get_metadata_details` using exact language
-   codes when localized values matter.
-5. Run targeted validation when translated metadata changed.
-6. Inspect the repository diff when translation storage is file-backed.
+Storage/dictionary writes, overwrite, external provider transmission, and any
+route affecting multiple storages or projects require authority for that exact
+scope.
 
-## Language boundary
+## Stop rule
 
-Keep programmatic metadata Names, FQNs, BSL identifiers, query fields, and real
-1C tokens unchanged. Translate only localized human-facing values covered by
-the configured translation workflow.
+Stop on unsupported project kind, undeclared language, ambiguous or incomplete
+storage topology, unreviewed overwrite/transmission, or a need to change
+programmatic identifiers.
 
-Do not invent undeclared language codes. A localized write under a declared but
-unused language can be technically valid while still being unintended; surface
-that state for review.
+## Completion signal
 
-## Verification
-
-Report only observable evidence: the project and requested languages; the
-selected generation storage and options when generation is used; operation
-status; storage/provider identities and counts actually reported by
-`get_translation_project_info`; repository diff; explicitly sampled metadata;
-targeted validation; and remaining manual review. Do not invent generated or
-translated counts, a complete affected-object list, or untranslated/stale
-locale statistics unless the current tool explicitly returns them.
-
-## Safety and stop conditions
-
-Stop when project language/storage configuration is incomplete, the requested
-language is undeclared, translation would overwrite an unreviewed dictionary,
-or programmatic identifiers would need to change. Do not treat successful
-generation as proof of translation quality.
+Return the exact project/languages/route, confirmed operation result, verified
+localized samples and diff/validation evidence, and explicit quality or
+completeness gaps.

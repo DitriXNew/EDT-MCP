@@ -5,78 +5,50 @@ description: Run a bounded 1C performance profiling experiment through EDT-MCP a
 
 # EDT-MCP profiling
 
-## Goal
+## Purpose and trigger
 
-Measure one scenario and answer one performance question without mixing
-measurement, refactoring, and unrelated runtime activity.
+Use this skill when one reproducible performance question requires runtime
+measurement against an exact 1C application.
 
-## Use when
+## Operating rule
 
-- a performance claim needs runtime evidence;
-- a method or line hotspot must be identified;
-- static query/code observations need confirmation.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- the issue is functional correctness only;
-- the target application or scenario is not reproducible;
-- a shared runtime cannot be isolated enough to attribute results.
+Measure one authorized scenario and data volume. Do not mix the measurement
+with refactoring, broad load generation, or unrelated runtime activity.
 
-## Preflight
+## Primary workflow
 
-1. Define one scenario, expected start/end, and performance question.
-2. Resolve the exact debug target and application.
-3. Check `debug_status` and require an active debug session/application before
-   `start_profiling`. Otherwise launch or Attach through the runtime-debug
-   workflow and wait for readiness, or stop and route there.
-4. Call `get_profiling_results` without `applicationId` and check its global
-   `profilingActive` before starting. Require an exclusive profiling window
-   with no other session allowed to publish a result.
-5. Read guides for `start_profiling`, `stop_profiling`, and
-   `get_profiling_results` when target or result semantics are uncertain.
-6. Decide how the scenario will be triggered and what data volume it uses.
+1. Define the question and resolve an active, unambiguous debug target with
+   `debug_status`; route launch or Attach preparation to
+   `edt-mcp-project-runtime-debug` when needed.
+2. Establish an attributable profiling window using current help and existing
+   `get_profiling_results` state.
+3. Call `start_profiling`, execute only the bounded scenario, and call
+   `stop_profiling` on success, failure, timeout, or interruption.
+4. Read `get_profiling_results` immediately, correlate candidate methods/lines
+   with exact source, and repeat only for a controlled comparison.
+5. Treat returned profiling rows as potentially partial; do not make absolute
+   hotspot or completeness claims unless the measurement proves them.
 
-## Workflow
+## Authority rule
 
-1. Start with `start_profiling` for the exact target.
-2. Execute only the bounded scenario.
-3. Stop with `stop_profiling` even when the scenario fails.
-4. Read `get_profiling_results` immediately after stopping. Request the detailed
-   format when method identity or duration fields are needed.
-5. Treat each module's returned lines as capped and partial: the tool can retain
-   only the first 200 qualifying executed lines per module, does not guarantee
-   cost ordering, and exposes no per-module truncation flag. Correlate candidate
-   methods and lines with exact project source using module/method readers.
-6. Repeat only when a controlled comparison is necessary and the first run's
-   target and conditions are known.
+The target application, scenario, data effects, launch/Attach work, and any
+repeat measurement must be authorized. Profiling does not authorize a code fix.
 
-## Attribution
+## Stop rule
 
-`get_profiling_results` exposes the latest global result without reliable
-result identity or timestamps. It cannot prove which application produced a
-result after another session publishes one. Use the preflight global
-`profilingActive` check, an exclusive profiling window, and the immediate
-stop-then-read sequence for attribution; do not require identity or timestamp
-fields that the API does not return.
+Stop and clean up when the target changes, another session prevents reliable
+attribution, the scenario would mutate prohibited data, or results cannot be
+linked to the intended run.
 
-## Evidence boundary
+## Completion signal
 
-- Static complexity or query shape is a hypothesis, not a measured bottleneck.
-- One profiling run proves behavior only for its scenario and data volume.
-- A hot line may be the caller of expensive platform work rather than the full
-  root cause.
-
-## Output
-
-Report scenario, application/target, data conditions, duration, candidate costly
-methods/lines, evidence linking them to source, result-cap limitations,
-confounders, optimization hypothesis, and the validation experiment for any
-future change. Do not make an absolute hottest-line or hottest-method claim
-unless a narrowed measurement establishes it.
-
-## Safety and stop conditions
-
-Do not refactor during the measurement step. Stop and clean up when the target
-changes, another session starts profiling, the scenario mutates prohibited
-data, or results cannot be attributed. Always attempt to stop profiling on
-success, failure, timeout, and interruption before handing control back.
+Report the exact target and scenario, conditions, observed duration and
+candidate hotspots, partial-result and attribution limits, cleanup status, and
+the next validation experiment for any proposed optimization.

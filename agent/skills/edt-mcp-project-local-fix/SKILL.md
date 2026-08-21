@@ -5,73 +5,51 @@ description: Apply one bounded BSL correction through EDT-MCP with lost-update p
 
 # EDT-MCP local BSL fix
 
-## Goal
+## Purpose and trigger
 
-Change one logical BSL surface while preserving current source, local
-conventions, and a clear validation boundary.
+Use this skill when the defect and exact BSL method or small query-bearing
+fragment are known and the user requested a bounded correction.
 
-## Use when
+## Operating rule
 
-- the defect and target method are bounded;
-- a small query-bearing fragment needs correction;
-- the user requested implementation rather than diagnosis only.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- the change is architectural, cross-module, or metadata-first;
-- the target is a form-structure or DCS mutation;
-- the user requested only analysis or review.
+Change one logical BSL surface in the exact project/module/method. Do not expand
+into architecture, metadata/form/DCS structure, unrelated cleanup, or plugin
+code.
 
-## Preflight
+## Primary workflow
 
-1. Resolve the exact project, module, and method.
-2. Read the target with `read_method_source` and retain `contentHash`.
-3. Read adjacent methods only when needed to preserve a local contract.
-4. Search for a proven project pattern when the intended implementation is
-   uncertain.
-5. If the changed fragment contains a 1C query, extract the final query and
-   validate it with `validate_query` in the exact project before writing.
-6. Call `get_tool_guide('write_module_source')` when the write mode or current
-   lost-update contract is uncertain.
+1. Resolve and read the exact method with `read_method_source`; retain its
+   current lost-update evidence.
+2. Validate a changed 1C query with `validate_query` before writing when
+   applicable.
+3. Consult `get_tool_guide` for the current write contract, then apply the
+   smallest guarded `write_module_source` edit.
+4. Re-read the method, revalidate any final query, and run targeted
+   `revalidate_objects` plus `get_project_errors` when model markers matter.
+5. Inspect the minimal repository diff and add only the focused test or runtime
+   probe required by acceptance.
 
-## Write
+## Authority rule
 
-1. Prefer `write_module_source` with a unique search/replace fragment.
-2. Pass the expected content hash returned by the read.
-3. Keep syntax checking enabled.
-4. Use whole-module replacement only when the whole module is intentionally
-   replaced and a current lost-update guard is supplied.
-5. Do not include adjacent cleanup unless correctness requires it.
+The request authorizes only the bounded source correction. It does not
+authorize infobase updates, client launches, runtime data changes, broader
+refactors, or unrelated Git changes.
 
-## Verification
+## Stop rule
 
-1. Re-read the changed method.
-2. Confirm the intended fragment changed exactly once.
-3. When model state requires refresh, run targeted `revalidate_objects` for the
-   affected object, then read current markers with `get_project_errors`.
-4. Revalidate the final query after writing when query text changed.
-5. Run the smallest focused test or runtime probe that proves changed behavior
-   when acceptance depends on runtime state.
-6. Inspect the final repository diff when Git evidence is available.
+Stop before writing on target ambiguity, non-unique replacement, stale
+lost-update evidence, failed query validation, unready project state, or an
+unresolved design decision.
 
-## Evidence boundary
+## Completion signal
 
-- A successful write proves the model accepted the edit, not that the project
-  is marker-free.
-- Query validation proves syntax and model resolution, not returned rows,
-  rights behavior, performance, or business semantics.
-- Static validation is not runtime proof.
-
-## Safety
-
-- Do not edit `.bsl` through filesystem tools when EDT-MCP can address it.
-- Do not set syntax-check bypasses merely to force a write.
-- Do not update an infobase or launch a client unless that runtime action is in
-  scope.
-- Preserve unrelated user changes and stop on a hash mismatch.
-
-## Stop conditions
-
-Stop before writing when the target fragment is non-unique, the module changed
-since it was read, query validation fails, project state is not ready, or the
-fix depends on an unresolved design decision.
+Return the exact changed method, minimal diff, successful readback and targeted
+validation, focused runtime/test evidence when required, and remaining static
+versus runtime gaps.

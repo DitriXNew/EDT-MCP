@@ -5,91 +5,48 @@ description: Establish the current EDT-MCP server surface, exact 1C project, and
 
 # EDT-MCP project session
 
-## Goal
+## Purpose and trigger
 
-Establish only the current facts needed for the task. Do not dump the complete
-tool catalog or repeat bootstrap calls while the evidence remains current.
+Use this skill to establish the exact EDT-MCP route, project, and required
+capability before another business-project workflow begins.
 
-## Use when
+## Operating rule
 
-- the target EDT project is unknown or ambiguous;
-- more than one EDT instance may be connected through a proxy;
-- a required tool is not visible;
-- the installed server version or enabled surface matters to a failure;
-- another project skill needs a reliable preflight.
+- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
+- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
+- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
+- Report only results confirmed by tool output.
 
-## Do not use when
+## Task boundary
 
-- the project and tool surface were already established in this session;
-- the task is about implementing or testing the EDT-MCP plugin itself;
-- the missing fact can be resolved by a narrower task skill.
+Discover only facts needed for the current 1C project task. Do not use this
+skill for EDT-MCP plugin development or repeat preflight whose evidence remains
+current.
 
-## Minimal preflight
+## Primary workflow
 
-1. Reuse valid current-session evidence.
-2. Call `list_projects` when the exact EDT project is not known.
-3. If proxy router tools are exposed and routing matters, inspect
-   `router_status` once.
-4. Call `get_server_status` only when version, EDT state, progressive
-   disclosure, or renderer flags matter.
-5. If a capability is hidden, inspect `list_toolsets`. A client that supports
-   dynamic MCP tool-catalog refresh may call `enable_toolset`, refresh the
-   catalog, and use the revealed tool in the current session. A client that
-   materializes schemas only at session start may call `enable_toolset`, then
-   reconnect or start a new session so the enabled schemas arrive in the next
-   handshake. Disabling Progressive Disclosure before server startup remains
-   an alternative. Do not assume that every client can refresh schemas in the
-   current session.
-6. Use `get_tool_guide` for an unfamiliar operation or before the first
-   destructive or cascading mutation in the task.
+1. Reuse valid session evidence; otherwise call `list_projects` to resolve the
+   exact project and kind.
+2. When proxy routing matters, call `router_status`; use `get_server_status`
+   only when installed surface or EDT state affects the task.
+3. If a required capability is hidden, inspect `list_toolsets` and use
+   `enable_toolset` only as current help permits. Follow the client's supported
+   catalog-refresh or reconnect route; do not assume either behavior.
+4. Call `get_tool_guide` for the selected unfamiliar, destructive, or cascading
+   operation rather than preloading unrelated guides.
+5. Hand off the exact project and visible capability to one primary task skill.
 
-## Identity model
+## Authority rule
 
-Keep these identifiers separate:
+Discovery does not authorize project mutation, destructive operations, runtime
+effects, optional Git/Workmate use, or substitution of a different project.
 
-- EDT project name;
-- metadata FQN;
-- base configuration versus configuration extension;
-- external-object project versus its `ExternalDataProcessor` or
-  `ExternalReport` object;
-- application or infobase identifier;
-- EDT launch configuration name.
+## Stop rule
 
-An external-object project has no ordinary configuration root. Current
-metadata tools resolve its top objects through the project's metadata scope;
-address those objects by their qualified FQNs and pass the external project as
-`projectName`.
+Stop when project ownership or route is ambiguous, the required capability
+remains unavailable, or the next operation lacks a proven target or authority.
 
-## Routing rules
+## Completion signal
 
-- Pass the exact `projectName` on project-scoped calls.
-- If duplicate project names are reported across EDT instances, stop until the
-  route is unambiguous.
-- Do not assume a fixed server port, tool count, toolset membership, or client
-  namespace.
-- Do not require Progressive Disclosure; the complete tool surface may be
-  visible from session start.
-- A hidden tool is not necessarily unsupported. A static client may need to
-  enable its toolset and reconnect before the tool becomes callable, while a
-  dynamic client may refresh in the current session. An administratively
-  disabled tool cannot be enabled by repeated discovery calls.
-- Optional tools such as Git or Workmate are not prerequisites for ordinary
-  project work.
-
-## Economy
-
-- Read one method before one module.
-- Read one metadata object before a subsystem or configuration.
-- Read a compact form layout before a full layout or screenshot.
-- Do not bulk-call `get_tool_guide`.
-
-## Verification
-
-Before handing control to another task skill, record the selected project, its
-kind when relevant, the visible required capability, and any routing ambiguity.
-
-## Stop conditions
-
-Stop and report the exact missing fact when project ownership is ambiguous, the
-required tool remains absent or disabled after proper discovery, a destructive
-operation lacks authority, or the write target cannot be proven.
+Record the selected project, project kind when relevant, routed server surface,
+required visible capability, chosen task skill, and any unresolved ambiguity.
