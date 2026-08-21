@@ -16,6 +16,7 @@ import com.ditrix.edt.mcp.server.tools.impl.AskWorkmateTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CancelJobTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateGitBranchTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
@@ -37,6 +38,7 @@ import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GenerateTranslationStringsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetCheckDescriptionTool;
+import com.ditrix.edt.mcp.server.tools.impl.GetComparisonNodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetConfigurationPropertiesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetContentAssistTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
@@ -75,6 +77,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListSubsystemsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListToolsetsTool;
+import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadMethodSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.ReadModuleSourceTool;
 import com.ditrix.edt.mcp.server.tools.impl.RemoveBreakpointTool;
@@ -230,6 +233,11 @@ public final class BuiltInToolRegistrar
         catalogue.add(new ModifyMetadataTool());
         catalogue.add(new AdoptMetadataObjectTool());
         catalogue.add(new ValidateXdtoPackageTool());
+
+        // Three-way configuration comparison (read-only: nothing is ever merged).
+        catalogue.add(new CompareConfigurationsTool());
+        catalogue.add(new GetComparisonNodeTool());
+        catalogue.add(new MergeRulesTool());
 
         // LanguageTool translation tools
         catalogue.add(new GenerateTranslationStringsTool());

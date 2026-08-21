@@ -1,0 +1,1309 @@
+/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.tools.impl;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
+
+import org.eclipse.emf.ecore.EStructuralFeature;
+
+import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
+import com._1c.g5.v8.dt.compare.model.CollectionElementComparisonNode;
+import com._1c.g5.v8.dt.compare.model.ComparisonNode;
+import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
+import com._1c.g5.v8.dt.compare.model.MergeRule;
+import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
+
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec.MergeRulesFormatException;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Decision;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.TopObjectKey;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+/**
+ * Reads and authors EDT's merge-rules file - the sparse document of per-node merge decisions a
+ * configuration comparison saves, and re-applies when a comparison is launched with it.
+ * <p>
+ * <b>Two modes, and the answer always says which one ran.</b> The file is addressed by NAMES,
+ * not by internal node ids, so it can be authored with no comparison running at all - which is
+ * the scenario this exists for: prepare the decisions, then open the comparison window once,
+ * already carrying them. But a file written that way has NOT been checked against what each node
+ * actually allows, and reporting it as if it had is exactly the class of lie this plugin keeps
+ * removing. So:
+ * <ul>
+ * <li><b>no live comparison</b> - the file is authored from names and the report says
+ * NOT VALIDATED, naming {@code compare_configurations} as the way to get validation;</li>
+ * <li><b>live comparison</b> - every rule is checked against the rules its node allows before
+ * anything is written, and an illegal rule is refused naming the node, the rule and the allowed
+ * set.</li>
+ * </ul>
+ * The two are never mixed silently, and nothing is written until EVERY decision has passed:
+ * a half-applied set would be a file whose contents nobody chose.
+ * <p>
+ * <b>This tool cannot merge.</b> It reads and writes a settings file; running the merge stays a
+ * human action in the comparison window. It never receives the comparison manager, only the
+ * narrow authority below, which answers exactly one question - which rules a node allows.
+ * <p>
+ * <b>Rule literals are the platform's wire literals</b> ({@code GetFromOther}, {@code DoNotMerge},
+ * ...) and are parsed with {@code MergeRule.get(literal)}. The Java constant spelling
+ * ({@code GET_FROM_OTHER}) is NOT a literal and is rejected with the correct spelling named.
+ */
+public class MergeRulesTool implements IMcpTool
+{
+    public static final String NAME = "merge_rules"; //$NON-NLS-1$
+
+    /** Parameter: which half of the tool to run. */
+    private static final String KEY_MODE = "mode"; //$NON-NLS-1$
+
+    /** Parameter: the merge-rules file to read, or to write. */
+    private static final String KEY_FILE_PATH = "filePath"; //$NON-NLS-1$
+
+    /** Parameter: an existing rules file whose content the write starts from. */
+    private static final String KEY_BASED_ON = "basedOn"; //$NON-NLS-1$
+
+    /** Parameter: the decisions to record. */
+    private static final String KEY_DECISIONS = "decisions"; //$NON-NLS-1$
+
+    /** Parameter: the live comparison to validate against. */
+    private static final String KEY_COMPARISON_ID = "comparisonId"; //$NON-NLS-1$
+
+    /** Value of {@link #KEY_MODE}: parse a rules file and report its decisions. */
+    private static final String MODE_READ = "read"; //$NON-NLS-1$
+
+    /** Value of {@link #KEY_MODE}: record decisions into a rules file. */
+    private static final String MODE_WRITE = "write"; //$NON-NLS-1$
+
+    /** Field of one {@link #KEY_DECISIONS} element: the key chain below the root. */
+    private static final String FIELD_PATH = "path"; //$NON-NLS-1$
+
+    /** Field of one {@link #KEY_DECISIONS} element: the merge-rule literal. */
+    private static final String FIELD_RULE = "rule"; //$NON-NLS-1$
+
+    /** Default cap on reported decision rows. */
+    private static final int DEFAULT_LIMIT = 200;
+
+    /**
+     * Rule literals this tool will author. The four that are a plain choice between the sides;
+     * the platform's other two are refused, see {@link #REFUSED_RULES}.
+     */
+    private static final List<String> AUTHORABLE_RULES = List.of("GetFromOther", "DoNotMerge", //$NON-NLS-1$ //$NON-NLS-2$
+        "MergePrioritizingMain", "MergePrioritizingOther"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * Rule literals refused unconditionally, in either mode. Both name a merge that is CONFIGURED
+     * elsewhere and not by the rule alone - a custom merge carries its own nested settings, and an
+     * external-tool merge names a tool and hands it the content - so writing the bare literal
+     * would record a decision whose actual behaviour nobody chose here.
+     */
+    private static final List<String> REFUSED_RULES = List.of("CustomMerge", "MergeUsingExternalTool"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    private final MergeRuleAuthoritySupplier authoritySupplier;
+
+    /**
+     * Creates the tool with the production authority - the one that asks a live comparison, over
+     * {@link ComparisonEngine}, which rules each node allows.
+     * <p>
+     * The authority answers only for a comparison whose tree has FINISHED. With none - no
+     * comparison running, EDT's comparison service absent, or a tree still being built - it
+     * answers nothing, and the write is authored from names and reported as NOT VALIDATED. That
+     * is the honest degradation, never a validated-looking answer.
+     */
+    public MergeRulesTool()
+    {
+        this(new EngineRuleAuthority());
+    }
+
+    /**
+     * Creates the tool with the authority that answers which rules a node allows. This is the
+     * single wiring point for the comparison facade: the tool never sees the comparison manager
+     * itself, only this one question.
+     *
+     * @param authoritySupplier resolves the authority for a comparison id (or for whatever
+     *            comparison is live, when the id is {@code null}), never {@code null}
+     */
+    public MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier)
+    {
+        this.authoritySupplier = authoritySupplier;
+    }
+
+    /**
+     * The supplier this instance will consult. Exists so a test can pin WHICH supplier the
+     * shipped, no-argument constructor installs: a tool that advertises validation while holding
+     * a supplier that can never answer would advertise a mode nothing can enter, and no
+     * behavioural test run without EDT can tell the two suppliers apart.
+     *
+     * @return the supplier, never {@code null}
+     */
+    MergeRuleAuthoritySupplier authoritySupplier()
+    {
+        return authoritySupplier;
+    }
+
+    @Override
+    public String getName()
+    {
+        return NAME;
+    }
+
+    @Override
+    public String getDescription()
+    {
+        return "Read or author EDT's merge-rules file - the per-node decisions a configuration " //$NON-NLS-1$
+            + "comparison saves and re-applies when it is launched. Authoring needs NO running " //$NON-NLS-1$
+            + "comparison (the file is addressed by names), and the report says which happened: " //$NON-NLS-1$
+            + "rules written without a live comparison are reported NOT VALIDATED; with one, every " //$NON-NLS-1$
+            + "rule is checked against what its node allows and an illegal rule is refused. Never " //$NON-NLS-1$
+            + "merges anything - running the merge stays a human action in the comparison window. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('merge_rules')."; //$NON-NLS-1$
+    }
+
+    @Override
+    public String getInputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .enumProperty(KEY_MODE,
+                "'read' parses a rules file and reports its decisions; 'write' records decisions " //$NON-NLS-1$
+                    + "into one (required).", //$NON-NLS-1$
+                true, MODE_READ, MODE_WRITE)
+            .stringProperty(KEY_FILE_PATH,
+                "Absolute path of the merge-rules file (required). read: the file to parse, '.xml' " //$NON-NLS-1$
+                    + "or the '.zip' a comparison saves. write: the '.xml' file to produce - an " //$NON-NLS-1$
+                    + "existing file there is OVERWRITTEN only when 'basedOn' names that SAME " //$NON-NLS-1$
+                    + "file, which updates it in place; any other write over an existing file is " //$NON-NLS-1$
+                    + "refused so decisions are never silently discarded.", //$NON-NLS-1$
+                true)
+            .stringProperty(KEY_BASED_ON,
+                "write: an existing rules file to start from, so its decisions and payload are " //$NON-NLS-1$
+                    + "kept and yours are merged in (optional; '.xml' or '.zip').") //$NON-NLS-1$
+            .objectArrayProperty(KEY_DECISIONS,
+                "write: the decisions to record, as [{path, rule}]. 'path' is the key chain below " //$NON-NLS-1$
+                    + "the root - [] = the whole configuration, ['commonModules'] = a whole " //$NON-NLS-1$
+                    + "collection (the EMF feature name; a metadata type token in either " //$NON-NLS-1$
+                    + "language, 'Catalog' or 'Catalogs' or the Russian form, is translated to " //$NON-NLS-1$
+                    + "it), ['commonModules','Main:Main:Main'] = one " //$NON-NLS-1$
+                    + "object, keyed by its name on the main, other and ancestor sides joined by " //$NON-NLS-1$
+                    + "':' with 'NONE' for a side that has no such object. 'rule' is one of " //$NON-NLS-1$
+                    + "GetFromOther, DoNotMerge, MergePrioritizingMain, MergePrioritizingOther.") //$NON-NLS-1$
+            .stringProperty(KEY_COMPARISON_ID,
+                "write: validate every rule against this live comparison before writing " //$NON-NLS-1$
+                    + "(optional; omitted = validate against the running comparison if there is " //$NON-NLS-1$
+                    + "one, otherwise author unvalidated and say so).") //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT, "Max decision rows to report; default 200, max 1000 (optional)") //$NON-NLS-1$
+            .build();
+    }
+
+    @Override
+    public String execute(Map<String, String> params)
+    {
+        String missing = JsonUtils.requireArguments(params, KEY_MODE, KEY_FILE_PATH);
+        if (missing != null)
+        {
+            return missing;
+        }
+        String mode = JsonUtils.extractStringArgument(params, KEY_MODE);
+        String filePath = JsonUtils.extractStringArgument(params, KEY_FILE_PATH);
+        String basedOn = JsonUtils.extractStringArgument(params, KEY_BASED_ON);
+        String comparisonId = JsonUtils.extractStringArgument(params, KEY_COMPARISON_ID);
+        List<JsonObject> decisions = JsonUtils.extractObjectArray(params, KEY_DECISIONS);
+        int limit = Pagination.clampLimit(JsonUtils.extractIntArgument(params, McpKeys.LIMIT, DEFAULT_LIMIT),
+            Pagination.MAX_LIMIT);
+
+        if (MODE_READ.equals(mode))
+        {
+            if (!decisions.isEmpty() || isSet(basedOn) || isSet(comparisonId))
+            {
+                return ToolResult.error("mode 'read' takes only " + KEY_FILE_PATH + " and " + McpKeys.LIMIT //$NON-NLS-1$ //$NON-NLS-2$
+                    + "; " + KEY_DECISIONS + " / " + KEY_BASED_ON + " / " + KEY_COMPARISON_ID //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " belong to mode 'write'. Nothing was read: re-send with mode 'write' to " //$NON-NLS-1$
+                    + "record those decisions, or drop them to read the file.").toJson(); //$NON-NLS-1$
+            }
+            return read(filePath, limit);
+        }
+        if (MODE_WRITE.equals(mode))
+        {
+            // The shared extractor keeps only JSON objects and discards the rest without a word, so
+            // a malformed element would be written off silently and the report would state a
+            // decision count lower than what the caller sent - this tool's whole contract is that
+            // the report never overstates, and understating without saying so breaks it just as
+            // badly. Every other malformed decision here is refused BY POSITION; this one now is
+            // too. The shared helper is left alone: other callers depend on its lenient shape.
+            String malformed = nonObjectDecisionRefusal(params);
+            if (malformed != null)
+            {
+                return malformed;
+            }
+            return write(filePath, basedOn, comparisonId, decisions, limit);
+        }
+        return ToolResult.error("Unknown " + KEY_MODE + " '" + mode + "'. Use '" + MODE_READ //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' to parse a merge-rules file, or '" + MODE_WRITE + "' to record decisions into one.") //$NON-NLS-1$ //$NON-NLS-2$
+            .toJson();
+    }
+
+    // ==================== read ====================
+
+    private String read(String filePath, int limit)
+    {
+        Path file;
+        try
+        {
+            file = Paths.get(filePath).toAbsolutePath().normalize();
+        }
+        catch (InvalidPathException e)
+        {
+            return invalidPath(KEY_FILE_PATH, filePath, e);
+        }
+        if (!Files.isRegularFile(file))
+        {
+            return ToolResult.error("Merge-rules file not found: " + file //$NON-NLS-1$
+                + ". Point " + KEY_FILE_PATH + " at the '.xml' or '.zip' a comparison saved, or " //$NON-NLS-1$ //$NON-NLS-2$
+                + "author one with mode 'write'.").toJson(); //$NON-NLS-1$
+        }
+        MergeRulesDocument document;
+        try
+        {
+            document = MergeRulesCodec.read(file);
+        }
+        catch (MergeRulesFormatException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+        catch (IOException e)
+        {
+            return ToolResult.error("Could not read the merge-rules file " + file + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                + describe(e)).toJson();
+        }
+        return renderRead(document, limit);
+    }
+
+    private String renderRead(MergeRulesDocument document, int limit)
+    {
+        List<Decision> decisions = document.decisions();
+        StringBuilder out = new StringBuilder("# Merge rules: ").append(document.sourceLabel()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        out.append("- Format version: ").append(document.formatVersion()).append('\n'); //$NON-NLS-1$
+        out.append("- Decisions: ").append(decisions.size()).append('\n'); //$NON-NLS-1$
+        out.append("- Preserved sections this tool does not interpret: ") //$NON-NLS-1$
+            .append(document.preservedSectionCount())
+            .append(" (kept verbatim by a rewrite)\n\n"); //$NON-NLS-1$
+        if (decisions.isEmpty())
+        {
+            out.append("The file records no merge rule. A merge-rules file is SPARSE - it holds only " //$NON-NLS-1$
+                + "the decisions somebody made, so an empty one leaves every node on EDT's own " //$NON-NLS-1$
+                + "default.\n"); //$NON-NLS-1$
+            return out.toString();
+        }
+        out.append(MarkdownUtils.tableHeader("#", "Node", "Level", "Main", "Other", "Ancestor", "Rule", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+            "Order side")); //$NON-NLS-1$
+        int shown = Math.min(limit, decisions.size());
+        for (int i = 0; i < shown; i++)
+        {
+            Decision decision = decisions.get(i);
+            Optional<TopObjectKey> key = decision.topObjectKey();
+            out.append(MarkdownUtils.tableRow(String.valueOf(i + 1), String.join(" / ", decision.path()), //$NON-NLS-1$
+                level(decision), side(key, TopObjectKey::main), side(key, TopObjectKey::other),
+                side(key, TopObjectKey::ancestor), decision.rule(),
+                decision.orderSide() == null ? "-" : decision.orderSide())); //$NON-NLS-1$
+        }
+        if (shown < decisions.size())
+        {
+            out.append('\n').append(Pagination.truncationNotice(shown, decisions.size())).append('\n');
+        }
+        out.append("\n> Levels: `root` = the whole configuration, `collection` = every object of one " //$NON-NLS-1$
+            + "kind, `object` = one object keyed by its name on the three sides ('NONE' = absent " //$NON-NLS-1$
+            + "there), `member` = below the object, where the platform keys nodes by a computed " //$NON-NLS-1$
+            + "POSITION that shifts when other rules change - reported here, never authored.\n"); //$NON-NLS-1$
+        return out.toString();
+    }
+
+    private static String level(Decision decision)
+    {
+        if (decision.depth() == 0)
+        {
+            return "root"; //$NON-NLS-1$
+        }
+        if (decision.depth() == 1)
+        {
+            return "collection"; //$NON-NLS-1$
+        }
+        if (decision.depth() == MergeRulesDocument.MAX_AUTHORABLE_DEPTH)
+        {
+            return "object"; //$NON-NLS-1$
+        }
+        return "member"; //$NON-NLS-1$
+    }
+
+    private static String side(Optional<TopObjectKey> key, Function<TopObjectKey, String> reader)
+    {
+        if (key.isEmpty())
+        {
+            return "-"; //$NON-NLS-1$
+        }
+        String name = reader.apply(key.get());
+        return name == null ? "(absent)" : name; //$NON-NLS-1$
+    }
+
+    // ==================== write ====================
+
+    private String write(String filePath, String basedOn, String comparisonId, List<JsonObject> rawDecisions,
+        int limit)
+    {
+        Path file;
+        try
+        {
+            file = Paths.get(filePath).toAbsolutePath().normalize();
+        }
+        catch (InvalidPathException e)
+        {
+            return invalidPath(KEY_FILE_PATH, filePath, e);
+        }
+        Path fileName = file.getFileName();
+        if (fileName == null)
+        {
+            // A root path ("C:\" / "/") names no file at all.
+            return ToolResult.error(KEY_FILE_PATH + " must name a file, not a directory root: '" //$NON-NLS-1$
+                + filePath + "'.").toJson(); //$NON-NLS-1$
+        }
+        if (!fileName.toString().toLowerCase(Locale.ROOT).endsWith(MergeRulesCodec.XML_EXTENSION))
+        {
+            return ToolResult.error("mode 'write' produces a '.xml' merge-rules file, but " + KEY_FILE_PATH //$NON-NLS-1$
+                + " is '" + fileName + "'. EDT reads a '.zip' by looking for the entry named " //$NON-NLS-1$ //$NON-NLS-2$
+                + "after the comparison's own project triple and IGNORES a zip whose entry is named " //$NON-NLS-1$
+                + "anything else, so a zip authored from outside a comparison would silently do " //$NON-NLS-1$
+                + "nothing. Write '.xml' - the comparison launcher reads it directly.").toJson(); //$NON-NLS-1$
+        }
+        if (rawDecisions.isEmpty())
+        {
+            return ToolResult.error("mode 'write' needs " + KEY_DECISIONS + ": [{path, rule}]. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'path' is the key chain below the root ([] = the whole configuration), 'rule' is " //$NON-NLS-1$
+                + "one of " + String.join(", ", AUTHORABLE_RULES) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+
+        Path base = null;
+        if (isSet(basedOn))
+        {
+            try
+            {
+                base = Paths.get(basedOn).toAbsolutePath().normalize();
+            }
+            catch (InvalidPathException e)
+            {
+                return invalidPath(KEY_BASED_ON, basedOn, e);
+            }
+            if (!Files.isRegularFile(base))
+            {
+                return ToolResult.error(KEY_BASED_ON + " file not found: " + base //$NON-NLS-1$
+                    + ". Omit it to author a fresh rules file.").toJson(); //$NON-NLS-1$
+            }
+        }
+        // The guard is on WHICH file is about to be replaced, not on whether a starting point was
+        // named: 'basedOn' one file and writing over ANOTHER discards the target's decisions just
+        // as completely as writing over it with a fresh document, and the report would then name
+        // only the decisions that were carried in.
+        if (Files.exists(file) && !isSameFile(file, base))
+        {
+            String startedElsewhere = base == null ? "" //$NON-NLS-1$
+                : " (" + KEY_BASED_ON + " names a DIFFERENT file, " + base //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", whose decisions would be written over the ones already there)"; //$NON-NLS-1$
+            return ToolResult.error("A file already exists at " + file + startedElsewhere //$NON-NLS-1$
+                + " and would be replaced, discarding the decisions it holds. Either pass " //$NON-NLS-1$
+                + KEY_BASED_ON + " with the SAME path, " + file //$NON-NLS-1$
+                + ", to update it in place, or choose another " + KEY_FILE_PATH + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        MergeRulesDocument document;
+        if (base != null)
+        {
+            try
+            {
+                document = MergeRulesCodec.read(base);
+            }
+            catch (MergeRulesFormatException e)
+            {
+                return ToolResult.error(e.getMessage()).toJson();
+            }
+            catch (IOException e)
+            {
+                return ToolResult.error("Could not read " + KEY_BASED_ON + " " + base + ": " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + describe(e)).toJson();
+            }
+        }
+        else
+        {
+            document = MergeRulesDocument.empty();
+        }
+        int existingDecisions = document.decisions().size();
+
+        List<RequestedDecision> requested = new ArrayList<>();
+        for (int i = 0; i < rawDecisions.size(); i++)
+        {
+            ParsedDecision parsed = parseDecision(rawDecisions.get(i), i + 1);
+            if (parsed.refusal != null)
+            {
+                return parsed.refusal;
+            }
+            requested.add(parsed.decision);
+        }
+
+        // Applied to the IN-MEMORY document first, so that what gets checked below is the
+        // document that would be written - not just the decisions this call happens to carry.
+        // Nothing reaches the disk until every check passes; the write is the last statement of
+        // this method.
+        int replaced = 0;
+        Set<List<String>> requestedPaths = new HashSet<>();
+        for (RequestedDecision decision : requested)
+        {
+            if (document.mergeRuleAt(decision.path).isPresent())
+            {
+                replaced++;
+            }
+            document.setMergeRule(decision.path, decision.rule);
+            requestedPaths.add(fullPathOf(decision.path));
+        }
+
+        boolean idGiven = isSet(comparisonId);
+        Optional<MergeRuleAuthority> authority;
+        String refusal;
+        try
+        {
+            authority = authoritySupplier.authority(idGiven ? comparisonId : null);
+            refusal = authority.isPresent()
+                ? firstRefusedDecision(authority.get(), document, requestedPaths) : null;
+        }
+        catch (RuntimeException e)
+        {
+            // The comparison answered with a FAILURE rather than with an answer. That is neither
+            // "this rule is illegal" nor "the rules were checked", so nothing is written and the
+            // failure is named: writing anyway would report an unchecked file as a checked one,
+            // and refusing the rule would attribute a verdict to a comparison that gave none.
+            Activator.logError("Could not validate merge rules against a live comparison", e); //$NON-NLS-1$
+            return ToolResult.error("Could not check the decisions against " //$NON-NLS-1$
+                + (idGiven ? "comparison '" + comparisonId + "'" : "the running comparison") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ": " + describe(e) + ". Nothing was written - the rules were neither checked nor " //$NON-NLS-1$ //$NON-NLS-2$
+                + "found illegal. Retry once the comparison answers, or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
+                + " to author the file from names alone - the report then says the rules were NOT " //$NON-NLS-1$
+                + "validated.").toJson(); //$NON-NLS-1$
+        }
+        if (idGiven && authority.isEmpty())
+        {
+            // Names what was observed - that nothing answered for this id - and the two states
+            // that produce it, without picking one. In particular it does NOT say "no comparison
+            // is running" and does NOT send the caller to start one: EDT runs a single comparison
+            // per instance, so if the tree is merely still building, starting another is refused.
+            return ToolResult.error("Cannot validate against comparison '" + comparisonId //$NON-NLS-1$
+                + "': nothing answered for it. Either the comparison is no longer registered, or " //$NON-NLS-1$
+                + "its tree is not finished - an unfinished tree cannot tell 'not compared yet' " //$NON-NLS-1$
+                + "from 'not in this comparison', so it is never used to refuse a rule. The id is " //$NON-NLS-1$
+                + "the one compare_configurations returned; get_comparison_node shows whether the " //$NON-NLS-1$
+                + "tree is still building. Or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
+                + " to author the file from names alone - the report then says the rules were NOT " //$NON-NLS-1$
+                + "validated.").toJson(); //$NON-NLS-1$
+        }
+        if (refusal != null)
+        {
+            return refusal;
+        }
+
+        try
+        {
+            MergeRulesCodec.write(file, document);
+        }
+        catch (IOException e)
+        {
+            return ToolResult.error("Could not write the merge-rules file " + file + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                + describe(e)).toJson();
+        }
+        return renderWrite(file, basedOn, existingDecisions, requested, replaced, authority, document, limit);
+    }
+
+    private String renderWrite(Path file, String basedOn, int existingDecisions, List<RequestedDecision> requested,
+        int replaced, Optional<MergeRuleAuthority> authority, MergeRulesDocument document, int limit)
+    {
+        StringBuilder out = new StringBuilder("# Merge rules written: ").append(file).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (authority.isPresent())
+        {
+            out.append("**Validated against comparison `").append(authority.get().comparisonId()) //$NON-NLS-1$
+                .append("`.** Every decision IN THE FILE was checked against the rules its own " //$NON-NLS-1$
+                    + "node allows before anything was written - the ones written now and the " //$NON-NLS-1$
+                    + "ones carried in from " + KEY_BASED_ON + " alike. The table below lists " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "only what this call requested.\n\n"); //$NON-NLS-1$
+        }
+        else
+        {
+            // "without a comparison to check them against" and not "with no comparison running":
+            // this branch is also reached when a comparison IS running but none answered for these
+            // nodes, and the report may not name a cause it did not observe.
+            out.append("**NOT VALIDATED - authored from names, without a comparison to check them " //$NON-NLS-1$
+                + "against.** The literals were checked against the platform's rule vocabulary, but " //$NON-NLS-1$
+                + "whether each rule is legal for its own node is knowable only from a live " //$NON-NLS-1$
+                + "comparison. Start one with compare_configurations and re-run this write to have " //$NON-NLS-1$
+                + "every rule checked.\n\n"); //$NON-NLS-1$
+        }
+        out.append("- Decisions recorded: ").append(requested.size()).append(" (") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(requested.size() - replaced).append(" new, ").append(replaced).append(" replaced)\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (isSet(basedOn))
+        {
+            out.append("- Based on: ").append(document.sourceLabel()).append(" (") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(existingDecisions).append(" decisions it already held were kept)\n"); //$NON-NLS-1$
+        }
+        out.append("- Decisions in the file now: ").append(document.decisions().size()).append('\n'); //$NON-NLS-1$
+        out.append("- Preserved sections this tool does not interpret: ") //$NON-NLS-1$
+            .append(document.preservedSectionCount()).append("\n\n"); //$NON-NLS-1$
+        out.append(MarkdownUtils.tableHeader("#", "Node", "Rule")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        int shown = Math.min(limit, requested.size());
+        for (int i = 0; i < shown; i++)
+        {
+            RequestedDecision decision = requested.get(i);
+            out.append(MarkdownUtils.tableRow(String.valueOf(i + 1), renderPath(decision.path), decision.rule));
+        }
+        if (shown < requested.size())
+        {
+            out.append('\n').append(Pagination.truncationNotice(shown, requested.size())).append('\n');
+        }
+        out.append("\n> Launch a comparison with this file to apply the decisions; the merge itself " //$NON-NLS-1$
+            + "stays a human action in the comparison window.\n"); //$NON-NLS-1$
+        return out.toString();
+    }
+
+    private static String renderPath(List<String> path)
+    {
+        return renderFullPath(fullPathOf(path));
+    }
+
+    /**
+     * @param path the keys below the root
+     * @return the full key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
+     */
+    private static List<String> fullPathOf(List<String> path)
+    {
+        List<String> full = new ArrayList<>();
+        full.add(MergeRulesDocument.ROOT_KEY);
+        full.addAll(path);
+        return full;
+    }
+
+    /**
+     * @param fullPath a key chain that already starts at {@link MergeRulesDocument#ROOT_KEY}
+     * @return the chain as one readable address
+     */
+    private static String renderFullPath(List<String> fullPath)
+    {
+        return String.join(" / ", fullPath); //$NON-NLS-1$
+    }
+
+    /**
+     * Parses and validates one requested decision.
+     *
+     * @param raw the decision object as sent
+     * @param position its 1-based position, for the error message
+     * @return the parsed decision, or the refusal explaining why it is not usable
+     */
+    /**
+     * Refuses a {@code decisions} array that carries an element which is not a JSON object.
+     *
+     * @param params the call arguments
+     * @return the rendered refusal, or {@code null} when every element is an object (or the value is
+     *         not a parsable array at all, which the existing checks already report)
+     */
+    private static String nonObjectDecisionRefusal(Map<String, String> params)
+    {
+        String raw = params == null ? null : params.get(KEY_DECISIONS);
+        if (raw == null || !raw.trim().startsWith("[")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        JsonArray array;
+        try
+        {
+            JsonElement element = JsonParser.parseString(raw.trim());
+            if (!element.isJsonArray())
+            {
+                return null;
+            }
+            array = element.getAsJsonArray();
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+        for (int i = 0; i < array.size(); i++)
+        {
+            if (array.get(i).isJsonObject())
+            {
+                continue;
+            }
+            return ToolResult.error("Nothing was written: decision #" + (i + 1) + " in '" //$NON-NLS-1$ //$NON-NLS-2$
+                + KEY_DECISIONS + "' is not an object. Each element is {path, rule} - for example " //$NON-NLS-1$
+                + "{\"path\": [\"commonModules\", \"Main:Main:Main\"], \"rule\": \"GetFromOther\"}.") //$NON-NLS-1$
+                .toJson();
+        }
+        return null;
+    }
+
+    private ParsedDecision parseDecision(JsonObject raw, int position)
+    {
+        JsonElement ruleElement = raw.get(FIELD_RULE);
+        if (ruleElement == null || !ruleElement.isJsonPrimitive())
+        {
+            return ParsedDecision.refused(ToolResult.error("Decision #" + position + " has no '" //$NON-NLS-1$ //$NON-NLS-2$
+                + FIELD_RULE + "'. Each " + KEY_DECISIONS //$NON-NLS-1$
+                + " element is {path, rule}, where rule is one of " //$NON-NLS-1$
+                + String.join(", ", AUTHORABLE_RULES) + ".").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String rule = ruleElement.getAsString();
+        String ruleRefusal = validateRuleLiteral(rule, position);
+        if (ruleRefusal != null)
+        {
+            return ParsedDecision.refused(ruleRefusal);
+        }
+
+        List<String> path = new ArrayList<>();
+        JsonElement pathElement = raw.get(FIELD_PATH);
+        if (pathElement != null && pathElement.isJsonArray())
+        {
+            JsonArray array = pathElement.getAsJsonArray();
+            for (JsonElement segment : array)
+            {
+                if (!segment.isJsonPrimitive() || segment.getAsString().isBlank())
+                {
+                    return ParsedDecision.refused(ToolResult.error("Decision #" + position //$NON-NLS-1$
+                        + " has a blank key in '" + FIELD_PATH //$NON-NLS-1$
+                        + "'. Every key must name something: [] addresses the whole configuration, " //$NON-NLS-1$
+                        + "['commonModules'] a collection, ['commonModules','A:A:A'] one object.") //$NON-NLS-1$
+                        .toJson());
+                }
+                path.add(segment.getAsString().trim());
+            }
+        }
+        else if (pathElement != null && !pathElement.isJsonNull())
+        {
+            return ParsedDecision.refused(ToolResult.error("Decision #" + position + " has a '" //$NON-NLS-1$ //$NON-NLS-2$
+                + FIELD_PATH
+                + "' that is not an array of keys. Send [] for the whole configuration, or the key " //$NON-NLS-1$
+                + "chain below the root, e.g. ['commonModules','A:A:A'].").toJson()); //$NON-NLS-1$
+        }
+        if (!path.isEmpty() && MergeRulesDocument.ROOT_KEY.equals(path.get(0)))
+        {
+            // The chain is relative to the root; a caller who spelled the root marker out anyway
+            // means the same node, so accept it rather than address a phantom child of the root.
+            path.remove(0);
+        }
+        canonicalizeCollectionKey(path);
+        String pathRefusal = validatePath(path, position);
+        if (pathRefusal != null)
+        {
+            return ParsedDecision.refused(pathRefusal);
+        }
+        return ParsedDecision.parsed(new RequestedDecision(path, rule));
+    }
+
+    /**
+     * Rewrites the collection key into the model FEATURE name the platform keys that node by.
+     * <p>
+     * The platform writes {@code commonModules} / {@code catalogs} - the EMF feature name - and
+     * matches the file by string equality, so a caller who addressed the collection by its
+     * metadata TYPE token ({@code Catalog}, {@code Catalogs}, and the Russian forms of both) would
+     * otherwise get a decision recorded under a key EDT's reader never matches: reported as
+     * written, silently never applied. Every other address in this feature already goes through
+     * the shared bilingual resolvers, and this is the same question asked of the same table.
+     * <p>
+     * A key the table does not recognise is left EXACTLY as sent. The legal keys are the
+     * platform's whole feature catalogue - which includes features that are not metadata types at
+     * all ({@code version}, {@code defaultLanguage}) - so refusing what this table cannot resolve
+     * would reject correct input. Whether such a key exists is a question only a live comparison
+     * can answer, and with one it IS answered, by the node lookup.
+     *
+     * @param path the key chain below the root, modified in place
+     */
+    private static void canonicalizeCollectionKey(List<String> path)
+    {
+        if (path.isEmpty())
+        {
+            return;
+        }
+        String key = path.get(0);
+        if (MergeRulesDocument.isTopObjectKey(key) || MergeRulesDocument.isPositionKey(key))
+        {
+            return;
+        }
+        String featureName = MetadataTypeUtils.getConfigReferenceName(key);
+        if (featureName != null)
+        {
+            path.set(0, featureName);
+        }
+    }
+
+    private String validateRuleLiteral(String rule, int position)
+    {
+        if (MergeRule.get(rule) == null)
+        {
+            return ToolResult.error("Decision #" + position + ": '" + rule + "' is not a merge rule. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "The file spells rules the way the platform does, in camel case - " //$NON-NLS-1$
+                + String.join(", ", AUTHORABLE_RULES) //$NON-NLS-1$
+                + " - not as a Java constant (GET_FROM_OTHER is not a rule literal).").toJson(); //$NON-NLS-1$
+        }
+        if (REFUSED_RULES.contains(rule))
+        {
+            return ToolResult.error("Decision #" + position + ": '" + rule + "' is refused. It names a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "merge whose behaviour is configured elsewhere - a custom merge carries its own " //$NON-NLS-1$
+                + "nested settings, an external-tool merge names the tool - so the bare literal " //$NON-NLS-1$
+                + "would record a decision nobody made here. Set it in the comparison window; this " //$NON-NLS-1$
+                + "tool authors " + String.join(", ", AUTHORABLE_RULES) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        if (!AUTHORABLE_RULES.contains(rule))
+        {
+            return ToolResult.error("Decision #" + position + ": '" + rule + "' is a merge rule this " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "tool does not author. It writes " + String.join(", ", AUTHORABLE_RULES) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        return null;
+    }
+
+    private String validatePath(List<String> path, int position)
+    {
+        if (path.size() > MergeRulesDocument.MAX_AUTHORABLE_DEPTH)
+        {
+            return ToolResult.error("Decision #" + position + " addresses a node " + path.size() //$NON-NLS-1$ //$NON-NLS-2$
+                + " levels below the root; this tool authors at most " //$NON-NLS-1$
+                + MergeRulesDocument.MAX_AUTHORABLE_DEPTH
+                + " (the whole configuration, a collection, or one object). Below the object the " //$NON-NLS-1$
+                + "platform keys nodes by a computed POSITION that shifts as soon as another rule " //$NON-NLS-1$
+                + "changes, so a rule written there would land on whatever ends up at that " //$NON-NLS-1$
+                + "position. Set the rule on the object and refine it in the comparison window.") //$NON-NLS-1$
+                .toJson();
+        }
+        for (int i = 0; i < path.size(); i++)
+        {
+            String key = path.get(i);
+            if (MergeRulesDocument.isPositionKey(key))
+            {
+                return ToolResult.error("Decision #" + position + " uses the key '" + key //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', which is a computed POSITION, not a name. Positions shift when other " //$NON-NLS-1$
+                    + "rules change, so they are reported but never authored - address the " //$NON-NLS-1$
+                    + "collection or the object by name instead.").toJson(); //$NON-NLS-1$
+            }
+            boolean topObjectLevel = i == MergeRulesDocument.MAX_AUTHORABLE_DEPTH - 1;
+            if (topObjectLevel && !MergeRulesDocument.isTopObjectKey(key))
+            {
+                return ToolResult.error("Decision #" + position + ": '" + key + "' addresses an object, " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "so it needs the object's name on all three sides - '" + key + ":" + key + ":" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + key + "' when the name is the same everywhere, '" + key //$NON-NLS-1$
+                    + ":NONE:NONE' when only the main side has it, and three different names when " //$NON-NLS-1$
+                    + "it was renamed. Read an existing rules file with mode 'read' to see the " //$NON-NLS-1$
+                    + "exact keys.").toJson(); //$NON-NLS-1$
+            }
+            if (!topObjectLevel && MergeRulesDocument.isTopObjectKey(key))
+            {
+                return ToolResult.error("Decision #" + position + ": '" + key + "' is an object key " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "(three names) at the collection level. A collection is keyed by the model " //$NON-NLS-1$
+                    + "feature name alone, e.g. ['commonModules','" + key + "'].").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Checks every decision THE FILE WOULD CARRY against the comparison, stopping at the first one
+     * it refuses.
+     * <p>
+     * The document and not the request, because the report says the rules were checked and the
+     * file is what the platform will read. A write started from {@code basedOn} carries decisions
+     * this call never sent; validating only the new ones stamped "checked" on a file whose
+     * inherited half nobody had looked at, and an inherited rule the comparison does not allow is
+     * exactly as inapplicable as a fresh one.
+     *
+     * @param authority the comparison to check against
+     * @param document the document as it would be written
+     * @param requestedPaths the full key chains this call set, so a refusal can say where the
+     *            offending decision came from
+     * @return the refusal for the first decision the comparison does not allow, or {@code null}
+     *         when the whole document passed
+     */
+    private String firstRefusedDecision(MergeRuleAuthority authority, MergeRulesDocument document,
+        Set<List<String>> requestedPaths)
+    {
+        for (Decision decision : document.decisions())
+        {
+            String refusal = validateAgainstNode(authority, decision.path(), decision.rule(),
+                !requestedPaths.contains(decision.path()));
+            if (refusal != null)
+            {
+                return refusal;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param authority the comparison to check against
+     * @param fullPath the key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
+     * @param rule the rule literal recorded at that node
+     * @param inherited whether the decision came from {@code basedOn} rather than from this call
+     * @return the refusal, or {@code null} when the comparison allows the rule
+     */
+    private String validateAgainstNode(MergeRuleAuthority authority, List<String> fullPath,
+        String rule, boolean inherited)
+    {
+        String node = renderFullPath(fullPath);
+        String origin = inherited ? originNote(fullPath) : ""; //$NON-NLS-1$
+        Optional<List<String>> allowed = authority.availableRules(fullPath);
+        if (allowed.isEmpty())
+        {
+            return ToolResult.error("Node '" + node + "' is not in comparison '" //$NON-NLS-1$ //$NON-NLS-2$
+                + authority.comparisonId() + "'. A rule on a node the comparison does not have " //$NON-NLS-1$
+                + "would never be applied - check the keys with get_comparison_node, or omit " //$NON-NLS-1$
+                + KEY_COMPARISON_ID + " to author the file unvalidated." + origin).toJson(); //$NON-NLS-1$
+        }
+        if (allowed.get().isEmpty())
+        {
+            // An allowed set that is EMPTY is an answer, not a missing one: the comparison has the
+            // node and offers no rule on it. Falling through would print "That node allows: " with
+            // nothing after it, which reads as a broken message rather than as the platform's
+            // verdict.
+            return ToolResult.error("Comparison '" + authority.comparisonId() //$NON-NLS-1$
+                + "' offers no merge rule on node '" + node //$NON-NLS-1$
+                + "': the platform offers a choice only where a node may be merged. Nothing was " //$NON-NLS-1$
+                + "written - set the rule on a node that does carry a choice (get_comparison_node " //$NON-NLS-1$
+                + "shows the tree), or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
+                + " to author the file unvalidated." + origin).toJson(); //$NON-NLS-1$
+        }
+        if (!allowed.get().contains(rule))
+        {
+            return ToolResult.error("Rule '" + rule + "' is not allowed for node '" //$NON-NLS-1$ //$NON-NLS-2$
+                + node + "' in comparison '" + authority.comparisonId() //$NON-NLS-1$
+                + "'. That node allows: " + String.join(", ", allowed.get()) //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Nothing was written - the whole set is applied only once every decision " //$NON-NLS-1$
+                + "passes." + origin).toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Says that the offending decision is one this call never sent, so the caller looks in the
+     * right file for it.
+     *
+     * @param fullPath the key chain of the decision
+     * @return the sentence to append to the refusal
+     */
+    private static String originNote(List<String> fullPath)
+    {
+        return " This decision was NOT sent by this call: it came in from " + KEY_BASED_ON //$NON-NLS-1$
+            + " and would have been written to the new file, so it is checked too. Fix it in " //$NON-NLS-1$
+            + "the " + KEY_BASED_ON + " file, or send a decision for '" + renderFullPath(fullPath) //$NON-NLS-1$ //$NON-NLS-2$
+            + "' that this comparison allows."; //$NON-NLS-1$
+    }
+
+    // ==================== helpers ====================
+
+    private static boolean isSet(String value)
+    {
+        return value != null && !value.isBlank();
+    }
+
+    /**
+     * Whether two paths name the same file on disk. Asked of the filesystem rather than of the
+     * strings, because a case difference or a link makes two spellings of ONE file compare
+     * unequal - and treating an in-place update as a replacement would refuse correct input.
+     *
+     * @param left an existing file
+     * @param right the file to compare it with, or {@code null}
+     * @return {@code true} when both name one file
+     */
+    private static boolean isSameFile(Path left, Path right)
+    {
+        if (right == null)
+        {
+            return false;
+        }
+        if (left.equals(right))
+        {
+            return true;
+        }
+        try
+        {
+            return Files.isSameFile(left, right);
+        }
+        catch (IOException e)
+        {
+            // The filesystem could not answer. "Different" is the safe reading: it refuses the
+            // write rather than replacing a file whose identity was never established.
+            return false;
+        }
+    }
+
+    private static String invalidPath(String parameter, String value, InvalidPathException e)
+    {
+        return ToolResult.error(parameter + " is not a usable file path: '" + value + "' (" //$NON-NLS-1$ //$NON-NLS-2$
+            + describe(e) + ").").toJson(); //$NON-NLS-1$
+    }
+
+    private static String describe(Exception e)
+    {
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+    }
+
+    /** One validated decision on its way into the document. */
+    private static final class RequestedDecision
+    {
+        private final List<String> path;
+
+        private final String rule;
+
+        RequestedDecision(List<String> path, String rule)
+        {
+            this.path = path;
+            this.rule = rule;
+        }
+    }
+
+    /** Either a parsed decision or the refusal that explains why there is none. */
+    private static final class ParsedDecision
+    {
+        private final RequestedDecision decision;
+
+        private final String refusal;
+
+        private ParsedDecision(RequestedDecision decision, String refusal)
+        {
+            this.decision = decision;
+            this.refusal = refusal;
+        }
+
+        static ParsedDecision parsed(RequestedDecision decision)
+        {
+            return new ParsedDecision(decision, null);
+        }
+
+        static ParsedDecision refused(String refusal)
+        {
+            return new ParsedDecision(null, refusal);
+        }
+    }
+
+    /**
+     * The one question this tool asks a live comparison: which merge rules does a node allow?
+     * <p>
+     * Deliberately this narrow. The tool never holds the comparison manager, so it has no way to
+     * start a merge even reflectively; and an authority that cannot answer for a node returns
+     * empty rather than an empty ALLOWED SET, because "I cannot see that node" and "that node
+     * allows nothing" are different facts and only one of them is a refusal.
+     */
+    public interface MergeRuleAuthority
+    {
+        /**
+         * The comparison this authority speaks for, as the report should name it.
+         *
+         * @return the comparison id, never {@code null}
+         */
+        String comparisonId();
+
+        /**
+         * The rules a node allows, as camel-case rule literals.
+         *
+         * @param nodePath the full key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
+         * @return the allowed literals, or empty when the comparison has no such node
+         */
+        Optional<List<String>> availableRules(List<String> nodePath);
+    }
+
+    /**
+     * Resolves the {@link MergeRuleAuthority} for a call. The production binding is supplied by
+     * the comparison facade at registration; with none, every write is authored from names and
+     * reported as NOT VALIDATED, which is the honest answer rather than a missing feature
+     * dressed up as a checked one.
+     */
+    @FunctionalInterface
+    public interface MergeRuleAuthoritySupplier
+    {
+        /**
+         * Finds the authority to validate against.
+         * <p>
+         * Empty means "no validation is possible for this call" and deliberately does not say
+         * WHY - the comparison may not be running, or this deployment may have no comparison
+         * facade wired at all. Callers must therefore report the absence of validation, never a
+         * cause they did not observe.
+         *
+         * @param comparisonId the comparison the caller named, or {@code null} to use whichever
+         *            comparison is running
+         * @return the authority, or empty when the rules cannot be validated
+         */
+        Optional<MergeRuleAuthority> authority(String comparisonId);
+    }
+
+    // ==================== the facade adapter ====================
+
+    /**
+     * The one place in this file that touches the comparison facade - the production binding of
+     * {@link MergeRuleAuthoritySupplier}.
+     *
+     * <p>It never receives an {@code IComparisonManager} or an {@code IComparisonSession}: it
+     * holds {@link ComparisonEngine} and the read-only {@link ComparisonView} it hands out, which
+     * is one of the three independent layers that make a merge unreachable from a tool.</p>
+     *
+     * <p><b>It answers only for a FINISHED tree.</b> The comparison tree is lazy, so a node that
+     * has not been compared yet is simply absent from its parent's children - indistinguishable
+     * from a node the comparison does not have. Answering from a half-built tree would turn "not
+     * compared yet" into the refusal "that node is not in this comparison", which is a statement
+     * the tool would not have observed. While the tree is still building this supplier therefore
+     * answers NOTHING, and the write degrades to the honest NOT VALIDATED report.</p>
+     */
+    static final class EngineRuleAuthority
+        implements MergeRuleAuthoritySupplier
+    {
+        @Override
+        public Optional<MergeRuleAuthority> authority(String comparisonId)
+        {
+            try
+            {
+                return resolve(comparisonId);
+            }
+            catch (RuntimeException e)
+            {
+                // "Could not ask" is not "no such node": it degrades to no validation, which the
+                // report states, rather than to a refusal naming a cause nobody observed.
+                Activator.logError("Could not reach a comparison to validate merge rules", e); //$NON-NLS-1$
+                return Optional.empty();
+            }
+        }
+
+        private static Optional<MergeRuleAuthority> resolve(String comparisonId)
+        {
+            ComparisonEngine engine = ComparisonEngine.get().orElse(null);
+            if (engine == null)
+            {
+                return Optional.empty();
+            }
+            // Through the registry's own entry point, not the engine's: a live session must stay
+            // findable while EDT's service is momentarily unregistered.
+            ComparisonSessionRegistry registry = ComparisonSessionRegistry.shared();
+            String id = isSet(comparisonId) ? comparisonId : registry.activeComparisonId();
+            if (id == null)
+            {
+                return Optional.empty();
+            }
+            ComparisonProcessHandle handle = registry.handle(id);
+            if (handle == null)
+            {
+                return Optional.empty();
+            }
+            ComparisonView view = engine.view(handle);
+            if (view == null || !isTreeFinished(engine, view))
+            {
+                return Optional.empty();
+            }
+            return Optional.of(new LiveComparisonAuthority(engine, view, id));
+        }
+
+        /** Whether the whole tree has been compared, read inside the comparison's own boundary. */
+        private static boolean isTreeFinished(ComparisonEngine engine, ComparisonView view)
+        {
+            Boolean finished = engine.read(view, "Check comparison tree readiness", //$NON-NLS-1$
+                (transaction, monitor) -> {
+                    ComparisonNode root = view.rootNode();
+                    return Boolean.valueOf(root != null
+                        && view.topNodeStatus(root.bmGetId()) == ComparisonNodeStatus.FINISHED);
+                });
+            return Boolean.TRUE.equals(finished);
+        }
+    }
+
+    /**
+     * Answers which rules a node allows, from one live comparison, through the read-only view.
+     *
+     * <p>Every lookup runs inside {@link ComparisonEngine#read} - the comparison tree lives in the
+     * comparison's OWN BM store, so a project transaction is the wrong boundary (CLAUDE.md don't
+     * #1) - and nothing from that store escapes: only rule literals come back.</p>
+     */
+    private static final class LiveComparisonAuthority
+        implements MergeRuleAuthority
+    {
+        private final ComparisonEngine engine;
+
+        private final ComparisonView view;
+
+        private final String comparisonId;
+
+        LiveComparisonAuthority(ComparisonEngine engine, ComparisonView view, String comparisonId)
+        {
+            this.engine = engine;
+            this.view = view;
+            this.comparisonId = comparisonId;
+        }
+
+        @Override
+        public String comparisonId()
+        {
+            return comparisonId;
+        }
+
+        @Override
+        public Optional<List<String>> availableRules(List<String> nodePath)
+        {
+            if (nodePath == null || nodePath.isEmpty()
+                || !MergeRulesDocument.ROOT_KEY.equals(nodePath.get(0)))
+            {
+                return Optional.empty();
+            }
+            List<String> relative = new ArrayList<>(nodePath.subList(1, nodePath.size()));
+            List<String> literals = engine.read(view, "Read the rules a comparison node allows", //$NON-NLS-1$
+                (transaction, monitor) -> rulesAt(relative));
+            return Optional.ofNullable(literals);
+        }
+
+        /** @return the allowed literals, or {@code null} when the tree has no such node */
+        private List<String> rulesAt(List<String> relativePath)
+        {
+            ComparisonNode node = findNode(view.rootNode(), relativePath, this::featureNameOf);
+            if (node == null || view.mergeSettings(node) == null)
+            {
+                // No settings on the node means no rule can be chosen there, which is not the
+                // same fact as "the node allows nothing" - so it is reported as no answer.
+                return null;
+            }
+            List<String> literals = new ArrayList<>();
+            for (MergeRule rule : view.availableMergeRules(node))
+            {
+                if (rule != null)
+                {
+                    literals.add(rule.getLiteral());
+                }
+            }
+            return literals;
+        }
+
+        private String featureNameOf(ComparisonNode node)
+        {
+            EStructuralFeature feature = view.relatedFeature(node);
+            return feature == null ? null : feature.getName();
+        }
+    }
+
+    // ==================== key chain -> node ====================
+
+    /**
+     * Walks a key chain down from the root, matching each key against the key the PLATFORM would
+     * serialize that child under. The two must agree, or a rule validated against one node would
+     * be written under a key addressing another.
+     *
+     * @param root the comparison tree's root node
+     * @param relativePath the keys below the root (empty addresses the root itself)
+     * @param featureNameOf resolves a node's model feature name, which only the session knows
+     * @return the node, or {@code null} when no child carries the next key
+     */
+    static ComparisonNode findNode(ComparisonNode root, List<String> relativePath,
+        Function<ComparisonNode, String> featureNameOf)
+    {
+        ComparisonNode current = root;
+        for (String key : relativePath)
+        {
+            ComparisonNode match = null;
+            for (ComparisonNode child : childrenOf(current))
+            {
+                if (key.equals(serializedKey(child, featureNameOf)))
+                {
+                    match = child;
+                    break;
+                }
+            }
+            if (match == null)
+            {
+                return null;
+            }
+            current = match;
+        }
+        return current;
+    }
+
+    /**
+     * The key the platform's own path generators write for a node: the three side NAMES for a top
+     * object, the position for a collection element, the model feature name otherwise. Measured
+     * against {@code TopNodePathGenerator} / {@code ContainmentNodePathGenerator}, not guessed.
+     *
+     * @param node the node to key
+     * @param featureNameOf resolves a node's model feature name
+     * @return the key, or {@code null} when the node has none
+     */
+    static String serializedKey(ComparisonNode node, Function<ComparisonNode, String> featureNameOf)
+    {
+        if (node instanceof TopComparisonNode)
+        {
+            TopComparisonNode top = (TopComparisonNode)node;
+            return MergeRulesDocument.TopObjectKey.format(nameFromSymlink(top.getMainSymlink()),
+                nameFromSymlink(top.getOtherSymlink()),
+                nameFromSymlink(top.getCommonAncestorSymlink()));
+        }
+        if (node instanceof CollectionElementComparisonNode)
+        {
+            return Integer.toString(((CollectionElementComparisonNode)node).getPositionAfterMerge());
+        }
+        return featureNameOf.apply(node);
+    }
+
+    /**
+     * The last segment of a symlink, which is what the platform puts in a top-object key. Computed
+     * here rather than taken from a platform label helper: the label helpers branch on
+     * {@code Locale.getDefault()}, so their output depends on the machine the server runs on.
+     *
+     * @param symlink a qualified name, or {@code null} when the side has no such object
+     * @return the name, or {@code null}
+     */
+    private static String nameFromSymlink(String symlink)
+    {
+        if (symlink == null)
+        {
+            return null;
+        }
+        int dot = symlink.lastIndexOf('.');
+        return dot < 0 ? symlink : symlink.substring(dot + 1);
+    }
+
+    private static List<ComparisonNode> childrenOf(ComparisonNode node)
+    {
+        List<ComparisonNode> result = new ArrayList<>();
+        if (node == null)
+        {
+            return result;
+        }
+        List<ComparisonNode> children = node.<ComparisonNode> getChildren();
+        if (children == null)
+        {
+            return result;
+        }
+        for (ComparisonNode child : children)
+        {
+            if (child != null)
+            {
+                result.add(child);
+            }
+        }
+        return result;
+    }
+}

@@ -1,0 +1,466 @@
+/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.utils.compare;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamConstants;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
+
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
+
+/**
+ * Reads and writes EDT's merge-settings file into / out of {@link MergeRulesDocument}.
+ * <p>
+ * <b>Reading accepts both containers the platform accepts.</b>
+ * {@code IComparisonManager.deserializeMergeSettings} asserts the name ends in {@code .xml} or
+ * {@code .zip}; the xml form is parsed directly, and the zip form is a container the comparison
+ * editor saves, one entry per comparison. NOTE the trap measured in that same method: the
+ * platform picks the zip entry whose name (minus extension) equals
+ * {@code <mainProject>_<otherProject>_<ancestorProject>} and merely LOGS A WARNING when no entry
+ * matches - i.e. a zip whose entry is named anything else is silently ignored by EDT. That is
+ * why this codec reads a zip but writes only xml: an entry name that would actually be picked up
+ * is knowable only from a live comparison.
+ * <p>
+ * <b>Writing is canonical and total.</b> The serializer emits every element, attribute and text
+ * value the document holds, in the order it holds them, with a fixed layout (UTF-8, LF, two-space
+ * indent). Nothing is projected away, so a file written from a parsed file differs from it only
+ * in whitespace - and for a file already in this layout, not at all. Whitespace itself carries no
+ * meaning here: the platform's reader is a StAX pull parser that keys on tags and attributes.
+ * <p>
+ * Two differences are known and stated rather than implied, because both are invisible to any
+ * XML reader: an element with empty content is re-emitted self-closing ({@code <A></A>} becomes
+ * {@code <A/>} - the same empty content), and a namespace PREFIX is not modelled (this format
+ * declares none; local names are what both readers key on).
+ */
+public final class MergeRulesCodec
+{
+    /** Extension of the plain-xml form. */
+    public static final String XML_EXTENSION = ".xml"; //$NON-NLS-1$
+
+    /** Extension of the zipped form the comparison editor saves. */
+    public static final String ZIP_EXTENSION = ".zip"; //$NON-NLS-1$
+
+    private static final String XML_DECLARATION = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"; //$NON-NLS-1$
+
+    private static final String INDENT = "  "; //$NON-NLS-1$
+
+    private static final String NEW_LINE = "\n"; //$NON-NLS-1$
+
+    private MergeRulesCodec()
+    {
+        // Utility class
+    }
+
+    /**
+     * Parses merge-settings XML held in memory.
+     *
+     * @param xml the document text
+     * @return the parsed document
+     * @throws MergeRulesFormatException when the text is not a {@code Format_version="2.0"}
+     *             merge-settings document
+     */
+    public static MergeRulesDocument parse(String xml) throws MergeRulesFormatException
+    {
+        try
+        {
+            return parse(newSecureFactory().createXMLStreamReader(new StringReader(xml)));
+        }
+        catch (XMLStreamException e)
+        {
+            throw new MergeRulesFormatException(notXml(e), e);
+        }
+    }
+
+    /**
+     * Parses merge-settings XML from a stream. The stream's own encoding declaration is honoured.
+     *
+     * @param in the stream, closed by the caller
+     * @return the parsed document
+     * @throws MergeRulesFormatException when the stream is not a {@code Format_version="2.0"}
+     *             merge-settings document
+     */
+    public static MergeRulesDocument parse(InputStream in) throws MergeRulesFormatException
+    {
+        try
+        {
+            return parse(newSecureFactory().createXMLStreamReader(in));
+        }
+        catch (XMLStreamException e)
+        {
+            throw new MergeRulesFormatException(notXml(e), e);
+        }
+    }
+
+    /**
+     * Reads a merge-settings file, xml or zip. The returned document records where it came from
+     * ({@link MergeRulesDocument#sourceLabel()}), naming the zip entry when there was one - a
+     * report must never present "the file" when what was read is one entry out of several.
+     *
+     * @param file the file to read
+     * @return the parsed document
+     * @throws IOException when the file cannot be read
+     * @throws MergeRulesFormatException when its content is not a merge-settings document, or a
+     *             zip does not hold exactly one readable candidate entry
+     */
+    public static MergeRulesDocument read(Path file) throws IOException, MergeRulesFormatException
+    {
+        if (isZip(file))
+        {
+            return readZip(file);
+        }
+        try (InputStream in = Files.newInputStream(file))
+        {
+            MergeRulesDocument document = parse(in);
+            document.setSourceLabel(file.toString());
+            return document;
+        }
+    }
+
+    /**
+     * Renders a document as canonical merge-settings XML.
+     *
+     * @param document the document
+     * @return the XML text, ending with a newline
+     */
+    public static String serialize(MergeRulesDocument document)
+    {
+        StringBuilder out = new StringBuilder(XML_DECLARATION).append(NEW_LINE);
+        writeElement(out, document.settings(), 0);
+        return out.toString();
+    }
+
+    /**
+     * Writes a document as UTF-8 xml, creating the parent directories when needed and REPLACING
+     * an existing file.
+     * <p>
+     * The bytes land in a sibling temporary file that is then moved over the target, so an
+     * update-in-place (reading a file and writing it back) cannot leave a half-written file
+     * where a complete one used to be.
+     *
+     * @param file the target file
+     * @param document the document
+     * @throws IOException when the file cannot be written
+     */
+    public static void write(Path file, MergeRulesDocument document) throws IOException
+    {
+        Path parent = file.getParent();
+        if (parent != null)
+        {
+            Files.createDirectories(parent);
+        }
+        Path temporary = file.resolveSibling(file.getFileName().toString() + ".tmp"); //$NON-NLS-1$
+        // The temporary lives in the CALLER's directory, so a failure that leaves it behind leaves
+        // litter in a place the caller owns - and a later write over the same path cannot tell that
+        // leftover from a real artefact. Every failing exit removes it; the successful one does not
+        // need to, because the move consumed it.
+        try
+        {
+            Files.write(temporary, serialize(document).getBytes(StandardCharsets.UTF_8));
+            try
+            {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+            }
+            catch (AtomicMoveNotSupportedException e)
+            {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            try
+            {
+                Files.deleteIfExists(temporary);
+            }
+            catch (IOException suppressed)
+            {
+                e.addSuppressed(suppressed);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Whether a path names the zipped form.
+     *
+     * @param file the path
+     * @return {@code true} when the file name ends with {@code .zip}, case-insensitively
+     */
+    public static boolean isZip(Path file)
+    {
+        return file != null && file.getFileName() != null
+            && file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(ZIP_EXTENSION);
+    }
+
+    private static MergeRulesDocument readZip(Path file) throws IOException, MergeRulesFormatException
+    {
+        try (ZipFile zip = new ZipFile(file.toFile()))
+        {
+            List<ZipEntry> candidates = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements())
+            {
+                ZipEntry entry = entries.nextElement();
+                if (entry.isDirectory())
+                {
+                    continue;
+                }
+                names.add(entry.getName());
+                if (entry.getName().toLowerCase(Locale.ROOT).endsWith(XML_EXTENSION))
+                {
+                    candidates.add(entry);
+                }
+            }
+            if (candidates.isEmpty() && names.size() == 1)
+            {
+                // A single entry with no extension is still unambiguous.
+                candidates.add(zip.getEntry(names.get(0)));
+            }
+            if (candidates.size() != 1)
+            {
+                throw new MergeRulesFormatException("The zip does not hold exactly one merge-settings entry: " //$NON-NLS-1$
+                    + (names.isEmpty() ? "it is empty" : String.join(", ", names)) //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". A comparison saves one entry per comparison, named " //$NON-NLS-1$
+                    + "'<mainProject>_<otherProject>_<ancestorProject>.xml'; extract the entry you " //$NON-NLS-1$
+                    + "mean and read it as .xml."); //$NON-NLS-1$
+            }
+            ZipEntry entry = candidates.get(0);
+            byte[] content;
+            try (InputStream in = zip.getInputStream(entry))
+            {
+                content = in.readAllBytes();
+            }
+            MergeRulesDocument document = parse(new ByteArrayInputStream(content));
+            document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
+            return document;
+        }
+    }
+
+    private static XMLInputFactory newSecureFactory()
+    {
+        XMLInputFactory factory = XMLInputFactory.newInstance();
+        // Harden against XXE / entity-expansion, as JUnitXmlParser does for its DOM parser.
+        factory.setProperty(XMLInputFactory.SUPPORT_DTD, Boolean.FALSE);
+        factory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, Boolean.FALSE);
+        factory.setProperty(XMLInputFactory.IS_COALESCING, Boolean.TRUE);
+        return factory;
+    }
+
+    private static MergeRulesDocument parse(XMLStreamReader reader) throws MergeRulesFormatException
+    {
+        try
+        {
+            Element rootElement = readTree(reader);
+            if (rootElement == null || !MergeRulesDocument.TAG_SETTINGS.equals(rootElement.tag()))
+            {
+                throw new MergeRulesFormatException("Not a merge-settings file: the root element is " //$NON-NLS-1$
+                    + (rootElement == null ? "missing" : "'" + rootElement.tag() + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + ", expected '" + MergeRulesDocument.TAG_SETTINGS //$NON-NLS-1$
+                    + "'. A merge-rules file is the one a comparison saves ('Save merge settings')," //$NON-NLS-1$
+                    + " not a configuration or a 1C:Enterprise designer settings file."); //$NON-NLS-1$
+            }
+            String version = rootElement.attribute(MergeRulesDocument.ATTR_FORMAT_VERSION);
+            if (!MergeRulesDocument.SUPPORTED_FORMAT_VERSION.equals(version))
+            {
+                throw new MergeRulesFormatException("Unsupported merge-settings format version: " //$NON-NLS-1$
+                    + (version == null ? "the '" + MergeRulesDocument.ATTR_FORMAT_VERSION //$NON-NLS-1$
+                        + "' attribute is missing" : "'" + version + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + ". This tool reads version '" + MergeRulesDocument.SUPPORTED_FORMAT_VERSION //$NON-NLS-1$
+                    + "', which is also the only version EDT's own reader accepts."); //$NON-NLS-1$
+            }
+            return MergeRulesDocument.of(rootElement);
+        }
+        catch (XMLStreamException e)
+        {
+            throw new MergeRulesFormatException(notXml(e), e);
+        }
+        finally
+        {
+            closeQuietly(reader);
+        }
+    }
+
+    private static Element readTree(XMLStreamReader reader) throws XMLStreamException
+    {
+        Element root = null;
+        Deque<Element> stack = new ArrayDeque<>();
+        StringBuilder text = new StringBuilder();
+        while (reader.hasNext())
+        {
+            int event = reader.next();
+            if (event == XMLStreamConstants.START_ELEMENT)
+            {
+                text.setLength(0);
+                Element element = new Element(reader.getLocalName());
+                for (int i = 0; i < reader.getAttributeCount(); i++)
+                {
+                    element.attribute(reader.getAttributeLocalName(i), reader.getAttributeValue(i));
+                }
+                if (stack.isEmpty())
+                {
+                    root = element;
+                }
+                else
+                {
+                    stack.peek().children().add(element);
+                }
+                stack.push(element);
+            }
+            else if (event == XMLStreamConstants.CHARACTERS || event == XMLStreamConstants.CDATA)
+            {
+                text.append(reader.getText());
+            }
+            else if (event == XMLStreamConstants.END_ELEMENT)
+            {
+                Element element = stack.pop();
+                String content = text.toString();
+                // Between child elements the characters are the layout's own indentation, which
+                // carries no meaning here. On a LEAF they are the value - and a payload leaf keeps
+                // it verbatim even when it is blank, because a Properties entry's value is data,
+                // whereas a blank structural element is just how somebody laid the file out.
+                if (!content.isBlank() || (element.children().isEmpty() && !isStructural(element)))
+                {
+                    element.setText(content);
+                }
+                text.setLength(0);
+            }
+        }
+        return root;
+    }
+
+    private static boolean isStructural(Element element)
+    {
+        return MergeRulesDocument.TAG_NODE.equals(element.tag())
+            || MergeRulesDocument.TAG_MERGE_SETTINGS.equals(element.tag())
+            || MergeRulesDocument.TAG_SETTINGS.equals(element.tag());
+    }
+
+    private static void writeElement(StringBuilder out, Element element, int depth)
+    {
+        indent(out, depth);
+        out.append('<').append(element.tag());
+        for (Map.Entry<String, String> attribute : element.attributes().entrySet())
+        {
+            out.append(' ').append(attribute.getKey()).append("=\"") //$NON-NLS-1$
+                .append(escapeAttribute(attribute.getValue())).append('"');
+        }
+        boolean hasChildren = !element.children().isEmpty();
+        String text = element.text();
+        boolean hasText = text != null && !text.isEmpty();
+        if (!hasChildren && !hasText)
+        {
+            out.append("/>").append(NEW_LINE); //$NON-NLS-1$
+            return;
+        }
+        out.append('>');
+        if (!hasChildren)
+        {
+            out.append(escapeText(text)).append("</").append(element.tag()).append('>').append(NEW_LINE); //$NON-NLS-1$
+            return;
+        }
+        out.append(NEW_LINE);
+        if (hasText)
+        {
+            indent(out, depth + 1);
+            out.append(escapeText(text)).append(NEW_LINE);
+        }
+        for (Element child : element.children())
+        {
+            writeElement(out, child, depth + 1);
+        }
+        indent(out, depth);
+        out.append("</").append(element.tag()).append('>').append(NEW_LINE); //$NON-NLS-1$
+    }
+
+    private static void indent(StringBuilder out, int depth)
+    {
+        for (int i = 0; i < depth; i++)
+        {
+            out.append(INDENT);
+        }
+    }
+
+    private static String escapeText(String value)
+    {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+    }
+
+    private static String escapeAttribute(String value)
+    {
+        return escapeText(value == null ? "" : value).replace("\"", "&quot;") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .replace("\n", "&#10;").replace("\r", "&#13;").replace("\t", "&#9;"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+    }
+
+    private static String notXml(XMLStreamException e)
+    {
+        return "The merge-settings file could not be parsed as XML: " //$NON-NLS-1$
+            + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+    }
+
+    private static void closeQuietly(XMLStreamReader reader)
+    {
+        try
+        {
+            reader.close();
+        }
+        catch (XMLStreamException e)
+        {
+            // Nothing actionable: the content has already been read (or failed to parse).
+        }
+    }
+
+    /**
+     * Raised when a file is not a merge-settings document this codec can read. Carries a message
+     * naming the value that was found and what to do about it, so a tool can surface it as-is.
+     */
+    public static final class MergeRulesFormatException extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * Creates the exception.
+         *
+         * @param message the actionable message
+         */
+        public MergeRulesFormatException(String message)
+        {
+            super(message);
+        }
+
+        /**
+         * Creates the exception.
+         *
+         * @param message the actionable message
+         * @param cause the underlying failure
+         */
+        public MergeRulesFormatException(String message, Throwable cause)
+        {
+            super(message, cause);
+        }
+    }
+}
