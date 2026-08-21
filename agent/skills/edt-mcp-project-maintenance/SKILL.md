@@ -36,9 +36,12 @@ the exact current marker and re-read validation afterward.
 is not a harmless save. Pass the exact project unless the entire workspace is
 explicitly in scope, and account for unsaved editor/model state.
 
-Consult `get_tool_guide('resync_to_disk')` before use. Its modes can write
-model state to disk or clean related projects; choose the direction from
-evidence rather than habit.
+Consult `get_tool_guide('resync_to_disk')` before use. It exports only the
+addressed project's model to disk: missing objects by default, or every object
+with `fullExport`. With `revalidate=true`, it schedules a clean build for that
+same project only. If a base configuration and extensions also need cleaning
+or revalidation, resolve every project and target each one explicitly with the
+appropriate tool.
 
 ## Applications and infobases
 
@@ -68,8 +71,39 @@ current confirmation and cancellation-capability contract.
 
 ## Git and destructive operations
 
-EDT-MCP Git tools may be disabled. When enabled, inspect status and diff first
-and follow the project's branch policy. Import/export, project deletion,
+Choose the Git isolation mode before changing branches.
+
+### Mode A: free current working tree
+
+Use the current working tree only when the exact project tree is clean, free
+from another task, and no parallel work is required.
+
+1. Inspect repository status and diff, then call `list_git_branches` and verify
+   the current branch and project-policy start point.
+2. For a missing task branch, call `create_git_branch` with an explicit verified
+   `startPoint` and `checkout=true`.
+3. Verify `success=true`, `created=true`, `checkedOut=true`, and re-read
+   `list_git_branches` to confirm the new branch is current.
+4. For an existing local branch, use `switch_git_branch`, not branch creation.
+5. Use `set_branch_infobase` only to bind or unbind an existing infobase when a
+   branch-specific binding is actually required.
+
+### Mode B: parallel or foreign work
+
+This mode is mandatory when another task owns the project, unrelated tracked
+changes exist, or parallel work is requested. Do not switch the active project
+branch, and do not stash, reset, commit, discard, or move foreign changes. Use
+a separate linked Git worktree through the route allowed by project policy.
+
+The current EDT-MCP branch tools operate on an existing project working tree
+and may not create linked worktrees. Missing `git worktree` support is an MCP
+capability limitation, not an architectural prohibition. Use the
+project-approved Git route for the missing operation. If that route lacks the
+required authority, stop with one concrete question; do not demand that the
+owner commit unrelated work.
+
+When the general `git` tool is deliberately enabled, follow its current guide
+and the project's branch/publish policy. Import/export, project deletion,
 infobase deletion, and deletion of database files require exact targets,
 preview where supported, rollback/backup information, and explicit authority.
 

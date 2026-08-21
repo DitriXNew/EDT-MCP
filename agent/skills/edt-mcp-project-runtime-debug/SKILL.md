@@ -59,14 +59,19 @@ reassignment unless changing the server configuration is authorized.
 
 ## Event log
 
-Use `get_event_log` with narrow time, severity, event, and application filters.
-For a FILE infobase, the tool can resolve its event-log location from the
-selected application. For a SERVER infobase, require a caller-confirmed
-absolute `logDir` that points to an accessible copy of `1Cv8Log` in supported
-`text-2.0` format. Neither `projectName` nor `applicationId` automatically
-resolves the server log directory; stop explicitly when a suitable `logDir`
-is unavailable. Logs can contain user, business, or connection data; return
-only evidence needed for the question.
+Use `get_event_log` with only the narrow filters exposed by its current input
+schema: `from`/`to`, `severity`, `event`/`eventContains`, `user`,
+`metadataContains`, and `session`. For a FILE infobase, `applicationId` selects
+which infobase log directory is read; it does not filter the per-event
+`events[].application` value. When application-level narrowing is needed,
+post-filter the returned `events[].application` values on the client side.
+
+For a SERVER infobase, require a caller-confirmed absolute `logDir` that points
+to an accessible copy of `1Cv8Log` in supported `text-2.0` format. `logDir`
+overrides project/application resolution, and neither `projectName` nor
+`applicationId` automatically resolves the server log directory; stop
+explicitly when a suitable `logDir` is unavailable. Logs can contain user,
+business, or connection data; return only evidence needed for the question.
 
 ## Cleanup
 

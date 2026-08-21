@@ -59,22 +59,36 @@ all-objects build is not proof that a requested named object exists.
 
 Set the smallest required source breakpoint with `set_breakpoint`, passing the
 external-object project as `projectName`, before starting the object. Then use
-`debug_launch` against the base configuration application and pass
-`externalObjectProjectName` plus `externalObjectName`. EDT builds the object for
-debugging; a prebuilt file cannot provide source breakpoints.
+`get_tool_guide('debug_launch')` and resolve both `updateBeforeLaunch` and
+`externalInfobaseChanges` before starting. Any database update or override of
+external infobase changes requires explicit authority. Pass both chosen values
+explicitly rather than relying on defaults, and stop when the current guide and
+available authority do not establish a safe combination.
+
+Call `debug_launch` against the base configuration application and pass
+`externalObjectProjectName` plus `externalObjectName`. EDT builds the object
+for debugging; a prebuilt file cannot provide source breakpoints.
 
 Use `startupOption` only for the current launch's `/C` payload. It is applied to
 a working copy and does not persistently change the saved EDT launch
 configuration. It is valid for runtime-client launches, not Attach launches.
 
 Check `debug_status` after the asynchronous start, then use `wait_for_break`.
-Use `restartIfRunning` only when terminating the current client is authorized.
+On a hit, inspect the returned frames and read only the bounded variables needed
+for the question with `get_variables`; the break notification alone is not
+runtime evidence. Resume the suspended thread with `resume`, remove the
+temporary breakpoint with `remove_breakpoint`, and use `terminate_launch` only
+when ending a task-owned launch is appropriate. Hand deeper stepping or
+expression work to `edt-mcp-project-runtime-debug`. Use `restartIfRunning` only
+when terminating the current client is authorized.
 
 ## Verification
 
 Re-read changed metadata/source, validate the owning object, verify build
 artifacts and counts, and collect runtime evidence only from the launched
-object and exact source breakpoint.
+object's inspected frame and bounded variables. Report whether the suspended
+thread was resumed, the temporary breakpoint was removed, and any task-owned
+launch was terminated.
 
 ## Stop conditions
 

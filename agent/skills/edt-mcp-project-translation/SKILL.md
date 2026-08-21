@@ -30,8 +30,8 @@ existing storage topology without translating programmatic identifiers.
    declared configuration `languages`.
 3. Treat every target language as explicit caller or user input, distinguish
    language codes from display names, and verify it is declared.
-4. Use `get_translation_project_info` only to discover translation storages
-   and providers and to select the configured route.
+4. Use `get_translation_project_info` to discover all translation storages and
+   providers. A storage can be selected only for string generation.
 5. Confirm whether generating strings will write translation storage.
 6. Consult `get_tool_guide` for `generate_translation_strings` or
    `translate_configuration` when parameters or side effects are uncertain.
@@ -39,10 +39,12 @@ existing storage topology without translating programmatic identifiers.
 ## Workflow
 
 1. Use `generate_translation_strings` only when requested and only for the
-   intended project/storage.
+   intended project/storage; its `storageId` is the storage-selection route.
 2. Reuse existing dictionaries and storage bindings; do not create or redirect
    them by assumption.
-3. Run `translate_configuration` only for the selected configured route.
+3. `translate_configuration` has no `storageId` selector and uses all storages
+   bound to the project. Run it only when every bound storage is in scope; do
+   not describe it as a selected single-storage route.
 4. Re-read affected metadata with `get_metadata_details` using exact language
    codes when localized values matter.
 5. Run targeted validation when translated metadata changed.
@@ -60,9 +62,13 @@ that state for review.
 
 ## Verification
 
-Report source/target languages, storage and dictionary identity, generated or
-translated counts, affected objects, validation results, untranslated/stale
-locales reported by current tools, and any manual review still required.
+Report only observable evidence: the project and requested languages; the
+selected generation storage and options when generation is used; operation
+status; storage/provider identities and counts actually reported by
+`get_translation_project_info`; repository diff; explicitly sampled metadata;
+targeted validation; and remaining manual review. Do not invent generated or
+translated counts, a complete affected-object list, or untranslated/stale
+locale statistics unless the current tool explicitly returns them.
 
 ## Safety and stop conditions
 
