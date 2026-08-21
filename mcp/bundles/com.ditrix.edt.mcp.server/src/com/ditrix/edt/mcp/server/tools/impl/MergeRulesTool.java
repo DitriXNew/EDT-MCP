@@ -715,15 +715,32 @@ public class MergeRulesTool implements IMcpTool
         if (pathElement.isJsonArray())
         {
             JsonArray array = pathElement.getAsJsonArray();
-            for (JsonElement segment : array)
+            for (int index = 0; index < array.size(); index++)
             {
-                if (!segment.isJsonPrimitive() || segment.getAsString().isBlank())
+                JsonElement segment = array.get(index);
+                // A key is TEXT the platform matches in the file. Every JSON scalar has a string
+                // form, so accepting any primitive silently turned a number or a boolean into one
+                // - [true] was recorded as Key="true" and reported as written, while EDT's reader
+                // has no node called that and never would. The type is checked before the
+                // conversion, and the refusal says which key it was, like every other malformed
+                // decision this tool refuses by position.
+                if (!segment.isJsonPrimitive() || !segment.getAsJsonPrimitive().isString())
                 {
                     return ParsedDecision.refused(ToolResult.error("Decision #" + position //$NON-NLS-1$
-                        + " has a blank key in '" + FIELD_PATH //$NON-NLS-1$
-                        + "'. Every key must name something: [] addresses the whole configuration, " //$NON-NLS-1$
+                        + ": key #" + (index + 1) + " in '" + FIELD_PATH + "' is " + segment //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + ", which is not a string. A key is the text EDT matches against the " //$NON-NLS-1$
+                        + "file - a collection's model feature name, or an object's three names - " //$NON-NLS-1$
+                        + "so send it quoted: [] addresses the whole configuration, " //$NON-NLS-1$
                         + "['commonModules'] a collection, ['commonModules','A:A:A'] one object.") //$NON-NLS-1$
                         .toJson());
+                }
+                if (segment.getAsString().isBlank())
+                {
+                    return ParsedDecision.refused(ToolResult.error("Decision #" + position //$NON-NLS-1$
+                        + ": key #" + (index + 1) + " in '" + FIELD_PATH //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' is blank. Every key must name something: [] addresses the whole " //$NON-NLS-1$
+                        + "configuration, ['commonModules'] a collection, " //$NON-NLS-1$
+                        + "['commonModules','A:A:A'] one object.").toJson()); //$NON-NLS-1$
                 }
                 path.add(segment.getAsString().trim());
             }

@@ -1049,6 +1049,77 @@ public class MergeRulesToolTest
         assertTrue("and the new one added", read(file).contains("Key=\"catalogs\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ A key is TEXT, and a scalar that is not text is not a key ============
+
+    @Test
+    public void testABooleanKeyIsRefusedInsteadOfBecomingTheKeyTrue() throws IOException
+    {
+        // Every JSON scalar has a string form, so accepting any primitive wrote Key="true" and
+        // reported it as recorded - while EDT matches nodes by name and has none called that.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[true],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "#1", "key #1", "not a string"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusalNamesTheOffendingKeyByItsPosition() throws IOException
+    {
+        // Which key it was, like every other malformed decision this tool refuses by position -
+        // otherwise a caller with a long chain is told only that one of them is wrong.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",false],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "#1", "key #2", "not a string", "false"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANumericKeyIsRefusedAsANonStringAndNotQuietlyStringified() throws IOException
+    {
+        // A number reads as a computed POSITION once it has been turned into text, which is a
+        // different complaint about a different thing: the caller never sent a key at all.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[7],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #1", "not a string"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAQuotedKeyThatLooksLikeAScalarIsStillAccepted() throws IOException
+    {
+        // The control: the check is on the JSON TYPE, not on what the text looks like. A feature
+        // whose name a caller quoted is a key like any other.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a string key must still be written: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue(read(target).contains("<Node Key=\"commonModules\" MergeRule=\"DoNotMerge\"/>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABlankKeyIsStillRefusedAndSaysWhichOne() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",\"  \"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #2", "blank"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
     private String call(Map<String, String> params)
     {
         return new MergeRulesTool().execute(params);

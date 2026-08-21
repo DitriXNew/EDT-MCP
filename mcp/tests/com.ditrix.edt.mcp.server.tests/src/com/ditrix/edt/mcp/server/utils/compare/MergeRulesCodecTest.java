@@ -21,7 +21,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -795,6 +797,289 @@ public class MergeRulesCodecTest
 
         assertEquals("every decision must come back - the bound guards the heap, it does not " //$NON-NLS-1$
             + "truncate a real file", decisions, MergeRulesCodec.read(zip).decisions().size()); //$NON-NLS-1$
+    }
+
+
+    // ======== Mixed content: the whitespace beside a child element is part of the value ========
+
+    /**
+     * A payload block whose text runs BUTT UP against a child element.
+     * <p>
+     * This is where "layout" and "content" whitespace part company: the two spaces are inside the
+     * element's character data, so a rewrite that trims them hands the next reader a different
+     * value for a block the codec promises to carry through verbatim. The block is written back
+     * inline for the same reason - a newline or an indent inserted beside the child would land
+     * INSIDE that character data.
+     */
+    private static final String EXACT_MIXED_FIXTURE = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+        + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+        + "  <Payload>Hello <Child/> world</Payload>\n" //$NON-NLS-1$
+        + "  <MergeSettings>\n" //$NON-NLS-1$
+        + "    <Node Key=\"$$Root$$\">\n" //$NON-NLS-1$
+        + "      <Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/>\n" //$NON-NLS-1$
+        + "    </Node>\n" //$NON-NLS-1$
+        + "  </MergeSettings>\n" //$NON-NLS-1$
+        + "</Settings>\n"; //$NON-NLS-1$
+
+    @Test
+    public void testTheSpacesBesideAChildElementAreKeptExactly() throws Exception
+    {
+        // Trimming the run that ends at the child and the one that starts after it changed the
+        // payload's parsed value from "Hello " + " world" to "Hello" + "world" - a rewrite of the
+        // caller's data, reported as a verbatim carry-through.
+        assertTrue("the character data around a child element is data, not indentation", //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(EXACT_MIXED_FIXTURE))
+                .contains(">Hello <Child/> world<")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMixedPayloadRoundTripsByteForByte() throws Exception
+    {
+        assertEquals("a block with text touching a child element must come back as it went in", //$NON-NLS-1$
+            EXACT_MIXED_FIXTURE,
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(EXACT_MIXED_FIXTURE)));
+    }
+
+    @Test
+    public void testAMixedPayloadIsIdempotentOnASecondRewrite() throws Exception
+    {
+        String once = MergeRulesCodec.serialize(MergeRulesCodec.parse(EXACT_MIXED_FIXTURE));
+        assertEquals("keeping the whitespace may not make the rewrite drift instead", once, //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(once)));
+    }
+
+    @Test
+    public void testWhitespaceBetweenTwoChildrenOfAMixedElementIsContentToo() throws Exception
+    {
+        // The run between <B/> and <C/> is whitespace ALONE, and it is still part of the value:
+        // the element it sits in says something, so its character data is data. A rule asked of
+        // the run instead of the element cannot see that, and would delete this one space.
+        String fixture = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+            + "  <Payload>a <B/> <C/> b</Payload>\n" //$NON-NLS-1$
+            + "  <MergeSettings>\n" //$NON-NLS-1$
+            + "    <Node Key=\"$$Root$$\"/>\n" //$NON-NLS-1$
+            + "  </MergeSettings>\n" //$NON-NLS-1$
+            + "</Settings>\n"; //$NON-NLS-1$
+
+        assertTrue("the space between two children of a mixed element must survive", //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(fixture)).contains(">a <B/> <C/> b<")); //$NON-NLS-1$
+    }
+
+    /** Character data holding a CR, which the file can only spell as a reference. */
+    private static final String CARRIAGE_RETURN_FIXTURE = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+        + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+        + "  <Payload>line&#13; <Child/></Payload>\n" //$NON-NLS-1$
+        + "  <MergeSettings>\n" //$NON-NLS-1$
+        + "    <Node Key=\"$$Root$$\"/>\n" //$NON-NLS-1$
+        + "  </MergeSettings>\n" //$NON-NLS-1$
+        + "</Settings>\n"; //$NON-NLS-1$
+
+    @Test
+    public void testACarriageReturnInCharacterDataIsWrittenAsAReference() throws Exception
+    {
+        // XML normalises line ends before a parser reports any character data, so a CR written as
+        // itself comes back as LF. Now that the run is kept verbatim, writing it raw would be a
+        // silent edit of the value on the very next read.
+        assertTrue("a CR must go back as the reference it came from", //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(CARRIAGE_RETURN_FIXTURE))
+                .contains("&#13;")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACarriageReturnDoesNotDriftOnASecondRewrite() throws Exception
+    {
+        String once = MergeRulesCodec.serialize(MergeRulesCodec.parse(CARRIAGE_RETURN_FIXTURE));
+        assertEquals("a run kept verbatim must survive the trip through a reader", once, //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(once)));
+    }
+
+    // ============ Nesting is bounded where it enters, not where it overflows ============
+
+    @Test
+    public void testADocumentNestedPastTheBoundIsRefusedNamingIt() throws Exception
+    {
+        // Reading is iterative and swallows any depth; the walks over what it produces - the
+        // serializer, decisions(), the section count - are recursive. Left unbounded the file
+        // parses and the REWRITE dies of a StackOverflowError, which is an Error and so is neither
+        // catchable as a bad format nor reportable as one: the write would abort part-way instead
+        // of being refused.
+        try
+        {
+            MergeRulesCodec.parse(nested(600));
+            fail("a document nested past the bound must be refused, not accepted and re-emitted"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the bound it applied: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("500")); //$NON-NLS-1$
+            assertTrue("and say what was wrong with the document: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("nests")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testADeepButPlausibleDocumentIsStillReadAndRewritten() throws Exception
+    {
+        // The control: the bound guards the stack, it does not refuse depth a real file could
+        // have. This also walks all three recursive walkers at a hundred levels.
+        MergeRulesDocument document = MergeRulesCodec.parse(nested(100));
+        assertEquals("a payload-free node tree holds no section to preserve", 0, //$NON-NLS-1$
+            document.preservedSectionCount());
+        String once = MergeRulesCodec.serialize(document);
+        assertEquals("a deep document must round-trip like any other", once, //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(once)));
+    }
+
+    /**
+     * Builds a well-formed merge-settings document whose node tree is {@code depth} levels deep.
+     *
+     * @param depth how many {@code Node} elements to nest
+     * @return the document text
+     */
+    private static String nested(int depth)
+    {
+        StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\">\n  <MergeSettings>\n    "); //$NON-NLS-1$
+        for (int i = 0; i < depth; i++)
+        {
+            xml.append("<Node Key=\"n").append(i).append("\">"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        for (int i = 0; i < depth; i++)
+        {
+            xml.append("</Node>"); //$NON-NLS-1$
+        }
+        xml.append("\n  </MergeSettings>\n</Settings>\n"); //$NON-NLS-1$
+        return xml.toString();
+    }
+
+    // ============ A chain of symbolic links is followed to its END ============
+
+    @Test
+    public void testEveryLinkInAChainIsFollowed() throws Exception
+    {
+        // Resolving one hop put the write on the INTERMEDIATE link, which the move then replaced
+        // with a regular file: a link nobody mentioned deleted, the file at the end of the chain
+        // left with its old content, and the call reporting the rules as written.
+        Path first = workDir.resolve("first.xml"); //$NON-NLS-1$
+        Path second = workDir.resolve("second.xml"); //$NON-NLS-1$
+        Path end = workDir.resolve("end.xml"); //$NON-NLS-1$
+
+        assertEquals("the chain must be walked to the file at the end of it", end, //$NON-NLS-1$
+            MergeRulesCodec.walkLinkChain(first, links(Map.of(first, second, second, end))));
+    }
+
+    @Test
+    public void testARelativeDestinationIsResolvedAgainstItsOwnLink() throws Exception
+    {
+        // Each hop's destination is recorded relative to THAT hop's directory. Resolving every hop
+        // against the first link's directory would name a file in the wrong place - and create it.
+        Path first = workDir.resolve("here").resolve("first.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        Path second = workDir.resolve("there").resolve("second.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<Path, Path> chain = new HashMap<>();
+        chain.put(first, Path.of("..", "there", "second.xml")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        chain.put(second, Path.of("end.xml")); //$NON-NLS-1$
+
+        assertEquals("the last hop's own directory is where its destination lives", //$NON-NLS-1$
+            workDir.resolve("there").resolve("end.xml"), //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesCodec.walkLinkChain(first, links(chain)));
+    }
+
+    @Test
+    public void testARingOfLinksIsRefusedInsteadOfBeingFollowedForEver() throws Exception
+    {
+        Path first = workDir.resolve("first.xml"); //$NON-NLS-1$
+        Path second = workDir.resolve("second.xml"); //$NON-NLS-1$
+        try
+        {
+            MergeRulesCodec.walkLinkChain(first, links(Map.of(first, second, second, first)));
+            fail("a ring has no file at the end of it, so it cannot be resolved into one"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            assertTrue("the refusal must say what it found: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("ring")); //$NON-NLS-1$
+            assertTrue("and name the links that form it: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(second.toString()));
+        }
+    }
+
+    @Test
+    public void testALinkPointingAtItselfIsARingToo() throws Exception
+    {
+        Path self = workDir.resolve("self.xml"); //$NON-NLS-1$
+        try
+        {
+            MergeRulesCodec.walkLinkChain(self, links(Map.of(self, self)));
+            fail("a link to itself is the shortest ring there is"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("ring")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAChainThatNeverEndsIsRefusedByTheHopBound() throws Exception
+    {
+        // A chain that repeats no path can still be endless - a link reached through a linked
+        // directory grows the path at every hop - so "seen this one already" is not on its own a
+        // reason to stop.
+        Map<Path, Path> chain = new HashMap<>();
+        for (int i = 0; i < 100; i++)
+        {
+            chain.put(workDir.resolve("hop" + i), workDir.resolve("hop" + (i + 1))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        try
+        {
+            MergeRulesCodec.walkLinkChain(workDir.resolve("hop0"), links(chain)); //$NON-NLS-1$
+            fail("the walk must stop somewhere even when no path ever repeats"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            assertTrue("the refusal must name the bound: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("40")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testWriteCreatesTheFileAtTheEndOfADanglingChain() throws Exception
+    {
+        // The same walk through the real filesystem, where the two links exist and the file at the
+        // end of them does not.
+        Path end = workDir.resolve("end.xml"); //$NON-NLS-1$
+        Path second = workDir.resolve("second.xml"); //$NON-NLS-1$
+        Path first = workDir.resolve("first.xml"); //$NON-NLS-1$
+        try
+        {
+            Files.createSymbolicLink(second, end);
+            Files.createSymbolicLink(first, second);
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            Assume.assumeNoException("this filesystem or account cannot create symbolic links", e); //$NON-NLS-1$
+        }
+
+        MergeRulesCodec.write(first, MergeRulesCodec.parse(FIXTURE));
+
+        assertTrue("the file the chain names must be the one created", Files.isRegularFile(end)); //$NON-NLS-1$
+        assertTrue("the intermediate link may not be replaced by the written file", //$NON-NLS-1$
+            Files.isSymbolicLink(second));
+        assertTrue("nor the first one", Files.isSymbolicLink(first)); //$NON-NLS-1$
+        assertEquals("and the bytes must be the document, not a fragment", FIXTURE, //$NON-NLS-1$
+            new String(Files.readAllBytes(end), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * A link reader backed by a map, so the walk can be proved where the filesystem grants no
+     * symbolic links.
+     *
+     * @param chain link path to the destination recorded in it
+     * @return the reader
+     */
+    private static MergeRulesCodec.LinkReader links(Map<Path, Path> chain)
+    {
+        return chain::get;
     }
 
     /**

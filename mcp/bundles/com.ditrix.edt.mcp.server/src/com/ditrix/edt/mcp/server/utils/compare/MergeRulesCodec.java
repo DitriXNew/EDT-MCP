@@ -20,9 +20,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.Enumeration;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -49,8 +51,14 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
  * <b>Writing is canonical and total.</b> The serializer emits every element, attribute and text
  * value the document holds, in the order it holds them, with a fixed layout (UTF-8, LF, two-space
  * indent). Nothing is projected away, so a file written from a parsed file differs from it only
- * in whitespace - and for a file already in this layout, not at all. Whitespace itself carries no
- * meaning here: the platform's reader is a StAX pull parser that keys on tags and attributes.
+ * in LAYOUT whitespace - and for a file already in this layout, not at all.
+ * <p>
+ * <b>Layout whitespace and character data are different things, and the line between them is
+ * drawn per element:</b> an element whose character data is entirely whitespace is laid out, so
+ * that whitespace is regenerated; an element with any non-whitespace character data is mixed
+ * content, and then all of its character data - the spaces beside a child element included - is
+ * kept byte for byte and written back inline. See
+ * {@code separateLayoutFromContent}, which also states the one case the rule cannot tell apart.
  * <p>
  * Two differences are known and stated rather than implied, because both are invisible to any
  * XML reader: an element with empty content is re-emitted self-closing ({@code <A></A>} becomes
@@ -86,6 +94,39 @@ public final class MergeRulesCodec
 
     /** Working buffer size for the bounded read. */
     private static final int READ_CHUNK_BYTES = 64 * 1024;
+
+    /**
+     * Deepest element nesting this codec reads.
+     * <p>
+     * The bound is on the READER because that is the one place that protects every walk of the
+     * tree at once. Reading is iterative and would swallow any depth, but three of the walks over
+     * what it produces are recursive - the serializer, {@code MergeRulesDocument.decisions()} and
+     * its section count - so a deep document does not fail the parse, it fails LATER with a
+     * {@code StackOverflowError}. That is an {@link Error}: it is not a malformed-format
+     * condition, it cannot honestly be caught as one, and it would abort a rewrite half-way
+     * through instead of refusing it. Making one walk iterative would leave the other two, so the
+     * depth is refused where it enters.
+     * <p>
+     * The number is far above any real file and far below what the stack can walk. A
+     * merge-settings document is FLAT: the platform's own tree is a root, a feature collection, a
+     * top object and its positional children - single digits - and a payload section beside it
+     * adds a handful more. Five hundred nested elements is two orders of magnitude past that,
+     * while the recursive re-emit it allows is a few hundred frames of one small method, well
+     * inside the smallest thread stack any JVM starts with.
+     */
+    private static final int MAX_ELEMENT_DEPTH = 500;
+
+    /**
+     * Largest number of symbolic links {@link #followSymbolicLink(Path)} walks through before it
+     * refuses.
+     * <p>
+     * A ring is caught by identity and named as a ring; this bound is for the chain that never
+     * repeats a path yet never ends either - a link whose destination is reached through another
+     * link to a directory grows the path at every hop, so "no path seen twice" does not by itself
+     * terminate. Forty is what Linux allows one path resolution ({@code SYMLOOP_MAX} is 8 in
+     * POSIX), so a chain this codec refuses is one the operating system would refuse too.
+     */
+    private static final int MAX_SYMLINK_HOPS = 40;
 
     private MergeRulesCodec()
     {
@@ -166,7 +207,7 @@ public final class MergeRulesCodec
     public static String serialize(MergeRulesDocument document)
     {
         StringBuilder out = new StringBuilder(XML_DECLARATION).append(NEW_LINE);
-        writeElement(out, document.settings(), 0);
+        writeElement(out, document.settings(), 0, false);
         return out.toString();
     }
 
@@ -245,16 +286,25 @@ public final class MergeRulesCodec
 
     /**
      * The file the bytes must actually land on: the target itself, or - when the target is a
-     * symbolic link - the file that link names.
+     * symbolic link - the file at the END of the chain of links it starts.
      * <p>
      * A DANGLING link is resolved through its own recorded destination rather than through the
      * filesystem, which cannot answer for a file that is not there: the write then creates the
      * file the link points at, which is what following the link means, instead of turning the link
      * into a regular file.
+     * <p>
+     * <b>The whole chain, one link at a time.</b> A link may name another link, and resolving only
+     * the first hop puts the write on the INTERMEDIATE link - which the move then replaces with a
+     * regular file, deleting a link nobody asked about and leaving the file at the end of the
+     * chain with its old content, while the report says the rules were written. That is the very
+     * defect following a link exists to prevent, one remove further along, so the walk continues
+     * until it reaches something that is not a link. Each hop resolves a relative destination
+     * against THAT hop's own directory, not the original file's.
      *
      * @param file an absolute path
      * @return the path to write, never {@code null}
-     * @throws IOException when the link cannot be read
+     * @throws IOException when a link cannot be read, or the chain rings or runs past
+     *             {@link #MAX_SYMLINK_HOPS}
      */
     private static Path followSymbolicLink(Path file) throws IOException
     {
@@ -264,15 +314,80 @@ public final class MergeRulesCodec
         }
         try
         {
+            // Resolves the whole chain in one call - and canonicalises it - whenever every hop
+            // exists. It cannot answer for a chain that ends in a missing file, or one that rings.
             return file.toRealPath();
         }
         catch (IOException e)
         {
-            Path linkTarget = Files.readSymbolicLink(file);
-            Path base = file.getParent();
-            return linkTarget.isAbsolute() || base == null ? linkTarget.toAbsolutePath()
-                : base.resolve(linkTarget).toAbsolutePath().normalize();
+            return walkDanglingChain(file);
         }
+    }
+
+    /**
+     * Follows a chain of symbolic links by reading each link's recorded destination, stopping at
+     * the first hop that is not a link.
+     * <p>
+     * A path already seen is a RING: it would be followed for ever, and there is no file at the
+     * end of it to write, so it is refused rather than resolved. Identity is compared on the
+     * NORMALISED path, which is what makes {@code a -> ./a} the same hop as {@code a}; the path
+     * carried forward is the un-normalised one, because collapsing {@code ..} across a symlinked
+     * directory would name a different file than the link does.
+     *
+     * @param start the link to start from, absolute
+     * @return the first path in the chain that is not a symbolic link
+     * @throws IOException when a link cannot be read, or the chain rings or runs too long
+     */
+    private static Path walkDanglingChain(Path start) throws IOException
+    {
+        return walkLinkChain(start,
+            path -> Files.isSymbolicLink(path) ? Files.readSymbolicLink(path) : null);
+    }
+
+    /**
+     * The chain walk itself, over any source of link destinations.
+     * <p>
+     * Package-private, and taking the reader as an argument, so that the ring and the hop bound
+     * are provable WITHOUT a filesystem that grants symbolic links: creating one on Windows needs
+     * a privilege the build does not have, and a test that is skipped proves nothing about the
+     * loop it was written for.
+     *
+     * @param start the path to start from, absolute
+     * @param links answers each hop's recorded destination, or {@code null} when the path is not
+     *            a link
+     * @return the first path in the chain that is not a link
+     * @throws IOException when a link cannot be read, or the chain rings or runs past
+     *             {@link #MAX_SYMLINK_HOPS}
+     */
+    static Path walkLinkChain(Path start, LinkReader links) throws IOException
+    {
+        Set<Path> seen = new LinkedHashSet<>();
+        seen.add(start.normalize());
+        Path current = start;
+        for (int hop = 0; hop < MAX_SYMLINK_HOPS; hop++)
+        {
+            Path destination = links.destinationOf(current);
+            if (destination == null)
+            {
+                return current;
+            }
+            Path base = current.getParent();
+            Path next = destination.isAbsolute() || base == null ? destination.toAbsolutePath()
+                : base.resolve(destination).toAbsolutePath().normalize();
+            if (!seen.add(next.normalize()))
+            {
+                throw new IOException("Cannot write merge rules to '" + start //$NON-NLS-1$
+                    + "': the symbolic links starting there form a ring (" //$NON-NLS-1$
+                    + String.join(" -> ", seen.stream().map(Path::toString).toList()) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " -> " + next + "), so there is no file at the end of it to write. Repoint " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "one of those links at a real file, or name that file directly."); //$NON-NLS-1$
+            }
+            current = next;
+        }
+        throw new IOException("Cannot write merge rules to '" + start //$NON-NLS-1$
+            + "': it starts a chain of more than " + MAX_SYMLINK_HOPS //$NON-NLS-1$
+            + " symbolic links, which is more than the operating system itself resolves. Name the " //$NON-NLS-1$
+            + "file you mean directly."); //$NON-NLS-1$
     }
 
     /**
@@ -419,7 +534,7 @@ public final class MergeRulesCodec
 
     /**
      * Reads the whole document into an element tree, keeping character data IN DOCUMENT ORDER
-     * among the child elements.
+     * among the child elements and BYTE FOR BYTE.
      * <p>
      * The runs are accumulated in one buffer, but that buffer is FLUSHED INTO THE ELEMENT THAT
      * OWNS IT at every element boundary, which is the difference that matters: a single buffer
@@ -428,12 +543,18 @@ public final class MergeRulesCodec
      * back with its leading text deleted and its trailing text moved in front of every child. The
      * codec's promise is that a payload block it does not interpret survives a rewrite verbatim,
      * and mixed content is precisely where a payload block puts its text.
+     * <p>
+     * Every run is kept exactly as read; which of them are LAYOUT is decided per element, once
+     * that element is complete, by {@code separateLayoutFromContent}.
      *
      * @param reader the stream reader positioned before the document
      * @return the root element, or {@code null} for an empty document
      * @throws XMLStreamException when the stream is not well-formed XML
+     * @throws MergeRulesFormatException when the document nests deeper than
+     *             {@link #MAX_ELEMENT_DEPTH}
      */
-    private static Element readTree(XMLStreamReader reader) throws XMLStreamException
+    private static Element readTree(XMLStreamReader reader)
+        throws XMLStreamException, MergeRulesFormatException
     {
         Element root = null;
         Deque<Element> stack = new ArrayDeque<>();
@@ -443,9 +564,12 @@ public final class MergeRulesCodec
             int event = reader.next();
             if (event == XMLStreamConstants.START_ELEMENT)
             {
-                // Whatever has been read so far belongs to the element still open above, and it is
-                // followed by a child - so it is interior text, never the element's whole value.
-                flushText(stack.peek(), pending, false);
+                // Whatever has been read so far belongs to the element still open above.
+                flushText(stack.peek(), pending);
+                if (stack.size() >= MAX_ELEMENT_DEPTH)
+                {
+                    throw new MergeRulesFormatException(tooDeep(reader.getLocalName()));
+                }
                 Element element = new Element(reader.getLocalName());
                 for (int i = 0; i < reader.getAttributeCount(); i++)
                 {
@@ -467,32 +591,20 @@ public final class MergeRulesCodec
             }
             else if (event == XMLStreamConstants.END_ELEMENT)
             {
-                flushText(stack.peek(), pending, true);
-                stack.pop();
+                flushText(stack.peek(), pending);
+                separateLayoutFromContent(stack.pop());
             }
         }
         return root;
     }
 
     /**
-     * Attaches the character data read so far to the element that owns it.
-     * <p>
-     * Two kinds of run are told apart, because they are not the same thing:
-     * <ul>
-     * <li>the element's WHOLE content ({@code closing} and no child seen yet) is its value and is
-     * kept byte for byte - a {@code Properties} entry's value is data, and even a blank one is,
-     * whereas a blank STRUCTURAL element is just how somebody laid the file out;</li>
-     * <li>a run sitting between child elements is mixed content: its meaningful part is kept as a
-     * text node in document order and the layout whitespace around it is dropped, exactly as the
-     * indentation between two child elements is. Keeping that whitespace instead would make the
-     * canonical re-emit differ from a file already in the canonical layout.</li>
-     * </ul>
+     * Attaches the character data read so far to the element that owns it, exactly as read.
      *
      * @param owner the element the run belongs to, or {@code null} for text outside the root
      * @param pending the accumulated run, cleared by this call
-     * @param closing whether the run ends at the owner's own end tag
      */
-    private static void flushText(Element owner, StringBuilder pending, boolean closing)
+    private static void flushText(Element owner, StringBuilder pending)
     {
         if (pending.length() == 0)
         {
@@ -500,23 +612,79 @@ public final class MergeRulesCodec
         }
         String content = pending.toString();
         pending.setLength(0);
-        if (owner == null)
+        if (owner != null)
         {
-            return;
+            owner.children().add(Element.text(content));
         }
-        if (closing && owner.children().isEmpty())
+    }
+
+    /**
+     * Decides, for one finished element, whether the character data it holds is LAYOUT or
+     * CONTENT - and drops it only in the first case.
+     * <p>
+     * <b>The rule is asked of the ELEMENT, not of the run: an element whose character data is
+     * entirely whitespace is laid out, and an element with any non-whitespace character data is
+     * mixed content - in which case ALL of its character data is content and is kept byte for
+     * byte.</b> Indentation between two child elements is whitespace and nothing else, so a file
+     * in the canonical layout loses exactly its layout and gets an identical one back, which is
+     * what keeps the round trip byte-identical. As soon as a run says something, the whitespace
+     * beside it stops being decoration: in {@code <Payload>Hello <Child/> world</Payload>} the
+     * spaces around the child are as much a part of the text as the letters, and trimming them
+     * rewrites a payload block this codec promises to carry through verbatim. Deciding run by run
+     * cannot express that - the space between two children of a mixed element is whitespace-only
+     * and still content - which is why the question is asked once per element.
+     * <p>
+     * The two cases that keep the behaviour they always had: an element whose whole content is
+     * text keeps that text byte for byte even when it is blank (a {@code Properties} entry's value
+     * is data), unless the element is STRUCTURAL, where a blank body is only how somebody laid the
+     * file out.
+     * <p>
+     * <b>What the rule cannot tell apart</b> is significant whitespace that is ENTIRELY
+     * whitespace - {@code <A> <B/> </A>} where the spaces are meant. XML carries no in-band signal
+     * for it other than {@code xml:space="preserve"}, which this codec cannot honour because it
+     * does not model namespace prefixes (stated on the class) and this format declares none. The
+     * merge-settings format has no such element; one that had would need the prefix modelled first.
+     *
+     * @param element the element whose children are complete
+     */
+    private static void separateLayoutFromContent(Element element)
+    {
+        boolean hasElementChild = false;
+        boolean hasContent = false;
+        for (Element child : element.children())
         {
-            if (!content.isBlank() || !isStructural(owner))
+            if (child.isText())
             {
-                owner.children().add(Element.text(content));
+                hasContent |= !child.textValue().isBlank();
+            }
+            else
+            {
+                hasElementChild = true;
+            }
+        }
+        if (!hasElementChild)
+        {
+            if (!hasContent && isStructural(element))
+            {
+                element.children().clear();
             }
             return;
         }
-        String interior = content.strip();
-        if (!interior.isEmpty())
+        if (!hasContent)
         {
-            owner.children().add(Element.text(interior));
+            element.children().removeIf(Element::isText);
         }
+    }
+
+    private static String tooDeep(String tag)
+    {
+        return "The merge-settings document nests elements more than " + MAX_ELEMENT_DEPTH //$NON-NLS-1$
+            + " levels deep (at '<" + tag + ">') and was not read. A merge-settings file is FLAT: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "the deepest tree the platform writes is a root, a feature collection, an object and " //$NON-NLS-1$
+            + "its positional children, so a document this deep is not one - and every walk over " //$NON-NLS-1$
+            + "it re-enters once per level, which would spend the workbench's stack instead of " //$NON-NLS-1$
+            + "reporting a problem. Check what the file actually holds and read the section you " //$NON-NLS-1$
+            + "mean."; //$NON-NLS-1$
     }
 
     private static boolean isStructural(Element element)
@@ -526,9 +694,28 @@ public final class MergeRulesCodec
             || MergeRulesDocument.TAG_SETTINGS.equals(element.tag());
     }
 
-    private static void writeElement(StringBuilder out, Element element, int depth)
+    /**
+     * Writes one element.
+     * <p>
+     * An element that holds CONTENT character data (see
+     * {@code separateLayoutFromContent}) is written INLINE: its runs go out exactly as
+     * they are held and its child elements get no line of their own, because any newline or
+     * indentation inserted between a run and the child beside it would land INSIDE the element's
+     * character data and change the value the next reader parses. Everything else gets the
+     * canonical layout, generated from the depth.
+     *
+     * @param out the buffer
+     * @param element the element to write
+     * @param depth nesting depth, used for the canonical indentation
+     * @param inline whether this element sits inside another element's character data, and so may
+     *            neither indent itself nor end its own line
+     */
+    private static void writeElement(StringBuilder out, Element element, int depth, boolean inline)
     {
-        indent(out, depth);
+        if (!inline)
+        {
+            indent(out, depth);
+        }
         out.append('<').append(element.tag());
         for (Map.Entry<String, String> attribute : element.attributes().entrySet())
         {
@@ -538,33 +725,76 @@ public final class MergeRulesCodec
         List<Element> content = element.children();
         if (content.isEmpty())
         {
-            out.append("/>").append(NEW_LINE); //$NON-NLS-1$
+            out.append("/>"); //$NON-NLS-1$
+            endLine(out, inline);
             return;
         }
         out.append('>');
-        Element only = content.size() == 1 ? content.get(0) : null;
-        if (only != null && only.isText())
+        if (isMixed(content))
+        {
+            for (Element child : content)
+            {
+                if (child.isText())
+                {
+                    out.append(escapeCharacterData(child.textValue()));
+                }
+                else
+                {
+                    writeElement(out, child, depth + 1, true);
+                }
+            }
+            closeTag(out, element, inline);
+            return;
+        }
+        if (content.get(0).isText())
         {
             // The element's whole content is its value: it goes back on the one line it came from.
-            out.append(escapeText(only.textValue())).append("</").append(element.tag()).append('>') //$NON-NLS-1$
-                .append(NEW_LINE);
+            for (Element child : content)
+            {
+                out.append(escapeCharacterData(child.textValue()));
+            }
+            closeTag(out, element, inline);
             return;
         }
         out.append(NEW_LINE);
         for (Element child : content)
         {
-            if (child.isText())
-            {
-                indent(out, depth + 1);
-                out.append(escapeText(child.textValue())).append(NEW_LINE);
-            }
-            else
-            {
-                writeElement(out, child, depth + 1);
-            }
+            writeElement(out, child, depth + 1, false);
         }
         indent(out, depth);
-        out.append("</").append(element.tag()).append('>').append(NEW_LINE); //$NON-NLS-1$
+        closeTag(out, element, inline);
+    }
+
+    /**
+     * Whether these children are mixed content - character data AND child elements side by side.
+     *
+     * @param content one element's children
+     * @return {@code true} when both kinds are present
+     */
+    private static boolean isMixed(List<Element> content)
+    {
+        boolean text = false;
+        boolean elements = false;
+        for (Element child : content)
+        {
+            text |= child.isText();
+            elements |= !child.isText();
+        }
+        return text && elements;
+    }
+
+    private static void closeTag(StringBuilder out, Element element, boolean inline)
+    {
+        out.append("</").append(element.tag()).append('>'); //$NON-NLS-1$
+        endLine(out, inline);
+    }
+
+    private static void endLine(StringBuilder out, boolean inline)
+    {
+        if (!inline)
+        {
+            out.append(NEW_LINE);
+        }
     }
 
     private static void indent(StringBuilder out, int depth)
@@ -573,6 +803,23 @@ public final class MergeRulesCodec
         {
             out.append(INDENT);
         }
+    }
+
+    /**
+     * Escapes a run of character data.
+     * <p>
+     * A carriage return is escaped instead of being written as itself. XML normalises line ends
+     * (spec 2.11) BEFORE a parser reports any character data, so a literal CR in the file comes
+     * back as LF - a value this codec promises to keep verbatim would silently change on the next
+     * read, and a second rewrite would then differ from the first. A CR is in the model only
+     * because the file spelled it {@code &#13;}, and that is how it goes back.
+     *
+     * @param value the character data
+     * @return the escaped text
+     */
+    private static String escapeCharacterData(String value)
+    {
+        return escapeText(value).replace("\r", "&#13;"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String escapeText(String value)
@@ -602,6 +849,21 @@ public final class MergeRulesCodec
         {
             // Nothing actionable: the content has already been read (or failed to parse).
         }
+    }
+
+    /**
+     * Answers what a path's symbolic link points at.
+     */
+    @FunctionalInterface
+    interface LinkReader
+    {
+        /**
+         * @param path the path to look at
+         * @return the destination recorded in the link, exactly as recorded (so possibly
+         *         relative), or {@code null} when the path is not a symbolic link
+         * @throws IOException when the link cannot be read
+         */
+        Path destinationOf(Path path) throws IOException;
     }
 
     /**
