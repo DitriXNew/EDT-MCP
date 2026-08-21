@@ -44,8 +44,10 @@ prebuilt `.epf`/`.erf` outside an EDT project.
    `debug_status` preflight first, using `set_infobase_credentials` only when
    authorized. If a matching live client exists, use it only as an explicitly
    authorized target; stop when the external object requires a fresh launch.
-   Otherwise call `set_breakpoint` before `debug_launch` and retain task-owned
-   IDs. If a preflight race returns `alreadyRunning=true`, refresh the uniquely
+   Otherwise call `set_breakpoint` before launching the resolved external-object
+   target according to the current `debug_launch` help/schema. Retain task-owned
+   IDs and verify that the returned target identity matches the resolved target.
+   If a preflight race returns `alreadyRunning=true`, refresh the uniquely
    identified target, resume only a task-caused suspension, remove task-owned
    temporary state, and stop. Terminate and relaunch only with explicit user
    authorization.

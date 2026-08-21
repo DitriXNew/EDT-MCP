@@ -25,7 +25,9 @@ an unsupported structured operation.
 1. Locate the owner with `search_in_code`, `get_module_structure`,
    `read_method_source`, or `get_metadata_details`.
 2. Read the complete owning method or dataset and validate the complete query
-   with `validate_query` in the exact project.
+   with `validate_query` in the exact project. For a DCS-owned query, use the
+   tool's DCS context/mode according to current help for both pre- and
+   post-change validation.
 3. Preserve business grain and cardinality. Hand an embedded BSL query mutation
    to `edt-mcp-project-local-fix` and require its guarded lost-update workflow;
    use `modify_metadata` for a supported DCS mutation.

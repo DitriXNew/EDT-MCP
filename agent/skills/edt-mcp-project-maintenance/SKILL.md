@@ -42,7 +42,9 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    when explicit application-wide authority covers every matching EDT-launched
    client that may appear between preview and apply.
 3. Poll a returned job only with `get_job_status`; use `cancel_job` only under
-   its current authorization and confirmation contract.
+   its current authorization and confirmation contract. Treat a client timeout
+   as an unknown result; reconcile the authoritative operation outcome under
+   current help before retrying, continuing, or reporting completion.
 4. For import, confirm a caller-approved XML source plus a new project target,
    call `import_configuration_from_xml`, then verify the returned project exists
    and becomes usable. For export, confirm the exact project and approved output

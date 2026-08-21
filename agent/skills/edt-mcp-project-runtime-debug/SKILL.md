@@ -43,9 +43,12 @@ evidence alone answers the question.
    breakpoint, remove task-owned temporary state, and stop unless a fresh
    relaunch was explicitly authorized. Never resume an ambiguous or unrelated
    suspension.
-5. Refresh `debug_status`. Before `wait_for_break`, `get_variables`,
-   `evaluate_expression`, `set_variable`, `step`, or `resume`, require the
-   current help and status to identify one unambiguous intended debug target.
+5. Settle any in-progress or unknown launch outcome under current help and a
+   bounded caller-approved deadline before removing a task-owned breakpoint,
+   treating the launch as absent, or completing. Before `wait_for_break`,
+   `get_variables`, `evaluate_expression`, `set_variable`, `step`, or
+   `resume`, require current help and status to identify one unambiguous
+   intended debug target.
    Otherwise remove only task-owned temporary state and stop.
 6. Collect only the bounded evidence needed. Treat expression evaluation and
    variable mutation as potentially state-changing.

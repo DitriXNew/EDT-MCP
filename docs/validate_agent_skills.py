@@ -152,7 +152,7 @@ def resolve_java_string(expression: str, errors: list[str], owner: Path) -> str 
     if len(candidates) != 1:
         fail(errors, f"implementation constant owner {class_name}: expected one source, got {len(candidates)}")
         return None
-    source = read_java_source(candidates[0], errors)
+    source = strip_java_comments(read_java_source(candidates[0], errors))
     match = re.search(
         rf"public\s+static\s+final\s+String\s+{constant_name}\s*=\s*\"([a-z0-9_]+)\"\s*;",
         source,
@@ -177,7 +177,7 @@ def registered_tool_names(errors: list[str]) -> set[str]:
             fail(errors, f"registered class {class_name}: expected one source, got {len(candidates)}")
             continue
         source_path = candidates[0]
-        source = read_java_source(source_path, errors)
+        source = strip_java_comments(read_java_source(source_path, errors))
         match = re.search(
             r"public\s+static\s+final\s+String\s+NAME\s*=\s*([^;]+);",
             source,
