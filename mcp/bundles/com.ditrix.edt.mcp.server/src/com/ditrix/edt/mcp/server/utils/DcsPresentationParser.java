@@ -309,6 +309,7 @@ public final class DcsPresentationParser
         Set<String> result = new LinkedHashSet<>();
         result.add("title"); //$NON-NLS-1$
         result.add("presentation"); //$NON-NLS-1$
+        result.add("userSettingPresentation"); //$NON-NLS-1$
         result.add("itemsUserSettingPresentation"); //$NON-NLS-1$
         return Collections.unmodifiableSet(result);
     }

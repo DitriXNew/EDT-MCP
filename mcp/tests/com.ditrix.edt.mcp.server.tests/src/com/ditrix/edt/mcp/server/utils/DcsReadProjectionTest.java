@@ -17,6 +17,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrder;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrderItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 
@@ -91,6 +92,10 @@ public class DcsReadProjectionTest
         item.setField(field);
         order.getItems().add(item);
         settings.setOrder(order);
+        DataCompositionGroup namedGroup =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createDataCompositionGroup();
+        namedGroup.setName("ByCustomer"); //$NON-NLS-1$
+        settings.getItems().add(namedGroup);
 
         String report = DcsReadProjection.renderSettingsOutline(
             "Report.Sales#/defaultSettings", settings, "en"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -98,6 +103,9 @@ public class DcsReadProjectionTest
             "Catalog.Products.Form.ListForm.Attribute.List#/listSettings", settings, "en"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(report.contains("#/defaultSettings/order/items/0")); //$NON-NLS-1$
         assertTrue(dynamic.contains("#/listSettings/order/items/0")); //$NON-NLS-1$
+        assertTrue(report.contains("#/defaultSettings/items/0")); //$NON-NLS-1$
+        assertTrue(dynamic.contains("#/listSettings/items/0")); //$NON-NLS-1$
+        assertFalse(report.contains("#/defaultSettings/items/ByCustomer")); //$NON-NLS-1$
         assertTrue(report.contains("DataCompositionOrderItem")); //$NON-NLS-1$
         assertTrue(dynamic.contains("DataCompositionOrderItem")); //$NON-NLS-1$
     }

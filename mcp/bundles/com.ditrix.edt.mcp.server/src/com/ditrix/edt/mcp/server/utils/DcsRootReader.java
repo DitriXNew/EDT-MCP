@@ -11,6 +11,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.BmRole;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.Target;
@@ -43,9 +44,20 @@ public final class DcsRootReader
         }
         if (target.kind() == TargetKind.DYNAMIC_LIST)
         {
-            return readDynamicList(transaction, target);
+            return readDynamicList(transaction, target, false);
         }
         return readSchema(transaction, target);
+    }
+
+    /** Write-side read that represents an allowed plain-attribute conversion as a null root. */
+    public static Result readForWrite(IBmTransaction transaction, Target target)
+    {
+        if (transaction == null || target == null)
+        {
+            return Result.failure("The resolved DCS target is unavailable. Re-run dcs action='get'."); //$NON-NLS-1$
+        }
+        return target.kind() == TargetKind.DYNAMIC_LIST
+            ? readDynamicList(transaction, target, true) : readSchema(transaction, target);
     }
 
     private static Result readSchema(IBmTransaction transaction, Target target)
@@ -73,7 +85,8 @@ public final class DcsRootReader
         return Result.success(content);
     }
 
-    private static Result readDynamicList(IBmTransaction transaction, Target target)
+    private static Result readDynamicList(IBmTransaction transaction, Target target,
+        boolean allowUnmaterialized)
     {
         Long id = target.bmId(BmRole.MD_FORM);
         EObject mdForm = id == null ? null : transaction.getObjectById(id.longValue());
@@ -81,13 +94,18 @@ public final class DcsRootReader
         EObject attribute = form == null ? null
             : FormElementWriter.resolveFormMember(form, target.formMemberRef());
         EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
-        if (extInfo == null || !"DynamicListExtInfo".equals(extInfo.eClass().getName())) //$NON-NLS-1$
+        if (extInfo == null && allowUnmaterialized
+            && target.bmId(BmRole.DYNAMIC_LIST_EXT_INFO) == null)
+        {
+            return Result.success(null);
+        }
+        if (!(extInfo instanceof DynamicListExtInfo))
         {
             String actual = extInfo == null ? "none" : extInfo.eClass().getName(); //$NON-NLS-1$
             return Result.failure(DcsTargetResolver.notDynamicListMessage(
                 target.normalizedRootFqn(), actual));
         }
-        return Result.success(extInfo);
+        return Result.success((DynamicListExtInfo)extInfo);
     }
 
     private static EObject singleReference(EObject object, String featureName)

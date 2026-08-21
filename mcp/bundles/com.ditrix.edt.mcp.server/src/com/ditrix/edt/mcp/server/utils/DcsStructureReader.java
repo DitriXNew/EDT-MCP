@@ -57,7 +57,7 @@ import com._1c.g5.v8.dt.mcore.TypeValue;
 import com._1c.g5.v8.dt.mcore.Value;
 
 /**
- * Shared READER that renders a 1C Data Composition Schema (СКД / a {@code .dcs} resource) - the model
+ * Shared READER that renders a 1C Data Composition Schema (\u0421\u041a\u0414 / a {@code .dcs} resource) - the model
  * behind a Report's / CommonTemplate's / object-owned Template's {@link DataCompositionSchema} content -
  * to a full Markdown document: data sources, data sets (with the FULL query text in a fenced block and
  * their fields), calculated fields, total fields, parameters, and the DEFAULT settings variant's

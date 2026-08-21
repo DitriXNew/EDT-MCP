@@ -370,10 +370,15 @@ public final class DcsAddress
             {
                 return true;
             }
+            if ("groupFields".equals(ancestor) || "dataParameters".equals(ancestor) //$NON-NLS-1$ //$NON-NLS-2$
+                || "outputParameters".equals(ancestor) || "userFields".equals(ancestor)) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return false;
+            }
             if ("settings".equals(ancestor) || "defaultSettings".equals(ancestor) //$NON-NLS-1$ //$NON-NLS-2$
                 || "listSettings".equals(ancestor)) //$NON-NLS-1$
             {
-                return false;
+                return true;
             }
         }
         return false;

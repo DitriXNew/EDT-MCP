@@ -987,14 +987,6 @@ public final class DcsReadProjection
                 return dataPath;
             }
         }
-        if (FEATURE_ITEMS.equals(collection) && "DataCompositionGroup".equals(item.eClass().getName())) //$NON-NLS-1$
-        {
-            String name = stringFeature(item, "name"); //$NON-NLS-1$
-            if (!name.isEmpty())
-            {
-                return name;
-            }
-        }
         return Integer.toString(index);
     }
 

@@ -97,15 +97,15 @@ public class DcsAddressTest
     }
 
     @Test
-    public void testStructureItemSupportsNamedGroupingOrIndex()
+    public void testStructureItemRequiresIndexEvenWhenGroupingHasAName()
     {
-        DcsAddress named = success("Report.Sales#/defaultSettings/items/ByCustomer"); //$NON-NLS-1$
-        DcsAddress unnamed = success("Report.Sales#/defaultSettings/items/0"); //$NON-NLS-1$
+        DcsAddress indexed = success("Report.Sales#/defaultSettings/items/0"); //$NON-NLS-1$
 
-        assertTrue(named.isNaturalKeySegment(2));
-        assertFalse(named.isIndexAddressed());
-        assertTrue(unnamed.isIndexSegment(2));
-        assertTrue(unnamed.isIndexAddressed());
+        assertTrue(indexed.isIndexSegment(2));
+        assertTrue(indexed.isIndexAddressed());
+        assertFailure("Report.Sales#/defaultSettings/items/ByCustomer", //$NON-NLS-1$
+            DcsAddress.FailureCode.INVALID_INDEX, "ByCustomer", "'ByCustomer'", //$NON-NLS-1$ //$NON-NLS-2$
+            "zero-based"); //$NON-NLS-1$
     }
 
     @Test

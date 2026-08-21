@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.eclipse.emf.common.util.Enumerator;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.dcs.model.common.DataCompositionDataSetFieldRole;
 import com._1c.g5.v8.dt.dcs.model.common.DataCompositionPeriodType;
@@ -38,7 +39,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
 /**
- * Authors the CONTENT of a 1C Data Composition Schema (СКД / a {@code .dcs}
+ * Authors the CONTENT of a 1C Data Composition Schema (\u0421\u041a\u0414 / a {@code .dcs}
  * resource) - the {@link DataCompositionSchema} model behind a Report's Data Composition Schema
  * {@code BasicTemplate} - from the structured {@code dcs} JSON a client passes to {@code modify_metadata}.
  * The writer is a pure, typed EMF transformation: it takes an already-resolved
@@ -412,6 +413,313 @@ public final class DcsWriter
 
         return Result.ok(sources, plan.dataSets.size(), fields, plan.parameters.size(), calculatedFields,
             totalFields);
+    }
+
+    /**
+     * Plans the field/calculated-field/parameter collections shared by a schema and a dynamic list.
+     * The existing dynamic-list items are copied into a detached scratch schema and authored through
+     * this class's normal parser, natural-key collision checks, type resolver, and typed item appliers.
+     * The caller commits the returned detached lists only after every other dynamic-list member has
+     * validated, so there is still one implementation of these item bodies and no partial mutation.
+     *
+     * @param fields current dynamic-list fields
+     * @param calculatedFields current dynamic-list calculated fields
+     * @param parameters current dynamic-list parameters
+     * @param action requested {@code upsert} or {@code update} semantics
+     * @param body object containing any of {@code fields}, {@code calculatedFields}, {@code parameters}
+     * @param typeResolver shared metadata value-type resolver
+     * @param languages configured presentation-language context
+     * @return detached item lists or the ready error JSON produced by the shared writer
+     */
+    public static DynamicItemsResult planDynamicListItems(List<DataSetField> fields,
+        List<DataCompositionSchemaCalculatedField> calculatedFields,
+        List<DataCompositionSchemaParameter> parameters, String action, JsonObject body,
+        TypeResolver typeResolver, DcsPresentationParser.LanguageContext languages)
+    {
+        JsonObject normalized = body.deepCopy();
+        String updateError = dynamicUpdateKeysError(fields, calculatedFields, parameters, action,
+            normalized);
+        if (updateError != null)
+        {
+            return DynamicItemsResult.failure(ToolResult.error(updateError).toJson());
+        }
+        mergeDynamicItemDefaults(normalized, fields, calculatedFields);
+        DataCompositionSchema scratch = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSchemaDataSetQuery dataSet = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetQuery();
+        dataSet.setName("__McpDynamicList"); //$NON-NLS-1$
+        dataSet.setQuery("DYNAMIC LIST"); //$NON-NLS-1$
+        if (fields != null)
+        {
+            for (DataSetField field : fields)
+            {
+                dataSet.getFields().add(EcoreUtil.copy(field));
+            }
+        }
+        scratch.getDataSets().add(dataSet);
+        if (calculatedFields != null)
+        {
+            for (DataCompositionSchemaCalculatedField field : calculatedFields)
+            {
+                scratch.getCalculatedFields().add(EcoreUtil.copy(field));
+            }
+        }
+        if (parameters != null)
+        {
+            for (DataCompositionSchemaParameter parameter : parameters)
+            {
+                scratch.getParameters().add(EcoreUtil.copy(parameter));
+            }
+        }
+
+        JsonObject adapted = new JsonObject();
+        if (nonEmptyOrMalformed(normalized, KEY_FIELDS))
+        {
+            JsonObject set = new JsonObject();
+            set.addProperty(KEY_NAME, "__McpDynamicList"); //$NON-NLS-1$
+            set.addProperty(KEY_TYPE, TYPE_QUERY);
+            set.addProperty(KEY_QUERY, "DYNAMIC LIST"); //$NON-NLS-1$
+            set.addProperty(KEY_AUTO_FILL, false);
+            set.add(KEY_FIELDS, normalized.get(KEY_FIELDS).deepCopy());
+            JsonArray sets = new JsonArray();
+            sets.add(set);
+            adapted.add(KEY_DATA_SETS, sets);
+        }
+        if (nonEmptyOrMalformed(normalized, KEY_CALCULATED_FIELDS))
+        {
+            adapted.add(KEY_CALCULATED_FIELDS, normalized.get(KEY_CALCULATED_FIELDS).deepCopy());
+        }
+        if (nonEmptyOrMalformed(normalized, KEY_PARAMETERS))
+        {
+            adapted.add(KEY_PARAMETERS, normalized.get(KEY_PARAMETERS).deepCopy());
+        }
+
+        Result applied = adapted.size() == 0 ? Result.ok(0, 0, 0, 0, 0, 0)
+            : apply(scratch, adapted, typeResolver, languages);
+        if (applied.hasError())
+        {
+            return DynamicItemsResult.failure(applied.error);
+        }
+        DataCompositionSchemaDataSetQuery plannedSet = (DataCompositionSchemaDataSetQuery)
+            scratch.getDataSets().get(0);
+        List<DataSetField> plannedFields = new ArrayList<>();
+        for (DataSetField field : plannedSet.getFields())
+        {
+            plannedFields.add(EcoreUtil.copy(field));
+        }
+        List<DataCompositionSchemaCalculatedField> plannedCalculated = new ArrayList<>();
+        for (DataCompositionSchemaCalculatedField field : scratch.getCalculatedFields())
+        {
+            plannedCalculated.add(EcoreUtil.copy(field));
+        }
+        List<DataCompositionSchemaParameter> plannedParameters = new ArrayList<>();
+        for (DataCompositionSchemaParameter parameter : scratch.getParameters())
+        {
+            plannedParameters.add(EcoreUtil.copy(parameter));
+        }
+        return DynamicItemsResult.success(plannedFields, plannedCalculated, plannedParameters,
+            body.has(KEY_FIELDS) && body.get(KEY_FIELDS).isJsonArray()
+                && !body.getAsJsonArray(KEY_FIELDS).isEmpty(),
+            body.has(KEY_CALCULATED_FIELDS) && body.get(KEY_CALCULATED_FIELDS).isJsonArray()
+                && !body.getAsJsonArray(KEY_CALCULATED_FIELDS).isEmpty(),
+            body.has(KEY_PARAMETERS) && body.get(KEY_PARAMETERS).isJsonArray()
+                && !body.getAsJsonArray(KEY_PARAMETERS).isEmpty(), applied);
+    }
+
+    private static boolean nonEmptyOrMalformed(JsonObject body, String member)
+    {
+        return body.has(member) && (!body.get(member).isJsonArray()
+            || !body.getAsJsonArray(member).isEmpty());
+    }
+
+    private static String dynamicUpdateKeysError(List<DataSetField> fields,
+        List<DataCompositionSchemaCalculatedField> calculatedFields,
+        List<DataCompositionSchemaParameter> parameters, String action, JsonObject body)
+    {
+        if (!"update".equals(action)) //$NON-NLS-1$
+        {
+            return null;
+        }
+        String error = missingDynamicKey(body, KEY_FIELDS, KEY_DATA_PATH,
+            dynamicFieldKeys(fields));
+        if (error != null)
+        {
+            return error;
+        }
+        error = missingDynamicKey(body, KEY_CALCULATED_FIELDS, KEY_DATA_PATH,
+            dynamicCalculatedFieldKeys(calculatedFields));
+        return error != null ? error
+            : missingDynamicKey(body, KEY_PARAMETERS, KEY_NAME, dynamicParameterKeys(parameters));
+    }
+
+    private static String missingDynamicKey(JsonObject body, String collection, String keyMember,
+        Set<String> existing)
+    {
+        if (!body.has(collection) || !body.get(collection).isJsonArray())
+        {
+            return null;
+        }
+        JsonArray array = body.getAsJsonArray(collection);
+        for (int i = 0; i < array.size(); i++)
+        {
+            JsonElement element = array.get(i);
+            if (!element.isJsonObject())
+            {
+                continue;
+            }
+            String key = stringMember(element.getAsJsonObject(), keyMember);
+            if (key != null && !existing.contains(key))
+            {
+                return "action='update' cannot create " + collection + " entry '" + key //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'. Existing keys: " + (existing.isEmpty() ? "(none)" //$NON-NLS-1$ //$NON-NLS-2$
+                        : String.join(", ", existing)) //$NON-NLS-1$
+                    + ". Copy an existing address from dcs action='get', or use action='upsert'."; //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static Set<String> dynamicFieldKeys(List<DataSetField> fields)
+    {
+        Set<String> result = new LinkedHashSet<>();
+        if (fields != null)
+        {
+            for (DataSetField field : fields)
+            {
+                org.eclipse.emf.ecore.EStructuralFeature feature =
+                    field.eClass().getEStructuralFeature(KEY_DATA_PATH);
+                Object value = feature == null ? null : field.eGet(feature);
+                if (value instanceof String) result.add((String)value);
+            }
+        }
+        return result;
+    }
+
+    private static Set<String> dynamicCalculatedFieldKeys(
+        List<DataCompositionSchemaCalculatedField> fields)
+    {
+        Set<String> result = new LinkedHashSet<>();
+        if (fields != null)
+        {
+            for (DataCompositionSchemaCalculatedField field : fields)
+            {
+                result.add(field.getDataPath());
+            }
+        }
+        return result;
+    }
+
+    private static Set<String> dynamicParameterKeys(List<DataCompositionSchemaParameter> parameters)
+    {
+        Set<String> result = new LinkedHashSet<>();
+        if (parameters != null)
+        {
+            for (DataCompositionSchemaParameter parameter : parameters)
+            {
+                result.add(parameter.getName());
+            }
+        }
+        return result;
+    }
+
+    private static void mergeDynamicItemDefaults(JsonObject body, List<DataSetField> fields,
+        List<DataCompositionSchemaCalculatedField> calculatedFields)
+    {
+        if (body.has(KEY_FIELDS) && body.get(KEY_FIELDS).isJsonArray() && fields != null)
+        {
+            for (JsonElement element : body.getAsJsonArray(KEY_FIELDS))
+            {
+                if (!element.isJsonObject()) continue;
+                JsonObject entry = element.getAsJsonObject();
+                String key = stringMember(entry, KEY_DATA_PATH);
+                for (DataSetField current : fields)
+                {
+                    org.eclipse.emf.ecore.EStructuralFeature path =
+                        current.eClass().getEStructuralFeature(KEY_DATA_PATH);
+                    org.eclipse.emf.ecore.EStructuralFeature source =
+                        current.eClass().getEStructuralFeature(KEY_FIELD);
+                    Object currentPath = path == null ? null : current.eGet(path);
+                    Object currentSource = source == null ? null : current.eGet(source);
+                    if (key != null && key.equals(currentPath) && !entry.has(KEY_FIELD)
+                        && currentSource instanceof String && !((String)currentSource).isEmpty())
+                    {
+                        entry.addProperty(KEY_FIELD, (String)currentSource);
+                    }
+                }
+            }
+        }
+        if (body.has(KEY_CALCULATED_FIELDS) && body.get(KEY_CALCULATED_FIELDS).isJsonArray()
+            && calculatedFields != null)
+        {
+            for (JsonElement element : body.getAsJsonArray(KEY_CALCULATED_FIELDS))
+            {
+                if (!element.isJsonObject()) continue;
+                JsonObject entry = element.getAsJsonObject();
+                String key = stringMember(entry, KEY_DATA_PATH);
+                for (DataCompositionSchemaCalculatedField current : calculatedFields)
+                {
+                    if (key != null && key.equals(current.getDataPath())
+                        && !entry.has(KEY_EXPRESSION) && current.getExpression() != null)
+                    {
+                        entry.addProperty(KEY_EXPRESSION, current.getExpression());
+                    }
+                }
+            }
+        }
+    }
+
+    /** Detached dynamic-list item plan produced by the schema item implementation. */
+    public static final class DynamicItemsResult
+    {
+        private final List<DataSetField> fields;
+        private final List<DataCompositionSchemaCalculatedField> calculatedFields;
+        private final List<DataCompositionSchemaParameter> parameters;
+        private final boolean fieldsTouched;
+        private final boolean calculatedFieldsTouched;
+        private final boolean parametersTouched;
+        private final Result applied;
+        private final String errorJson;
+
+        private DynamicItemsResult(List<DataSetField> fields,
+            List<DataCompositionSchemaCalculatedField> calculatedFields,
+            List<DataCompositionSchemaParameter> parameters, boolean fieldsTouched,
+            boolean calculatedFieldsTouched, boolean parametersTouched, Result applied,
+            String errorJson)
+        {
+            this.fields = fields;
+            this.calculatedFields = calculatedFields;
+            this.parameters = parameters;
+            this.fieldsTouched = fieldsTouched;
+            this.calculatedFieldsTouched = calculatedFieldsTouched;
+            this.parametersTouched = parametersTouched;
+            this.applied = applied;
+            this.errorJson = errorJson;
+        }
+
+        private static DynamicItemsResult success(List<DataSetField> fields,
+            List<DataCompositionSchemaCalculatedField> calculatedFields,
+            List<DataCompositionSchemaParameter> parameters, boolean fieldsTouched,
+            boolean calculatedFieldsTouched, boolean parametersTouched, Result applied)
+        {
+            return new DynamicItemsResult(fields, calculatedFields, parameters, fieldsTouched,
+                calculatedFieldsTouched, parametersTouched, applied, null);
+        }
+
+        private static DynamicItemsResult failure(String errorJson)
+        {
+            return new DynamicItemsResult(null, null, null, false, false, false, null, errorJson);
+        }
+
+        public boolean isSuccess() { return errorJson == null; }
+        public List<DataSetField> fields() { return fields; }
+        public List<DataCompositionSchemaCalculatedField> calculatedFields() { return calculatedFields; }
+        public List<DataCompositionSchemaParameter> parameters() { return parameters; }
+        public boolean fieldsTouched() { return fieldsTouched; }
+        public boolean calculatedFieldsTouched() { return calculatedFieldsTouched; }
+        public boolean parametersTouched() { return parametersTouched; }
+        public Result applied() { return applied; }
+        public String errorJson() { return errorJson; }
     }
 
     // ---- model mutation (typed DCS API) -------------------------------------------------------

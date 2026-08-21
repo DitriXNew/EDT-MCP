@@ -62,7 +62,7 @@ public final class DcsSchemaWriter
         if (!ACTION_UPSERT.equals(action) && !ACTION_UPDATE.equals(action))
         {
             return PrepareResult.failure("Schema authoring supports action='upsert' or 'update'; got '" //$NON-NLS-1$ //$NON-NLS-2$
-                + action + "'. Use one of those actions for this stage."); //$NON-NLS-1$
+                + action + "'. Use one of those actions."); //$NON-NLS-1$
         }
         if (address == null || body == null)
         {
@@ -73,7 +73,8 @@ public final class DcsSchemaWriter
         {
             return PrepareResult.failure("Type '" + type + "' is not authorable in the schema layer. " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Use one of: schema, dataSource, dataSet, field, parameter, calculatedField, " //$NON-NLS-1$
-                + "totalField. Settings and dynamic-list writes arrive in a later stage."); //$NON-NLS-1$
+                + "totalField. Use the shared settings writer or dynamic-list writer for their " //$NON-NLS-1$
+                + "respective target roots."); //$NON-NLS-1$
         }
         String presentationError = DcsPresentationParser.validateRecursively(body, languages);
         if (presentationError != null)

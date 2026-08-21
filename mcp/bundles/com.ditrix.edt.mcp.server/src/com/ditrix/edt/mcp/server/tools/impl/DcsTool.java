@@ -14,10 +14,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.widgets.Display;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -27,22 +29,30 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
+import com.ditrix.edt.mcp.server.utils.DcsDynamicListContent;
+import com.ditrix.edt.mcp.server.utils.DcsDynamicListWriter;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
 import com.ditrix.edt.mcp.server.utils.DcsReadProjection;
 import com.ditrix.edt.mcp.server.utils.DcsRootReader;
 import com.ditrix.edt.mcp.server.utils.DcsSchemaContent;
 import com.ditrix.edt.mcp.server.utils.DcsSchemaWriter;
+import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Reads DCS/dynamic-list roots and authors the schema layer. */
+/** Reads and authors DCS schemas, shared settings, and form dynamic lists. */
 public class DcsTool implements IMcpTool
 {
     public static final String NAME = "dcs"; //$NON-NLS-1$
@@ -84,7 +94,7 @@ public class DcsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Inspect 1C DCS schemas and form dynamic lists, and upsert/update schema nodes. " //$NON-NLS-1$
+        return "Inspect and upsert/update 1C DCS schemas, shared settings, and form dynamic lists. " //$NON-NLS-1$
             + "Call action='get' first, pass its hash as expectedHash for " //$NON-NLS-1$
             + "index-addressed mutations, and call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
@@ -95,7 +105,7 @@ public class DcsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_FQN, "DCS root FQN, optionally followed by an RFC-6901 '#/...' pointer.", true) //$NON-NLS-1$
-            .enumProperty(KEY_ACTION, "Operation; schema writes support upsert/update.", true, ACTIONS) //$NON-NLS-1$
+            .enumProperty(KEY_ACTION, "Operation; current writes support upsert/update.", true, ACTIONS) //$NON-NLS-1$
             .enumProperty(KEY_TYPE, "Target kind; body shapes are in get_tool_guide('dcs').", true, TYPES) //$NON-NLS-1$
             .objectProperty(KEY_BODY, "Mutation body; forbidden for get/remove and required by the other mutations.") //$NON-NLS-1$
             .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
@@ -190,7 +200,7 @@ public class DcsTool implements IMcpTool
         else
         {
             return ToolResult.error("Action '" + action //$NON-NLS-1$
-                + "' is reserved for a later stage. Use action='get', 'upsert', or 'update'; no model " //$NON-NLS-1$
+                + "' is not implemented. Use action='get', 'upsert', or 'update'; no model " //$NON-NLS-1$
                 + "changes were made.").toJson(); //$NON-NLS-1$
         }
         return result.get();
@@ -385,27 +395,14 @@ public class DcsTool implements IMcpTool
                     + "'. Wait for EDT to finish opening the project, then retry action='" //$NON-NLS-1$
                     + action + "'.").toJson(); //$NON-NLS-1$
             }
-            DcsTargetResolver.Resolution resolution = DcsTargetResolver.resolve(context, model, address);
+            DcsTargetResolver.Resolution resolution = DcsTargetResolver.resolveForWrite(context, model, address);
             if (!resolution.isSuccess())
             {
                 return ToolResult.error(resolution.failure().message()).toJson();
             }
             DcsTargetResolver.Target target = resolution.target();
-            if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
-            {
-                return ToolResult.error("Schema-layer type '" + type + "' cannot mutate dynamic-list root '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + target.normalizedRootFqn() + "' in this stage. Use action='get'; dynamic-list " //$NON-NLS-1$
-                    + "authoring arrives with the shared settings layer.").toJson(); //$NON-NLS-1$
-            }
-
             DcsPresentationParser.LanguageContext languages =
                 new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes());
-            DcsSchemaWriter.PrepareResult prepared =
-                DcsSchemaWriter.prepare(action, type, address, body, languages);
-            if (!prepared.isSuccess())
-            {
-                return ToolResult.error(prepared.error()).toJson();
-            }
             DcsSchemaContent.Services services = DcsSchemaContent.resolveServices(context, model);
             if (!services.isSuccess())
             {
@@ -413,6 +410,27 @@ public class DcsTool implements IMcpTool
             }
             DcsWriter.TypeResolver typeResolver =
                 DcsWriter.typeResolver(context.configuration(), services.version());
+            if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
+            {
+                return executeDynamicListWrite(context, target, address, action, type, body,
+                    expectedHash, languages, typeResolver, services.version());
+            }
+
+            String schemaMembersError = "schema".equals(type) ? schemaRootMembersError(body) : null; //$NON-NLS-1$
+            if (schemaMembersError != null)
+            {
+                return ToolResult.error(schemaMembersError).toJson();
+            }
+            boolean settingsWrite = DcsSettingsWriter.supports(type)
+                || "schema".equals(type) && DcsSettingsWriter.schemaMembers(body).size() > 0; //$NON-NLS-1$
+            JsonObject schemaBody = "schema".equals(type) ? schemaLayerMembers(body) : body; //$NON-NLS-1$
+            DcsSchemaWriter.PrepareResult prepared = DcsSettingsWriter.supports(type)
+                || "schema".equals(type) && schemaBody.size() == 0 ? null //$NON-NLS-1$
+                : DcsSchemaWriter.prepare(action, type, address, schemaBody, languages);
+            if (prepared != null && !prepared.isSuccess())
+            {
+                return ToolResult.error(prepared.error()).toJson();
+            }
 
             WriteOutcome outcome;
             try
@@ -431,11 +449,10 @@ public class DcsTool implements IMcpTool
                             + "' is no longer a DataCompositionSchema. Re-run dcs action='get'."); //$NON-NLS-1$
                     }
                     String currentHash = DcsHash.compute(current.root());
-                    if (expectedHash != null && !expectedHash.equals(currentHash))
+                    String hashError = validateExpectedHash(expectedHash, currentHash, address);
+                    if (hashError != null)
                     {
-                        throw DcsWriteFailure.message("expectedHash '" + expectedHash //$NON-NLS-1$
-                            + "' does not match current hash '" + currentHash + "' for '" + address //$NON-NLS-1$ //$NON-NLS-2$
-                            + "'. Re-run dcs action='get' and pass the new expectedHash."); //$NON-NLS-1$
+                        throw DcsWriteFailure.message(hashError);
                     }
 
                     DcsSchemaContent.ResolveResult content = DcsSchemaContent.resolve(tx, target, services);
@@ -443,15 +460,36 @@ public class DcsTool implements IMcpTool
                     {
                         throw DcsWriteFailure.message(content.error());
                     }
-                    DcsSchemaWriter.Result applied =
-                        DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver);
-                    if (!applied.isSuccess())
+                    DcsSettingsWriter.SchemaResult settings = null;
+                    if (settingsWrite)
                     {
-                        throw applied.isErrorJson() ? DcsWriteFailure.json(applied.error())
-                            : DcsWriteFailure.message(applied.error());
+                        JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
+                            ? DcsSettingsWriter.schemaMembers(body) : body;
+                        settings = DcsSettingsWriter.planSchema(content.schema(), action, type,
+                            address, settingsBody, languages);
+                        if (!settings.isSuccess())
+                        {
+                            throw DcsWriteFailure.message(settings.error());
+                        }
+                    }
+                    DcsWriter.Result counts = null;
+                    if (prepared != null)
+                    {
+                        DcsSchemaWriter.Result applied =
+                            DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver);
+                        if (!applied.isSuccess())
+                        {
+                            throw applied.isErrorJson() ? DcsWriteFailure.json(applied.error())
+                                : DcsWriteFailure.message(applied.error());
+                        }
+                        counts = applied.applied();
+                    }
+                    if (settings != null)
+                    {
+                        settings.plan().commit(content.schema());
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
-                        applied.applied());
+                        counts, settingsWrite);
                 });
             }
             catch (DcsWriteFailure e)
@@ -476,15 +514,23 @@ public class DcsTool implements IMcpTool
                     + "action='get'.").toJson(); //$NON-NLS-1$
             }
             DcsWriter.Result counts = outcome.applied;
+            String countsText = counts == null ? "none" //$NON-NLS-1$
+                : "dataSources=" + counts.dataSources + ", dataSets=" + counts.dataSets //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", fields=" + counts.fields + ", parameters=" + counts.parameters //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", calculatedFields=" + counts.calculatedFields + ", totalFields=" //$NON-NLS-1$ //$NON-NLS-2$
+                    + counts.totalFields;
             return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
                 + "`\n\n**Hash:** `" + outcome.hash + "`\n\n**Export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
-                + "\n\n**Applied:** dataSources=" + counts.dataSources //$NON-NLS-1$
-                + ", dataSets=" + counts.dataSets + ", fields=" + counts.fields //$NON-NLS-1$ //$NON-NLS-2$
-                + ", parameters=" + counts.parameters + ", calculatedFields=" //$NON-NLS-1$ //$NON-NLS-2$
-                + counts.calculatedFields + ", totalFields=" + counts.totalFields; //$NON-NLS-1$
+                + "\n\n**Settings applied:** `" + outcome.settingsApplied + "`" //$NON-NLS-1$ //$NON-NLS-2$
+                + "\n\n**Schema applied:** " + countsText; //$NON-NLS-1$
         }
         catch (RuntimeException e)
         {
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
             Activator.logError("Error writing DCS target " + address, e); //$NON-NLS-1$
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             return ToolResult.error("Could not write DCS target '" + address + "': " + message //$NON-NLS-1$ //$NON-NLS-2$
@@ -492,16 +538,218 @@ public class DcsTool implements IMcpTool
         }
     }
 
+    private static String executeDynamicListWrite(ProjectContext.ConfigurationResult context,
+        DcsTargetResolver.Target target, DcsAddress address, String action, String type, JsonObject body,
+        String expectedHash, DcsPresentationParser.LanguageContext languages,
+        DcsWriter.TypeResolver typeResolver, com._1c.g5.v8.dt.platform.version.Version version)
+    {
+        FormElementWriter.FormMemberRef ref = target.formMemberRef();
+        FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(context.project(),
+            context.scope(), ref.formPath, "Form for dynamic-list target '" //$NON-NLS-1$
+                + target.normalizedRootFqn() + "' was not found. Verify the form FQN and retry."); //$NON-NLS-1$
+
+        String verdict = FormElementWriter.readEditableForm(fctx, "DcsDynamicListPreflight", //$NON-NLS-1$
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    return ToolResult.error("Form attribute '" + target.normalizedRootFqn() //$NON-NLS-1$
+                        + "' was not found. Re-run dcs action='get' and copy the current FQN.").toJson(); //$NON-NLS-1$
+                }
+                DynamicListExtInfo extInfo = dynamicListExtInfo(member);
+                DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
+                    type, address, body, typeResolver, languages);
+                if (!planned.isSuccess())
+                {
+                    return dynamicPlanError(planned);
+                }
+                if (extInfo == null && !planned.plan().canConvertPlainAttribute())
+                {
+                    return ToolResult.error("Form attribute '" + target.normalizedRootFqn() //$NON-NLS-1$
+                        + "' is not a dynamic list. Include a non-empty 'queryText' or 'mainTable' " //$NON-NLS-1$
+                        + "in a type='dynamicList' body to request the guarded conversion.").toJson(); //$NON-NLS-1$
+                }
+                if (!planned.plan().canConvertPlainAttribute())
+                {
+                    return ""; //$NON-NLS-1$
+                }
+                return ModifyMetadataTool.dynamicListRetypeVerdict(context.configuration(), version,
+                    formModel, member, planned.plan().mainTable());
+            });
+        if (verdict != null && !verdict.isEmpty())
+        {
+            return verdict;
+        }
+        if (verdict == null)
+        {
+            ConsentPreview preview = new ConsentPreview(
+                "Convert a form attribute into a dynamic list", //$NON-NLS-1$
+                "This replaces the attribute's data type with DynamicList. Any value the form held " //$NON-NLS-1$
+                    + "through it is dropped on the next database update.", //$NON-NLS-1$
+                1, List.of(target.normalizedRootFqn()));
+            ConsentDecision decision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+            if (decision != ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(
+                    DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+            }
+        }
+
+        AtomicReference<DynamicWriteOutcome> outcome = new AtomicReference<>();
+        boolean formPersisted = FormElementWriter.writeEditableForm(fctx, "DcsDynamicListWrite", //$NON-NLS-1$
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    throw new FormValidationException(ToolResult.error("Form attribute '" //$NON-NLS-1$
+                        + target.normalizedRootFqn()
+                        + "' disappeared before the write. Re-run dcs action='get'.").toJson()); //$NON-NLS-1$
+                }
+                DynamicListExtInfo extInfo = dynamicListExtInfo(member);
+                String currentHash = DcsHash.compute(extInfo);
+                String hashError = validateExpectedHash(expectedHash, currentHash, address);
+                if (hashError != null)
+                {
+                    throw new FormValidationException(ToolResult.error(hashError).toJson());
+                }
+                DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
+                    type, address, body, typeResolver, languages);
+                if (!planned.isSuccess())
+                {
+                    throw new FormValidationException(dynamicPlanError(planned));
+                }
+                String mainTableError = FormElementWriter.mainTableResolutionError(
+                    context.configuration(), planned.plan().mainTable());
+                if (mainTableError != null)
+                {
+                    throw new FormValidationException(mainTableError);
+                }
+                if (extInfo == null && planned.plan().canConvertPlainAttribute())
+                {
+                    String recheck = ModifyMetadataTool.dynamicListRetypeVerdict(
+                        context.configuration(), version, formModel, member,
+                        planned.plan().mainTable());
+                    if (recheck != null && !recheck.isEmpty())
+                    {
+                        throw new FormValidationException(recheck);
+                    }
+                }
+                List<String> applied = planned.plan().commit(formModel, member, extInfo,
+                    context.configuration(), version);
+                DynamicListExtInfo effective = dynamicListExtInfo(member);
+                String settingsFqn = null;
+                if (planned.plan().settingsTouched())
+                {
+                    DcsDynamicListContent.Result settings =
+                        DcsDynamicListContent.ensureAttached(tx, effective);
+                    if (!settings.isSuccess())
+                    {
+                        throw new FormValidationException(ToolResult.error(settings.error()).toJson());
+                    }
+                    settingsFqn = settings.fqn();
+                }
+                outcome.set(new DynamicWriteOutcome(DcsHash.compute(effective), settingsFqn,
+                    applied));
+            });
+        DynamicWriteOutcome written = outcome.get();
+        boolean settingsPersisted = written != null && (written.settingsFqn == null
+            || BmTransactions.forceExportToDisk(context.project(), written.settingsFqn));
+        if (!formPersisted || !settingsPersisted)
+        {
+            return ToolResult.error("DCS action='" + action + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
+                + address + "', but force-export could not be scheduled for " //$NON-NLS-1$
+                + (!formPersisted ? "Form.form" : written.settingsFqn) //$NON-NLS-1$
+                + ". Save or resync the project, then verify with dcs action='get'.").toJson(); //$NON-NLS-1$
+        }
+        return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
+            + "`\n\n**Hash:** `" + written.hash + "`\n\n**Form.form export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
+            + "\n\n**ListSettings.dcss export scheduled:** `" //$NON-NLS-1$
+            + (written.settingsFqn != null) + "`\n\n**Applied:** " //$NON-NLS-1$
+            + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static DynamicListExtInfo dynamicListExtInfo(EObject member)
+    {
+        if (member == null || member.eClass().getEStructuralFeature("extInfo") == null) //$NON-NLS-1$
+        {
+            return null;
+        }
+        Object value = member.eGet(member.eClass().getEStructuralFeature("extInfo")); //$NON-NLS-1$
+        return value instanceof DynamicListExtInfo ? (DynamicListExtInfo)value : null;
+    }
+
+    private static String dynamicPlanError(DcsDynamicListWriter.Result result)
+    {
+        return result.isErrorJson() ? result.error() : ToolResult.error(result.error()).toJson();
+    }
+
+    static String expectedHashError(String expected, String current, DcsAddress address)
+    {
+        return "expectedHash '" + expected + "' does not match current hash '" + current //$NON-NLS-1$ //$NON-NLS-2$
+            + "' for '" + address + "'. Re-run dcs action='get' and pass the new expectedHash."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    static String validateExpectedHash(String expected, String current, DcsAddress address)
+    {
+        return expected == null || expected.equals(current) ? null
+            : expectedHashError(expected, current, address);
+    }
+
+    private static JsonObject schemaLayerMembers(JsonObject body)
+    {
+        JsonObject result = new JsonObject();
+        for (String member : List.of("dataSources", "dataSets", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "calculatedFields", "totalFields")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            if (body.has(member)) result.add(member, body.get(member).deepCopy());
+        }
+        return result;
+    }
+
+    private static String schemaRootMembersError(JsonObject body)
+    {
+        Set<String> allowed = new LinkedHashSet<>(List.of("dataSources", "dataSets", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "calculatedFields", "totalFields", "defaultSettings", "variants")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String member : body.keySet())
+        {
+            if (!allowed.contains(member))
+            {
+                return "Unknown schema body member '" + member + "'. Use one of: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + String.join(", ", allowed) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null;
+    }
+
     private static final class WriteOutcome
     {
         final String hash;
         final String contentFqn;
         final DcsWriter.Result applied;
+        final boolean settingsApplied;
 
-        WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied)
+        WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied,
+            boolean settingsApplied)
         {
             this.hash = hash;
             this.contentFqn = contentFqn;
+            this.applied = applied;
+            this.settingsApplied = settingsApplied;
+        }
+    }
+
+    private static final class DynamicWriteOutcome
+    {
+        final String hash;
+        final String settingsFqn;
+        final List<String> applied;
+
+        DynamicWriteOutcome(String hash, String settingsFqn, List<String> applied)
+        {
+            this.hash = hash;
+            this.settingsFqn = settingsFqn;
             this.applied = applied;
         }
     }

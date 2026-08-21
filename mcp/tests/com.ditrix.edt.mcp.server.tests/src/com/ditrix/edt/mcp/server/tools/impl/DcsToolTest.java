@@ -11,13 +11,16 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -65,7 +68,38 @@ public class DcsToolTest
         assertEquals("integer", properties.getAsJsonObject("limit").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("integer", properties.getAsJsonObject("offset").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertTrue(properties.getAsJsonObject("action").get("description").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
-            .contains("schema writes support upsert/update")); //$NON-NLS-1$
+            .contains("current writes support upsert/update")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testIndexAddressedMutationIsRefusedWithoutExpectedHash()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("fqn", "Report.Sales#/variants/Main/settings/filter/items/0"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("action", "update"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("type", "filter"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("body", "{\"use\":false}"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new DcsTool().execute(params);
+        assertTrue(result.contains("expectedHash is required")); //$NON-NLS-1$
+        assertTrue(result.contains("action='get'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStaleHashErrorNamesBothHashesAndTheFix()
+    {
+        DcsAddress.ParseResult parsed = DcsAddress.parse(
+            "Report.Sales#/variants/Main/settings/filter/items/0"); //$NON-NLS-1$
+        assertTrue(parsed.isSuccess());
+        String error = DcsTool.validateExpectedHash("aaaaaaaaaaaaaaaaaaaa", //$NON-NLS-1$
+            "bbbbbbbbbbbbbbbbbbbb", parsed.address()); //$NON-NLS-1$
+        assertNotNull(error);
+        assertTrue(error.contains("aaaaaaaaaaaaaaaaaaaa")); //$NON-NLS-1$
+        assertTrue(error.contains("bbbbbbbbbbbbbbbbbbbb")); //$NON-NLS-1$
+        assertTrue(error.contains("Re-run dcs action='get'")); //$NON-NLS-1$
+        assertTrue(error.contains("pass the new expectedHash")); //$NON-NLS-1$
+        assertEquals(null, DcsTool.validateExpectedHash("bbbbbbbbbbbbbbbbbbbb", //$NON-NLS-1$
+            "bbbbbbbbbbbbbbbbbbbb", parsed.address())); //$NON-NLS-1$
     }
 
     @Test

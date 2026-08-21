@@ -110,6 +110,22 @@ public final class DcsTargetResolver
     public static Resolution resolve(ProjectContext.ConfigurationResult projectContext,
         IBmModel bmModel, DcsAddress address)
     {
+        return resolve(projectContext, bmModel, address, false);
+    }
+
+    /**
+     * Write resolution variant that also accepts a plain form attribute. The caller must run the
+     * existing destructive dynamic-list conversion preflight and consent gate before mutating it.
+     */
+    public static Resolution resolveForWrite(ProjectContext.ConfigurationResult projectContext,
+        IBmModel bmModel, DcsAddress address)
+    {
+        return resolve(projectContext, bmModel, address, true);
+    }
+
+    private static Resolution resolve(ProjectContext.ConfigurationResult projectContext,
+        IBmModel bmModel, DcsAddress address, boolean allowPlainDynamicList)
+    {
         RootClassification classification = classifyRoot(address);
         if (!classification.isSuccess())
         {
@@ -140,7 +156,8 @@ public final class DcsTargetResolver
                 case OWNED_TEMPLATE:
                     return resolveTemplate(projectContext, bmModel, address, classification);
                 case DYNAMIC_LIST:
-                    return resolveDynamicList(projectContext, bmModel, address, classification);
+                    return resolveDynamicList(projectContext, bmModel, address, classification,
+                        allowPlainDynamicList);
                 default:
                     return failure(FailureCode.UNSUPPORTED_ROOT, classification.normalizedRoot, null,
                         unsupportedRootMessage(classification.normalizedRoot));
@@ -336,7 +353,8 @@ public final class DcsTargetResolver
     }
 
     private static Resolution resolveDynamicList(ProjectContext.ConfigurationResult context,
-        IBmModel bmModel, DcsAddress address, RootClassification classification)
+        IBmModel bmModel, DcsAddress address, RootClassification classification,
+        boolean allowPlainDynamicList)
     {
         MetadataNodeResolver.MetadataNode formNode = MetadataNodeResolver.resolveExisting(
             context.scope(), classification.formMemberRef.formPath);
@@ -384,6 +402,11 @@ public final class DcsTargetResolver
             String actual = extInfo == null ? "none" : extInfo.eClass().getName(); //$NON-NLS-1$
             if (extInfo == null || !ECLASS_DYNAMIC_LIST_EXT_INFO.equals(actual))
             {
+                if (allowPlainDynamicList)
+                {
+                    return inspectDynamicList(form, attribute, null, null,
+                        classification.normalizedRoot);
+                }
                 return DynamicListInspection.failure(new Failure(FailureCode.NOT_DYNAMIC_LIST,
                     classification.normalizedRoot, actual,
                     notDynamicListMessage(classification.normalizedRoot, actual)));

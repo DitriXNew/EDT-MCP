@@ -7,6 +7,7 @@ resources lazily, and a read must still roll that model side effect back.
 """
 
 import os
+import re
 
 from harness import (
     PROJECT,
@@ -19,6 +20,7 @@ from harness import (
     diff,
     e2e_test,
     poll_diff_contains,
+    poll_disk_contains,
     read_disk,
     wait_for_project_ready,
 )
@@ -117,6 +119,17 @@ def _find_report_dcs(report_name):
 
 def _assert_read_did_not_change(before, ctx):
     assert diff() == before, "%s must not change the seeded project" % ctx
+
+
+def _hash(result):
+    match = re.search(r"\*\*Hash:\*\* `([0-9a-f]{20})`", result.text)
+    assert match, "dcs result must carry a 20-character hash:\n%s" % result.text
+    return match.group(1)
+
+
+def _projection_without_hash(result):
+    parts = result.text.split("\n\n", 1)
+    return parts[1] if len(parts) == 2 else result.text
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -310,8 +323,191 @@ def test_total_field_and_validation_failure_is_atomic():
     assert "Sum(E2EDcsTotalAmount)" in total_read.text
 
 
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_variant_nested_settings_and_hash_guarded_filter_index_update():
+    root = _seed_report("E2EDcsSettings")
+    authored = _write(root, "upsert", "variant", {
+        "name": "ManagerView",
+        "presentation": {"EN": "Manager view"},
+        "settings": {
+            "items": [{
+                "name": "CustomerGroup",
+                "groupFields": {"items": [{
+                    "field": {"kind": "field", "value": "Customer"},
+                    "groupType": "Items",
+                    "use": True,
+                }]},
+                "items": [{
+                    "name": "PeriodGroup",
+                    "groupFields": {"items": [{
+                        "field": {"kind": "field", "value": "Period"},
+                        "groupType": "Items",
+                    }]},
+                }],
+            }],
+            "selection": {
+                "viewMode": "Normal",
+                "userSettingID": "selection",
+                "items": [{
+                    "field": {"kind": "field", "value": "Customer"},
+                    "use": True,
+                }],
+            },
+            "filter": {
+                "viewMode": "Normal",
+                "userSettingID": "filter",
+                "items": [{
+                    "kind": "group",
+                    "groupType": "AndGroup",
+                    "items": [{
+                        "left": {"kind": "field", "value": "Quantity"},
+                        "comparisonType": "Greater",
+                        "right": [{"kind": "number", "value": 10}],
+                        "use": True,
+                    }, {
+                        "kind": "group",
+                        "groupType": "OrGroup",
+                        "items": [{
+                            "left": {"kind": "field", "value": "Amount"},
+                            "comparisonType": "Equal",
+                            "right": [{"kind": "number", "value": 20}],
+                            "use": True,
+                        }],
+                    }],
+                }],
+            },
+            "order": {
+                "viewMode": "Normal",
+                "userSettingID": "order",
+                "items": [{
+                    "field": {"kind": "field", "value": "Customer"},
+                    "orderType": "Asc",
+                    "use": True,
+                }],
+            },
+        },
+    }, language="en")
+    assert_ok(authored, "author a complete settings variant")
+
+    variant = _get(root + "#/variants/ManagerView/settings", "userSettings")
+    assert_ok(variant, "read back the settings addresses")
+    first_address = root + "#/variants/ManagerView/settings/filter/items/0/items/0"
+    changed_address = root + "#/variants/ManagerView/settings/filter/items/0/items/1/items/0"
+    assert root + "#/variants/ManagerView/settings/items/0" in variant.text
+    assert root + "#/variants/ManagerView/settings/items/0/items/0" in variant.text
+    assert first_address in variant.text
+    assert changed_address in variant.text
+
+    first_before = _get(first_address, "filter")
+    changed_before = _get(changed_address, "filter")
+    assert_ok(first_before, "read the sibling condition before the indexed update")
+    assert_ok(changed_before, "read the target condition before the indexed update")
+    current_hash = _hash(variant)
+
+    updated = _write(changed_address, "update", "filter", {
+        "kind": "item",
+        "right": [{"kind": "number", "value": 99}],
+    }, expectedHash=current_hash)
+    assert_ok(updated, "update exactly one nested filter item with its root hash")
+
+    first_after = _get(first_address, "filter")
+    changed_after = _get(changed_address, "filter")
+    assert_ok(first_after, "read the untouched sibling after the indexed update")
+    assert_ok(changed_after, "read the changed condition after the indexed update")
+    assert _projection_without_hash(first_after) == _projection_without_hash(first_before), \
+        "the hash-guarded update must not change a sibling filter item"
+    changed_projection = _projection_without_hash(changed_after)
+    assert "99" in changed_projection, "the selected filter item must carry its new value"
+    assert "20" not in changed_projection, \
+        "the selected filter item must not retain its old value"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dynamic_list_write_persists_form_and_external_list_settings_files():
+    catalog_name = "E2EDcsListWrite"
+    catalog = "Catalog." + catalog_name
+    form = catalog + ".Form.ListForm"
+    root = form + ".Attribute.List"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": catalog}),
+              "seed dynamic-list catalog")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form}),
+              "seed dynamic-list form")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed plain form attribute for guarded conversion")
+    wait_for_project_ready()
+
+    query_marker = "E2EDcsDynamicDescription"
+    configured = _write(root, "upsert", "dynamicList", {
+        "queryText": "SELECT Ref, Description AS %s FROM %s" % (query_marker, catalog),
+        "customQuery": True,
+        "mainTable": catalog,
+        "dynamicDataRead": True,
+        "autoFillAvailableFields": False,
+        "autoSaveUserSettings": True,
+        "getInvisibleFieldPresentations": True,
+        "keyType": "RowKey",
+        "keyField": ["Ref"],
+        "fields": [
+            {"dataPath": "Ref"},
+            {"dataPath": query_marker, "field": query_marker},
+        ],
+        "calculatedFields": [{
+            "dataPath": "DisplayText",
+            "expression": query_marker,
+        }],
+        "parameters": [{"name": "OnlyActive", "use": "Always"}],
+        "listSettings": {
+            "selection": {
+                "items": [], "viewMode": "Normal", "userSettingID": "selection",
+                "userSettingPresentation": {"EN": "Selection"},
+            },
+            "filter": {
+                "items": [], "viewMode": "Normal", "userSettingID": "filter",
+            },
+            "order": {
+                "items": [], "viewMode": "Normal", "userSettingID": "order",
+            },
+            "conditionalAppearance": {
+                "items": [], "viewMode": "Normal", "userSettingID": "appearance",
+            },
+        },
+    }, language="en")
+    assert_ok(configured, "configure a dynamic list and its shared settings through dcs")
+    assert "**Form.form export scheduled:** `true`" in configured.text
+    assert "**ListSettings.dcss export scheduled:** `true`" in configured.text
+
+    form_rel = "src/Catalogs/%s/Forms/ListForm/Form.form" % catalog_name
+    settings_rel = (
+        "src/Catalogs/%s/Forms/ListForm/Attributes/List/ExtInfo/ListSettings.dcss"
+        % catalog_name
+    )
+    poll_disk_contains(form_rel, query_marker,
+                       ctx="dynamic-list ext-info and fields must reach Form.form")
+    poll_disk_contains(settings_rel, "selection",
+                       ctx="shared list settings must reach the external ListSettings.dcss")
+    form_disk = read_disk(form_rel)
+    settings_disk = read_disk(settings_rel)
+    assert query_marker in form_disk, "the custom query must persist in Form.form"
+    assert "<dataPath>Ref</dataPath>" in form_disk, "dynamic-list fields must persist in Form.form"
+    assert "selection" in settings_disk and "filter" in settings_disk and "order" in settings_disk \
+        and "appearance" in settings_disk, \
+        "the empty holder scaffolding must persist in ListSettings.dcss"
+
+    read_back = _get(root, "dynamicList")
+    assert_ok(read_back, "read back the authored dynamic list")
+    assert root + "#/fields/Ref" in read_back.text
+    settings = _get(root + "#/listSettings", "userSettings")
+    assert_ok(settings, "read back external dynamic-list settings")
+    assert root + "#/listSettings/selection" in settings.text
+    assert root + "#/listSettings/filter" in settings.text
+    assert root + "#/listSettings/order" in settings.text
+    assert root + "#/listSettings/conditionalAppearance" in settings.text
+
+
 @e2e_test(tool="dcs", kind="read")
-def test_later_stage_mutation_action_is_a_clean_non_mutating_error():
+def test_unimplemented_mutation_action_is_a_clean_non_mutating_error():
     result = call("dcs", {
         "projectName": PROJECT,
         "fqn": "Report.DoesNotNeedToExist",
@@ -320,7 +516,7 @@ def test_later_stage_mutation_action_is_a_clean_non_mutating_error():
         "body": {"name": "DataSet1"},
         "expectedHash": "00000000000000000000",
     })
-    error = assert_error(result, "reserved replace action")
+    error = assert_error(result, "unimplemented replace action")
     assert_error_quality(error, names=["replace"], suggests=["get", "upsert"],
-                         ctx="reserved actions name the working alternatives")
-    assert_no_diff("a rejected reserved action must not change the project")
+                         ctx="unimplemented actions name the working alternatives")
+    assert_no_diff("a rejected unimplemented action must not change the project")

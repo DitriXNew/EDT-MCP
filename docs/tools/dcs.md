@@ -1,6 +1,6 @@
 # dcs
 
-Inspect 1C DCS schemas and form dynamic lists, and upsert/update schema nodes. Call action='get' first, pass its hash as expectedHash for index-addressed mutations, and call get_tool_guide('dcs') for body shapes.
+Inspect and upsert/update 1C DCS schemas, shared settings, and form dynamic lists. Call action='get' first, pass its hash as expectedHash for index-addressed mutations, and call get_tool_guide('dcs') for body shapes.
 
 ## Parameters
 
@@ -57,15 +57,20 @@ FQN explicitly points inside a variant.
 | Action | Meaning | Body | Hash | Current status |
 | --- | --- | --- | --- | --- |
 | `get` | Read a summary, collection page, or full node | absent | absent; returns current hash | implemented |
-| `upsert` | Create by natural key or partially update | required | required for index-addressed targets | schema layer |
-| `update` | Update an existing node only | required | required for index-addressed targets | existing schema node |
-| `replace` | Authoritative replacement | required | always required | reserved |
-| `remove` | Remove one fragment-addressed node | absent | always required | reserved |
+| `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target | required | required for index-addressed targets | schema, settings, dynamic lists |
+| `update` | Update an existing node only | required | required for index-addressed targets | schema, settings, dynamic lists |
+| `replace` | Authoritative replacement | required | always required | not implemented |
+| `remove` | Remove one fragment-addressed node | absent | always required | not implemented |
 
 The complete per-type mutation body shapes are returned by `get_tool_guide('dcs')`.
-The schema layer currently authors data sources, query data sets and their fields,
-parameters, calculated fields, and total fields. Settings, dynamic-list writes,
-`replace`, and `remove` remain reserved and are rejected without changing the model.
+The schema layer authors data sources, query data sets and their fields, parameters,
+calculated fields, and total fields. The shared settings layer authors variants, recursive
+groupings, selection, filter groups/items, order, data parameters, output parameters, and
+holder scaffolding for both schemas and dynamic lists. Dynamic lists also author ext-info
+scalars and reuse the schema item writers for fields, calculated fields, and parameters.
+Conditional-appearance rules remain read-only, while an empty holder may carry the same
+view-mode and user-setting scaffolding.
+`replace` and `remove` are rejected without changing the model.
 
 ## Get-edit-verify protocol
 
