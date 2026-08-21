@@ -31,8 +31,10 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    unsaved in-memory model edits; preserve any through the current supported,
    authorized save/resync route, or stop if safety cannot be proved. Always pass
    the exact project; omission rebuilds every EDT project. After any clean,
-   call `list_projects` with `format=json` until that exact project reports `ready`;
-   do not trust the clean result or continue against an unsettled/unknown state.
+   poll `list_projects` with `format=json` and bounded backoff for at most five
+   minutes, or a shorter caller deadline, until that exact project reports
+   `ready`. If the deadline expires, stop and report the unsettled project; do
+   not trust the clean result or continue against an unsettled/unknown state.
 2. Resolve application identity with `get_applications` and
    `list_configurations`. For `update_database`, review the current preview and
    side effects with `terminateRunningClients=false`, obtain authority, execute

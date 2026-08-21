@@ -52,7 +52,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | **All Tools** | Ничего (все включённые на данный момент инструменты) |
 | **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Доступны: Core/Project (кроме export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | То же, что Analysis Only, **минус** добавляются доступными все инструменты BSL Code **кроме** `write_module_source`. То есть доступны `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Development** | Группа Debugging и инструменты, выключенные по умолчанию (сейчас raw `git`). `run_yaxunit_tests` остаётся доступен через Applications для обычных прогонов; `debug=true` может запуститься, но инструменты исследования и очистки выключены, поэтому не начинай debug-прогон, пока Debugging не включён. Refactoring, Translation, BSL Code, Applications — доступны |
+| **Development** | Группа Debugging и инструменты, выключенные по умолчанию (сейчас raw `git` и `ask_workmate`). `run_yaxunit_tests` остаётся доступен через Applications для обычных прогонов; `debug=true` может запуститься, но инструменты исследования и очистки выключены, поэтому не начинай debug-прогон, пока Debugging не включён. Refactoring, Translation, BSL Code и остальные инструменты Applications — доступны |
 
 ## Настраиваемые дефолты параметров
 

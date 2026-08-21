@@ -51,7 +51,7 @@ In plugin settings (`Window -> Preferences -> MCP Server -> Tools`) the user sel
 | **All Tools** | Nothing (all currently enabled tools) |
 | **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Available: Core/Project (except export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | Same as Analysis Only, **plus** all BSL Code tools become available **except** `write_module_source`. So available: `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Development** | The Debugging group and default-off tools (currently raw `git`). `run_yaxunit_tests` remains available from Applications for normal runs; although `debug=true` can start, its inspection and cleanup tools are disabled, so do not start a debug run until Debugging is enabled. Refactoring, Translation, BSL Code, Applications are available |
+| **Development** | The Debugging group and default-off tools (currently raw `git` and `ask_workmate`). `run_yaxunit_tests` remains available from Applications for normal runs; although `debug=true` can start, its inspection and cleanup tools are disabled, so do not start a debug run until Debugging is enabled. Refactoring, Translation, BSL Code, and the remaining Applications tools are available |
 
 ## Configurable parameter defaults
 

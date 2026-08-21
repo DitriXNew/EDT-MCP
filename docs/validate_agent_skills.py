@@ -36,6 +36,10 @@ PROXY_TOOLS = {"router_status"}
 BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 SKILL_NAME = re.compile(r"edt-mcp-project-[a-z0-9]+(?:-[a-z0-9]+)*")
 MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+JAVA_COMMENT_OR_LITERAL = re.compile(
+    r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/',
+    re.DOTALL,
+)
 
 
 def fail(errors: list[str], message: str) -> None:
@@ -61,6 +65,13 @@ def read_java_source(path: Path, errors: list[str]) -> str:
     except UnicodeDecodeError as exc:
         fail(errors, f"{path.relative_to(ROOT)}: invalid Java source encoding: {exc}")
         return ""
+
+
+def strip_java_comments(source: str) -> str:
+    return JAVA_COMMENT_OR_LITERAL.sub(
+        lambda match: "" if match.group(0).startswith(("//", "/*")) else match.group(0),
+        source,
+    )
 
 
 def parse_frontmatter(path: Path, text: str, errors: list[str]) -> dict[str, str]:
@@ -153,7 +164,7 @@ def resolve_java_string(expression: str, errors: list[str], owner: Path) -> str 
 
 
 def registered_tool_names(errors: list[str]) -> set[str]:
-    registrar = read_java_source(REGISTRAR, errors)
+    registrar = strip_java_comments(read_java_source(REGISTRAR, errors))
     classes = re.findall(r"catalogue\.add\(new\s+([A-Za-z0-9_]+)\s*\(", registrar)
     if not classes:
         fail(errors, f"{REGISTRAR.relative_to(ROOT)}: no registered tool classes found")
