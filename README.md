@@ -500,7 +500,7 @@ with `python docs/generate_tool_docs.py`.
 | [`adopt_metadata_object`](docs/tools/adopt_metadata_object.md) | Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can… |
 | [`create_launch_config`](docs/tools/create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](docs/tools/create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
-| [`dcs`](docs/tools/dcs.md) | Inspect 1C DCS schemas and form dynamic lists; mutation actions are reserved but not implemented yet. Call action='get' first, pass its hash as expectedHash… |
+| [`dcs`](docs/tools/dcs.md) | Inspect 1C DCS schemas and form dynamic lists, and upsert/update schema nodes. Call action='get' first, pass its hash as expectedHash… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
 | [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a… |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |

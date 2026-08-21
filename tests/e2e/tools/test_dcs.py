@@ -1,4 +1,4 @@
-"""End-to-end contract tests for the read side of the ``dcs`` tool (#404).
+"""End-to-end contract tests for the ``dcs`` schema read/write path (#404).
 
 The fixture does not carry four convenient DCS roots, so happy-path tests seed their own
 metadata with the existing authoring tools and then pin the project diff before every read.
@@ -6,8 +6,11 @@ The post-read equality checks are load-bearing: ``BasicTemplate.getTemplate()`` 
 resources lazily, and a read must still roll that model side effect back.
 """
 
+import os
+
 from harness import (
     PROJECT,
+    PROJECT_DIR,
     assert_error,
     assert_error_quality,
     assert_no_diff,
@@ -15,6 +18,8 @@ from harness import (
     call,
     diff,
     e2e_test,
+    poll_diff_contains,
+    read_disk,
     wait_for_project_ready,
 )
 
@@ -85,6 +90,29 @@ def _get(fqn, target_type, **extra):
     }
     args.update(extra)
     return call("dcs", args)
+
+
+def _write(fqn, action, target_type, body, **extra):
+    args = {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "action": action,
+        "type": target_type,
+        "body": body,
+    }
+    args.update(extra)
+    return call("dcs", args)
+
+
+def _find_report_dcs(report_name):
+    templates = os.path.join(PROJECT_DIR, "src", "Reports", report_name, "Templates")
+    if not os.path.isdir(templates):
+        return None
+    for root, _dirs, files in os.walk(templates):
+        for filename in files:
+            if filename.lower() == "template.dcs":
+                return os.path.relpath(os.path.join(root, filename), PROJECT_DIR).replace(os.sep, "/")
+    return None
 
 
 def _assert_read_did_not_change(before, ctx):
@@ -193,16 +221,106 @@ def test_russian_name_is_preserved_in_canonical_addresses():
     _assert_read_did_not_change(before, "Russian-Name read")
 
 
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
+    report_name = "E2EDcsWriteDataset"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for dcs write")
+    wait_for_project_ready()
+
+    first_query = "SELECT 101 AS E2EDcsWriteFirst"
+    second_query = "SELECT 202 AS E2EDcsWriteSecond"
+    created = _write(root, "upsert", "dataSet", {
+        "name": "Sales",
+        "type": "query",
+        "query": first_query,
+        "autoFillFields": False,
+        "fields": [{"dataPath": "Amount"}],
+    })
+    assert_ok(created, "author a query dataset through dcs")
+    poll_diff_contains("E2EDcsWriteFirst",
+                       ctx="the dcs write must force-export the first query to disk")
+
+    updated = _write(root + "#/dataSets/Sales", "upsert", "dataSet", {
+        "query": second_query,
+    })
+    assert_ok(updated, "re-author the same natural key")
+    poll_diff_contains("E2EDcsWriteSecond",
+                       ctx="the re-authored query must force-export to disk")
+
+    drill = _get(root + "#/dataSets/Sales", "dataSet")
+    assert_ok(drill, "read back the upserted dataset")
+    assert second_query in drill.text
+    assert first_query not in drill.text
+    assert drill.text.count(root + "#/dataSets/Sales`") == 1, \
+        "the same natural key must be updated, never duplicated"
+
+    dcs_rel = _find_report_dcs(report_name)
+    assert dcs_rel is not None, "the first dcs write must materialize the report's Template.dcs"
+    on_disk = read_disk(dcs_rel)
+    assert "E2EDcsWriteSecond" in on_disk, "the committed query must persist in %s" % dcs_rel
+    assert "E2EDcsWriteFirst" not in on_disk, "the old query must be replaced in %s" % dcs_rel
+    assert on_disk.count("<name>Sales</name>") == 1, \
+        "the report's .dcs must contain one Sales dataset, not duplicate natural keys"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_total_field_and_validation_failure_is_atomic():
+    report_name = "E2EDcsWriteTotal"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for total-field write")
+    wait_for_project_ready()
+
+    total = _write(root, "upsert", "totalField", {
+        "dataPath": "Amount",
+        "expression": "Sum(E2EDcsTotalAmount)",
+        "groups": ["Goods"],
+    })
+    assert_ok(total, "author a totalField")
+    poll_diff_contains("E2EDcsTotalAmount",
+                       ctx="the authored totalField must force-export to disk")
+    before = _get(root, "schema")
+    assert_ok(before, "capture the schema hash before a rejected write")
+
+    rejected = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "MustNotLand",
+            "type": "query",
+            "query": "SELECT 999 AS MustNotLand",
+        }],
+        "totalFields": [{
+            "dataPath": "Broken",
+            "expression": "Sum(Broken)",
+            "titel": "bad unknown member",
+        }],
+    })
+    error = assert_error(rejected, "unknown nested body member")
+    assert_error_quality(error, names=["titel"], suggests=["Accepted members", "dataPath"],
+                         ctx="unknown body members name the bad key and accepted members")
+
+    after = _get(root, "schema")
+    assert_ok(after, "read schema after rejected write")
+    assert after.text == before.text, "validation failure must leave the model and hash untouched"
+    assert "MustNotLand" not in diff(), "an earlier valid section must not partially reach disk"
+
+    total_read = _get(root + "#/totalFields/Amount", "totalField")
+    assert_ok(total_read, "read back the totalField")
+    assert "Sum(E2EDcsTotalAmount)" in total_read.text
+
+
 @e2e_test(tool="dcs", kind="read")
-def test_reserved_mutation_action_is_a_clean_non_mutating_error():
+def test_later_stage_mutation_action_is_a_clean_non_mutating_error():
     result = call("dcs", {
         "projectName": PROJECT,
         "fqn": "Report.DoesNotNeedToExist",
-        "action": "upsert",
+        "action": "replace",
         "type": "dataSet",
         "body": {"name": "DataSet1"},
+        "expectedHash": "00000000000000000000",
     })
-    error = assert_error(result, "Stage 1b reserved action")
-    assert_error_quality(error, names=["upsert"], suggests=["get"],
-                         ctx="reserved actions name the working alternative")
+    error = assert_error(result, "reserved replace action")
+    assert_error_quality(error, names=["replace"], suggests=["get", "upsert"],
+                         ctx="reserved actions name the working alternatives")
     assert_no_diff("a rejected reserved action must not change the project")

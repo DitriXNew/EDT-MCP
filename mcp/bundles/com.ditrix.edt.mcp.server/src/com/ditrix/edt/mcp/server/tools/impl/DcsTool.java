@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -24,18 +25,24 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
 import com.ditrix.edt.mcp.server.utils.DcsReadProjection;
 import com.ditrix.edt.mcp.server.utils.DcsRootReader;
+import com.ditrix.edt.mcp.server.utils.DcsSchemaContent;
+import com.ditrix.edt.mcp.server.utils.DcsSchemaWriter;
+import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
+import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Reads and, in later stages, mutates DCS schemas and form dynamic lists. */
+/** Reads DCS/dynamic-list roots and authors the schema layer. */
 public class DcsTool implements IMcpTool
 {
     public static final String NAME = "dcs"; //$NON-NLS-1$
@@ -77,8 +84,8 @@ public class DcsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Inspect 1C DCS schemas and form dynamic lists; mutation actions are reserved but not " //$NON-NLS-1$
-            + "implemented yet. Call action='get' first, pass its hash as expectedHash for " //$NON-NLS-1$
+        return "Inspect 1C DCS schemas and form dynamic lists, and upsert/update schema nodes. " //$NON-NLS-1$
+            + "Call action='get' first, pass its hash as expectedHash for " //$NON-NLS-1$
             + "index-addressed mutations, and call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
 
@@ -88,7 +95,7 @@ public class DcsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_FQN, "DCS root FQN, optionally followed by an RFC-6901 '#/...' pointer.", true) //$NON-NLS-1$
-            .enumProperty(KEY_ACTION, "Operation; this stage implements get only.", true, ACTIONS) //$NON-NLS-1$
+            .enumProperty(KEY_ACTION, "Operation; schema writes support upsert/update.", true, ACTIONS) //$NON-NLS-1$
             .enumProperty(KEY_TYPE, "Target kind; body shapes are in get_tool_guide('dcs').", true, TYPES) //$NON-NLS-1$
             .objectProperty(KEY_BODY, "Mutation body; forbidden for get/remove and required by the other mutations.") //$NON-NLS-1$
             .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
@@ -161,23 +168,31 @@ public class DcsTool implements IMcpTool
         {
             return shapeError;
         }
-        if (!ACTION_GET.equals(action))
-        {
-            return ToolResult.error("Action '" + action //$NON-NLS-1$
-                + "' is not implemented yet. This Stage 1b tool supports action='get'; no model changes were made.") //$NON-NLS-1$
-                .toJson();
-        }
-
         int limit = Pagination.clampLimit(rawLimit, Pagination.MAX_LIMIT);
         Display display = Display.getDefault();
         if (display == null || display.isDisposed())
         {
             return ToolResult.error("EDT workbench display is not available for dcs target '" + rawFqn //$NON-NLS-1$
-                + "'. Open the project in EDT and retry action='get'.").toJson(); //$NON-NLS-1$
+                + "'. Open the project in EDT and retry action='" + action + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         AtomicReference<String> result = new AtomicReference<>();
-        display.syncExec(() -> result.set(executeGet(projectName, parsed.address(), type,
-            language, limit, offset)));
+        if (ACTION_GET.equals(action))
+        {
+            display.syncExec(() -> result.set(executeGet(projectName, parsed.address(), type,
+                language, limit, offset)));
+        }
+        else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action))
+        {
+            JsonObject parsedBody = JsonParser.parseString(body).getAsJsonObject();
+            display.syncExec(() -> result.set(executeWrite(projectName, parsed.address(), action, type,
+                parsedBody, expectedHash, language)));
+        }
+        else
+        {
+            return ToolResult.error("Action '" + action //$NON-NLS-1$
+                + "' is reserved for a later stage. Use action='get', 'upsert', or 'update'; no model " //$NON-NLS-1$
+                + "changes were made.").toJson(); //$NON-NLS-1$
+        }
         return result.get();
     }
 
@@ -344,6 +359,173 @@ public class DcsTool implements IMcpTool
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             return ToolResult.error("Could not read DCS target '" + address + "': " + message //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Re-open or clean the project, then retry action='get'.").toJson(); //$NON-NLS-1$
+        }
+    }
+
+    private static String executeWrite(String projectName, DcsAddress address, String action, String type,
+        JsonObject body, String expectedHash, String language)
+    {
+        try
+        {
+            ProjectContext.ConfigurationResult context = ProjectContext.resolveMetadataRoot(projectName);
+            if (!context.ok())
+            {
+                return context.errorJson();
+            }
+            String effectiveLanguage = resolveLanguage(context, language);
+            if (effectiveLanguage != null && effectiveLanguage.startsWith("ERROR:")) //$NON-NLS-1$
+            {
+                return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
+            }
+            IBmModelManager manager = Activator.getDefault().getBmModelManager();
+            IBmModel model = manager == null ? null : manager.getModel(context.project());
+            if (model == null)
+            {
+                return ToolResult.error("BM model is not available for project '" + projectName //$NON-NLS-1$
+                    + "'. Wait for EDT to finish opening the project, then retry action='" //$NON-NLS-1$
+                    + action + "'.").toJson(); //$NON-NLS-1$
+            }
+            DcsTargetResolver.Resolution resolution = DcsTargetResolver.resolve(context, model, address);
+            if (!resolution.isSuccess())
+            {
+                return ToolResult.error(resolution.failure().message()).toJson();
+            }
+            DcsTargetResolver.Target target = resolution.target();
+            if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
+            {
+                return ToolResult.error("Schema-layer type '" + type + "' cannot mutate dynamic-list root '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + target.normalizedRootFqn() + "' in this stage. Use action='get'; dynamic-list " //$NON-NLS-1$
+                    + "authoring arrives with the shared settings layer.").toJson(); //$NON-NLS-1$
+            }
+
+            DcsPresentationParser.LanguageContext languages =
+                new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes());
+            DcsSchemaWriter.PrepareResult prepared =
+                DcsSchemaWriter.prepare(action, type, address, body, languages);
+            if (!prepared.isSuccess())
+            {
+                return ToolResult.error(prepared.error()).toJson();
+            }
+            DcsSchemaContent.Services services = DcsSchemaContent.resolveServices(context, model);
+            if (!services.isSuccess())
+            {
+                return ToolResult.error(services.error()).toJson();
+            }
+            DcsWriter.TypeResolver typeResolver =
+                DcsWriter.typeResolver(context.configuration(), services.version());
+
+            WriteOutcome outcome;
+            try
+            {
+                outcome = BmTransactions.write(model, "DcsSchemaWrite", (tx, monitor) -> //$NON-NLS-1$
+                {
+                    DcsRootReader.Result current = DcsRootReader.read(tx, target);
+                    if (!current.isSuccess())
+                    {
+                        throw DcsWriteFailure.message(current.error());
+                    }
+                    if (current.root() != null
+                        && !(current.root() instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema))
+                    {
+                        throw DcsWriteFailure.message("DCS root '" + target.normalizedRootFqn() //$NON-NLS-1$
+                            + "' is no longer a DataCompositionSchema. Re-run dcs action='get'."); //$NON-NLS-1$
+                    }
+                    String currentHash = DcsHash.compute(current.root());
+                    if (expectedHash != null && !expectedHash.equals(currentHash))
+                    {
+                        throw DcsWriteFailure.message("expectedHash '" + expectedHash //$NON-NLS-1$
+                            + "' does not match current hash '" + currentHash + "' for '" + address //$NON-NLS-1$ //$NON-NLS-2$
+                            + "'. Re-run dcs action='get' and pass the new expectedHash."); //$NON-NLS-1$
+                    }
+
+                    DcsSchemaContent.ResolveResult content = DcsSchemaContent.resolve(tx, target, services);
+                    if (!content.isSuccess())
+                    {
+                        throw DcsWriteFailure.message(content.error());
+                    }
+                    DcsSchemaWriter.Result applied =
+                        DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver);
+                    if (!applied.isSuccess())
+                    {
+                        throw applied.isErrorJson() ? DcsWriteFailure.json(applied.error())
+                            : DcsWriteFailure.message(applied.error());
+                    }
+                    return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
+                        applied.applied());
+                });
+            }
+            catch (DcsWriteFailure e)
+            {
+                return e.errorJson;
+            }
+
+            List<String> exports = new ArrayList<>(target.forceExportFqns());
+            if (outcome.contentFqn != null && !outcome.contentFqn.isEmpty()
+                && !exports.contains(outcome.contentFqn))
+            {
+                exports.add(outcome.contentFqn);
+            }
+            WriteScope.recordWrite(context.project());
+            boolean persisted = !exports.isEmpty()
+                && BmTransactions.forceExportToDisk(context.project(), exports);
+            if (!persisted)
+            {
+                return ToolResult.error("DCS action='" + action + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + address + "', but force-export could not be scheduled for " + exports //$NON-NLS-1$
+                    + ". Save or resync the project before refreshing it, then verify with dcs " //$NON-NLS-1$
+                    + "action='get'.").toJson(); //$NON-NLS-1$
+            }
+            DcsWriter.Result counts = outcome.applied;
+            return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
+                + "`\n\n**Hash:** `" + outcome.hash + "`\n\n**Export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
+                + "\n\n**Applied:** dataSources=" + counts.dataSources //$NON-NLS-1$
+                + ", dataSets=" + counts.dataSets + ", fields=" + counts.fields //$NON-NLS-1$ //$NON-NLS-2$
+                + ", parameters=" + counts.parameters + ", calculatedFields=" //$NON-NLS-1$ //$NON-NLS-2$
+                + counts.calculatedFields + ", totalFields=" + counts.totalFields; //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error writing DCS target " + address, e); //$NON-NLS-1$
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            return ToolResult.error("Could not write DCS target '" + address + "': " + message //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Re-open or clean the project, run dcs action='get', then retry.").toJson(); //$NON-NLS-1$
+        }
+    }
+
+    private static final class WriteOutcome
+    {
+        final String hash;
+        final String contentFqn;
+        final DcsWriter.Result applied;
+
+        WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied)
+        {
+            this.hash = hash;
+            this.contentFqn = contentFqn;
+            this.applied = applied;
+        }
+    }
+
+    /** Runtime failure forces the BM write transaction to roll back. */
+    private static final class DcsWriteFailure extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+        final String errorJson;
+
+        private DcsWriteFailure(String errorJson)
+        {
+            super(errorJson);
+            this.errorJson = errorJson;
+        }
+
+        static DcsWriteFailure message(String message)
+        {
+            return new DcsWriteFailure(ToolResult.error(message).toJson());
+        }
+
+        static DcsWriteFailure json(String errorJson)
+        {
+            return new DcsWriteFailure(errorJson);
         }
     }
 

@@ -1,10 +1,10 @@
 ## Guide
 
 `dcs` addresses a data composition schema (DCS) or a form attribute's dynamic-list
-configuration as one root plus an optional fragment. Stage 1b implements
-`action="get"` only. The other actions and their schemas are reserved now so calls do
-not need to change when authoring support lands; today they return a clean
-"not implemented" error without changing the model.
+configuration as one root plus an optional fragment. `action="get"` covers both root
+kinds. Schema roots also support `upsert` and `update` for data sources, query data
+sets and fields, parameters, calculated fields, and total fields. Settings,
+dynamic-list writes, `replace`, and `remove` remain reserved for later stages.
 
 ### Start with a root summary
 
@@ -116,11 +116,11 @@ same kind inside a named variant, address that variant's `settings` subtree expl
 
 ### Actions
 
-| Action | Meaning | `body` | `expectedHash` | Stage 1b |
+| Action | Meaning | `body` | `expectedHash` | Current support |
 | --- | --- | --- | --- | --- |
 | `get` | Read a root summary, collection page, or full node | Must be absent | Must be absent; the current `hash` is returned | Implemented |
-| `upsert` | Create by natural key or partially update; omitted members stay unchanged | Required | Required only for an index-addressed target | Not implemented yet |
-| `update` | Modify an existing node only; never create | Required | Required only for an index-addressed target | Not implemented yet |
+| `upsert` | Create by natural key or partially update; omitted members stay unchanged | Required | Required only for an index-addressed target | Schema layer |
+| `update` | Modify an existing node only; never create | Required | Required only for an index-addressed target | Existing schema node only |
 | `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required | Always required | Not implemented yet |
 | `remove` | Remove exactly one fragment-addressed node | Must be absent | Always required | Not implemented yet |
 
@@ -130,9 +130,10 @@ members are errors. The whole request is validated before a future mutation star
 
 ### Types and body shapes
 
-The body shapes below define the fixed authoring contract. They are not accepted by
-Stage 1b because mutation actions are not implemented yet. Optional members are marked
-with `?`; omitted members have the action semantics from the table above.
+The body shapes below define the fixed authoring contract. This stage accepts the
+schema-layer rows through `upsert` and `update`; the remaining rows document the
+reserved contract. Optional members are marked with `?`; omitted members have the
+action semantics from the table above.
 
 Shared localized text and value shapes:
 
@@ -147,10 +148,10 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 | --- | --- |
 | `schema` | Root schema: `{dataSources?, dataSets?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
 | `dynamicList` | Dynamic-list ext-info: `{queryText?, mainTable?, dynamicDataRead?, autoFillAvailableFields?, customQuery?, autoSaveUserSettings?, getInvisibleFieldPresentations?, keyType?, keyField?, fields?, calculatedFields?, parameters?, listSettings?}`. Existing dynamic-list conversion safety gates still apply. |
-| `dataSource` | `{name, dataSourceType?, connectionString?}`; natural key is `name`. |
-| `dataSet` | Query data set: `{name, kind:"query", dataSource?, query?, autoFillAvailableFields?, fields?, role?, useRestriction?}`; natural key is `name`. Object/union data sets can be read, but authoring support arrives in a later stage. |
+| `dataSource` | `{name, type?, connectionString?}`; natural key is `name`; `type` defaults to `"Local"`. |
+| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object/union data sets can be read, but authoring support arrives in a later stage. |
 | `field` | `{dataPath, field?, title?:PresentationSpec, role?, useRestriction?}`; natural key is `dataPath`. `DataCompositionField` values use their string path. |
-| `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, values?:ValueSpec[], use?}`; natural key is `name`. |
+| `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?}`; natural key is `name`. |
 | `calculatedField` | `{dataPath, title?:PresentationSpec, expression?}`; natural key is `dataPath`. |
 | `totalField` | `{dataPath, expression?, groups?:string[]}`; natural key is `dataPath`. |
 | `variant` | `{name, presentation?:PresentationSpec, settings?}`; natural key is `name`. |
@@ -164,6 +165,12 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 | `userField` | `{items:[{kind:"expression", dataPath?, expression?, title?:PresentationSpec} | {kind:"case", dataPath?, variants?, title?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `outputParameter` | `{items:[{parameter:ValueSpec, value?:ValueSpec, use?}]}`. Items are ordered/indexed. |
 | `userSettings` | Settings scaffolding: `{itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec, additionalProperties?}`. Never use these fields to store invented MCP IDs. |
+
+For a schema-root batch, use the established plural payload vocabulary:
+`dataSources`, `dataSets`, `parameters`, `calculatedFields`, and `totalFields`. A field
+is nested under its query data set. For a singular write, use the corresponding row
+body and either the root/collection address (`upsert`) or exact returned node address
+(`update`). Unknown members are rejected before any model change.
 
 Enum values are platform literals. An invalid comparison, order direction, grouping
 kind, or similar token is rejected and the future error lists the allowed values.

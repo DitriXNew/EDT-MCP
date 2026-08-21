@@ -74,6 +74,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
+import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
@@ -1252,248 +1253,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // going through the property pipeline where the undeclared-locale guard lives - so without
         // this the very hole issue #298 closes stayed open on this route. Checked HERE, before any
         // write, so a bad code fails the call with nothing applied.
-        Set<String> titleLocales = new LinkedHashSet<>();
-        String localeError = dcsTitleLocaleError(ctx.config, args.dcsSpec, titleLocales);
+        DcsPresentationParser.LanguageContext titleLocales = new DcsPresentationParser.LanguageContext(
+            MetadataLanguageUtils.declaredLanguageCodes(ctx.config));
+        String localeError = DcsPresentationParser.validateRecursively(args.dcsSpec, titleLocales);
         if (localeError != null)
         {
-            return localeError;
+            return ToolResult.error(localeError).toJson();
         }
         // A dcs title is a localized write like any other, so the same question applies: is the
         // configuration even translated into that language? The report's per-property missing list
         // has no meaning here (a payload writes many titles at once), but the prompt to ASK does.
-        boolean localeUnused = titleLocales.stream()
+        boolean localeUnused = titleLocales.usedCodes().stream()
             .anyMatch(code -> MetadataLanguageUtils.isDeclaredButUnused(ctx.config, code));
-        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec, localeUnused);
+        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec, localeUnused,
+            titleLocales);
     }
 
-
-    /**
-     * Rejects a localized {@code title} in a {@code dcs} payload whose language code the
-     * configuration does not declare - the same rule the property pipeline applies, on the route
-     * that bypasses it. Issue #298.
-     *
-     * <p>Walks the payload for every {@code title} that is an OBJECT (a {@code {code: text}} map); a
-     * plain-string title is language-neutral and needs no check. Returns a ready JSON error naming
-     * the offending code and the declared ones, or {@code null} when every code is fine (or the
-     * configuration declares none, which leaves nothing to validate against).
-     *
-     * @param config the configuration
-     * @param dcsSpec the raw dcs payload
-     * @param used collects the canonical codes the payload's titles write under
-     * @return a JSON error, or {@code null} when the payload's locales are acceptable
-     */
-    private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec,
-        Set<String> used)
-    {
-        if (dcsSpec == null)
-        {
-            return null;
-        }
-        List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
-        if (declared.isEmpty())
-        {
-            // No declared code makes EVERY code undeclared, so a localized title here would be
-            // stored where nothing can display it. The property pipeline refuses this case; the
-            // dcs route must not be the hole it slips through. A payload with no localized title
-            // is untouched - only an actual {code: text} map is refused.
-            String firstLocale = firstDcsTitleLocale(dcsSpec);
-            if (firstLocale == null)
-            {
-                return null;
-            }
-            return ToolResult.error("This configuration declares no language codes, so '" //$NON-NLS-1$ //$NON-NLS-2$
-                + firstLocale + "' in a dcs title cannot be stored where anything would display " //$NON-NLS-1$
-                + "it. Add a Language object with a 'languageCode' first (create_metadata " //$NON-NLS-1$
-                + "'Language.<Name>' + modify_metadata 'languageCode'), then write the title.") //$NON-NLS-1$
-                    .toJson();
-        }
-        return normalizeDcsTitleLocales(config, declared, dcsSpec, used);
-    }
-
-    /**
-     * The first language code any STORED dcs title is keyed by, or {@code null} when the payload
-     * carries no localized title at all. Used only to name a value in the no-declared-language
-     * refusal - the walk itself is {@link #normalizeDcsTitleLocales}.
-     */
-    private static String firstDcsTitleLocale(JsonObject dcsSpec)
-    {
-        for (String member : new String[] {KEY_DCS_PARAMETERS, KEY_DCS_CALCULATED_FIELDS})
-        {
-            String code = firstTitleLocaleOfEntries(dcsSpec.get(member));
-            if (code != null)
-            {
-                return code;
-            }
-        }
-        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
-        if (dataSets == null || !dataSets.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement dataSet : dataSets.getAsJsonArray())
-        {
-            if (dataSet != null && dataSet.isJsonObject())
-            {
-                String code = firstTitleLocaleOfEntries(dataSet.getAsJsonObject().get(KEY_DCS_FIELDS));
-                if (code != null)
-                {
-                    return code;
-                }
-            }
-        }
-        return null;
-    }
-
-    /** The first language key of the first object-valued {@code title} in one array of entries. */
-    private static String firstTitleLocaleOfEntries(JsonElement entries)
-    {
-        if (entries == null || !entries.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement entry : entries.getAsJsonArray())
-        {
-            if (entry == null || !entry.isJsonObject())
-            {
-                continue;
-            }
-            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
-            if (title != null && title.isJsonObject() && !title.getAsJsonObject().keySet().isEmpty())
-            {
-                return title.getAsJsonObject().keySet().iterator().next();
-            }
-        }
-        return null;
-    }
-
-    /** The dcs payload members the writer reads a storable {@code title} from (see DcsWriter). */
-    private static final String DCS_DATA_SETS = "dataSets"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_FIELDS = "fields"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_PARAMETERS = "parameters"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_CALCULATED_FIELDS = "calculatedFields"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_TITLE = "title"; //$NON-NLS-1$
-
-    /**
-     * Validates and CANONICALIZES the language keys of every {@code title} the DCS writer actually
-     * stores, rejecting a code the configuration does not declare.
-     * <p>
-     * The rewrite matters as much as the rejection: the DCS writer stores the payload's key verbatim,
-     * so accepting {@code EN} against a configuration that declares {@code en_CA} - which the
-     * case-insensitive match does - would store a second, never-displayed key. That is the same
-     * canonicalization the property pipeline performs; the two paths must not disagree.
-     * <p>
-     * The walk follows the writer's OWN shape - a dataset's {@code fields}, the schema
-     * {@code parameters} and the {@code calculatedFields}, mirroring DcsWriter's three
-     * {@code parseTitle} call sites - rather than hunting for any member named {@code title}. A title
-     * the writer never reads (on a data SOURCE, or nested in a member it ignores) reaches no model
-     * object: rejecting its code would fail a call over a value that was never going to be stored,
-     * and counting it would raise a question about a translation that never happened.
-     *
-     * @param used collects the canonical codes the stored titles write under
-     * @return a ready JSON error for the first undeclared code, or {@code null} when all are fine
-     */
-    private static String normalizeDcsTitleLocales(Configuration config, List<String> declared,
-        JsonObject dcsSpec, Set<String> used)
-    {
-        String error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_PARAMETERS), used);
-        if (error != null)
-        {
-            return error;
-        }
-        error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_CALCULATED_FIELDS), used);
-        if (error != null)
-        {
-            return error;
-        }
-        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
-        if (dataSets == null || !dataSets.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement dataSet : dataSets.getAsJsonArray())
-        {
-            if (dataSet == null || !dataSet.isJsonObject())
-            {
-                continue;
-            }
-            error = normalizeEntryTitles(config, declared,
-                dataSet.getAsJsonObject().get(KEY_DCS_FIELDS), used);
-            if (error != null)
-            {
-                return error;
-            }
-        }
-        return null;
-    }
-
-    /** Validates the object-valued {@code title} of every entry in one array of writer entries. */
-    private static String normalizeEntryTitles(Configuration config, List<String> declared,
-        JsonElement entries, Set<String> used)
-    {
-        if (entries == null || !entries.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement entry : entries.getAsJsonArray())
-        {
-            if (entry == null || !entry.isJsonObject())
-            {
-                continue;
-            }
-            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
-            if (title == null || !title.isJsonObject())
-            {
-                // A plain-string title is language-neutral, and anything else is the writer's own
-                // error to report - this guard only judges LANGUAGE keys.
-                continue;
-            }
-            String error = canonicalizeTitleKeys(config, declared, title.getAsJsonObject(), used);
-            if (error != null)
-            {
-                return error;
-            }
-        }
-        return null;
-    }
-
-    /** Validates and canonicalizes the keys of ONE {@code {code: text}} title object, in place. */
-    private static String canonicalizeTitleKeys(Configuration config, List<String> declared,
-        JsonObject title, Set<String> used)
-    {
-        java.util.Map<String, JsonElement> rewritten = new java.util.LinkedHashMap<>();
-        for (java.util.Map.Entry<String, JsonElement> entry : title.entrySet())
-        {
-            String code = entry.getKey();
-            String canonical = MetadataLanguageUtils.canonicalLanguageCode(config, code);
-            if (canonical == null)
-            {
-                return ToolResult.error("Unknown language '" + code + "' for a dcs title. This " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
-                    + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
-            }
-            if (rewritten.containsKey(canonical))
-            {
-                // Two spellings of one declared code, e.g. {"en": ..., "EN": ...}. Canonicalizing
-                // would silently drop one translation - and which one survived would depend on map
-                // order. Say so instead: only the caller knows which text was meant.
-                return ToolResult.error("A dcs title names the language '" + canonical //$NON-NLS-1$
-                    + "' twice (as '" + code + "' and again in another spelling). Give it once.") //$NON-NLS-1$
-                        .toJson();
-            }
-            rewritten.put(canonical, entry.getValue());
-            used.add(canonical);
-        }
-        for (String key : new ArrayList<>(title.keySet()))
-        {
-            title.remove(key);
-        }
-        rewritten.forEach(title::add);
-        return null;
-    }
 
     /**
      * Dispatches a FORM-member FQN (item / attribute / command): the member lives on the editable Form
@@ -2153,7 +1928,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * FQN with a lone {@code dcs} payload.</p>
      */
     private String modifyDcsContent(ProjectContext ctx, String normFqn, Report report, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-        JsonObject dcsSpec, boolean localeUnused)
+        JsonObject dcsSpec, boolean localeUnused,
+        DcsPresentationParser.LanguageContext presentationLanguages)
     {
         // The Report is a top BM object - capture its bmGetId up front, re-fetch inside the tx (a top
         // object's eContainer() does not reliably climb).
@@ -2165,6 +1941,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return writeCtx.error;
         }
+        writeCtx.presentationLanguages = presentationLanguages;
 
         // Captured inside the write: the on-disk export targets. exportFqnHolder = the DCS template's TOP
         // object (the Report), contentFqnHolder = the DCS content's OWN resource FQN (the .dcs).
@@ -2225,6 +2002,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         /** The project's platform version; may be {@code null} (the type resolver then fails actionably). */
         Version version;
         DcsWriter.TypeResolver typeResolver;
+        DcsPresentationParser.LanguageContext presentationLanguages;
     }
 
     /**
@@ -2282,23 +2060,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private static DcsWriter.TypeResolver dcsTypeResolver(Configuration dcsConfig, Version version)
     {
-        // A parameter's `valueType` is built into an mcore TypeDescription through the shared S2 builder
-        // (same path as the generic `type` property, prepareTypeDescription). Supplied to DcsWriter as a
-        // TypeResolver so the pure writer never touches the platform type provider directly.
-        return valueTypeSpec -> {
-            if (version == null)
-            {
-                return DcsWriter.TypeResolution.failed(
-                    "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
-            }
-            // DCS_PARAMETER, not the METADATA default: a parameter's type is not a stored feature, so
-            // an in-memory collection must be refused with wording that is true HERE (issue #295 review).
-            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version,
-                false, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
-            return tr.error != null
-                ? DcsWriter.TypeResolution.failed(tr.error)
-                : DcsWriter.TypeResolution.of(tr.typeDescription);
-        };
+        return DcsWriter.typeResolver(dcsConfig, version);
     }
 
     /**
@@ -2338,7 +2100,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // resolveDcsContent), so its own resource FQN resolves and is force-exported alongside the
         // template so the sibling .dcs drains.
         contentFqnHolder[0] = contentResourceExportFqn(schema);
-        DcsWriter.Result applied = DcsWriter.apply(schema, dcsSpec, writeCtx.typeResolver);
+        DcsWriter.Result applied = DcsWriter.apply(schema, dcsSpec, writeCtx.typeResolver,
+            writeCtx.presentationLanguages);
         if (applied.hasError())
         {
             // Roll the whole write back so a validation failure leaves nothing on disk.
@@ -2435,6 +2198,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty("fields", result.fields); //$NON-NLS-1$
         applied.addProperty("parameters", result.parameters); //$NON-NLS-1$
         applied.addProperty("calculatedFields", result.calculatedFields); //$NON-NLS-1$
+        applied.addProperty("totalFields", result.totalFields); //$NON-NLS-1$
         ToolResult dcsResult = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -2448,7 +2212,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(McpKeys.MESSAGE, "Modified DCS of report " + normFqn + " (dataSources: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.dataSources + ", dataSets: " + result.dataSets + ", fields: " + result.fields //$NON-NLS-1$ //$NON-NLS-2$
                 + ", parameters: " + result.parameters + ", calculatedFields: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.calculatedFields + ")") //$NON-NLS-1$
+                + result.calculatedFields + ", total fields: " + result.totalFields + ")") //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
     }
 

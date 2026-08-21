@@ -48,6 +48,7 @@ public class DcsToolTest
         assertEquals(ResponseType.MARKDOWN, tool.getResponseType());
         assertTrue(tool.getDescription().contains("get_tool_guide('dcs')")); //$NON-NLS-1$
         assertTrue(tool.getDescription().contains("expectedHash")); //$NON-NLS-1$
+        assertTrue(tool.getDescription().contains("upsert/update")); //$NON-NLS-1$
     }
 
     @Test
@@ -63,6 +64,8 @@ public class DcsToolTest
         assertEquals("object", properties.getAsJsonObject("body").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("integer", properties.getAsJsonObject("limit").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("integer", properties.getAsJsonObject("offset").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(properties.getAsJsonObject("action").get("description").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
+            .contains("schema writes support upsert/update")); //$NON-NLS-1$
     }
 
     @Test
