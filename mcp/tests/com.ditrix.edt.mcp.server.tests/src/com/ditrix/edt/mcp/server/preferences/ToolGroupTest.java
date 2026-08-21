@@ -124,6 +124,7 @@ public class ToolGroupTest
         assertEquals(ToolGroup.DEBUG, ToolGroup.getGroupForTool("set_breakpoint"));
         assertEquals(ToolGroup.BSL_CODE, ToolGroup.getGroupForTool("read_module_source"));
         assertEquals(ToolGroup.REFACTORING, ToolGroup.getGroupForTool("rename_metadata_object"));
+        assertEquals(ToolGroup.REFACTORING, ToolGroup.getGroupForTool("dcs")); //$NON-NLS-1$
     }
 
     @Test
@@ -224,11 +225,12 @@ public class ToolGroupTest
         // create/modify/delete_metadata and removed in F4b).
         assertTrue(tools.contains("modify_metadata"));
         assertTrue(tools.contains("adopt_metadata_object")); //$NON-NLS-1$
+        assertTrue(tools.contains("dcs")); //$NON-NLS-1$
         assertFalse(tools.contains("add_form_attribute"));
         assertFalse(tools.contains("set_form_item_property"));
         assertFalse(tools.contains("add_form_command"));
         assertFalse(tools.contains("delete_form_item"));
         assertFalse(tools.contains("add_form_item"));
-        assertEquals(5, tools.size());
+        assertEquals(6, tools.size());
     }
 }

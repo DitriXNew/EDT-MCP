@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.tools.impl.DeleteInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.DcsTool;
 import com.ditrix.edt.mcp.server.tools.impl.EnableToolsetTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ExportCommonPictureTool;
@@ -163,6 +164,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new GetPlatformDocumentationTool());
         catalogue.add(new GetMetadataObjectsTool());
         catalogue.add(new GetMetadataDetailsTool());
+        catalogue.add(new DcsTool());
         catalogue.add(new ListCommonPicturesTool());
         catalogue.add(new ExportCommonPictureTool());
         catalogue.add(new ListSubsystemsTool());

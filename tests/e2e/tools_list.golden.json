@@ -953,6 +953,83 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Inspect 1C DCS schemas and form dynamic lists; mutation actions are reserved but not implemented yet. Call action='get' first, pass its hash as expectedHash for index-addressed mutations, and call get_tool_guide('dcs') for body shapes.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "upsert",
+            "update",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "description": "Mutation body; forbidden for get/remove and required by the other mutations.",
+          "type": "object"
+        },
+        "expectedHash": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "schema",
+            "dynamicList",
+            "dataSource",
+            "dataSet",
+            "field",
+            "parameter",
+            "calculatedField",
+            "totalField",
+            "variant",
+            "grouping",
+            "selection",
+            "filter",
+            "dataParameter",
+            "order",
+            "conditionalAppearance",
+            "table",
+            "userField",
+            "outputParameter",
+            "userSettings"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn",
+        "action",
+        "type"
+      ],
+      "type": "object"
+    },
+    "name": "dcs",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
