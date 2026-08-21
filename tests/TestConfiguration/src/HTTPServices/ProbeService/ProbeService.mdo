@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:HTTPService xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="8aef8f61-b905-4e86-88a7-d90bd8e28e2f">
+  <name>ProbeService</name>
+  <rootURL>probe</rootURL>
+  <reuseSessions>AutoUse</reuseSessions>
+  <sessionMaxAge>20</sessionMaxAge>
+</mdclass:HTTPService>

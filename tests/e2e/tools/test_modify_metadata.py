@@ -15,7 +15,8 @@ get_metadata_details(assignable:true).
 
 reset: kind="write-metadata" -> reset_model() after each test.
 
-Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc, ...
+Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc,
+HTTPService.ProbeService (the only place a 64-bit property exists), ...
 """
 
 import os
@@ -2651,3 +2652,47 @@ def test_modify_accepts_a_locale_the_same_batch_declares():
     e2 = assert_error(removed, "the code the batch removes must be refused")
     assert_error_quality(e2, names=["fr"], suggests=["it"],
                          ctx="the error must name the removed code and list the post-batch ones")
+
+
+# ===== a 64-bit (ELong) property (#451) ======================================================
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_long_property_is_advertised_as_long_and_accepts_64_bit_values():
+    # WebService.sessionMaxAge and HTTPService.sessionMaxAge are the ONLY long-typed properties in
+    # the whole mdclass metamodel, so this fixture HTTP service is the only place the long path can
+    # be exercised at all. Before the fix the property was not merely mistyped - it was unsettable:
+    # the prepared value was an Integer and EMF refused the eSet outright with "The value of type
+    # 'class java.lang.Integer' must be of type 'class java.lang.Long'".
+    fqn = "HTTPService.ProbeService"
+    assert_contains(_assignable_text(fqn), "| sessionMaxAge | LONG |",
+                    "a 64-bit property must be advertised as LONG, not INTEGER")
+
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                 "properties": [{"name": "sessionMaxAge", "value": "600"}]})
+    assert_ok(r, "set sessionMaxAge to an in-range value")
+    assert_contains(_assignable_text(fqn), "| sessionMaxAge | LONG | 600 |",
+                    "the model must read back the value that was just set")
+
+    # A value no int can hold. The old range guard refused it as "not a valid integer", so this is
+    # the assertion that pins the widened range rather than only the wrapper type.
+    beyond_int = str(2 ** 31)
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                 "properties": [{"name": "sessionMaxAge", "value": beyond_int}]})
+    assert_ok(r, "set sessionMaxAge beyond the 32-bit range")
+    assert_contains(_assignable_text(fqn), "| sessionMaxAge | LONG | %s |" % beyond_int,
+                    "a 64-bit value must survive the round-trip through the model")
+    poll_disk_contains("src/HTTPServices/ProbeService/ProbeService.mdo",
+                       "<sessionMaxAge>%s</sessionMaxAge>" % beyond_int,
+                       ctx="the 64-bit value must reach the exported .mdo, not only the model")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_fractional_value_for_a_long_property_is_refused_actionably():
+    # The widened range must not turn into "anything numeric goes": a fractional value is still not
+    # a whole 64-bit number, and the error has to say which kind of number is expected.
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": "HTTPService.ProbeService",
+                                 "properties": [{"name": "sessionMaxAge", "value": "1.5"}]})
+    assert_error(r, "a fractional value is not a whole 64-bit number")
+    assert_contains(r.text, "64-bit", "the error must name the kind of number it expected")
+    assert_no_diff("a refused property must not touch the project on disk")
