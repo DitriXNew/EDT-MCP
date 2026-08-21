@@ -51,9 +51,14 @@ prebuilt `.epf`/`.erf` outside an EDT project.
    identified target, resume only a task-caused suspension, remove task-owned
    temporary state, and stop. Terminate and relaunch only with explicit user
    authorization.
-5. Refresh `debug_status` after launch. Call `wait_for_break` and inspect with
-   `get_variables` only when the current help proves the intended debug target
-   is unambiguous. Otherwise remove only task-owned temporary state and stop.
+5. After launch, settle the task-owned launch outcome under current tool
+   help/schema and a bounded caller-approved deadline before cleanup, an
+   absence claim, or completion. If the deadline expires, report the launch as
+   in-flight or unknown with its outstanding task-owned cleanup obligation; do
+   not assume a later client cannot appear. Once settled, call `wait_for_break`
+   and inspect with `get_variables` only when the current help proves the
+   intended debug target is unambiguous. Otherwise remove only task-owned
+   temporary state and stop.
 6. Finish with `resume` for any task-suspended execution, calling
    `remove_breakpoint`, and using `terminate_launch` only for a uniquely
    identified, task-owned launch whose termination is authorized.

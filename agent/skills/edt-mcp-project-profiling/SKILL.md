@@ -28,8 +28,12 @@ with refactoring, broad load generation, or unrelated runtime activity.
    `get_profiling_results` state. Keep the global profiling surface quiescent
    through the final result read; if result identity cannot be matched
    independently, treat the global result as unattributed.
-3. Call `start_profiling`, execute only the bounded scenario, and call
-   `stop_profiling` on success, failure, timeout, or interruption.
+3. Call `start_profiling` and claim ownership only when its result confirms
+   this task started the profiling window. If profiling was already active, do
+   not stop or replace it; stop and report that an attributable window could
+   not be established without disrupting another owner. Otherwise execute only
+   the bounded scenario and call `stop_profiling` for that task-owned window on
+   success, failure, timeout, or interruption.
 4. Read `get_profiling_results` in that protected window, correlate candidate
    methods/lines with exact source, and repeat only for a controlled comparison.
 5. Treat returned profiling rows as potentially partial; do not make absolute

@@ -36,10 +36,6 @@ PROXY_TOOLS = {"router_status"}
 BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 SKILL_NAME = re.compile(r"edt-mcp-project-[a-z0-9]+(?:-[a-z0-9]+)*")
 MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-JAVA_COMMENT_OR_LITERAL = re.compile(
-    r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/',
-    re.DOTALL,
-)
 
 
 def fail(errors: list[str], message: str) -> None:
@@ -67,11 +63,83 @@ def read_java_source(path: Path, errors: list[str]) -> str:
         return ""
 
 
+def mask_java_regions(
+    source: str, *, mask_comments: bool, mask_literals: bool
+) -> str:
+    """Blank selected Java regions without changing source offsets."""
+    masked = list(source)
+    length = len(source)
+
+    def blank(start: int, end: int) -> None:
+        for index in range(start, end):
+            if source[index] not in "\r\n":
+                masked[index] = " "
+
+    def quoted_end(start: int, delimiter: str) -> int:
+        index = start + len(delimiter)
+        while index < length:
+            if source[index] == "\\":
+                index = min(index + 2, length)
+            elif source.startswith(delimiter, index):
+                return index + len(delimiter)
+            else:
+                index += 1
+        return length
+
+    index = 0
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = length if end < 0 else end
+            if mask_comments:
+                blank(index, end)
+            index = end
+        elif source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            end = length if end < 0 else end + 2
+            if mask_comments:
+                blank(index, end)
+            index = end
+        elif source.startswith('\"\"\"', index):
+            end = quoted_end(index, '\"\"\"')
+            if mask_literals:
+                blank(index, end)
+            index = end
+        elif source[index] in "\"'":
+            end = quoted_end(index, source[index])
+            if mask_literals:
+                blank(index, end)
+            index = end
+        else:
+            index += 1
+
+    return "".join(masked)
+
+
 def strip_java_comments(source: str) -> str:
-    return JAVA_COMMENT_OR_LITERAL.sub(
-        lambda match: "" if match.group(0).startswith(("//", "/*")) else match.group(0),
-        source,
+    return mask_java_regions(source, mask_comments=True, mask_literals=False)
+
+
+def mask_java_structure(source: str) -> str:
+    return mask_java_regions(source, mask_comments=True, mask_literals=True)
+
+
+def find_java_string_assignment(source: str, constant_name: str) -> str | None:
+    comment_free = strip_java_comments(source)
+    structure = mask_java_structure(source)
+    match = re.search(
+        rf"\bpublic\s+static\s+final\s+String\s+{re.escape(constant_name)}\s*=",
+        structure,
     )
+    if not match:
+        return None
+    start = match.end()
+    while start < len(comment_free) and comment_free[start].isspace():
+        start += 1
+    end = structure.find(";", start)
+    if end < 0:
+        return None
+    return comment_free[start:end].strip()
 
 
 def parse_frontmatter(path: Path, text: str, errors: list[str]) -> dict[str, str]:
@@ -152,19 +220,21 @@ def resolve_java_string(expression: str, errors: list[str], owner: Path) -> str 
     if len(candidates) != 1:
         fail(errors, f"implementation constant owner {class_name}: expected one source, got {len(candidates)}")
         return None
-    source = strip_java_comments(read_java_source(candidates[0], errors))
-    match = re.search(
-        rf"public\s+static\s+final\s+String\s+{constant_name}\s*=\s*\"([a-z0-9_]+)\"\s*;",
-        source,
+    expression = find_java_string_assignment(
+        read_java_source(candidates[0], errors), constant_name
     )
-    if not match:
+    if expression is None:
         fail(errors, f"{candidates[0].relative_to(ROOT)}: cannot resolve {constant_name}")
         return None
-    return match.group(1)
+    literal = re.fullmatch(r'"([a-z0-9_]+)"', expression)
+    if not literal:
+        fail(errors, f"{candidates[0].relative_to(ROOT)}: cannot resolve {constant_name}")
+        return None
+    return literal.group(1)
 
 
 def registered_tool_names(errors: list[str]) -> set[str]:
-    registrar = strip_java_comments(read_java_source(REGISTRAR, errors))
+    registrar = mask_java_structure(read_java_source(REGISTRAR, errors))
     classes = re.findall(r"catalogue\.add\(new\s+([A-Za-z0-9_]+)\s*\(", registrar)
     if not classes:
         fail(errors, f"{REGISTRAR.relative_to(ROOT)}: no registered tool classes found")
@@ -177,15 +247,11 @@ def registered_tool_names(errors: list[str]) -> set[str]:
             fail(errors, f"registered class {class_name}: expected one source, got {len(candidates)}")
             continue
         source_path = candidates[0]
-        source = strip_java_comments(read_java_source(source_path, errors))
-        match = re.search(
-            r"public\s+static\s+final\s+String\s+NAME\s*=\s*([^;]+);",
-            source,
-        )
-        if not match:
+        expression = find_java_string_assignment(read_java_source(source_path, errors), "NAME")
+        if expression is None:
             fail(errors, f"{source_path.relative_to(ROOT)}: public NAME constant not found")
             continue
-        name = resolve_java_string(match.group(1).strip(), errors, source_path)
+        name = resolve_java_string(expression, errors, source_path)
         if name is None:
             continue
         if name in names:
