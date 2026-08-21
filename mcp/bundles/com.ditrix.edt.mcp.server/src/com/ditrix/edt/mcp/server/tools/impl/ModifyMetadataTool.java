@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -5462,6 +5463,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareBoolean(name, value, info, out);
             case INTEGER:
                 return prepareInteger(name, value, info, out);
+            case LONG:
+                return prepareLong(name, value, info, out);
             case TYPE_DESCRIPTION:
                 return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
             case REFERENCE:
@@ -5609,6 +5612,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'.").toJson(); //$NON-NLS-1$
         }
         out.add(PreparedChange.scalar(info.feature, i));
+        return null;
+    }
+
+    /**
+     * Validates a {@code LONG} property value and, on success, appends the prepared scalar change as
+     * a {@link Long}. Returns an actionable JSON error when the value is fractional or outside the
+     * signed 64-bit range, or {@code null} on success.
+     */
+    private static String prepareLong(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        Long l = parseLong(value);
+        if (l == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid 64-bit integer for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use a whole number from " + Long.MIN_VALUE + " to " + Long.MAX_VALUE + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        out.add(PreparedChange.scalar(info.feature, l));
         return null;
     }
 
@@ -6213,6 +6234,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return Integer.valueOf((int)d);
         }
         catch (NumberFormatException e)
+        {
+            return null;
+        }
+    }
+
+    private static Long parseLong(String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            return Long.valueOf(new BigDecimal(value.trim()).longValueExact());
+        }
+        catch (NumberFormatException | ArithmeticException e)
         {
             return null;
         }

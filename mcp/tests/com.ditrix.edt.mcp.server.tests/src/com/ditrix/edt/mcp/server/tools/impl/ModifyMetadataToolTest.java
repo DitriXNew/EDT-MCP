@@ -13,13 +13,17 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EDataType;
 import org.eclipse.emf.ecore.EEnum;
 import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
@@ -52,6 +56,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -1840,6 +1845,87 @@ public class ModifyMetadataToolTest
                 MetadataLanguageUtils.cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430, 0x0417,
                     0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439), // TablicaZnachenij
                 "DocumentRef.Invoice"))); //$NON-NLS-1$
+    }
+
+    // ===== integer and long scalar coercion (#451) ===============================================
+    //
+    // The real ELong properties are WebService.sessionMaxAge / HTTPService.sessionMaxAge, which live
+    // on the mdclass path. These tests drive the form-member path instead, because that is the seam
+    // already exposed for tests - and it proves the same code: both paths funnel every property
+    // through the one private prepare(...), whose `switch (info.valueKind)` owns the INTEGER / LONG
+    // branches. A synthetic ELong feature stands in for the platform's, so the case needs no live EDT.
+
+    @Test
+    public void testELongPropertyPreparesLongWrapper() throws Exception
+    {
+        Object prepared = preparedScalarValue(numericMember(EcorePackage.Literals.ELONG),
+            "sessionMaxAge", "60"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an ELong feature must be prepared as java.lang.Long, got " //$NON-NLS-1$
+            + prepared.getClass().getName(), prepared instanceof Long);
+        assertEquals(Long.valueOf(60L), prepared);
+    }
+
+    @Test
+    public void testELongPropertyAcceptsValueBeyondIntegerRange()
+    {
+        for (String value : new String[] {"2147483648", Long.toString(Long.MIN_VALUE), //$NON-NLS-1$
+            Long.toString(Long.MAX_VALUE)})
+        {
+            String verdict = neverAsking().formRetypeVerdict(null, null,
+                numericMember(EcorePackage.Literals.ELONG),
+                Collections.singletonList(prop("sessionMaxAge", value)), report()); //$NON-NLS-1$
+
+            assertNull("a legal long value must not be rejected as an invalid integer: " //$NON-NLS-1$
+                + value + ": " + verdict, verdict); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testEIntPropertyStillPreparesIntegerWrapper() throws Exception
+    {
+        Object prepared = preparedScalarValue(numericMember(EcorePackage.Literals.EINT),
+            "retryCount", "60"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an EInt feature must remain java.lang.Integer, got " //$NON-NLS-1$
+            + prepared.getClass().getName(), prepared instanceof Integer);
+        assertEquals(Integer.valueOf(60), prepared);
+    }
+
+    private static EObject numericMember(EDataType type)
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("numericlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("numericlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/numericlike/451/" + type.getName()); //$NON-NLS-1$
+
+        EClass memberClass = factory.createEClass();
+        memberClass.setName("NumericMember"); //$NON-NLS-1$
+        EAttribute numeric = factory.createEAttribute();
+        numeric.setName(type == EcorePackage.Literals.ELONG ? "sessionMaxAge" : "retryCount"); //$NON-NLS-1$ //$NON-NLS-2$
+        numeric.setEType(type);
+        memberClass.getEStructuralFeatures().add(numeric);
+        pkg.getEClassifiers().add(memberClass);
+        return new DynamicEObjectImpl(memberClass);
+    }
+
+    /** Reads the scalar built by the same private preparation path the write transaction applies. */
+    private static Object preparedScalarValue(EObject member, String name, String value) throws Exception
+    {
+        Method prepare = ModifyMetadataTool.class.getDeclaredMethod("prepareFormMemberChanges", //$NON-NLS-1$
+            MetadataScope.class, Version.class, EObject.class, List.class, MdNameNormalizer.Report.class);
+        prepare.setAccessible(true);
+        List<?> changes = (List<?>)prepare.invoke(new ModifyMetadataTool(), null, null, member,
+            Collections.singletonList(prop(name, value)), report());
+
+        Object holderChange = changes.get(0);
+        Field changeField = holderChange.getClass().getDeclaredField("change"); //$NON-NLS-1$
+        changeField.setAccessible(true);
+        Object preparedChange = changeField.get(holderChange);
+        Field scalarValue = preparedChange.getClass().getDeclaredField("scalarValue"); //$NON-NLS-1$
+        scalarValue.setAccessible(true);
+        return scalarValue.get(preparedChange);
     }
 
     // ===== a contained AdjustableBoolean flag is prepared as a plain boolean (#382) ===============

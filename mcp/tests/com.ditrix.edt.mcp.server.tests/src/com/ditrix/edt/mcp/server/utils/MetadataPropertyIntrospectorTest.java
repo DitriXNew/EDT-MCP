@@ -512,6 +512,30 @@ public class MetadataPropertyIntrospectorTest
     }
 
     @Test
+    public void testLongAttributeIsClassifiedAsLong()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("longlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("longlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/longlike"); //$NON-NLS-1$
+
+        EClass service = f.createEClass();
+        service.setName("WebService"); //$NON-NLS-1$
+        EAttribute sessionMaxAge = f.createEAttribute();
+        sessionMaxAge.setName("sessionMaxAge"); //$NON-NLS-1$
+        sessionMaxAge.setEType(EcorePackage.Literals.ELONG);
+        service.getEStructuralFeatures().add(sessionMaxAge);
+        pkg.getEClassifiers().add(service);
+
+        PropertyInfo info = MetadataPropertyIntrospector.findFeature(
+            pkg.getEFactoryInstance().create(service), "sessionMaxAge"); //$NON-NLS-1$
+        assertNotNull(info);
+        assertEquals("an ELong attribute must advertise its 64-bit kind", //$NON-NLS-1$
+            "LONG", info.valueKind.name()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testFindFeatureWithNullExtInfoResolvesOnlyDirect()
     {
         // A null extInfo (the element has no extInfo instance yet) still resolves the DIRECT features but

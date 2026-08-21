@@ -58,6 +58,8 @@ public final class MetadataPropertyIntrospector
         BOOLEAN,
         /** An integer (e.g. a length / precision). */
         INTEGER,
+        /** A 64-bit integer. */
+        LONG,
         /** An enum: only one of {@link PropertyInfo#allowedValues} is valid. */
         ENUM,
         /** The localized synonym map, keyed by language code. */
@@ -453,7 +455,7 @@ public final class MetadataPropertyIntrospector
         return null;
     }
 
-    /** Classifies an attribute feature into a scalar {@link ValueKind} (enum / boolean / integer / string). */
+    /** Classifies an attribute feature into a scalar {@link ValueKind}. */
     private static ValueKind classifyAttribute(EAttribute feature)
     {
         EClassifier type = feature.getEAttributeType();
@@ -466,10 +468,13 @@ public final class MetadataPropertyIntrospector
         {
             return ValueKind.BOOLEAN;
         }
-        if ("int".equals(typeName) || "java.lang.Integer".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
-            || "long".equals(typeName) || "java.lang.Long".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
+        if ("int".equals(typeName) || "java.lang.Integer".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
         {
             return ValueKind.INTEGER;
+        }
+        if ("long".equals(typeName) || "java.lang.Long".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return ValueKind.LONG;
         }
         return ValueKind.STRING;
     }
