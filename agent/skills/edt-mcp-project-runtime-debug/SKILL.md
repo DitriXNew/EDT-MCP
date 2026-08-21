@@ -12,10 +12,7 @@ debugger, variable, expression, or event-log evidence.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -29,8 +26,10 @@ evidence alone answers the question.
    server-side bounds from help, call `get_event_log`, and report any paging,
    format, location, disclosure, or completeness gap.
 2. Otherwise resolve the target with `get_applications`,
-   `list_configurations`, and `debug_status`; settle update, external-change,
-   restart, credential, and data-disclosure authority before launching.
+   `list_configurations`, `debug_status`, and `list_breakpoints`; distinguish
+   pre-existing breakpoints from task-owned ones, and settle update,
+   external-change, restart, credential, and data-disclosure authority before
+   launching.
 3. Use `set_infobase_credentials` only for the confirmed target and only when
    authorized. Decide from `debug_status` whether to use an existing session or
    start a fresh one before installing the smallest `set_breakpoint`. Use an

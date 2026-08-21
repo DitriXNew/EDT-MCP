@@ -12,10 +12,7 @@ capability before another business-project workflow begins.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -25,8 +22,11 @@ current.
 
 ## Primary workflow
 
-1. Reuse valid session evidence; otherwise call `list_projects` to resolve the
-   exact project and kind.
+1. Reuse valid session evidence. On an unfamiliar workspace, use the bounded
+   onboarding route: `get_edt_version` -> `list_projects` ->
+   `get_configuration_properties` -> `get_problem_summary`, then
+   `list_subsystems` only when project navigation needs it. Resolve the exact
+   project and kind before continuing.
 2. When proxy routing matters, call `router_status`; use `get_server_status`
    only when installed surface or EDT state affects the task.
 3. If a required capability is hidden, inspect `list_toolsets` and use
@@ -34,7 +34,12 @@ current.
    catalog-refresh or reconnect route; do not assume either behavior.
 4. Call `get_tool_guide` for the selected unfamiliar, destructive, or cascading
    operation rather than preloading unrelated guides.
-5. Hand off the exact project and visible capability to one primary task skill.
+5. Prefer counts, filters, narrow fields, and paginated reads before full
+   payloads. Preserve cursors and truncation evidence; fetch another page only
+   when the task's conclusion requires it.
+6. Resolve metadata by programmatic `Name`, never by localized synonym. Only
+   the FQN type token is bilingual (for example `Catalog`/`Справочник`).
+7. Hand off the exact project and visible capability to one primary task skill.
 
 ## Authority rule
 

@@ -12,10 +12,7 @@ run translation, and verify localized metadata for an exact project.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 

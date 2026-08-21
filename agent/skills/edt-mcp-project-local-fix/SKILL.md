@@ -12,10 +12,7 @@ fragment are known and the user requested a bounded correction.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -25,14 +22,16 @@ code.
 
 ## Primary workflow
 
-1. Resolve and read the exact method with `read_method_source`; retain its
-   current lost-update evidence.
+1. Resolve and read the exact method with `read_method_source`; retain the
+   returned `contentHash` for lost-update protection.
 2. Validate a changed 1C query with `validate_query` before writing when
    applicable.
 3. Consult `get_tool_guide` for the current write contract, then apply the
-   smallest guarded `write_module_source` edit.
+   smallest guarded `write_module_source` edit. Mode `replace` overwrites the
+   whole module; use it only for an intentional full-module replacement, not a
+   method-sized edit.
 4. Re-read the method, revalidate any final query, and run targeted
-   `revalidate_objects` plus `get_project_errors` when model markers matter.
+   `revalidate_objects` plus `get_project_errors` after every code write.
 5. Inspect the minimal repository diff and add only the focused test or runtime
    probe required by acceptance.
 

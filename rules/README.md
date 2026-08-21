@@ -4,13 +4,19 @@
 
 Sample rule pack for AI assistants (Claude Code, Cursor, GitHub Copilot, Gemini CLI) for effective use of the EDT-MCP MCP server in 1C:EDT projects.
 
+This bilingual README is intentionally user-facing. The canonical
+machine-facing template defaults to English, while `ru/` remains an equivalent
+localized rules branch. These standing rules coexist with the compact
+task-oriented [`agent/`](../agent/README.md) skills; install either layer or
+both, but resolve conflicts instead of silently choosing one.
+
 ---
 
 ## Русский
 
 ### Что это и кому нужно
 
-Комплект — это **шаблон**, который вы копируете в свой 1С-проект и адаптируете под себя. Он состоит из двух языковых веток (`ru/` и `en/`), каждая со своим навигатором `INDEX.md` и 8 тематическими файлами правил.
+Комплект — это **шаблон** постоянных подробных правил, который вы копируете в свой 1С-проект и адаптируете под себя. Он состоит из двух языковых веток (`ru/` и `en/`), каждая со своим навигатором `INDEX.md` и 8 тематическими файлами правил. Для компактной маршрутизации по отдельным задачам его можно совместно использовать с [`agent/`](../agent/README.md).
 
 Когда AI-клиент читает корневой файл инструкций (`CLAUDE.md` для Claude, `.cursorrules` для Cursor и т. д.), он получает указание читать `rules/<язык>/INDEX.md`, а оттуда — нужные модули.
 
@@ -50,7 +56,7 @@ Sample rule pack for AI assistants (Claude Code, Cursor, GitHub Copilot, Gemini 
 
 ### What it is and who needs it
 
-This pack is a **template** that you copy into your 1C project and tailor to your setup. It consists of two language branches (`ru/` and `en/`), each with its own `INDEX.md` navigator and 8 thematic rule files.
+This pack is a **template** of standing detailed rules that you copy into your 1C project and tailor to your setup. It consists of two language branches (`ru/` and `en/`), each with its own `INDEX.md` navigator and 8 thematic rule files. It may be installed together with the compact task routing in [`agent/`](../agent/README.md).
 
 When an AI client reads the root instruction file (`CLAUDE.md` for Claude, `.cursorrules` for Cursor, etc.), it is told to read `rules/<lang>/INDEX.md`, which in turn points to the relevant modules.
 

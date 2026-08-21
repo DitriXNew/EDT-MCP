@@ -12,10 +12,7 @@ authorized second opinion on an exact 1C project question.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -28,9 +25,10 @@ Git, production-write, or proof route.
 1. Resolve the project and inspect `get_tool_guide` for `ask_workmate`.
 2. Treat `projectName` as Workmate context, not an authorization or isolation
    boundary. For a bridge/tool-capable call that could write, require a proven
-   project-scoped/read-only surface or a workspace isolated to the exact
-   disposable or authorized target; otherwise do not delegate mutations and
-   stop for authority or isolation.
+   filtered/read-only capability set or actual filesystem/process containment
+   limited to every authorized project and file target; a one-project EDT
+   workspace is not containment. Otherwise do not delegate mutations and stop
+   for authority or containment.
 3. Submit one `ask_workmate` request with the resolved exact `projectName` and
    retain its returned job identity; do not omit the project and fall back to
    Workmate's default context.

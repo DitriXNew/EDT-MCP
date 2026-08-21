@@ -93,21 +93,26 @@
 ## 9. Прогон тестов YAxUnit
 
 - Обычный прогон: `run_yaxunit_tests` с `projectName` — JUnit XML парсится, ответ в Markdown.
-- При падении и непонятности: `debug_yaxunit_tests` + `set_breakpoint` в нужный тест → дальше как раздел 7.
+- При падении и непонятности: `set_breakpoint` в нужный тест →
+  `run_yaxunit_tests(debug=true)` → `wait_for_break`, дальше как раздел 7.
 
 ## 10. Профилирование
 
 1. Должен быть активный debug-сеанс (см. раздел 7), у тебя на руках `applicationId`.
-2. `start_profiling` с `applicationId` — toggle ON.
+2. `start_profiling` с `applicationId`.
 3. Выполняешь сценарий в 1С:Предприятии.
-4. `start_profiling` с тем же `applicationId` ещё раз — toggle OFF.
-5. `get_profiling_results` (опц. `moduleFilter`, `minFrequency`) — per-module/per-line, call counts, timing.
+4. `stop_profiling` с тем же `applicationId`.
+5. Читай `get_profiling_results`, пока глобальная поверхность профилирования
+   остаётся свободной; иначе считай результат неатрибутированным, если его
+   принадлежность нельзя подтвердить независимо.
 
 ## 11. Работа с формами
 
 1. `get_form_layout_snapshot` с `projectName`+`formPath`, `mode: compact` — структура формы как YAML.
 2. Если нужно визуально — `get_form_screenshot` с `projectName`+`formPath`.
-3. Правки `.form` — через `Read`+`Edit` (соблюдай правила `edt-metadata.md`).
+3. Для изменений используй структурные инструменты метаданных/форм. Прямая
+   правка `.form` допустима только как явно разрешённый крайний вариант по
+   `common-safety.md` и `edt-metadata.md`.
 
 ## 12. Анализ ошибок и проверок
 

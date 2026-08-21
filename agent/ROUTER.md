@@ -7,6 +7,11 @@ repository contributor skills under `.claude/skills/`.
 Load the smallest matching skill. Load more than one only when the task truly
 crosses workflow boundaries.
 
+Apply [`skills/COMMON.md`](skills/COMMON.md) to every route. When the installed
+project also uses [`rules/`](../rules/), treat those files as standing detailed
+policy and these skills as task-specific routing; neither silently overrides
+the other.
+
 | Task intent | Skill |
 |---|---|
 | Establish the current project, server surface, or multi-EDT route | `edt-mcp-project-session` |

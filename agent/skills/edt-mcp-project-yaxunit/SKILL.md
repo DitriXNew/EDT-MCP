@@ -12,10 +12,7 @@ YAXUnit selection on an exact authorized test application.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -41,8 +38,11 @@ tests or an unidentified/shared production infobase.
 5. For debugging, first prove the intended debug target can remain unambiguous
    under current help. Then use `set_breakpoint` -> debug-mode
    `run_yaxunit_tests` -> `wait_for_break` -> bounded inspection -> `resume` and
-   `remove_breakpoint`. Use `terminate_launch` only for a uniquely identified,
-   task-owned launch whose termination is authorized.
+   `remove_breakpoint`. After the run or any target race, refresh status and
+   resume every uniquely attributable task-caused suspension before removing
+   the task breakpoint; never resume an unrelated or ambiguously owned target.
+   Use `terminate_launch` only for a uniquely identified, task-owned launch
+   whose termination is authorized.
 6. Use `cancel_job` only for the retained running job and follow its current
    preview, confirmation, and final-state contract.
 

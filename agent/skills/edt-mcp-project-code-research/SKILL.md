@@ -12,10 +12,7 @@ code, dependencies, impact, or implementation differences.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -27,19 +24,25 @@ authorization.
 ## Primary workflow
 
 1. Resolve candidates with `get_metadata_objects`, `list_modules`, and
-   `search_in_code`.
+   `search_in_code`. Search is literal and not dialect-aware: for identifiers,
+   use AST-backed definition/reference/hierarchy tools and do not infer absence
+   from one Russian or English spelling.
 2. Narrow with `get_module_structure`, then prefer `read_method_source` over
    `read_module_source` unless module-level context is required.
 3. Follow only the relationships needed using `go_to_definition`,
    `find_references`, `get_method_call_hierarchy`, `get_outgoing_structures`,
    or `get_symbol_info`.
-4. Treat every single-hop or depth-1 caller result as a lower bound. When the
-   conclusion requires completeness, use the current completeness-capable
-   route from the authoritative guide and report any remaining gaps.
-5. Treat structured-output analysis and cross-project impact as potentially
-   partial; inspect the bounded source and relevant projects before claiming a
+4. `get_method_call_hierarchy` scans only one project's `<project>/src`.
+   Inspect each relevant base/extension project separately and name any project
+   left unsearched. Treat `get_outgoing_structures` as a heuristic lower bound,
+   even when its response is not marked partial.
+5. Treat every single-hop/depth-1 result and structured-output analysis as a
+   lower bound. Inspect bounded source and relevant projects before claiming a
    complete contract.
-6. Use `get_platform_documentation` when the conclusion depends on platform
+6. Start with counts, file lists, filters, or method/range reads; request full
+   payloads or more pages only when needed. Preserve truncation and cursor
+   evidence in the result.
+7. Use `get_platform_documentation` when the conclusion depends on platform
    behavior rather than project code.
 
 ## Authority rule

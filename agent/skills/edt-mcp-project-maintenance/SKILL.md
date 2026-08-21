@@ -13,10 +13,7 @@ operations when enabled.
 
 ## Operating rule
 
-- Use current MCP tool help/schema and repository tool documentation as the authority for parameters, limits, side effects, returned identifiers, errors, and recovery.
-- This skill supplies task routing and essential ordering only; do not invent undocumented behavior or copy tool contracts into the workflow.
-- On ambiguity, an unexpected state or error, unclear target/ownership, or a user-affecting/destructive action, stop and consult the authoritative help. If the safe action remains unclear or needs permission, ask the user.
-- Report only results confirmed by tool output.
+Read and apply [the common operating rules](../COMMON.md) before this workflow.
 
 ## Task boundary
 
@@ -36,7 +33,10 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    the exact project; omission rebuilds every EDT project.
 2. Resolve application identity with `get_applications` and
    `list_configurations`. For `update_database`, review the current preview and
-   side effects, obtain authority, execute once, and verify the final state.
+   side effects with `terminateRunningClients=false`, obtain authority, execute
+   once with the reviewed value, and verify the final state. Use `true` only
+   when explicit application-wide authority covers every matching EDT-launched
+   client that may appear between preview and apply.
 3. Poll a returned job only with `get_job_status`; use `cancel_job` only under
    its current authorization and confirmation contract.
 4. For import, confirm a caller-approved XML source plus a new project target,

@@ -23,7 +23,9 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 > [!TIP]
 > **Using EDT-MCP on a 1C business project?** The client-neutral
 > [business-project skills pack](agent/README.md) routes common project tasks to
-> compact workflows. It is separate from the plugin-contributor skills above.
+> compact workflows. The [rules pack](rules/README.md) provides standing,
+> detailed project policy; the two business-project layers are complementary.
+> Both are separate from the plugin-contributor skills above.
 
 > [!IMPORTANT]
 > **EDT version compatibility:**

@@ -1,8 +1,10 @@
 # Map of EDT-MCP MCP-server tools
 
-> The source of truth is the "Available Tools" section in the EDT-MCP repository `README.md`. If it differs from this file — trust the README.
+> Current MCP help/schema and the generated `docs/tools/` inventory are the
+> source of truth. This copied task map is secondary.
 >
-> Total tools: **57**, organised into 9 groups.
+> This file is a curated task map, not an exhaustive capability index; it does
+> not carry a manually maintained total that can drift from the server.
 
 ## Tool name prefixes across clients
 
@@ -35,7 +37,7 @@ This section matters more than any table below. Use it to pick the right tool, t
 | "What's in this form?" | `get_form_layout_snapshot` with `mode: compact` (YAML); `get_form_screenshot` for visuals | YAML is cheaper than PNG |
 | "What does the platform expose for type X?" | `get_platform_documentation` | Do not guess signatures |
 | "Run / debug / update an infobase" | `list_configurations` -> `debug_launch` / `update_database` | First learn the launch configuration name |
-| "Run tests" | `run_yaxunit_tests`; to debug failing ones — `debug_yaxunit_tests` + `set_breakpoint` | |
+| "Run tests" | `run_yaxunit_tests`; to debug failing ones — `set_breakpoint` then `run_yaxunit_tests(debug=true)` | |
 | "What does check Z mean?" | `get_check_description` | |
 
 If a tool returns `tool is disabled` — the current preset (see below) hides it. **Do not try to bypass**; tell the user and suggest switching the preset.
@@ -46,10 +48,10 @@ In plugin settings (`Window -> Preferences -> MCP Server -> Tools`) the user sel
 
 | Preset | What is disabled |
 |---|---|
-| **All Tools** | Nothing (all 57 tools) |
+| **All Tools** | Nothing (all currently enabled tools) |
 | **Analysis Only** | Groups Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Available: Core/Project (except export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | Same as Analysis Only, **plus** all BSL Code tools become available **except** `write_module_source`. So available: `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Development** | Only the Debugging group (including `debug_yaxunit_tests`, `start_profiling`, `get_profiling_results`). Refactoring, Translation, BSL Code, Applications are all available |
+| **Development** | Only the Debugging group (including `run_yaxunit_tests(debug=true)`, `start_profiling`, `get_profiling_results`). Refactoring, Translation, BSL Code, Applications are all available |
 
 ## Configurable parameter defaults
 
@@ -128,9 +130,9 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | `step` | Step over/into/out, returns a new snapshot |
 | `resume` | Resume a thread or all threads of a target |
 | `evaluate_expression` | Execute a BSL expression in frame context |
-| `debug_yaxunit_tests` | Run YAxUnit tests in DEBUG mode so breakpoints fire |
+| `run_yaxunit_tests` with `debug: true` | Run YAxUnit tests in DEBUG mode after setting the required breakpoint |
 | `debug_status` | Status of active debug launches: mode, suspend, threads, top frame |
-| `start_profiling` | Toggle performance profiling on the active debug target |
+| `start_profiling` | Start performance profiling on the active debug target; use `stop_profiling` to finish |
 | `get_profiling_results` | Profiling results: per-module / per-line, call counts, timing, coverage |
 
 Typical cycle — see `edt-mcp-workflows.md`, section "Debugging".
