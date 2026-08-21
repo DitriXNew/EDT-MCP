@@ -25,7 +25,13 @@ existing storage topology without translating programmatic identifiers.
 
 ## Preflight
 
-1. Resolve the exact project.
+1. Resolve the exact project with `list_projects(format='json')` and inspect its
+   reported `natures`. String generation is supported only when the selected
+   project has `V8ConfigurationNature`. If it has `V8ExtensionNature`, stop
+   explicitly: `generate_translation_strings` does not support configuration
+   extensions. Route to an owning configuration project only when that is the
+   user's explicit intended target and the ownership relation is proven by
+   current project evidence; never silently substitute another project.
 2. Call `get_configuration_properties` and record `defaultLanguage` plus the
    declared configuration `languages`.
 3. Treat every target language as explicit caller or user input, distinguish

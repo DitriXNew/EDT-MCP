@@ -70,16 +70,27 @@ test when debugging.
    Unknown extension names are a hard error. If the required dependency graph
    cannot be expressed by these supported values, stop and explain the
    limitation instead of silently broadening the scope.
-3. When `updateBeforeLaunch=true`, pass `externalInfobaseChanges` explicitly.
+3. Before a normal `debug=false` run with `updateBeforeLaunch=true`, inspect
+   application-wide live client launches using
+   `list_configurations(type='client', projectName=<exact project>)` and match
+   the selected real `applicationId`. Explain that the documented preparation
+   chain may terminate an existing client before recompute/update, and require
+   explicit authority to terminate or restart any user-owned matching client.
+   Update/restructure authority does not grant client-termination authority.
+   Without it, use `updateBeforeLaunch=false` only when the application is
+   already prepared and that documented no-sweep route is proven safe for the
+   requested run; otherwise stop and report the limitation. Do not claim that
+   `run_yaxunit_tests` preserves a matching client.
+4. When `updateBeforeLaunch=true`, pass `externalInfobaseChanges` explicitly.
    `override` writes the infobase and discards its external configuration
    changes; `import` rewrites project sources; `cancel` refuses the divergence.
    Require authority for the chosen effect rather than inheriting `override`.
-4. On standalone-server applications, let the coordinated test launch perform
+5. On standalone-server applications, let the coordinated test launch perform
    the update; do not pre-run a bare `update_database`, which can start the
    server in run mode.
-5. Pass `standaloneServerPortConflict='cancel'` unless explicit authority allows
+6. Pass `standaloneServerPortConflict='cancel'` unless explicit authority allows
    `reassign`, which rewrites the standalone-server configuration.
-6. Use `updateBeforeLaunch=false` only when the application is already prepared
+7. Use `updateBeforeLaunch=false` only when the application is already prepared
    or the task intentionally delegates freshness elsewhere.
 
 ## Run and poll
@@ -94,14 +105,21 @@ test when debugging.
 
 ## Debug
 
+Before setting the breakpoint, inspect application-wide live client launches
+for the exact selected application. Proceed only after proving that no matching
+client exists, or after explicit authority to terminate the matching
+user-owned client before this workflow starts and a fresh discovery proves it
+is gone. Do not start the debug path alongside a pre-existing matching client:
+configuration name, project/application identity, and the returned launch
+handle do not make either supported `terminate_launch` selector unique when
+duplicate launches coexist. With `updateBeforeLaunch=true`, the tool may also
+terminate an existing client during its fresh-run sweep, so that side effect
+still requires explicit authority.
+
 Set the exact source breakpoint before starting the selected test and retain
-the `breakpointId` returned by `set_breakpoint`. Before the run, retain the
-exact target and its `running` state from `list_configurations`; do not treat a
-pre-existing user/shared launch as task-owned. With
-`updateBeforeLaunch=true`, the tool may terminate such an existing client
-during its fresh-run sweep, so stop unless that side effect is explicitly
-authorized. Then use the current debug mode of `run_yaxunit_tests` with
-`debug=true`; the separate `debug_yaxunit_tests` name is a compatibility alias.
+the `breakpointId` returned by `set_breakpoint`. Then use the current debug mode
+of `run_yaxunit_tests` with `debug=true`; the separate
+`debug_yaxunit_tests` name is a compatibility alias.
 Before
 `wait_for_break`, `get_variables`, or `evaluate_expression`, require a
 sanitized/non-production target, adequate enabled server redaction for the
@@ -117,16 +135,19 @@ terminal while the spawned 1C client is still alive.
 Use this complete order: `set_breakpoint` ->
 `run_yaxunit_tests(debug=true)` -> poll only its `jobId` when pending ->
 `wait_for_break` -> bounded inspect/step -> cleanup. Cleanup after success,
-failure, timeout, or interruption is unambiguous: first resume the exact thread
-or application if it is suspended; second remove the temporary breakpoint by
-its retained `breakpointId`; third, if the client did not exit naturally,
-terminate only the launch proven to have been spawned by this call using
-`terminate_launch` with either the retained exact `launchConfigurationName` or
-the returned `projectName` plus `applicationId` (set `includeAttach=false`). A
-step can suspend execution again, so check the final state before cleanup. If
-termination times out, report it; use `force=true` only with separate authority
-because it can lose client state. Never terminate a pre-existing user/shared
-launch without explicit authorization.
+failure, timeout, or interruption is ordered: first resume the exact thread or
+application if it is suspended; second remove the temporary breakpoint by its
+retained `breakpointId`; third, if the client did not exit naturally, use
+`terminate_launch` only when both launch ownership and selector uniqueness are
+proven. The retained `launchConfigurationName` or returned `projectName` plus
+`applicationId` is usable only while fresh discovery proves that it selects no
+other live launch; set `includeAttach=false`. If uniqueness cannot be proven,
+do not risk termination: leave the task-owned breakpoint removed, report the
+remaining launch state, and request manual or newly authorized cleanup. A step
+can suspend execution again, so check the final state before cleanup. If an
+authorized unique termination times out, report it; use `force=true` only with
+separate authority because it can lose client state. Never terminate a
+pre-existing user/shared launch without explicit authorization.
 
 `cancel_job` addresses a still-running background job and its destructive
 cancellation contract; it is not launch cleanup after the debug job has already

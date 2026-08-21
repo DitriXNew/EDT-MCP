@@ -139,6 +139,16 @@ file as `/Execute`; a prebuilt file cannot provide source breakpoints. Verify
 the echoed `externalObjectProjectName` and resolved `externalObjectName` before
 claiming that the intended object was launched.
 
+Branch immediately when the response has `alreadyRunning=true`: no fresh
+client was spawned and the external-object `/Execute` overrides were not
+applied. Do not continue to `debug_status`, `wait_for_break`, or the object
+probe, and never attribute the unrelated existing session to this workflow.
+Remove the temporary breakpoint by its retained `breakpointId`, then either
+stop and report that the existing client prevented execution, or obtain
+explicit authority to terminate/restart that exact matching client. For an
+authorized retry, confirm the old client is gone, set a new temporary
+breakpoint, and perform a fresh launch before probing.
+
 Use `startupOption` only for the current launch's `/C` payload. It is applied to
 a working copy and does not persistently change the saved EDT launch
 configuration. It is valid for runtime-client launches, not Attach launches.

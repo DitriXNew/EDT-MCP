@@ -23,7 +23,30 @@ experiment, then clean up temporary state.
 - no authorized test application or infobase is identified;
 - the task only asks for code review or model validation.
 
+## Event-log-only route
+
+When the question needs only `get_event_log` evidence, branch here before the
+ordinary debugger preflight and do not enter the launch workflow below.
+
+1. Confirm that `get_event_log` is disclosed in the current tool catalog and
+   consult `get_tool_guide('get_event_log')` for its current contract.
+2. Locate the supported text-format log by either a confirmed absolute
+   `logDir`, or the exact configuration `projectName` plus `applicationId` from
+   `get_applications` only when several FILE infobases require disambiguation.
+   Stop if the location is unavailable, ambiguous, SERVER-mode without an
+   accessible copied `logDir`, or an unsupported SQLite `.lgd` log.
+3. Apply the disclosure authorization and narrow filters described below,
+   read the bounded log evidence, and report explicitly that no debug session
+   was started.
+
+Do not set breakpoints, request or store infobase credentials, call
+`debug_launch` or `debug_status`, attach to a client, update the infobase, or
+change external-configuration state on this route. `get_event_log` reads the
+raw log without a running 1C session and does not mutate the project or model.
+
 ## Preflight
+
+For an ordinary debugger investigation:
 
 1. Resolve the exact project, application, and launch configuration with
    `get_applications` and `list_configurations`.
