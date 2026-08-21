@@ -426,8 +426,8 @@ public final class NavigatorEnhancementManager
     private static FilterPreferencePlan prepareFilterPreference(INavigatorFilterService filterService,
         StructuredViewer viewer, boolean enabled)
     {
-        boolean changeRequired = filterService.isActive(GROUPED_OBJECTS_FILTER_ID) != enabled;
-        if (!changeRequired && viewer == null)
+        boolean serviceChangeRequired = filterService.isActive(GROUPED_OBJECTS_FILTER_ID) != enabled;
+        if (!serviceChangeRequired && viewer == null)
         {
             return FilterPreferencePlan.NO_CHANGE;
         }
@@ -447,7 +447,7 @@ public final class NavigatorEnhancementManager
                     {
                         groupedObjectsDescriptor = descriptor;
                     }
-                    if (changeRequired && filterId != null && filterService.isActive(filterId))
+                    if (serviceChangeRequired && filterId != null && filterService.isActive(filterId))
                     {
                         activeFilterIds.add(filterId);
                     }
@@ -456,6 +456,7 @@ public final class NavigatorEnhancementManager
         }
 
         ViewerFilter groupedObjectsFilter = null;
+        boolean viewerChangeRequired = false;
         if (viewer != null)
         {
             if (groupedObjectsDescriptor == null)
@@ -467,32 +468,54 @@ public final class NavigatorEnhancementManager
             {
                 return null;
             }
+
+            boolean filterInstalled = false;
+            ViewerFilter[] viewerFilters = viewer.getFilters();
+            if (viewerFilters != null)
+            {
+                for (ViewerFilter viewerFilter : viewerFilters)
+                {
+                    if (viewerFilter == groupedObjectsFilter)
+                    {
+                        filterInstalled = true;
+                        break;
+                    }
+                }
+            }
+            viewerChangeRequired = filterInstalled != enabled;
         }
 
+        boolean changeRequired = serviceChangeRequired || viewerChangeRequired;
         if (!changeRequired)
         {
             return FilterPreferencePlan.NO_CHANGE;
         }
 
-        if (enabled)
+        if (serviceChangeRequired && enabled)
         {
             activeFilterIds.add(GROUPED_OBJECTS_FILTER_ID);
         }
-        else
+        else if (serviceChangeRequired)
         {
             activeFilterIds.remove(GROUPED_OBJECTS_FILTER_ID);
         }
 
-        return new FilterPreferencePlan(activeFilterIds.toArray(String[]::new),
-            groupedObjectsFilter);
+        String[] updatedActiveFilterIds = serviceChangeRequired
+            ? activeFilterIds.toArray(String[]::new)
+            : null;
+        return new FilterPreferencePlan(updatedActiveFilterIds, groupedObjectsFilter,
+            viewerChangeRequired);
     }
 
     private static void applyFilterPreference(INavigatorFilterService filterService,
         StructuredViewer viewer, boolean enabled, FilterPreferencePlan plan)
     {
         // The convenience update method persists CNF state, so update state and viewer separately.
-        filterService.setActiveFilterIds(plan.activeFilterIds);
-        if (viewer != null)
+        if (plan.activeFilterIds != null)
+        {
+            filterService.setActiveFilterIds(plan.activeFilterIds);
+        }
+        if (viewer != null && plan.viewerChangeRequired)
         {
             if (enabled)
             {
@@ -508,21 +531,23 @@ public final class NavigatorEnhancementManager
     private static final class FilterPreferencePlan
     {
         private static final FilterPreferencePlan NO_CHANGE =
-            new FilterPreferencePlan(null, null);
+            new FilterPreferencePlan(null, null, false);
 
         private final String[] activeFilterIds;
         private final ViewerFilter groupedObjectsFilter;
+        private final boolean viewerChangeRequired;
 
         private FilterPreferencePlan(String[] activeFilterIds,
-            ViewerFilter groupedObjectsFilter)
+            ViewerFilter groupedObjectsFilter, boolean viewerChangeRequired)
         {
             this.activeFilterIds = activeFilterIds;
             this.groupedObjectsFilter = groupedObjectsFilter;
+            this.viewerChangeRequired = viewerChangeRequired;
         }
 
         private boolean isChangeRequired()
         {
-            return activeFilterIds != null;
+            return activeFilterIds != null || viewerChangeRequired;
         }
     }
 

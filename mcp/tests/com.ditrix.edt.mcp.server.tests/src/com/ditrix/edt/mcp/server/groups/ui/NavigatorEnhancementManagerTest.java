@@ -166,6 +166,39 @@ public class NavigatorEnhancementManagerTest
     }
 
     @Test
+    public void testFalseRemovesStaleViewerFilterWithoutUpdatingService()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_ENHANCE_NAVIGATOR,
+            PreferenceConstants.DEFAULT_ENHANCE_NAVIGATOR);
+        store.setValue(PreferenceConstants.PREF_ENHANCE_NAVIGATOR, false);
+
+        INavigatorActivationService activationService = mock(INavigatorActivationService.class);
+        INavigatorFilterService filterService = mock(INavigatorFilterService.class);
+        INavigatorContentService contentService = mock(INavigatorContentService.class);
+        ViewerFilter groupedObjectsFilter = mock(ViewerFilter.class);
+        StructuredViewer viewer = viewerWithFilters();
+        viewer.addFilter(groupedObjectsFilter);
+        when(contentService.getActivationService()).thenReturn(activationService);
+        when(contentService.getFilterService()).thenReturn(filterService);
+        when(activationService.isNavigatorExtensionActive(anyString())).thenReturn(false);
+        when(filterService.isActive(anyString())).thenReturn(false);
+        ICommonFilterDescriptor groupedObjectsDescriptor = descriptor(GROUPED_OBJECTS_FILTER_ID);
+        when(filterService.getVisibleFilterDescriptors())
+            .thenReturn(new ICommonFilterDescriptor[] { groupedObjectsDescriptor });
+        when(filterService.getViewerFilter(groupedObjectsDescriptor))
+            .thenReturn(groupedObjectsFilter);
+
+        NavigatorEnhancementManager.applyPreference(store, contentService, viewer);
+
+        verify(filterService, never()).setActiveFilterIds(any(String[].class));
+        verify(viewer).removeFilter(groupedObjectsFilter);
+        assertArrayEquals("the stale filter must be removed from the viewer", //$NON-NLS-1$
+            new ViewerFilter[0], viewer.getFilters());
+        verify(contentService).update();
+    }
+
+    @Test
     public void testMissingGroupedDescriptorRetriesWithoutStrandingFilterState()
     {
         PreferenceStore store = new PreferenceStore();
