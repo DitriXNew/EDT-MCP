@@ -54,7 +54,7 @@ test when debugging.
 ## Update and launch policy
 
 1. Decide `updateBeforeLaunch` deliberately. Its current default may
-   recompute projects, terminate a stale client, and update the application.
+   recompute projects and update the application.
    Before permitting an update, require explicit update/restructure authority
    or a disposable test infobase where those effects are acceptable; update
    dialogs may be accepted automatically.
@@ -70,17 +70,15 @@ test when debugging.
    Unknown extension names are a hard error. If the required dependency graph
    cannot be expressed by these supported values, stop and explain the
    limitation instead of silently broadening the scope.
-3. Before a normal `debug=false` run with `updateBeforeLaunch=true`, inspect
-   application-wide live client launches using
-   `list_configurations(type='client', projectName=<exact project>)` and match
-   the selected real `applicationId`. Explain that the documented preparation
-   chain may terminate an existing client before recompute/update, and require
-   explicit authority to terminate or restart any user-owned matching client.
-   Update/restructure authority does not grant client-termination authority.
-   Without it, use `updateBeforeLaunch=false` only when the application is
-   already prepared and that documented no-sweep route is proven safe for the
-   requested run; otherwise stop and report the limitation. Do not claim that
-   `run_yaxunit_tests` preserves a matching client.
+3. Before a normal `debug=false` run with `updateBeforeLaunch=true`, discover
+   the exact affected set first: preparation may terminate every live launch
+   for the selected project/application, including clients and standalone
+   servers, and may detach stale Attach launches anywhere in that project.
+   Obtain explicit user authority for that exact set before starting;
+   update/restructure authority
+   alone is insufficient. Without launch authority, do not start this route:
+   use `updateBeforeLaunch=false` only when the application is already prepared
+   and that documented no-sweep route is proven safe, or stop.
 4. When `updateBeforeLaunch=true`, pass `externalInfobaseChanges` explicitly.
    `override` writes the infobase and discards its external configuration
    changes; `import` rewrites project sources; `cancel` refuses the divergence.
@@ -105,16 +103,13 @@ test when debugging.
 
 ## Debug
 
-Before setting the breakpoint, inspect application-wide live client launches
-for the exact selected application. Proceed only after proving that no matching
-client exists, or after explicit authority to terminate the matching
-user-owned client before this workflow starts and a fresh discovery proves it
-is gone. Do not start the debug path alongside a pre-existing matching client:
-configuration name, project/application identity, and the returned launch
-handle do not make either supported `terminate_launch` selector unique when
-duplicate launches coexist. With `updateBeforeLaunch=true`, the tool may also
-terminate an existing client during its fresh-run sweep, so that side effect
-still requires explicit authority.
+Before setting the breakpoint or starting the run, use a fresh `debug_status`
+view and require that no pre-existing active debug target shares the selected
+real `applicationId`, whether it is a client, standalone server, or Attach
+target. If one exists, stop unless a documented selector can uniquely identify
+the newly spawned task target. While
+the target remains ambiguous, do not call `wait_for_break`, inspect, step,
+resume, or terminate.
 
 Set the exact source breakpoint before starting the selected test and retain
 the `breakpointId` returned by `set_breakpoint`. Then use the current debug mode

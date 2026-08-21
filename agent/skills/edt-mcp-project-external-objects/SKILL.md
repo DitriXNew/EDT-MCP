@@ -162,8 +162,13 @@ after a raw response cannot undo disclosure. On a hit, inspect only the frames
 and variables needed for the question; the break notification alone is not
 runtime evidence. After the probe, including failure, timeout, or interruption,
 resume first if execution is suspended, then remove the temporary breakpoint by
-its retained `breakpointId`. Use `terminate_launch` only when ending a task-owned
-launch is appropriate. Hand deeper stepping or expression work to
+its retained `breakpointId`. Before any launch cleanup, obtain a fresh
+`debug_status` live-launch view and exclude Attach launches from the candidate
+set (`includeAttach=false` where supported). Call `terminate_launch` only when the
+echoed task launch configuration identifies exactly one live runtime launch and
+task ownership is proven. If either uniqueness or ownership is unproven, do not
+terminate: remove only task-owned breakpoints and report that the launch was
+intentionally left untouched. Hand deeper stepping or expression work to
 `edt-mcp-project-runtime-debug`. Use `restartIfRunning` only when terminating
 the current client is authorized.
 
