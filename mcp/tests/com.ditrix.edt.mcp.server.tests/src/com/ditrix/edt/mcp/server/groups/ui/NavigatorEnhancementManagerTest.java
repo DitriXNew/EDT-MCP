@@ -181,7 +181,7 @@ public class NavigatorEnhancementManagerTest
         viewer.addFilter(groupedObjectsFilter);
         when(contentService.getActivationService()).thenReturn(activationService);
         when(contentService.getFilterService()).thenReturn(filterService);
-        when(activationService.isNavigatorExtensionActive(anyString())).thenReturn(false);
+        when(activationService.isNavigatorExtensionActive(anyString())).thenReturn(true);
         when(filterService.isActive(anyString())).thenReturn(true);
         ICommonFilterDescriptor edtDescriptor = descriptor(EDT_FILTER_ID);
         when(filterService.getVisibleFilterDescriptors())
@@ -189,6 +189,8 @@ public class NavigatorEnhancementManagerTest
 
         NavigatorEnhancementManager.applyPreference(store, contentService, viewer);
 
+        verify(activationService, never()).activateExtensions(any(String[].class), anyBoolean());
+        verify(activationService, never()).deactivateExtensions(any(String[].class), anyBoolean());
         verify(filterService, never()).setActiveFilterIds(any(String[].class));
         verify(viewer, never()).removeFilter(groupedObjectsFilter);
         verify(contentService, never()).update();
@@ -204,6 +206,9 @@ public class NavigatorEnhancementManagerTest
 
         NavigatorEnhancementManager.applyPreference(store, contentService, viewer);
 
+        ArgumentCaptor<String[]> contentIds = ArgumentCaptor.forClass(String[].class);
+        verify(activationService).deactivateExtensions(contentIds.capture(), eq(false));
+        assertArrayEquals(EXPECTED_CONTENT_EXTENSION_IDS, contentIds.getValue());
         ArgumentCaptor<String[]> filterIds = ArgumentCaptor.forClass(String[].class);
         verify(filterService).setActiveFilterIds(filterIds.capture());
         assertArrayEquals(new String[] { EDT_FILTER_ID }, filterIds.getValue());

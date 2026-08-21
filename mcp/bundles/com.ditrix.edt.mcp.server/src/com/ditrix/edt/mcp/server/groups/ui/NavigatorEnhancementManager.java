@@ -349,29 +349,56 @@ public final class NavigatorEnhancementManager
 
         boolean enabled = isEnabled(preferenceStore);
         INavigatorActivationService activationService = contentService.getActivationService();
-        boolean changed = applyContentPreference(activationService, enabled);
-
         INavigatorFilterService filterService = contentService.getFilterService();
-        if (applyFilterPreference(filterService, viewer, enabled))
+        if (activationService == null || filterService == null)
         {
-            changed = true;
+            return;
         }
 
-        if (changed)
+        FilterPreferencePlan filterPlan = prepareFilterPreference(filterService, viewer, enabled);
+        if (filterPlan == null)
         {
-            // The plugin preference is the source of truth; do not persist duplicate CNF state.
-            contentService.update();
+            return;
         }
+
+        boolean contentChangeRequired = requiresContentChange(activationService, enabled);
+        if (!contentChangeRequired && !filterPlan.isChangeRequired())
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            // Make the group nodes available before hiding their original objects.
+            if (contentChangeRequired)
+            {
+                applyContentPreference(activationService, true);
+            }
+            if (filterPlan.isChangeRequired())
+            {
+                applyFilterPreference(filterService, viewer, true, filterPlan);
+            }
+        }
+        else
+        {
+            // Reveal original objects before removing the group nodes that expose them.
+            if (filterPlan.isChangeRequired())
+            {
+                applyFilterPreference(filterService, viewer, false, filterPlan);
+            }
+            if (contentChangeRequired)
+            {
+                applyContentPreference(activationService, false);
+            }
+        }
+
+        // The plugin preference is the source of truth; do not persist duplicate CNF state.
+        contentService.update();
     }
 
-    private static boolean applyContentPreference(INavigatorActivationService activationService,
+    private static void applyContentPreference(INavigatorActivationService activationService,
         boolean enabled)
     {
-        if (activationService == null || !requiresContentChange(activationService, enabled))
-        {
-            return false;
-        }
-
         String[] extensionIds = GROUPS_CONTENT_EXTENSION_IDS.clone();
         if (enabled)
         {
@@ -381,7 +408,6 @@ public final class NavigatorEnhancementManager
         {
             activationService.deactivateExtensions(extensionIds, false);
         }
-        return true;
     }
 
     private static boolean requiresContentChange(INavigatorActivationService activationService,
@@ -397,13 +423,13 @@ public final class NavigatorEnhancementManager
         return false;
     }
 
-    private static boolean applyFilterPreference(INavigatorFilterService filterService,
+    private static FilterPreferencePlan prepareFilterPreference(INavigatorFilterService filterService,
         StructuredViewer viewer, boolean enabled)
     {
-        if (filterService == null
-            || filterService.isActive(GROUPED_OBJECTS_FILTER_ID) == enabled)
+        boolean changeRequired = filterService.isActive(GROUPED_OBJECTS_FILTER_ID) != enabled;
+        if (!changeRequired && viewer == null)
         {
-            return false;
+            return FilterPreferencePlan.NO_CHANGE;
         }
 
         // setActiveFilterIds replaces the complete set, so retain every active bound filter.
@@ -421,7 +447,7 @@ public final class NavigatorEnhancementManager
                     {
                         groupedObjectsDescriptor = descriptor;
                     }
-                    if (filterId != null && filterService.isActive(filterId))
+                    if (changeRequired && filterId != null && filterService.isActive(filterId))
                     {
                         activeFilterIds.add(filterId);
                     }
@@ -434,13 +460,18 @@ public final class NavigatorEnhancementManager
         {
             if (groupedObjectsDescriptor == null)
             {
-                return false;
+                return null;
             }
             groupedObjectsFilter = filterService.getViewerFilter(groupedObjectsDescriptor);
             if (groupedObjectsFilter == null)
             {
-                return false;
+                return null;
             }
+        }
+
+        if (!changeRequired)
+        {
+            return FilterPreferencePlan.NO_CHANGE;
         }
 
         if (enabled)
@@ -452,20 +483,47 @@ public final class NavigatorEnhancementManager
             activeFilterIds.remove(GROUPED_OBJECTS_FILTER_ID);
         }
 
+        return new FilterPreferencePlan(activeFilterIds.toArray(String[]::new),
+            groupedObjectsFilter);
+    }
+
+    private static void applyFilterPreference(INavigatorFilterService filterService,
+        StructuredViewer viewer, boolean enabled, FilterPreferencePlan plan)
+    {
         // The convenience update method persists CNF state, so update state and viewer separately.
-        filterService.setActiveFilterIds(activeFilterIds.toArray(String[]::new));
+        filterService.setActiveFilterIds(plan.activeFilterIds);
         if (viewer != null)
         {
             if (enabled)
             {
-                viewer.addFilter(groupedObjectsFilter);
+                viewer.addFilter(plan.groupedObjectsFilter);
             }
             else
             {
-                viewer.removeFilter(groupedObjectsFilter);
+                viewer.removeFilter(plan.groupedObjectsFilter);
             }
         }
-        return true;
+    }
+
+    private static final class FilterPreferencePlan
+    {
+        private static final FilterPreferencePlan NO_CHANGE =
+            new FilterPreferencePlan(null, null);
+
+        private final String[] activeFilterIds;
+        private final ViewerFilter groupedObjectsFilter;
+
+        private FilterPreferencePlan(String[] activeFilterIds,
+            ViewerFilter groupedObjectsFilter)
+        {
+            this.activeFilterIds = activeFilterIds;
+            this.groupedObjectsFilter = groupedObjectsFilter;
+        }
+
+        private boolean isChangeRequired()
+        {
+            return activeFilterIds != null;
+        }
     }
 
     /**

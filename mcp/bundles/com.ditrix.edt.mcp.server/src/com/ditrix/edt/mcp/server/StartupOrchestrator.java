@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.osgi.framework.BundleContext;
 
 import com.ditrix.edt.mcp.server.groups.IGroupService;
@@ -36,6 +38,9 @@ import com.ditrix.edt.mcp.server.utils.WorkmateChatSessionPublisher;
  */
 public class StartupOrchestrator
 {
+    /** Invalidates UI initialization work posted by an earlier lifecycle. */
+    private final AtomicLong lifecycleGeneration = new AtomicLong();
+
     /** Group service instance (created directly, not via OSGi DS to avoid circular references) */
     private IGroupService groupService;
 
@@ -51,6 +56,8 @@ public class StartupOrchestrator
      */
     public void start(boolean headless)
     {
+        long startGeneration = lifecycleGeneration.incrementAndGet();
+
         // Create group service directly (not via OSGi DS to avoid circular references)
         groupService = new GroupServiceImpl();
         ((GroupServiceImpl) groupService).activate();
@@ -67,6 +74,11 @@ public class StartupOrchestrator
 
             // Initialize Navigator integrations.
             org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+                if (lifecycleGeneration.get() != startGeneration)
+                {
+                    return;
+                }
+
                 try
                 {
                     com.ditrix.edt.mcp.server.groups.ui.NavigatorEnhancementManager
@@ -97,6 +109,7 @@ public class StartupOrchestrator
      */
     public void stop(boolean headless)
     {
+        lifecycleGeneration.incrementAndGet();
         chatSessionPublisher.stop();
 
         // Dispose UI components only in non-headless mode.
