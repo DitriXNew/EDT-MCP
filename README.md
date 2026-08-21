@@ -129,6 +129,7 @@ Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
 - **Check descriptions folder**: Path to check description markdown files
 - **Auto-start**: Start server on EDT launch
 - **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
+- **Enhance Navigator**: Controls this plugin’s contributions to the Navigator tree (groups and their filter). Turn it off to resolve conflicts with another plugin that patches the same panel
 - **Show tags in Navigator**: Display tags as decorations in the Navigator tree
 - **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
 - **Server control**: Start, stop, and restart the MCP server directly from preferences
