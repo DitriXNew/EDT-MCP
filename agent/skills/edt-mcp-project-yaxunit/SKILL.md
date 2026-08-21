@@ -30,6 +30,9 @@ tests or an unidentified/shared production infobase.
    `set_infobase_credentials` only when authorized and required.
 2. Select at least one intended test, module, extension, or tag; settle update,
    external-change, launch, disclosure, and dependency scope before execution.
+   Before any `updateBeforeLaunch=true` route, discover and obtain authority
+   for every affected project/application launch and project Attach launch;
+   otherwise use a proven no-sweep route or stop.
 3. Call `run_yaxunit_tests`. If pending, retain its job ID and poll only that
    job with `get_job_status`; never rerun merely to check status.
 4. For a completed normal run, require at least one intended test to have

@@ -36,6 +36,9 @@ prebuilt `.epf`/`.erf` outside an EDT project.
 4. For a debug run, complete target, launch-policy, disclosure, and credential
    preflight first, using `set_infobase_credentials` only when authorized.
    Then call `set_breakpoint` before `debug_launch` and retain task-owned IDs.
+   If `debug_launch` reports `alreadyRunning=true`, remove task-owned
+   temporary state and stop; terminate and relaunch only with explicit user
+   authorization.
 5. Refresh `debug_status` after launch. Call `wait_for_break` and inspect with
    `get_variables` only when the current help proves the intended debug target
    is unambiguous. Otherwise remove only task-owned temporary state and stop.

@@ -29,8 +29,9 @@ an unsupported structured operation.
    `read_method_source`, or `get_metadata_details`.
 2. Read the complete owning method or dataset and validate the complete query
    with `validate_query` in the exact project.
-3. Preserve business grain and cardinality, then apply the smallest supported
-   source route or `modify_metadata` DCS mutation after consulting current help.
+3. Preserve business grain and cardinality. Hand an embedded BSL query mutation
+   to `edt-mcp-project-local-fix` and require its guarded lost-update workflow;
+   use `modify_metadata` for a supported DCS mutation.
 4. Re-read the owner, validate the final query, and inspect targeted
    `get_project_errors` when markers matter.
 5. Run an authorized report/runtime check only when rows, totals, RLS,

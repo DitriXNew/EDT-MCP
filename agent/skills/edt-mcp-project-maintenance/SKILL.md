@@ -39,9 +39,10 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    and becomes usable. For export, confirm the exact project and approved output
    directory, call `export_configuration_to_xml`, then verify the reported
    destination and expected export result.
-5. Use the current working tree for a task branch only when it is clean, free,
-   and not needed for parallel work; verify with `list_git_branches`, then use
-   `create_git_branch` or `switch_git_branch` as appropriate.
+5. Before using the current working tree, inspect actual repository status and
+   diff through the project-approved Git route and prove it clean, free, and not
+   needed for parallel work. Use `list_git_branches` only for branch/binding
+   identity, then use `create_git_branch` or `switch_git_branch` as appropriate.
 6. When the active project has foreign changes or parallel work is required,
    do not switch it. Use a separate Git worktree through the project-approved
    Git route and resolve that checkout as a distinct EDT project before MCP

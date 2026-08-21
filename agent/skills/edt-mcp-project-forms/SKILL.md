@@ -34,6 +34,8 @@ Route code-only fixes to `edt-mcp-project-local-fix` and DCS changes to
    `validate_query` when applicable.
 4. Use `get_form_layout_snapshot` when layout structure matters and
    `get_form_screenshot` only when rendered appearance is acceptance evidence.
+   After a change, require `get_form_screenshot(refresh=true)`; a render
+   failure means screenshot evidence is unavailable.
 5. Run targeted validation and an authorized runtime UI scenario only when
    interaction behavior must be proven.
 
