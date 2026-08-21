@@ -429,6 +429,20 @@ public final class NavigatorEnhancementManager
             }
         }
 
+        ViewerFilter groupedObjectsFilter = null;
+        if (viewer != null)
+        {
+            if (groupedObjectsDescriptor == null)
+            {
+                return false;
+            }
+            groupedObjectsFilter = filterService.getViewerFilter(groupedObjectsDescriptor);
+            if (groupedObjectsFilter == null)
+            {
+                return false;
+            }
+        }
+
         if (enabled)
         {
             activeFilterIds.add(GROUPED_OBJECTS_FILTER_ID);
@@ -440,19 +454,15 @@ public final class NavigatorEnhancementManager
 
         // The convenience update method persists CNF state, so update state and viewer separately.
         filterService.setActiveFilterIds(activeFilterIds.toArray(String[]::new));
-        if (viewer != null && groupedObjectsDescriptor != null)
+        if (viewer != null)
         {
-            ViewerFilter groupedObjectsFilter = filterService.getViewerFilter(groupedObjectsDescriptor);
-            if (groupedObjectsFilter != null)
+            if (enabled)
             {
-                if (enabled)
-                {
-                    viewer.addFilter(groupedObjectsFilter);
-                }
-                else
-                {
-                    viewer.removeFilter(groupedObjectsFilter);
-                }
+                viewer.addFilter(groupedObjectsFilter);
+            }
+            else
+            {
+                viewer.removeFilter(groupedObjectsFilter);
             }
         }
         return true;

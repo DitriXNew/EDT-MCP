@@ -165,6 +165,54 @@ public class NavigatorEnhancementManagerTest
         verify(contentService).update();
     }
 
+    @Test
+    public void testMissingGroupedDescriptorRetriesWithoutStrandingFilterState()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_ENHANCE_NAVIGATOR,
+            PreferenceConstants.DEFAULT_ENHANCE_NAVIGATOR);
+        store.setValue(PreferenceConstants.PREF_ENHANCE_NAVIGATOR, false);
+
+        INavigatorActivationService activationService = mock(INavigatorActivationService.class);
+        INavigatorFilterService filterService = mock(INavigatorFilterService.class);
+        INavigatorContentService contentService = mock(INavigatorContentService.class);
+        ViewerFilter groupedObjectsFilter = mock(ViewerFilter.class);
+        StructuredViewer viewer = viewerWithFilters();
+        viewer.addFilter(groupedObjectsFilter);
+        when(contentService.getActivationService()).thenReturn(activationService);
+        when(contentService.getFilterService()).thenReturn(filterService);
+        when(activationService.isNavigatorExtensionActive(anyString())).thenReturn(false);
+        when(filterService.isActive(anyString())).thenReturn(true);
+        ICommonFilterDescriptor edtDescriptor = descriptor(EDT_FILTER_ID);
+        when(filterService.getVisibleFilterDescriptors())
+            .thenReturn(new ICommonFilterDescriptor[] { edtDescriptor });
+
+        NavigatorEnhancementManager.applyPreference(store, contentService, viewer);
+
+        verify(filterService, never()).setActiveFilterIds(any(String[].class));
+        verify(viewer, never()).removeFilter(groupedObjectsFilter);
+        verify(contentService, never()).update();
+        assertArrayEquals("the installed filter must remain until it can be resolved", //$NON-NLS-1$
+            new ViewerFilter[] { groupedObjectsFilter }, viewer.getFilters());
+
+        ICommonFilterDescriptor groupedObjectsDescriptor = descriptor(GROUPED_OBJECTS_FILTER_ID);
+        when(filterService.getVisibleFilterDescriptors()).thenReturn(new ICommonFilterDescriptor[] {
+            edtDescriptor, groupedObjectsDescriptor
+        });
+        when(filterService.getViewerFilter(groupedObjectsDescriptor))
+            .thenReturn(groupedObjectsFilter);
+
+        NavigatorEnhancementManager.applyPreference(store, contentService, viewer);
+
+        ArgumentCaptor<String[]> filterIds = ArgumentCaptor.forClass(String[].class);
+        verify(filterService).setActiveFilterIds(filterIds.capture());
+        assertArrayEquals(new String[] { EDT_FILTER_ID }, filterIds.getValue());
+        verify(viewer).removeFilter(groupedObjectsFilter);
+        assertArrayEquals("the retry must remove the resolved filter", //$NON-NLS-1$
+            new ViewerFilter[0], viewer.getFilters());
+        verify(contentService).update();
+    }
+
     private static StructuredViewer viewerWithFilters()
     {
         StructuredViewer viewer = mock(StructuredViewer.class);
