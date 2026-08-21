@@ -1114,7 +1114,10 @@ public class MergeRulesTool implements IMcpTool
             {
                 return Optional.empty();
             }
-            ComparisonView view = engine.view(handle);
+            // Both "the service could not be asked" and "EDT no longer knows the handle" land the
+            // same way HERE and only here: this path degrades to no validation, which the report
+            // states, so it draws no conclusion from either and needs to tell them apart nowhere.
+            ComparisonView view = engine.view(handle).orElse(null);
             if (view == null || !isTreeFinished(engine, view))
             {
                 return Optional.empty();

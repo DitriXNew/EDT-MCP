@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -50,6 +51,8 @@ public class ComparisonEngineTest
         final List<CompareMergeProcessBatch> started = new ArrayList<>();
 
         boolean available = true;
+        /** Whether the platform can be REACHED at all - the reading half of "service present". */
+        boolean reachable = true;
         boolean active;
         ComparisonProcessStatus status = ComparisonProcessStatus.COMPARISON_PROCESS_INITIALIZATION_FINISHED;
         RuntimeException statusFailure;
@@ -86,38 +89,38 @@ public class ComparisonEngineTest
         }
 
         @Override
-        public boolean hasActiveComparison()
+        public PlatformAnswer<Boolean> hasActiveComparison()
         {
             calls.add("hasActiveComparison"); //$NON-NLS-1$
-            return active;
+            return reachable ? PlatformAnswer.of(Boolean.valueOf(active)) : PlatformAnswer.unavailable();
         }
 
         @Override
-        public List<ComparisonProcessHandle> handles(String projectName)
+        public PlatformAnswer<List<ComparisonProcessHandle>> handles(String projectName)
         {
             calls.add("handles"); //$NON-NLS-1$
-            return handles;
+            return reachable ? PlatformAnswer.of(handles) : PlatformAnswer.unavailable();
         }
 
         @Override
-        public ComparisonProcessStatus status(ComparisonProcessHandle handle)
+        public PlatformAnswer<ComparisonProcessStatus> status(ComparisonProcessHandle handle)
         {
             calls.add("status"); //$NON-NLS-1$
             if (statusFailure != null)
             {
                 throw statusFailure;
             }
-            return status;
+            return reachable ? PlatformAnswer.of(status) : PlatformAnswer.unavailable();
         }
 
         @Override
-        public IComparisonSession session(ComparisonProcessHandle handle)
+        public PlatformAnswer<IComparisonSession> session(ComparisonProcessHandle handle)
         {
             calls.add("session"); //$NON-NLS-1$
             // A fake of IComparisonSession is deliberately NOT built: it would drag in method
             // signature types from packages this bundle does not import. Every path exercised here
             // is one where EDT has no session for the handle.
-            return null;
+            return reachable ? PlatformAnswer.of(null) : PlatformAnswer.unavailable();
         }
 
         @Override
@@ -342,7 +345,7 @@ public class ComparisonEngineTest
         backend.active = true;
         ComparisonEngine engine = engineOver(backend);
 
-        assertTrue(engine.hasActiveComparison());
+        assertEquals(Boolean.TRUE, engine.hasActiveComparison().orElse(null));
         // A question about the state must not change it: the sweep that CAN end a session is a
         // separate, named call.
         assertEquals(Collections.singletonList("hasActiveComparison"), backend.calls); //$NON-NLS-1$
@@ -354,7 +357,74 @@ public class ComparisonEngineTest
         RecordingBackend backend = new RecordingBackend();
         backend.handles = null;
 
-        assertTrue(engineOver(backend).handles("SomeProject").isEmpty()); //$NON-NLS-1$
+        PlatformAnswer<List<ComparisonProcessHandle>> answer =
+            engineOver(backend).handles("SomeProject"); //$NON-NLS-1$
+
+        // ANSWERED, and answered with an empty list: EDT was asked and holds nothing.
+        assertTrue(answer.isAnswered());
+        assertTrue(answer.orElse(null).isEmpty());
+    }
+
+    /**
+     * The distinction the whole reading side turns on, pinned as its own fact: "EDT holds nothing
+     * for this project" and "EDT could not be asked" are BOTH empty when they are collapsed into a
+     * list, and they must not be collapsed. A consumer read the second as the first and dropped a
+     * live session without stopping it.
+     */
+    @Test
+    public void anUnreachablePlatformIsNotAnEmptyHandleList()
+    {
+        RecordingBackend asked = new RecordingBackend();
+        asked.handles = Collections.emptyList();
+        RecordingBackend unreachable = new RecordingBackend();
+        unreachable.reachable = false;
+
+        PlatformAnswer<List<ComparisonProcessHandle>> answered =
+            engineOver(asked).handles("SomeProject"); //$NON-NLS-1$
+        PlatformAnswer<List<ComparisonProcessHandle>> absent =
+            engineOver(unreachable).handles("SomeProject"); //$NON-NLS-1$
+
+        assertTrue("EDT answered, and it answered 'nothing'", answered.isAnswered()); //$NON-NLS-1$
+        assertTrue(answered.orElse(null).isEmpty());
+        assertTrue("EDT was never asked, so there is no answer to quote", absent.isUnavailable()); //$NON-NLS-1$
+        // And the two are told apart WITHOUT looking at a value: the caller that got this wrong
+        // was looking at the list.
+        assertNotEquals(answered.isAnswered(), absent.isAnswered());
+    }
+
+    /**
+     * The same distinction on the status read, which decides the poll loop's phase. When the
+     * service is gone the platform said nothing because nobody asked it, and a caller that quotes
+     * "EDT answered no status" is crediting the platform with a report it never made.
+     */
+    @Test
+    public void aStatusNobodyCouldAskForSaysSoRatherThanReadingAsAnAnsweredNothing()
+    {
+        RecordingBackend backend = new RecordingBackend();
+        backend.reachable = false;
+        ComparisonProcessHandle handle = handle("Main", "Other"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ComparisonEngine.Progress progress = engineOver(backend).progress(null, handle);
+
+        assertEquals(ComparisonEngine.Phase.UNKNOWN, progress.phase());
+        assertNull(progress.status());
+        assertNull("nothing threw, so there is no read failure to name", //$NON-NLS-1$
+            progress.statusReadFailure());
+        assertFalse("the platform was never asked", progress.statusWasAsked()); //$NON-NLS-1$
+    }
+
+    /** The control for the test above: an answered {@code null} status WAS asked for. */
+    @Test
+    public void aStatusEdtItselfDeclinedToGiveCountsAsAsked()
+    {
+        RecordingBackend backend = new RecordingBackend();
+        backend.status = null;
+
+        ComparisonEngine.Progress progress =
+            engineOver(backend).progress(null, handle("Main", "Other")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(ComparisonEngine.Phase.UNKNOWN, progress.phase());
+        assertTrue("EDT was asked and answered nothing", progress.statusWasAsked()); //$NON-NLS-1$
     }
 
     /**
@@ -457,8 +527,9 @@ public class ComparisonEngineTest
 
     /**
      * The other half of the same rule, and the control for the test above: a READ that cannot be
-     * made answers instead of throwing. Its callers already read {@code null}/empty as "could not
-     * ask", so a throw there would turn one unlucky tick into a refusal.
+     * made ANSWERS instead of throwing, because a throw would turn one unlucky tick into a
+     * refusal. What it answers is {@code unavailable} rather than {@code null}/empty - it still
+     * does not throw, but it no longer looks like the platform saying "there is nothing there".
      */
     @Test
     public void aReadThatCannotReachThePlatformStillAnswersRatherThanThrowing()
@@ -466,9 +537,12 @@ public class ComparisonEngineTest
         ComparisonEngine.Backend backend = ComparisonEngine.managerBackend(() -> null);
 
         assertFalse(backend.isAvailable());
-        assertFalse(backend.hasActiveComparison());
-        assertNull(backend.status(handle("Main", "Other"))); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNull(backend.session(handle("Main", "Other"))); //$NON-NLS-1$ //$NON-NLS-2$
+        // Still no throw - and no longer a silent "nothing there" either: every one of them says
+        // the question could not be ASKED, which is the fact a caller has to act on.
+        assertTrue(backend.hasActiveComparison().isUnavailable());
+        assertTrue(backend.handles("SomeProject").isUnavailable()); //$NON-NLS-1$
+        assertTrue(backend.status(handle("Main", "Other")).isUnavailable()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(backend.session(handle("Main", "Other")).isUnavailable()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

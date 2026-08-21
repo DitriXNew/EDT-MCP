@@ -102,16 +102,18 @@ public class ComparisonSessionRegistryTest
         List<ComparisonProcessHandle> live = new ArrayList<>();
         int asked;
         RuntimeException failure;
+        /** Whether EDT can be reached at all; when it cannot, there is no answer to give. */
+        boolean reachable = true;
 
         @Override
-        public List<ComparisonProcessHandle> forProject(String projectName)
+        public PlatformAnswer<List<ComparisonProcessHandle>> forProject(String projectName)
         {
             asked++;
             if (failure != null)
             {
                 throw failure;
             }
-            return live;
+            return reachable ? PlatformAnswer.of(live) : PlatformAnswer.unavailable();
         }
     }
 
@@ -667,7 +669,7 @@ public class ComparisonSessionRegistryTest
         String id = registry.register(handle, batch());
         releaser.explode = true;
 
-        assertEquals(ReleaseOutcome.NOT_STOPPED, registry.release(id));
+        assertEquals(ReleaseOutcome.STOP_FAILED, registry.release(id));
 
         assertEquals("the stop was attempted", Collections.singletonList(id), releaser.released); //$NON-NLS-1$
         assertEquals("and the record still goes, or it would pin the slot for its whole TTL", 0, //$NON-NLS-1$
@@ -689,7 +691,7 @@ public class ComparisonSessionRegistryTest
         assertTrue(registry.find(id).isPresent());
         liveHandles.live = Collections.emptyList();
 
-        assertEquals(ReleaseOutcome.NOT_STOPPED, registry.release(id));
+        assertEquals(ReleaseOutcome.ALREADY_GONE, registry.release(id));
 
         assertTrue("a handle the platform has forgotten must not be handed back to it", //$NON-NLS-1$
             releaser.released.isEmpty());
@@ -737,5 +739,194 @@ public class ComparisonSessionRegistryTest
             assertTrue("the refusal must say why: " + e.getMessage(), //$NON-NLS-1$
                 e.getMessage().contains("facade")); //$NON-NLS-1$
         }
+    }
+
+    // ==================== "Could not ask" is not "it is gone" ====================
+
+    /**
+     * The defect this pins, measured: {@code ManagerBackend.handles} answered an EMPTY LIST when
+     * EDT's comparison service was unregistered or the project did not resolve, and that reading
+     * arrived here indistinguishable from EDT saying "I no longer hold that handle". The registry
+     * then treated a momentary service gap as proof the comparison had ended: it dropped the
+     * record WITHOUT stopping anything, and the comparison went on holding EDT's single slot with
+     * no id left able to address it.
+     */
+    @Test
+    public void aSessionSurvivesAPlatformThatCouldNotBeAskedAboutIt()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        // Seen alive once, so a LATER absence would count - this is the state in which the defect
+        // fired, and without it the never-seen latch would mask the answer being tested.
+        assertTrue(registry.find(id).isPresent());
+
+        liveHandles.reachable = false;
+
+        assertTrue("the session must survive a question nobody could ask", //$NON-NLS-1$
+            registry.find(id).isPresent());
+        assertEquals(id, registry.activeComparisonId());
+        assertEquals(Collections.singletonList(id), registry.ids());
+        assertEquals(1, registry.size());
+        assertTrue("and nothing may be handed back on the strength of an unasked question", //$NON-NLS-1$
+            releaser.released.isEmpty());
+    }
+
+    /**
+     * The control for the test above, and the reason it is not satisfied by a registry that simply
+     * never reclaims: EDT ANSWERING that it no longer holds the handle still drops the record.
+     */
+    @Test
+    public void aSessionEdtAnsweredAboutAndDoesNotHoldIsStillDropped()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        assertTrue(registry.find(id).isPresent());
+
+        liveHandles.live = Collections.emptyList();
+
+        assertFalse(registry.find(id).isPresent());
+        assertEquals(0, registry.size());
+    }
+
+    /**
+     * A release attempt that could not be made must not be reported as an already-ended comparison
+     * either: with EDT unreachable the liveness question is unanswered, so the handle IS handed
+     * back rather than assumed gone, and the failing hand-back is what the verdict names.
+     */
+    @Test
+    public void aReleaseWhilePlatformIsUnreachableIsNotClaimedAsAnAlreadyEndedComparison()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        assertTrue(registry.find(id).isPresent());
+        liveHandles.reachable = false;
+        releaser.explode = true;
+
+        assertEquals(ReleaseOutcome.STOP_FAILED, registry.release(id));
+
+        assertEquals("the hand-back was attempted, not skipped as 'already gone'", //$NON-NLS-1$
+            Collections.singletonList(id), releaser.released);
+    }
+
+    // ============ The sweep may not lose what it could not give back ============
+
+    /**
+     * The defect: the sweep removed every expired record unconditionally and discarded what the
+     * hand-back reported. A TTL that fell while the service was away, or a stop that threw, made
+     * the session vanish from this map while its virtual project and private BM store could still
+     * be open - {@link ComparisonSessionRegistry#activeComparisonId()} then answered "nothing
+     * holds the slot", the next launch was let through, and EDT's one-comparison-per-instance
+     * assertion refused it with no sentence anybody could act on.
+     */
+    @Test
+    public void anExpiredSessionThatCouldNotBeGivenBackStaysRegistered()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        assertTrue(registry.find(id).isPresent());
+        releaser.explode = true;
+        clock.now += TTL + 1L;
+
+        assertEquals("nothing was reclaimed, so nothing may be counted", 0, registry.sweep()); //$NON-NLS-1$
+
+        assertEquals("the stop WAS attempted", Collections.singletonList(id), releaser.released); //$NON-NLS-1$
+        assertEquals("and the record stays: it may still hold the slot", 1, registry.size()); //$NON-NLS-1$
+        assertEquals("so a refusal can still name it, with a remedy attached", id, //$NON-NLS-1$
+            registry.activeComparisonId());
+    }
+
+    /** The next sweep retries, so a session stranded by a passing failure reclaims itself. */
+    @Test
+    public void aSweepRetriesAHandBackThatFailedBefore()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        assertTrue(registry.find(id).isPresent());
+        releaser.explode = true;
+        clock.now += TTL + 1L;
+        assertEquals(0, registry.sweep());
+
+        releaser.explode = false;
+
+        assertEquals(1, registry.sweep());
+        assertEquals(0, registry.size());
+        assertNull(registry.activeComparisonId());
+    }
+
+    /**
+     * The positive control for both: a sweep that CAN give the session back still reclaims it, so
+     * the tests above are not passed by a sweep that stopped reclaiming anything at all.
+     */
+    @Test
+    public void anExpiredSessionThatWasGivenBackIsStillReclaimed()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        assertTrue(registry.find(id).isPresent());
+        clock.now += TTL + 1L;
+
+        assertEquals(1, registry.sweep());
+
+        assertEquals(Collections.singletonList(id), releaser.released);
+        assertEquals(0, registry.size());
+    }
+
+    /**
+     * An expired session EDT has already forgotten is dropped with NO hand-back: there is nothing
+     * to give back, and asking the platform to stop a handle it no longer knows is not a no-op
+     * everywhere.
+     */
+    @Test
+    public void anExpiredSessionEdtHasForgottenIsDroppedWithoutBeingStopped()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        assertTrue(registry.find(id).isPresent());
+        liveHandles.live = Collections.emptyList();
+        clock.now += TTL + 1L;
+
+        assertEquals(1, registry.sweep());
+
+        assertTrue(releaser.released.isEmpty());
+        assertEquals(0, registry.size());
+        assertNull(registry.activeComparisonId());
+    }
+
+    // ============ "Not yet started" is visible to a poll loop ============
+
+    /**
+     * A poll loop has to tell "EDT has not begun the comparison yet" from "EDT will not answer for
+     * this comparison", and the latch is the only authority on the first. It is exposed on the
+     * session because a loop that spends its unreadable-tick budget on a scheduled-but-unstarted
+     * launch cancels a perfectly healthy comparison.
+     */
+    @Test
+    public void aSessionSaysWhetherEdtHasEverListedIt()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.emptyList();
+        String id = registry.register(handle, batch());
+
+        assertFalse("EDT has not listed it, so the launch has not surfaced yet", //$NON-NLS-1$
+            registry.find(id).get().seenAliveByEdt());
+
+        liveHandles.live = Collections.singletonList(handle);
+
+        assertTrue(registry.find(id).get().seenAliveByEdt());
     }
 }

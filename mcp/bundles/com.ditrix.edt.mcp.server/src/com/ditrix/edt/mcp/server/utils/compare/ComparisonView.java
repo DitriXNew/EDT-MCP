@@ -12,7 +12,6 @@ import java.util.List;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
-import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.compare.core.ComparisonContext;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessStatus;
@@ -326,18 +325,46 @@ public final class ComparisonView
     }
 
     /**
-     * Builds the comparison context for the transaction of the CURRENT read.
-     * <p>
-     * Pass the {@code IBmTransaction} the read boundary handed you. The no-argument
-     * {@code ComparisonUtils.createComparisonContext(session)} form leaves the context WITHOUT a
-     * comparison transaction, and the {@code (session, boolean)} form opens a brand-new one of its
-     * own — inside an existing read that would be a second, unrelated view of the same tree.
+     * The context a READ of this comparison runs against.
      *
-     * @param transaction the active read transaction
-     * @return a context bound to that transaction
+     * <h2>Why the one-argument factory, and why the other two are wrong here</h2>
+     * The three platform factories set DIFFERENT HALVES of the context, and the half each one
+     * sets is the whole story. Read from the bytecode of
+     * {@code ComparisonUtils}/{@code ComparisonDataSourceTransactionalContext}, not from their
+     * names:
+     * <ul>
+     *   <li>{@code createComparisonContext(session)} delegates with a {@code null} transaction, and
+     *       the data-source context then calls {@code dataSource.beginTransaction()} for EACH SIDE
+     *       - every side is read in its own namespace, which is the only arrangement under which a
+     *       three-way read can work at all;</li>
+     *   <li>its transaction-taking overload puts the caller's transaction into the MAIN SIDE's
+     *       slot ({@code new BmComparisonDataSourceTransaction(tx)}) and sets
+     *       <b>{@code mergeMode = true}</b>. It is the MERGE entry: the transaction it wants is the
+     *       main project's, to write into. {@code NoMergeStarterRatchetTest} fails the build if
+     *       this bundle calls it, which is why it is described here and not written out;</li>
+     *   <li>its boolean overload opens a brand-new transaction on the comparison TREE's own engine
+     *       - inside an existing read that is a second, unrelated view of the same tree, and
+     *       {@link ComparisonContext#close()} COMMITS it.</li>
+     * </ul>
+     *
+     * <h2>The defect this replaces</h2>
+     * This method used to take the tree transaction the read boundary hands out and pass it to the
+     * transaction-taking overload. That put a transaction bound to the comparison-tree namespace into the MAIN
+     * SIDE's slot, so reading a main-side object - which for a project-backed main side lives in
+     * the PROJECT's namespace - failed with
+     * {@code BmAssertionException: The object belongs to namespace 'X' whereas the transaction is
+     * bound to namespace 'ComparisonTreeModel-N'}, and it silently put this read-only feature into
+     * the platform's merge mode on the way. Every expansion of a node with compared objects failed.
+     *
+     * <p>The comparison transaction is deliberately left UNSET: the caller is already inside
+     * {@code runComparisonTreeReadonlyTask}, so the tree reads have their transaction, and
+     * {@link ComparisonContext#close()} commits whatever sits in that field - a transaction this
+     * object does not own.</p>
+     *
+     * @return a context for reading, which the caller must {@code close()}
      */
-    public ComparisonContext contextFor(IBmTransaction transaction)
+    public ComparisonContext readContext()
     {
-        return ComparisonUtils.createComparisonContext(session, transaction);
+        return ComparisonUtils.createComparisonContext(session);
     }
 }

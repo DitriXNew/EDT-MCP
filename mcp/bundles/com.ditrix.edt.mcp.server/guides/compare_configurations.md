@@ -106,6 +106,14 @@ A comparison nobody comes back to is released by the registry's idle TTL (30 min
 without a lookup), and that reclaim happens as part of answering the next launch — so a
 forgotten comparison delays the next one, it does not block it until EDT restarts.
 
+There is one exception, and it is deliberate: when the reclaim itself does not go through
+— EDT's comparison service is momentarily gone, or the stop throws — the record is KEPT
+rather than dropped. Dropping it would free a slot that is not actually free, and the next
+launch would be accepted only for the platform to refuse it. So in that narrow case the
+refusal keeps naming the comparison and offering `releaseComparisonId`, and the slot stays
+claimed until a later attempt succeeds. A slot that is genuinely stuck is still cleared by
+restarting EDT.
+
 ## Cancelling
 
 `cancel_job` on the returned `jobId` stops a comparison that is still RUNNING and releases

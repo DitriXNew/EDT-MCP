@@ -151,6 +151,57 @@ public class NoMergeStarterRatchetTest
      */
     private static final String REQUIRED_IMPORT = COMPARE_CORE;
 
+    /**
+     * The comparison-context factory that also switches the platform into MERGE MODE.
+     * <p>
+     * Read from the bytecode of {@code ComparisonDataSourceTransactionalContext}: its
+     * {@code (IComparisonSession, IBmTransaction)} constructor, which
+     * {@code ComparisonUtils.createComparisonContext(session, transaction)} is the only caller of,
+     * puts the caller's transaction into the MAIN SIDE's slot and sets {@code mergeMode = true}.
+     * The one-argument form passes {@code null} instead, and every side then opens its own
+     * data-source transaction - which is the only shape a read can use.
+     * <p>
+     * So a second argument here is a merge starter, exactly like the names above, and it does not
+     * announce itself: it compiles, it type-checks, and the first thing that fails is a
+     * {@code BmAssertionException} about namespaces, from inside the platform, on whichever node
+     * the caller happened to expand.
+     */
+    private static final Pattern MERGE_MODE_CONTEXT =
+        Pattern.compile("createComparisonContext\\s*\\([^)]*,"); //$NON-NLS-1$
+
+    // === layer 4: the read context is never built in merge mode ===
+
+    @Test
+    public void noSourceFileBuildsAComparisonContextInMergeMode()
+    {
+        Map<String, String> sources = bundleSources();
+        List<String> violations = new ArrayList<>();
+        int callsSeen = 0;
+        for (Map.Entry<String, String> file : sources.entrySet())
+        {
+            if (file.getValue().contains("createComparisonContext")) //$NON-NLS-1$
+            {
+                callsSeen++;
+            }
+            for (int line : linesMatching(file.getValue(), MERGE_MODE_CONTEXT))
+            {
+                violations.add(file.getKey() + ':' + line);
+            }
+        }
+        // The positive control. This bundle DOES build a comparison context; if it stopped, or if
+        // the source scan silently read nothing, the assertion below would pass over an empty set
+        // and prove nothing at all - the failure mode this whole class exists to avoid.
+        assertTrue("this bundle must still build a comparison context somewhere, or this check " //$NON-NLS-1$
+            + "is vacuous", callsSeen > 0); //$NON-NLS-1$
+        if (!violations.isEmpty())
+        {
+            fail("createComparisonContext(session, <anything>) puts the caller's transaction into " //$NON-NLS-1$
+                + "the MAIN side's slot and sets mergeMode = true. This bundle compares and never " //$NON-NLS-1$
+                + "merges, so it must use the ONE-argument form and let each side open its own " //$NON-NLS-1$
+                + "data-source transaction. Fix:\n  " + String.join("\n  ", violations)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
     // === layer 3: the starters are not written down ===
 
     @Test

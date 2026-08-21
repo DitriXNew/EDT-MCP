@@ -47,6 +47,7 @@ runs first, for the paths that skip out while the comparison is still RUNNING.
 """
 
 import re
+import time
 
 from harness import (
     E2ESkip,
@@ -74,6 +75,12 @@ NOT_FINISHED_NOTICE = "Subtree not finished"
 NO_DIFFERENCES = "no differences"
 
 # Budget for the comparison to finish: get_job_status caps a single wait at 25s.
+# EDT gives the single comparison slot back on its OWN thread, so a comparison cancelled a
+# moment ago still holds it for a short while. This test shares a workbench with the tests
+# that do the cancelling, so its launch is retried across that window - see _start_comparison.
+SLOT_ROUNDS = 8
+SLOT_SECONDS = 2
+
 POLL_ROUNDS = 6
 POLL_SECONDS = 25
 
@@ -100,6 +107,37 @@ def _release(comparison_id):
     """
     if comparison_id:
         call("compare_configurations", {"releaseComparisonId": comparison_id})
+
+
+def _start_comparison():
+    """Start the comparison this test expands, tolerating EDT's own release lag.
+
+    The refusal this works around is CORRECT, which is why it is waited out rather than
+    argued with: EDT keeps its single comparison slot until it has finished releasing a
+    cancelled comparison on its own thread, and a launch during that window really would
+    hit the platform's one-at-a-time assertion. This test shares a workbench with the
+    compare_configurations tests that cancel comparisons, so it can land inside that
+    window - it did on CI, and read a correct refusal as a broken expansion.
+
+    Retried the same way test_compare_configurations proves a freed slot. A refusal that
+    NEVER clears is still returned as itself, so a genuine regression fails here exactly
+    as it does today.
+    """
+    started = None
+    for _ in range(SLOT_ROUNDS):
+        started = call("compare_configurations", {
+            "projectName": PROJECT,
+            "otherRevision": HEAD,
+            "ancestorRevision": HEAD,
+            "waitSeconds": 0,
+            # Without this the report lists only differing nodes, and HEAD-vs-HEAD has none,
+            # so there would be no nodeId to address in phase 2.
+            "changedOnly": False,
+        })
+        if not started.is_error:
+            return started
+        time.sleep(SLOT_SECONDS)
+    return started
 
 
 def _await_report(job_id):
@@ -216,15 +254,7 @@ def test_expands_a_node_of_a_live_comparison():
       2. by nodeId     - proves the report's own ids address the same tree
       3. a form node   - proves the structural snapshot, not raw XML
     """
-    started = call("compare_configurations", {
-        "projectName": PROJECT,
-        "otherRevision": HEAD,
-        "ancestorRevision": HEAD,
-        "waitSeconds": 0,
-        # Without this the report lists only differing nodes, and HEAD-vs-HEAD has none,
-        # so there would be no nodeId to address in phase 2.
-        "changedOnly": False,
-    })
+    started = _start_comparison()
     assert_ok(started, "start a three-way comparison to expand")
     job_id = None
     comparison_id = None

@@ -41,12 +41,14 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Backend;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.ComparisonException;
+import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Launch;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.LaunchRequest;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Progress;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.StopOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ReleaseOutcome;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
@@ -500,7 +502,7 @@ public class CompareConfigurationsToolTest
     @Test
     public void testAReleaseThatStoppedNothingDoesNotSayTheSlotIsFree()
     {
-        backend.answerReleaseWith(ReleaseOutcome.NOT_STOPPED);
+        backend.answerReleaseWith(ReleaseOutcome.STOP_FAILED);
 
         String result = tool.execute(Map.of("releaseComparisonId", "cmp-4")); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -703,6 +705,42 @@ public class CompareConfigurationsToolTest
         return params;
     }
 
+    /**
+     * @return a validated request against the fixture project, for the paths that drive
+     *     {@code runComparison} directly instead of going through the job registry
+     */
+    private static LaunchRequest launchRequest()
+    {
+        return new LaunchRequest("TestConfiguration", "origin/main", "v1.0", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            true);
+    }
+
+    /**
+     * A reporter with a real budget, because the poll loop is bounded by nothing else once the job
+     * is committed - a test that gave it an unbounded one would hang instead of failing.
+     *
+     * @param budgetMillis how long the work may take
+     * @return the reporter
+     */
+    private static ProgressReporter reporter(long budgetMillis)
+    {
+        long deadline = System.currentTimeMillis() + budgetMillis;
+        return new ProgressReporter()
+        {
+            @Override
+            public void add(String message)
+            {
+                // The progress journal is not what these tests are about.
+            }
+
+            @Override
+            public long remainingMillis()
+            {
+                return deadline - System.currentTimeMillis();
+            }
+        };
+    }
+
     private static String jobId(String rendered)
     {
         Matcher matcher = JOB_ID_ROW.matcher(rendered);
@@ -871,6 +909,8 @@ public class CompareConfigurationsToolTest
         private final CountDownLatch startEntered = new CountDownLatch(1);
         private final CountDownLatch startGate = new CountDownLatch(1);
         private volatile boolean blockStart;
+        private final AtomicReference<Launch> handOverOnPoll = new AtomicReference<>();
+        private final AtomicReference<Launch> requestStopDuringStart = new AtomicReference<>();
         private final AtomicReference<ReleaseOutcome> releaseOutcome =
             new AtomicReference<>(ReleaseOutcome.RELEASED);
         private volatile List<String> liveComparisonIds = List.of();
@@ -893,6 +933,14 @@ public class CompareConfigurationsToolTest
         public String start(LaunchRequest request) throws ComparisonException
         {
             lastRequest.set(request);
+            Launch arriving = requestStopDuringStart.getAndSet(null);
+            if (arriving != null)
+            {
+                // The cancellation lands while the launch is in flight - after the launch's
+                // pre-start check, which is the only way the duty can still be outstanding once
+                // the comparison exists.
+                arriving.requestStop();
+            }
             startEntered.countDown();
             if (blockStart)
             {
@@ -920,6 +968,15 @@ public class CompareConfigurationsToolTest
         @Override
         public Progress poll(String comparisonId)
         {
+            Launch handOver = handOverOnPoll.getAndSet(null);
+            if (handOver != null)
+            {
+                // The cancellation handler runs out of time HERE - after the launch's previous
+                // check and before its next one. That is the only placement in which the old
+                // two-flag protocol lost the request, and no real thread schedule can be made to
+                // hit it on purpose.
+                handOver.handOverStop();
+            }
             Progress queued = pollAnswers.poll();
             return queued == null ? pollAnswer.get() : queued;
         }
@@ -967,6 +1024,22 @@ public class CompareConfigurationsToolTest
         void setPollAnswer(Progress progress)
         {
             pollAnswer.set(progress);
+        }
+
+        /**
+         * @param launch the launch whose cancellation handler gives up during the next poll
+         */
+        void handOverDuringFirstPoll(Launch launch)
+        {
+            handOverOnPoll.set(launch);
+        }
+
+        /**
+         * @param launch the launch a cancellation arrives for while it is being handed to EDT
+         */
+        void requestStopDuringStart(Launch launch)
+        {
+            requestStopDuringStart.set(launch);
         }
 
         /**
@@ -1084,5 +1157,252 @@ public class CompareConfigurationsToolTest
         {
             return lastRequest.get();
         }
+    }
+
+    // ============ A stop is TWO operations, and the verdict is built from both ============
+
+    /**
+     * The defect: {@code EngineBackend.cancel} assigned the session hand-back's answer to nothing
+     * and returned {@code STOPPED} regardless. A service that disappeared between the cancel and
+     * the hand-back therefore reached {@code cancel_job} as TERMINATED plus "its temporary
+     * workspace released" - over a hand-back that had not completed.
+     */
+    @Test
+    public void testAStopWhoseHandBackFailedIsNotClaimedAsAFullStop()
+    {
+        assertEquals(StopOutcome.STOPPED_NOT_RELEASED,
+            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.STOP_FAILED));
+    }
+
+    /**
+     * The three controls, each in its own assertion because each is a different reason. In
+     * particular ALREADY_GONE is the ORDINARY answer after a successful cancel - the cancel is what
+     * made EDT forget the handle - so reporting it as a failed stop would turn every successful
+     * cancellation into a warning.
+     */
+    @Test
+    public void testAStopWhoseHandBackSucceededOrHadNothingLeftToDoIsAFullStop()
+    {
+        assertEquals(StopOutcome.STOPPED,
+            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.RELEASED));
+        assertEquals(StopOutcome.STOPPED,
+            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.ALREADY_GONE));
+        assertEquals(StopOutcome.STOPPED,
+            CompareConfigurationsTool.stopVerdict(ReleaseOutcome.NOT_REGISTERED));
+    }
+
+    /**
+     * And the consumer half: {@code cancel_job} must not publish the verdict the registry turns
+     * into TERMINATED, and must not repeat the sentence a caller stops reading at.
+     */
+    @Test
+    public void testAStopWhoseHandBackFailedIsNotPublishedAsAVerifiedTermination() throws Exception
+    {
+        backend.keepRunning();
+        backend.answerCancelWith(StopOutcome.STOPPED_NOT_RELEASED);
+        String jobId = jobId(tool.execute(request(Map.of("waitSeconds", "0")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(backend.awaitStarted());
+
+        CancellationResult result = jobs.cancel(jobId);
+
+        assertEquals(CancellationOutcome.ALREADY_COMMITTED, result.getOutcome());
+        assertContains(result.getDetail(), "was stopped, but handing its session back here did " //$NON-NLS-1$
+            + "NOT complete"); //$NON-NLS-1$
+        assertFalse("the workspace was not confirmed released, so it must not be claimed: " //$NON-NLS-1$
+            + result.getDetail(),
+            result.getDetail().contains("its temporary workspace released")); //$NON-NLS-1$
+    }
+
+    // ============ A session that disappeared is not a cancellation EDT performed ============
+
+    /**
+     * The defect: the poll read the handle and the batch through two separate lookups, each of
+     * which re-asks EDT, and turned either one coming back empty into
+     * {@code Progress.cancelled} - so the job answered "**Cancelled:** ... was stopped before it
+     * finished" for a comparison the platform had never reported cancelling. A disappearance has
+     * several causes and this job witnessed none of them.
+     */
+    @Test
+    public void testASessionThatDisappearedIsReportedAsItselfNotAsAnEdtCancellation()
+        throws Exception
+    {
+        backend.setPollAnswer(Progress.gone("Its session is no longer registered here.")); //$NON-NLS-1$
+
+        String rendered = tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(rendered, "can no longer be read"); //$NON-NLS-1$
+        assertContains(rendered, "was ended outside it"); //$NON-NLS-1$
+        assertFalse("nobody asked this job to stop, so no cancellation may be claimed:\n" //$NON-NLS-1$
+            + rendered, rendered.contains("**Cancelled:**")); //$NON-NLS-1$
+        assertFalse(rendered.contains("was stopped before it finished")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: EDT's OWN cancelled status is still reported as a cancellation. Without this the
+     * test above would be satisfied by a tool that had simply stopped saying "cancelled" anywhere.
+     */
+    @Test
+    public void testAStatusEdtReportsAsCancelledIsStillACancellation()
+    {
+        backend.setPollAnswer(Progress.cancelled("EDT reported the comparison as cancelled.")); //$NON-NLS-1$
+
+        String rendered = tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(rendered, "was stopped before it finished"); //$NON-NLS-1$
+        assertContains(rendered, "EDT reported the comparison as cancelled."); //$NON-NLS-1$
+    }
+
+    /**
+     * The other side of the same rule: when THIS job's own cancellation is what ended the
+     * comparison, the disappearance IS reported as a cancellation - the launch has first-hand
+     * evidence, which is exactly what it lacked above.
+     */
+    @Test
+    public void testASessionThatDisappearedAfterOurOwnCancellationIsReportedAsCancelled()
+        throws Exception
+    {
+        Launch launch = new Launch();
+        launch.requestStop();
+        assertTrue(launch.claimPendingStop());
+        backend.setPollAnswer(Progress.gone("Its session is no longer registered here.")); //$NON-NLS-1$
+
+        Object rendered = tool.runComparison(launchRequest(), reporter(60_000L), launch);
+
+        assertContains(String.valueOf(rendered), "**Cancelled:**"); //$NON-NLS-1$
+        assertContains(String.valueOf(rendered), "was stopped before it finished"); //$NON-NLS-1$
+    }
+
+    // ============ A launch EDT has not started yet is not an unreadable one ============
+
+    /**
+     * The defect: {@code startComparison} only SCHEDULES the launch, so until Eclipse runs it EDT
+     * lists no handle and answers no status - and every one of those ticks was counted against the
+     * three-second unreadable budget. A scheduler busy with a build for longer than that got a
+     * correctly queued comparison CANCELLED, reported as an error reading its status.
+     */
+    @Test
+    public void testAComparisonEdtHasNotStartedYetIsNotCancelledAsUnreadable() throws Exception
+    {
+        Progress[] starting = new Progress[CompareConfigurationsTool.MAX_UNREADABLE_TICKS + 2];
+        for (int tick = 0; tick < starting.length; tick++)
+        {
+            starting[tick] = Progress.starting("EDT has accepted the comparison and has not " //$NON-NLS-1$
+                + "listed it yet, so it answers no status for it"); //$NON-NLS-1$
+        }
+        backend.queuePollAnswers(starting);
+        backend.setPollAnswer(Progress.finished("COMPARISON_PROCESS_FINISHED")); //$NON-NLS-1$
+        backend.setReport("# Comparison: TestConfiguration"); //$NON-NLS-1$
+
+        Object rendered = tool.runComparison(launchRequest(), reporter(120_000L), new Launch());
+
+        assertContains(String.valueOf(rendered), "# Comparison: TestConfiguration"); //$NON-NLS-1$
+        assertEquals("a queued comparison must not be cancelled for not having started yet", 0, //$NON-NLS-1$
+            backend.cancels());
+    }
+
+    /**
+     * The control: an UNREADABLE run of the same length still ends the comparison, so the test
+     * above is not passed by a loop that stopped counting anything.
+     */
+    @Test
+    public void testAnUnreadableRunOfTheSameLengthStillEndsTheComparison()
+    {
+        Progress[] unreadable = new Progress[CompareConfigurationsTool.MAX_UNREADABLE_TICKS + 2];
+        for (int tick = 0; tick < unreadable.length; tick++)
+        {
+            unreadable[tick] = Progress.unknown("EDT answered no status for this comparison"); //$NON-NLS-1$
+        }
+        backend.queuePollAnswers(unreadable);
+        backend.setPollAnswer(Progress.finished("COMPARISON_PROCESS_FINISHED")); //$NON-NLS-1$
+
+        try
+        {
+            tool.runComparison(launchRequest(), reporter(120_000L), new Launch());
+            org.junit.Assert.fail("a comparison nobody can read must not be waited out"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            assertContains(e.getMessage(), "could not be read"); //$NON-NLS-1$
+            assertEquals(1, backend.cancels());
+        }
+    }
+
+    // ============ The duty to stop is never owed by nobody ============
+
+    /**
+     * The defect, and the interleaving it needs: the launch looked ONCE, just before its poll loop,
+     * found the handler still holding the duty and moved on; microseconds later that handler ran
+     * out of time, wrote its flag back and returned "the launch is stopping it". The duty was then
+     * owed by nobody, {@code cancel_job} promised a stop nobody performed, and the comparison kept
+     * EDT's single slot.
+     *
+     * <p>Reproduced by placing the hand-over BETWEEN two of the launch's own checks - which is
+     * only possible by driving the loop with a {@link Launch} this test holds - and it is why the
+     * launch now asks on every tick instead of once.</p>
+     */
+    @Test
+    public void testAStopHandedToTheLaunchAfterItLookedIsStillPerformed()
+    {
+        Launch launch = new Launch();
+        backend.keepRunning();
+        // The cancellation arrives DURING the launch, so the launch's pre-start check cannot see
+        // it and the comparison really does get started...
+        backend.requestStopDuringStart(launch);
+        // ...and the hand-over lands during the FIRST poll: after the launch has already looked
+        // once and found the duty still the handler's, and before its next look.
+        backend.handOverDuringFirstPoll(launch);
+
+        try
+        {
+            tool.runComparison(launchRequest(), reporter(4_000L), launch);
+            org.junit.Assert.fail("the cancellation must end the job"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            assertContains(e.getMessage(), "ran out of time waiting for the launch"); //$NON-NLS-1$
+            assertEquals(1, backend.cancels());
+            assertEquals(backend.lastComparisonId(), backend.lastCancelled());
+        }
+    }
+
+    /** A duty the handler still holds is left alone: racing it would downgrade a verified stop. */
+    @Test
+    public void testADutyTheHandlerStillHoldsIsNotTakenByTheLaunch()
+    {
+        Launch launch = new Launch();
+        launch.requestStop();
+
+        assertFalse("the handler owns it, so the launch must not", launch.claimHandedOverStop()); //$NON-NLS-1$
+        assertTrue("and the handler can still hand it over", launch.handOverStop()); //$NON-NLS-1$
+        assertTrue("after which the launch takes it", launch.claimHandedOverStop()); //$NON-NLS-1$
+        assertFalse("exactly once", launch.claimHandedOverStop()); //$NON-NLS-1$
+        assertFalse("and nobody else may claim it either", launch.claimPendingStop()); //$NON-NLS-1$
+    }
+
+    /**
+     * A handler whose duty somebody has already TAKEN cannot hand it over, so it promises nothing
+     * of its own - the state has no "owed by nobody" to fall into.
+     */
+    @Test
+    public void testADutyAlreadyTakenCannotBeHandedOver()
+    {
+        Launch launch = new Launch();
+        launch.requestStop();
+        assertTrue(launch.claimPendingStop());
+
+        assertFalse(launch.handOverStop());
+        assertFalse(launch.claimHandedOverStop());
+    }
+
+    /** With no cancellation outstanding there is no duty to take, in either form. */
+    @Test
+    public void testNothingIsClaimableWhileNoCancellationHasArrived()
+    {
+        Launch launch = new Launch();
+
+        assertFalse(launch.stopWasRequested());
+        assertFalse(launch.claimPendingStop());
+        assertFalse(launch.claimHandedOverStop());
+        assertFalse(launch.handOverStop());
     }
 }

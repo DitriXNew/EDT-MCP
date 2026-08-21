@@ -138,27 +138,34 @@ public final class ComparisonEngine
         void stop(ComparisonProcessHandle handle);
 
         /**
-         * @return {@code true} when a comparison is already running in this EDT instance
+         * @return whether a comparison is already running in this EDT instance, or
+         *     {@link PlatformAnswer#unavailable()} when the service could not be asked
          */
-        boolean hasActiveComparison();
+        PlatformAnswer<Boolean> hasActiveComparison();
 
         /**
          * @param projectName the project to ask about
-         * @return the handles EDT currently holds for it (never {@code null})
+         * @return the handles EDT currently holds for it - possibly an EMPTY list, which is an
+         *     answer - or {@link PlatformAnswer#unavailable()} when the service is not registered
+         *     or the project could not be resolved, in which case nothing was asked
          */
-        List<ComparisonProcessHandle> handles(String projectName);
+        PlatformAnswer<List<ComparisonProcessHandle>> handles(String projectName);
 
         /**
          * @param handle the comparison
-         * @return its status, or {@code null} when EDT no longer knows the handle
+         * @return its status - possibly {@code null}, which is EDT's answer when it no longer
+         *     holds the handle's session - or {@link PlatformAnswer#unavailable()} when the
+         *     service could not be asked
          */
-        ComparisonProcessStatus status(ComparisonProcessHandle handle);
+        PlatformAnswer<ComparisonProcessStatus> status(ComparisonProcessHandle handle);
 
         /**
          * @param handle the comparison
-         * @return its session, or {@code null} when EDT no longer knows the handle
+         * @return its session - possibly {@code null}, which is EDT's answer when it no longer
+         *     knows the handle - or {@link PlatformAnswer#unavailable()} when the service could
+         *     not be asked
          */
-        IComparisonSession session(ComparisonProcessHandle handle);
+        PlatformAnswer<IComparisonSession> session(ComparisonProcessHandle handle);
 
         /**
          * @param handle the comparison the decisions will be restored onto
@@ -186,9 +193,11 @@ public final class ComparisonEngine
      * refusal for a launch, and the {@code SERVICE_UNAVAILABLE} stop verdict for a cancellation -
      * so naming the failure costs them no new vocabulary.
      * <p>
-     * It is deliberately NOT thrown by the reading calls: a read that cannot be made answers
-     * {@code null}/empty, which every caller here already treats as "could not ask" rather than as
-     * an answer.
+     * It is deliberately NOT thrown by the reading calls: a poll loop that died on one unlucky
+     * tick would end a healthy comparison. They say the same thing without throwing, through
+     * {@link PlatformAnswer} - which exists because answering {@code null}/empty instead made "we
+     * could not ask" indistinguishable from "we asked and there is nothing there", and a consumer
+     * turned the second reading into a verdict.
      */
     public static final class ServiceUnavailableException
         extends IllegalStateException
@@ -247,14 +256,16 @@ public final class ComparisonEngine
         private final ComparisonProcessStatus status;
         private final Throwable failure;
         private final Throwable statusReadFailure;
+        private final boolean statusAsked;
 
         Progress(Phase phase, ComparisonProcessStatus status, Throwable failure,
-            Throwable statusReadFailure)
+            Throwable statusReadFailure, boolean statusAsked)
         {
             this.phase = phase;
             this.status = status;
             this.failure = failure;
             this.statusReadFailure = statusReadFailure;
+            this.statusAsked = statusAsked;
         }
 
         /**
@@ -292,6 +303,24 @@ public final class ComparisonEngine
         public Throwable statusReadFailure()
         {
             return statusReadFailure;
+        }
+
+        /**
+         * Whether the platform was reached at all for this reading.
+         * <p>
+         * A THIRD fact, distinct from both of the above, and the reason it is here: an unreadable
+         * tick has three causes and a caller that describes it has to pick the right one. The
+         * read threw ({@link #statusReadFailure()} names it); or EDT answered nothing, which its
+         * manager does when it no longer holds the session; or the comparison service was not
+         * registered when the question was asked, in which case EDT said nothing because nobody
+         * asked it. Saying the second when the third happened credits the platform with a report
+         * it never made.
+         *
+         * @return {@code false} when EDT's comparison service could not be asked at all
+         */
+        public boolean statusWasAsked()
+        {
+            return statusAsked;
         }
 
         /**
@@ -417,21 +446,36 @@ public final class ComparisonEngine
      * ({@link ComparisonSessionRegistry#activeComparisonId()}, which reclaims) FIRST, or it refuses
      * on the strength of a session the same call was entitled to release.
      *
-     * @return {@code true} when a comparison is active
+     * @return whether a comparison is active, or {@link PlatformAnswer#unavailable()} when EDT's
+     *     comparison service could not be asked - which is NOT the same claim as "no comparison
+     *     is active", and callers must not spell it that way
      */
-    public boolean hasActiveComparison()
+    public PlatformAnswer<Boolean> hasActiveComparison()
     {
         return backend.hasActiveComparison();
     }
 
     /**
+     * The comparisons EDT currently holds for a project.
+     * <p>
+     * An EMPTY list and an UNAVAILABLE answer are different facts and the difference decides
+     * whether a session may be reclaimed: the first says EDT has forgotten the comparison, the
+     * second says this server could not reach EDT to ask. Folding them together is what let
+     * {@link ComparisonSessionRegistry} drop a live session - without stopping it - during a
+     * momentary service gap.
+     *
      * @param projectName the project to ask about
-     * @return the comparisons EDT currently holds for it (never {@code null})
+     * @return the handles, possibly an empty list, or {@link PlatformAnswer#unavailable()}
      */
-    public List<ComparisonProcessHandle> handles(String projectName)
+    public PlatformAnswer<List<ComparisonProcessHandle>> handles(String projectName)
     {
-        List<ComparisonProcessHandle> found = backend.handles(projectName);
-        return found == null ? Collections.emptyList() : found;
+        PlatformAnswer<List<ComparisonProcessHandle>> found = backend.handles(projectName);
+        if (found.isUnavailable())
+        {
+            return found;
+        }
+        List<ComparisonProcessHandle> handles = found.orElse(null);
+        return PlatformAnswer.of(handles == null ? Collections.emptyList() : handles);
     }
 
     /**
@@ -456,9 +500,11 @@ public final class ComparisonEngine
 
     /**
      * @param handle the comparison
-     * @return the platform's raw status, or {@code null} when EDT no longer knows the handle
+     * @return the platform's raw status - possibly {@code null}, which is EDT's answer when it no
+     *     longer knows the handle - or {@link PlatformAnswer#unavailable()} when the service
+     *     could not be asked
      */
-    public ComparisonProcessStatus status(ComparisonProcessHandle handle)
+    public PlatformAnswer<ComparisonProcessStatus> status(ComparisonProcessHandle handle)
     {
         return backend.status(handle);
     }
@@ -492,9 +538,12 @@ public final class ComparisonEngine
         Throwable failure = failureCause(batch);
         ComparisonProcessStatus status = null;
         RuntimeException statusReadFailure = null;
+        boolean statusAsked = true;
         try
         {
-            status = backend.status(handle);
+            PlatformAnswer<ComparisonProcessStatus> answer = backend.status(handle);
+            statusAsked = answer.isAnswered();
+            status = answer.orElse(null);
         }
         catch (RuntimeException e)
         {
@@ -503,24 +552,33 @@ public final class ComparisonEngine
             // here is how one unlucky read ends a healthy comparison.
             Activator.logError("Could not read the status of a comparison", e); //$NON-NLS-1$
             statusReadFailure = e;
+            statusAsked = false;
         }
         if (failure != null)
         {
-            return new Progress(Phase.FAILED, status, failure, statusReadFailure);
+            return new Progress(Phase.FAILED, status, failure, statusReadFailure, statusAsked);
         }
-        return new Progress(phaseOf(status), status, null, statusReadFailure);
+        return new Progress(phaseOf(status), status, null, statusReadFailure, statusAsked);
     }
 
     /**
      * A read-only window onto a live comparison.
      *
      * @param handle the comparison
-     * @return the view, or {@code null} when EDT no longer knows the handle
+     * @return the view - or an ANSWERED {@code null} when EDT no longer knows the handle, which
+     *     is the one case a caller may report as "the comparison is gone" - or
+     *     {@link PlatformAnswer#unavailable()} when the service could not be asked, which is a
+     *     fact about this server's reach and not about the comparison
      */
-    public ComparisonView view(ComparisonProcessHandle handle)
+    public PlatformAnswer<ComparisonView> view(ComparisonProcessHandle handle)
     {
-        IComparisonSession session = backend.session(handle);
-        return session == null ? null : new ComparisonView(handle, session);
+        PlatformAnswer<IComparisonSession> answer = backend.session(handle);
+        if (answer.isUnavailable())
+        {
+            return PlatformAnswer.unavailable();
+        }
+        IComparisonSession session = answer.orElse(null);
+        return PlatformAnswer.of(session == null ? null : new ComparisonView(handle, session));
     }
 
     /**
@@ -674,10 +732,10 @@ public final class ComparisonEngine
      * It resolves the service on every call rather than caching it, so the facade behaves
      * correctly across an unregister/register cycle. When the service is absent — the state before
      * the bundle starts and after it stops — the two kinds of call answer differently, and the
-     * asymmetry is the point: a READ answers {@code null}/empty, which its callers already read as
-     * "could not ask"; a LIFETIME call throws {@link ServiceUnavailableException}, because
-     * returning quietly from one would leave its caller reporting a start or a stop that never
-     * happened.
+     * asymmetry is the point: a READ answers {@link PlatformAnswer#unavailable()}, which says "the
+     * question was not asked" in a form no caller can mistake for "there is nothing there"; a
+     * LIFETIME call throws {@link ServiceUnavailableException}, because returning quietly from one
+     * would leave its caller reporting a start or a stop that never happened.
      */
     private static final class ManagerBackend
         implements Backend
@@ -739,37 +797,46 @@ public final class ComparisonEngine
         }
 
         @Override
-        public boolean hasActiveComparison()
+        public PlatformAnswer<Boolean> hasActiveComparison()
         {
             IComparisonManager manager = manager();
-            return manager != null && manager.hasActiveComparison();
+            return manager == null
+                ? PlatformAnswer.unavailable()
+                : PlatformAnswer.of(Boolean.valueOf(manager.hasActiveComparison()));
         }
 
         @Override
-        public List<ComparisonProcessHandle> handles(String projectName)
+        public PlatformAnswer<List<ComparisonProcessHandle>> handles(String projectName)
         {
             IComparisonManager manager = manager();
             IV8Project v8Project = resolveV8Project(projectName);
             if (manager == null || v8Project == null)
             {
-                return Collections.emptyList();
+                // NOT an empty list. Neither the missing service nor the unresolved project is
+                // evidence about the comparison, and a consumer that read the empty list as
+                // "EDT has forgotten this handle" dropped a live session without stopping it.
+                return PlatformAnswer.unavailable();
             }
             List<ComparisonProcessHandle> found = manager.getHandles(v8Project);
-            return found == null ? Collections.emptyList() : found;
+            return PlatformAnswer.of(found == null ? Collections.emptyList() : found);
         }
 
         @Override
-        public ComparisonProcessStatus status(ComparisonProcessHandle handle)
+        public PlatformAnswer<ComparisonProcessStatus> status(ComparisonProcessHandle handle)
         {
             IComparisonManager manager = manager();
-            return manager == null ? null : manager.getStatus(handle);
+            return manager == null
+                ? PlatformAnswer.unavailable()
+                : PlatformAnswer.of(manager.getStatus(handle));
         }
 
         @Override
-        public IComparisonSession session(ComparisonProcessHandle handle)
+        public PlatformAnswer<IComparisonSession> session(ComparisonProcessHandle handle)
         {
             IComparisonManager manager = manager();
-            return manager == null ? null : manager.getComparisonSession(handle);
+            return manager == null
+                ? PlatformAnswer.unavailable()
+                : PlatformAnswer.of(manager.getComparisonSession(handle));
         }
 
         @Override

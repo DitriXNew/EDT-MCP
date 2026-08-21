@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
+import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 
 /**
  * Expands ONE node of a running or finished configuration comparison: the three-way property table,
@@ -125,8 +127,21 @@ public class GetComparisonNodeTool implements IMcpTool
          */
         boolean isKnown(String comparisonId);
 
-        /** @return the ids of every live comparison, for a "did you mean" error */
+        /** @return the ids of every live comparison THIS SERVER started, for a "did you mean" error */
         List<String> knownComparisonIds();
+
+        /**
+         * Whether EDT itself reports a comparison occupying its single slot.
+         * <p>
+         * Asked in addition to {@link #knownComparisonIds()} because that list answers a narrower
+         * question than a refusal used to claim. It holds the comparisons this server started, so
+         * an empty one is not "nothing is running": a comparison launched from the workbench takes
+         * the slot under no id of ours and never appears in it.
+         *
+         * @return EDT's answer, or {@link PlatformAnswer#unavailable()} when the comparison
+         *     service could not be asked - which is a third case again, and not a "no"
+         */
+        PlatformAnswer<Boolean> edtHasActiveComparison();
 
         /**
          * Asks the engine to compare these nodes next. A hint, not a guarantee - the caller still
@@ -565,31 +580,76 @@ public class GetComparisonNodeTool implements IMcpTool
 
     // ==================== Parameter parsing ====================
 
+    /**
+     * The largest magnitude a {@code double} carries with no rounding. A JSON number bigger than
+     * this reached us through a {@code double} that could not hold it, so the digits we were handed
+     * may name a NEIGHBOURING node rather than the one the caller meant - and expanding the wrong
+     * node silently is worse than refusing.
+     */
+    private static final long EXACT_IN_DOUBLE = 1L << 53;
+
+    /**
+     * A node id, or {@code null} when the text does not name one.
+     *
+     * <h2>Two spellings, because the wire has two</h2>
+     * The id is a BM object id copied out of the {@code compare_configurations} report, and the
+     * schema asks for an INTEGER - but this tool is handed a string, and how the number got into
+     * that string is not the caller's doing. Gson renders every JSON number through
+     * {@code Double.toString()} (the same fact {@code JsonUtils.extractIntArgument} documents and
+     * handles), so a client that correctly sends {@code "nodeId": 4294967296} delivers
+     * {@code "4.294967296E9"} here, and {@code "nodeId": 1} delivers {@code "1.0"}.
+     * <p>
+     * This used to accept only {@code Long.parseLong} plus a stripped trailing {@code ".0"}, and so
+     * refused the tool's OWN ids: every node id at or above 10^7 - which the report hands out
+     * routinely - came back as "nodeId must be a whole number". The refusal named the mangled text,
+     * which no caller could act on, because the caller had typed the right number.
+     *
+     * <h2>What is still refused, and why</h2>
+     * A fractional value, a non-number, anything outside {@code long}, and - the one that matters -
+     * an integral value beyond {@link #EXACT_IN_DOUBLE}. Past that point the double that carried the
+     * number could not hold it exactly, so the digits here may be a neighbouring id that is itself
+     * perfectly plausible. Refusing is the only honest answer: the true id is already lost, and
+     * expanding its neighbour would answer a question nobody asked.
+     * <p>
+     * Scientific notation is no longer treated as suspect on its own. {@code 1e3} is a legitimate
+     * JSON spelling of 1000 - JSON has no separate integer type - so reading it as node 1000 is
+     * correct rather than a guess, and it is indistinguishable from Gson's own {@code 1.0E3}.
+     *
+     * @param raw the caller's text
+     * @return the id, or {@code null} when the text does not name one
+     */
     private static Long parseNodeId(String raw)
     {
-        // A node id is a BM object id copied verbatim out of the compare_configurations report, so
-        // the only correct parse is an integral one. Going through double would accept float syntax
-        // ("1e3" becomes 1000) and, past 2^53, round a real id to a NEIGHBOURING id that is itself
-        // plausible - the tool would then expand a different node than the caller named instead of
-        // refusing. BigDecimal.longValueExact() refuses both: anything with a fractional part or
-        // beyond long range must be refused, not converted. Long.parseLong does exactly that:
-        // it rejects "1e3", "0x1p3" and "12.5", and overflows past Long.MAX_VALUE into an exception
-        // instead of a neighbouring value. BigDecimal would NOT do - it accepts scientific notation,
-        // so "1e3" would still resolve to node 1000. The single trailing ".0" is stripped first,
-        // because a client that renders a JSON number that way means the whole id it printed.
         String text = raw.trim();
-        if (text.endsWith(".0")) //$NON-NLS-1$
-        {
-            text = text.substring(0, text.length() - 2);
-        }
         try
         {
+            // The trustworthy spelling: exact digits, any magnitude a long can hold.
             return Long.valueOf(Long.parseLong(text));
         }
-        catch (NumberFormatException e)
+        catch (NumberFormatException notPlainDigits)
+        {
+            // Not an integer literal. It may still be the double-shaped rendering of one.
+        }
+        BigDecimal decimal;
+        try
+        {
+            decimal = new BigDecimal(text);
+        }
+        catch (NumberFormatException notANumber)
         {
             return null;
         }
+        long value;
+        try
+        {
+            // Refuses a fractional part and anything outside long, rather than converting it.
+            value = decimal.longValueExact();
+        }
+        catch (ArithmeticException notAWholeId)
+        {
+            return null;
+        }
+        return Math.abs(value) > EXACT_IN_DOUBLE ? null : Long.valueOf(value);
     }
 
     private static ComparisonSide parseSide(String raw)
@@ -639,14 +699,49 @@ public class GetComparisonNodeTool implements IMcpTool
 
     // ==================== Errors ====================
 
+    /**
+     * The refusal for an id nothing answers to, saying only what was actually established.
+     * <p>
+     * The list it offers holds the comparisons THIS SERVER started, and an empty one used to be
+     * rendered as "none is running right now" - a claim about EDT that this list cannot support.
+     * Two situations make it false: a comparison launched from the workbench holds the single slot
+     * under no id of ours, and the registry answers an empty list just as readily when the bundle
+     * is not started at all. So the empty case states the narrow fact and then adds EDT's own
+     * answer, with "could not be asked" kept apart from "no".
+     *
+     * @param comparisonId the id the caller quoted
+     * @return the refusal
+     */
     private String unknownComparisonError(String comparisonId)
     {
         List<String> known = source.knownComparisonIds();
-        String alive = known == null || known.isEmpty() ? "none is running right now" //$NON-NLS-1$
+        String alive = known == null || known.isEmpty() ? noKnownComparisonsText()
             : "live comparisons: " + String.join(", ", known); //$NON-NLS-1$ //$NON-NLS-2$
         return ToolResult.error("Unknown comparison '" + comparisonId + "' (" + alive //$NON-NLS-1$ //$NON-NLS-2$
             + "). Start one with compare_configurations, or poll the one you started with " //$NON-NLS-1$
             + "get_job_status.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * @return what to say when this server holds no comparison of its own, qualified by whatever
+     *     EDT answered about its single slot
+     */
+    private String noKnownComparisonsText()
+    {
+        PlatformAnswer<Boolean> active = source.edtHasActiveComparison();
+        if (active.isUnavailable())
+        {
+            return "no comparison started through this server is registered, and EDT's " //$NON-NLS-1$
+                + "comparison service could not be asked whether one is running"; //$NON-NLS-1$
+        }
+        if (Boolean.TRUE.equals(active.orElse(Boolean.FALSE)))
+        {
+            return "no comparison started through this server is registered, but EDT reports " //$NON-NLS-1$
+                + "one occupying its single comparison slot - it was started outside this " //$NON-NLS-1$
+                + "server, so only EDT can address or end it"; //$NON-NLS-1$
+        }
+        return "no comparison started through this server is registered, and EDT reports none " //$NON-NLS-1$
+            + "running"; //$NON-NLS-1$
     }
 
     private static String unknownObjectError(String comparisonId, String objectFqn, String symlink)
@@ -703,14 +798,13 @@ public class GetComparisonNodeTool implements IMcpTool
      * returned or threw.
      *
      * <p>Releasing is correct here, and the reasoning is byte code rather than habit: the
-     * {@code (session, transaction)} context factory builds a plain context and sets only its
-     * data-source context - it never sets a comparison transaction. So closing that context closes
-     * the per-side data-source readers and SKIPS its commit branch entirely, and cannot touch the
-     * transaction the read boundary owns. The {@code (session, boolean)} factory is the different
-     * one: it opens a transaction of its own, which is why the facade's write path wraps THAT form
-     * in try-with-resources. Carrying the try-with-resources reasoning over to the wrong factory is
-     * what left every expand call stranding its data-source readers on a feature that already pins
-     * a virtual project.</p>
+     * one-argument context factory builds a plain context and sets only its data-source context -
+     * it never sets a comparison transaction. So closing that context closes the per-side
+     * data-source readers and SKIPS its commit branch entirely, and cannot touch the transaction
+     * the read boundary owns. The {@code (session, boolean)} factory is the different one: it
+     * opens a transaction of its own AND {@code close()} commits it. Carrying the
+     * try-with-resources reasoning over to the wrong factory is what left every expand call
+     * stranding its data-source readers on a feature that already pins a virtual project.</p>
      *
      * @param <T> the task result
      * @param access the in-boundary lookups the task reads through
@@ -753,6 +847,15 @@ public class GetComparisonNodeTool implements IMcpTool
         }
 
         @Override
+        public PlatformAnswer<Boolean> edtHasActiveComparison()
+        {
+            ComparisonEngine engine = ComparisonEngine.get().orElse(null);
+            // No facade means the bundle is not started or the service is not registered, which
+            // is precisely "could not be asked" - not "no comparison is running".
+            return engine == null ? PlatformAnswer.unavailable() : engine.hasActiveComparison();
+        }
+
+        @Override
         public void prioritize(String comparisonId, List<Long> nodeIds)
         {
             ComparisonEngine engine = ComparisonEngine.get().orElse(null);
@@ -777,7 +880,10 @@ public class GetComparisonNodeTool implements IMcpTool
             }
             // The comparison's OWN read boundary - the tree is in its private BM store.
             return engine.read(view, "Read comparison node", (transaction, monitor) -> { //$NON-NLS-1$
-                ComparisonContext context = view.contextFor(transaction);
+                // The boundary's own transaction is NOT handed to the context: the factory that
+                // takes one puts it into the MAIN SIDE's slot and turns on the platform's merge
+                // mode. See ComparisonView.readContext().
+                ComparisonContext context = view.readContext();
                 return runThenRelease(new ViewTreeAccess(view, context), task, context::close);
             });
         }
@@ -797,7 +903,10 @@ public class GetComparisonNodeTool implements IMcpTool
                 return null;
             }
             ComparisonProcessHandle handle = ComparisonSessionRegistry.shared().handle(comparisonId);
-            return handle == null ? null : engine.view(handle);
+            // orElse(null) folds "EDT could not be asked" into "no view", and that is safe HERE
+            // only because the caller's next step is an IllegalStateException naming the
+            // comparison, not a claim about EDT: no verdict is drawn from the difference.
+            return handle == null ? null : engine.view(handle).orElse(null);
         }
     }
 

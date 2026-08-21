@@ -64,7 +64,9 @@ import com.ditrix.edt.mcp.server.Activator;
  *       is not stopping the comparison, and a caller told "the slot is free" acts on a slot
  *       somebody may still hold;</li>
  *   <li>{@link #sweep()} — the session sat idle past its TTL. An abandoned comparison otherwise
- *       pins its virtual project for as long as EDT runs;</li>
+ *       pins its virtual project for as long as EDT runs. A session it could NOT give back stays
+ *       registered, because nobody is watching this path and a silent loss would report the slot
+ *       as free while the comparison still held it;</li>
  *   <li>{@link #releaseAll()} — the bundle is stopping ({@code EdtServices.dispose}).</li>
  * </ul>
  * A session that EDT has already forgotten is dropped from the map WITHOUT being released: asking
@@ -111,12 +113,21 @@ public final class ComparisonSessionRegistry
         /** Nothing was registered under that id, so nothing was released and nothing was stopped. */
         NOT_REGISTERED,
         /**
-         * The record was dropped, but the comparison was NOT observed to stop. Two situations
-         * produce it and this does not pick one: EDT no longer held the handle (so there was
-         * nothing to stop and it was not asked), or the stop itself failed - the failure is in the
-         * EDT error log. Either way the slot may still be taken, and the caller is told so.
+         * The record was dropped and no stop was asked for, because EDT no longer held the handle:
+         * the comparison had already ended, so there was nothing left to give back.
+         * <p>
+         * This used to share one literal with {@link #STOP_FAILED}, and the two were told apart
+         * nowhere - the javadoc said so in as many words. They had to be split because a caller
+         * that has just cancelled a comparison ITSELF gets this outcome on the ordinary path (its
+         * own cancel is what made EDT forget the handle), and reporting that as a failed stop
+         * would turn every successful cancellation into a warning.
          */
-        NOT_STOPPED
+        ALREADY_GONE,
+        /**
+         * The record was dropped, EDT still held the handle, and the hand-back was attempted and
+         * did NOT complete - the failure is in the EDT error log. The slot may still be taken.
+         */
+        STOP_FAILED
     }
 
     /** Gives a live handle back to EDT. */
@@ -135,9 +146,11 @@ public final class ComparisonSessionRegistry
     {
         /**
          * @param projectName the project the comparison was started for
-         * @return the handles EDT lists right now (never {@code null})
+         * @return the handles EDT lists right now - possibly an EMPTY list, which is an answer -
+         *     or {@link PlatformAnswer#unavailable()} when EDT could not be asked at all, which
+         *     is not
          */
-        List<ComparisonProcessHandle> forProject(String projectName);
+        PlatformAnswer<List<ComparisonProcessHandle>> forProject(String projectName);
     }
 
     /** One registered comparison. */
@@ -219,6 +232,23 @@ public final class ComparisonSessionRegistry
         {
             return lastTouchedMillis;
         }
+
+        /**
+         * Whether EDT has EVER listed this handle.
+         * <p>
+         * Exposed because it is the only authority on "the scheduled launch has not surfaced yet",
+         * and a poll loop has to tell that apart from "EDT will not answer for this comparison".
+         * {@code startComparison} SCHEDULES the launch, so between it and the first listing EDT
+         * answers no status at all - readings that look exactly like an unreadable comparison. A
+         * loop that spends its unreadable-tick budget on them cancels a correctly queued
+         * comparison whenever Eclipse's scheduler is busy for a few seconds.
+         *
+         * @return {@code true} once EDT has listed the handle at least once
+         */
+        public boolean seenAliveByEdt()
+        {
+            return seenAliveByEdt;
+        }
     }
 
     /**
@@ -230,7 +260,7 @@ public final class ComparisonSessionRegistry
     private static final ComparisonSessionRegistry DETACHED = new ComparisonSessionRegistry(
         System::currentTimeMillis, DEFAULT_IDLE_TTL_MILLIS, session -> {
             // nothing to release: nothing can be registered here
-        }, projectName -> Collections.emptyList(), false);
+        }, projectName -> PlatformAnswer.of(Collections.emptyList()), false);
 
     private final Map<String, ComparisonSession> sessions = new LinkedHashMap<>();
     private final AtomicLong idGenerator = new AtomicLong(1);
@@ -423,14 +453,17 @@ public final class ComparisonSessionRegistry
         // Asked BEFORE the record goes, and asked at all - which release() never did: it stopped
         // handles the platform had already forgotten and reported every one of them as a stop.
         boolean vanished = hasVanishedFromEdt(session);
+        // Dropped in every case a record existed, and deliberately unlike the sweep below: the
+        // caller ASKED, is told exactly what happened, and gets the follow-up to act on. Leaving
+        // the record would make the id resolve again for somebody who was just told it is closed.
         sessions.remove(comparisonId);
         if (vanished)
         {
             // Nothing left to give back, and asking the platform to stop a handle it no longer
             // knows is not a no-op everywhere. The record is gone; a stop is not claimed.
-            return ReleaseOutcome.NOT_STOPPED;
+            return ReleaseOutcome.ALREADY_GONE;
         }
-        return releaseQuietly(session) ? ReleaseOutcome.RELEASED : ReleaseOutcome.NOT_STOPPED;
+        return releaseQuietly(session) ? ReleaseOutcome.RELEASED : ReleaseOutcome.STOP_FAILED;
     }
 
     /**
@@ -439,7 +472,8 @@ public final class ComparisonSessionRegistry
      * Public for the tests and for a caller that wants to reclaim without asking anything else;
      * production never has to call it, because every liveness-checking lookup already does.
      *
-     * @return how many were released
+     * @return how many sessions were RECLAIMED - given back, or proven already gone. A session
+     *     whose hand-back failed is not counted, because it was not reclaimed
      */
     public synchronized int sweep()
     {
@@ -452,7 +486,22 @@ public final class ComparisonSessionRegistry
      * Every lookup that re-checks liveness starts here, so an expired session is given back BEFORE
      * the lookup can touch it back to life or name it to a caller.
      *
-     * @return how many were released
+     * <h2>A hand-back that failed does not drop the record</h2>
+     * This is the one place where a record is dropped with NOBODY watching, and it used to drop
+     * every expired one unconditionally while discarding what the hand-back reported. When the TTL
+     * fell during a service gap, or the stop threw, the session vanished from this map while its
+     * virtual project and private BM store could still be open: {@link #activeComparisonId()} then
+     * answered "nothing holds the slot", the next launch was allowed through, and EDT's
+     * one-comparison-per-instance assertion refused it with no sentence anybody could act on.
+     * <p>
+     * So an unreclaimed session STAYS registered. That is the honest state - it may still hold the
+     * slot - and it has two effects that are both wanted: a refusal can still name it, with the
+     * {@code releaseComparisonId} remedy attached, and the next sweep retries the hand-back, which
+     * is what makes a session stranded by a momentary service gap reclaim itself once the service
+     * is back. It differs from {@link #release(String)} on purpose: there a caller asked and is
+     * told what happened, here nobody would ever learn of a silent loss.
+     *
+     * @return how many were reclaimed
      */
     private int sweepExpired()
     {
@@ -465,12 +514,24 @@ public final class ComparisonSessionRegistry
                 expired.add(session);
             }
         }
+        int reclaimed = 0;
         for (ComparisonSession session : expired)
         {
-            sessions.remove(session.comparisonId());
-            releaseQuietly(session);
+            if (hasVanishedFromEdt(session))
+            {
+                // EDT has already forgotten it, so there is nothing to give back and nothing to
+                // ask for. Dropping the record here loses nothing.
+                sessions.remove(session.comparisonId());
+                reclaimed++;
+                continue;
+            }
+            if (releaseQuietly(session))
+            {
+                sessions.remove(session.comparisonId());
+                reclaimed++;
+            }
         }
-        return expired.size();
+        return reclaimed;
     }
 
     /**
@@ -498,8 +559,12 @@ public final class ComparisonSessionRegistry
      *   <li>EDT lists the handle - not vanished, and the latch is raised so a LATER absence counts;</li>
      *   <li>EDT does not list it and never did - not vanished. The launch is scheduled and has not
      *       surfaced; "not yet" is not "no more";</li>
-     *   <li>the question could not be ASKED - not vanished. That is not the same statement as "not
-     *       there": the session stays and the next real call fails with the platform's own message.</li>
+     *   <li>the question THREW - not vanished. The session stays and the next real call fails with
+     *       the platform's own message;</li>
+     *   <li>the question could not be ASKED at all ({@link PlatformAnswer#unavailable()}) - not
+     *       vanished. That is not the same statement as "not there", and it is where this method
+     *       used to be wrong: an unregistered service answered an EMPTY LIST, which read exactly
+     *       like EDT saying it no longer holds the handle.</li>
      * </ul>
      *
      * @param session the session to check
@@ -507,16 +572,27 @@ public final class ComparisonSessionRegistry
      */
     private boolean hasVanishedFromEdt(ComparisonSession session)
     {
-        List<ComparisonProcessHandle> live;
+        PlatformAnswer<List<ComparisonProcessHandle>> answer;
         try
         {
-            live = liveHandles.forProject(session.projectName());
+            answer = liveHandles.forProject(session.projectName());
         }
         catch (RuntimeException e)
         {
             Activator.logError("Could not list live comparisons for project " + session.projectName(), e); //$NON-NLS-1$
             return false;
         }
+        if (answer == null || answer.isUnavailable())
+        {
+            // The question was not asked - EDT's comparison service was unregistered, or the
+            // project did not resolve. That is a fact about this server's reach, not about the
+            // comparison, and it used to arrive here as an empty list indistinguishable from
+            // EDT's own "I do not hold that handle". Believing it dropped a live session
+            // WITHOUT stopping it, and the comparison went on holding EDT's single slot with
+            // nothing left able to address it.
+            return false;
+        }
+        List<ComparisonProcessHandle> live = answer.orElse(null);
         if (live != null && live.contains(session.handle()))
         {
             session.seenAliveByEdt = true;

@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -33,6 +34,7 @@ import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
+import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -520,16 +522,30 @@ public class GetComparisonNodeToolTest
 
     // ==================== nodeId is an id, not a number ====================
 
+    /**
+     * This pinned the OPPOSITE rule until its premise was measured and found false.
+     * <p>
+     * It refused scientific notation because "1e3 is not a node id anybody printed". Something
+     * does print ids that way, and it is our own transport: Gson renders every JSON number through
+     * {@code Double.toString()}, so a client sending the JSON integer 4294967296 - exactly what the
+     * schema asks for and exactly what the report hands out - delivers "4.294967296E9" to the tool.
+     * The rule therefore made every node id at or above 10^7 unaddressable, and said so in a
+     * message naming a string the caller had never written. Verified live on the stand.
+     * <p>
+     * The honest rule keeps the refusal that has a reason behind it (see the two tests below on
+     * fractional values and on ids past 2^53) and drops the one that only fought the transport.
+     * JSON has no separate integer type, so "1e3" IS a spelling of 1000 and reading it as node 1000
+     * is correct rather than a guess.
+     */
     @Test
-    public void testScientificNotationIsRefusedRatherThanResolvedToANode()
+    public void testScientificNotationResolvesToTheNumberItSpells()
     {
-        // "1e3" is not a node id anybody printed. Parsing it as a number would silently address
-        // node 1000 - a node that plausibly exists, so the caller would read the wrong node and
-        // never learn that the id they sent was not understood.
-        String result = call(knownSource(), args("comparisonId", "cmp-1", "nodeId", "1e3")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        StubSource source = knownSource();
 
-        assertError(result);
-        assertTrue(errorMessage(result), errorMessage(result).contains("whole number")); //$NON-NLS-1$
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "1e3")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertFalse(result, isError(result));
+        assertEquals(Long.valueOf(1000L), source.requestedNodeId);
     }
 
     @Test
@@ -629,6 +645,8 @@ public class GetComparisonNodeToolTest
         implements GetComparisonNodeTool.NodeSource
     {
         private final List<String> known = new ArrayList<>();
+        /** What EDT answers about its single slot; unavailable when it cannot be asked at all. */
+        private PlatformAnswer<Boolean> edtActive = PlatformAnswer.of(Boolean.FALSE);
         private final List<Long> prioritized = new ArrayList<>();
         private final List<ComparisonNodeStatus> statuses = new ArrayList<>();
         private ComparisonNode node;
@@ -654,6 +672,12 @@ public class GetComparisonNodeToolTest
         public List<String> knownComparisonIds()
         {
             return known;
+        }
+
+        @Override
+        public PlatformAnswer<Boolean> edtHasActiveComparison()
+        {
+            return edtActive;
         }
 
         @Override
@@ -726,7 +750,13 @@ public class GetComparisonNodeToolTest
         @Override
         public ComparisonNode node(long nodeId)
         {
-            source.requestedNodeId = Long.valueOf(nodeId);
+            if (source.requestedNodeId == null)
+            {
+                // The FIRST lookup, which is the one the caller's id produced. The tool looks the
+                // node up again by its own bmGetId() afterwards, and recording that instead would
+                // report the fixture's id back to every test no matter what was asked for.
+                source.requestedNodeId = Long.valueOf(nodeId);
+            }
             return source.visibleNode();
         }
 
@@ -756,5 +786,126 @@ public class GetComparisonNodeToolTest
         {
             return Collections.emptyList();
         }
+    }
+
+    // ============ An empty local list is not "nothing is running" ============
+
+    /**
+     * The defect: the refusal rendered an empty list of LOCAL comparison ids as "none is running
+     * right now" - a claim about EDT that this list cannot support. A comparison started from the
+     * workbench holds EDT's single slot under no id of ours and never appears in it, and the very
+     * same sentence came out when the platform had not been asked at all.
+     */
+    @Test
+    public void testAnUnknownIdDoesNotClaimNothingIsRunningWhenEdtSaysOtherwise()
+    {
+        StubSource source = new StubSource();
+        source.edtActive = PlatformAnswer.of(Boolean.TRUE);
+
+        String result = call(source, args("comparisonId", "cmp-404", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products")); //$NON-NLS-1$
+
+        assertError(result);
+        assertFalse("EDT reports a comparison running, so 'none is running' is false: " + result, //$NON-NLS-1$
+            result.contains("none is running")); //$NON-NLS-1$
+        assertTrue(result, result.contains("no comparison started through this server is " //$NON-NLS-1$
+            + "registered")); //$NON-NLS-1$
+        assertTrue("the slot IS taken, and only EDT can end what took it: " + result, //$NON-NLS-1$
+            result.contains("started outside this server")); //$NON-NLS-1$
+    }
+
+    /** A platform that could not be asked is a third case, and is not reported as a "no". */
+    @Test
+    public void testAnUnknownIdSaysSoWhenEdtCouldNotBeAskedAtAll()
+    {
+        StubSource source = new StubSource();
+        source.edtActive = PlatformAnswer.unavailable();
+
+        String result = call(source, args("comparisonId", "cmp-404", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products")); //$NON-NLS-1$
+
+        assertError(result);
+        assertFalse(result, result.contains("none is running")); //$NON-NLS-1$
+        assertTrue(result, result.contains("could not be asked")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: when EDT itself answers that nothing is running, the refusal may say so. Without
+     * this the two tests above would be satisfied by a tool that had stopped mentioning EDT.
+     */
+    @Test
+    public void testAnUnknownIdMaySayNothingIsRunningWhenEdtAnsweredThat()
+    {
+        StubSource source = new StubSource();
+        source.edtActive = PlatformAnswer.of(Boolean.FALSE);
+
+        String result = call(source, args("comparisonId", "cmp-404", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products")); //$NON-NLS-1$
+
+        assertError(result);
+        assertTrue(result, result.contains("EDT reports none running")); //$NON-NLS-1$
+    }
+
+    // ============ A node id survives the wire's own rendering of a JSON number ============
+
+    /**
+     * The defect, measured live: the report hands out node ids like 4294967296, a client sends it
+     * as the JSON integer the schema asks for, Gson renders every JSON number through
+     * {@code Double.toString()} - and the tool was handed {@code "4.294967296E9"} and refused it as
+     * "not a whole number". The caller had typed the right number; the refusal named a string it
+     * had never written and could do nothing about. Every id at or above 10^7 was unaddressable.
+     */
+    @Test
+    public void testANodeIdRenderedAsAJsonNumberIsStillTheSameNode()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "4.294967296E9")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertFalse("a node id the report itself hands out must be addressable: " + result, //$NON-NLS-1$
+            isError(result));
+        assertEquals("and it must address THAT node, not a neighbour", //$NON-NLS-1$
+            Long.valueOf(4294967296L), source.requestedNodeId);
+    }
+
+    /** The small end of the same rendering: Gson writes the id 1 as "1.0". */
+    @Test
+    public void testASmallNodeIdRenderedWithADecimalPointIsStillTheSameNode()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "1.0")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertFalse(result, isError(result));
+        assertEquals(Long.valueOf(1L), source.requestedNodeId);
+    }
+
+    /**
+     * The refusal that MUST survive: past 2^53 the double that carried the number could not hold it,
+     * so the digits handed to us may name a neighbouring node that is itself perfectly plausible.
+     * The true id is already lost, and expanding its neighbour would answer a question nobody asked.
+     */
+    @Test
+    public void testANodeIdTooLargeForTheDoubleThatCarriedItIsRefusedRatherThanRounded()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "9.007199254740994E15")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertError(result);
+        assertNull("nothing may be looked up on a rounded id", source.requestedNodeId); //$NON-NLS-1$
+    }
+
+    /** And the controls: a fractional id and a non-number are still not ids. */
+    @Test
+    public void testAFractionalOrNonNumericNodeIdIsStillRefused()
+    {
+        StubSource fractional = knownSource();
+        assertError(call(fractional, args("comparisonId", "cmp-1", "nodeId", "12.5"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNull(fractional.requestedNodeId);
+
+        StubSource text = knownSource();
+        assertError(call(text, args("comparisonId", "cmp-1", "nodeId", "abc"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNull(text.requestedNodeId);
     }
 }

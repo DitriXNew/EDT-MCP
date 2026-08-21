@@ -160,6 +160,15 @@ public final class MergeRulesCodec
      * The bytes land in a sibling temporary file that is then moved over the target, so an
      * update-in-place (reading a file and writing it back) cannot leave a half-written file
      * where a complete one used to be.
+     * <p>
+     * That temporary is UNIQUE PER CALL, and the uniqueness is load-bearing rather than tidy. A
+     * fixed {@code <target>.tmp} is shared by every write aimed at the same path, so two
+     * concurrent {@code merge_rules} writes interleaved as write-write-move-move: the second
+     * overwrote the first's bytes before either move ran, both moves succeeded, and BOTH calls
+     * reported that the document they had just validated was the one on disk - while the file held
+     * one set of rules and nobody could tell whose. A per-operation temporary makes the two writes
+     * independent; the last move still wins, which is what "replace" means, but each call's move
+     * now carries its OWN bytes.
      *
      * @param file the target file
      * @param document the document
@@ -167,27 +176,33 @@ public final class MergeRulesCodec
      */
     public static void write(Path file, MergeRulesDocument document) throws IOException
     {
-        Path parent = file.getParent();
-        if (parent != null)
+        Path target = file.toAbsolutePath();
+        Path parent = target.getParent();
+        if (parent == null)
         {
-            Files.createDirectories(parent);
+            throw new IOException("Cannot write merge rules to '" + file //$NON-NLS-1$
+                + "': it names a filesystem root, not a file."); //$NON-NLS-1$
         }
-        Path temporary = file.resolveSibling(file.getFileName().toString() + ".tmp"); //$NON-NLS-1$
+        Files.createDirectories(parent);
+        // Created in the TARGET's directory, never in the system temp area: the move over the
+        // target has to stay within one filesystem to be atomic. The name carries the target's
+        // own name so a leftover is traceable to the write that left it.
+        Path temporary = Files.createTempFile(parent, target.getFileName().toString() + '.',
+            ".tmp"); //$NON-NLS-1$
         // The temporary lives in the CALLER's directory, so a failure that leaves it behind leaves
-        // litter in a place the caller owns - and a later write over the same path cannot tell that
-        // leftover from a real artefact. Every failing exit removes it; the successful one does not
-        // need to, because the move consumed it.
+        // litter in a place the caller owns. Every failing exit removes it; the successful one does
+        // not need to, because the move consumed it.
         try
         {
             Files.write(temporary, serialize(document).getBytes(StandardCharsets.UTF_8));
             try
             {
-                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING,
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
             }
             catch (AtomicMoveNotSupportedException e)
             {
-                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
             }
         }
         catch (IOException | RuntimeException e)

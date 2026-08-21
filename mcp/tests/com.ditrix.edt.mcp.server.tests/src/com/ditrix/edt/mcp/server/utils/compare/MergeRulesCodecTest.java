@@ -21,6 +21,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -88,18 +91,48 @@ public class MergeRulesCodecTest
         workDir = Files.createTempDirectory("merge-rules-codec-test"); //$NON-NLS-1$
     }
 
+    /**
+     * Removes the work directory, retrying briefly.
+     * <p>
+     * The retry is for Windows and nothing else: a file deleted while another thread still holds a
+     * handle to it lingers as a directory entry, so the parent reports {@code DirectoryNotEmpty}
+     * for a few milliseconds after every child has been deleted. The concurrent-write test makes
+     * that likely, and a suite that fails in TEARDOWN over it reports a defect nobody has.
+     * <p>
+     * It masks nothing: leftovers are asserted INSIDE the tests that care about them
+     * ({@code testWriteLeavesNoTemporaryFileBehind}, {@code testAFailedWriteLeavesNoTemporaryBehind}),
+     * never here.
+     */
     @After
-    public void tearDown() throws IOException
+    public void tearDown() throws IOException, InterruptedException
     {
-        if (workDir != null && Files.exists(workDir))
+        IOException last = null;
+        for (int attempt = 0; attempt < 20; attempt++)
         {
-            try (Stream<Path> walk = Files.walk(workDir))
+            if (workDir == null || !Files.exists(workDir))
             {
-                for (Path path : walk.sorted(Comparator.reverseOrder()).toList())
-                {
-                    Files.deleteIfExists(path);
-                }
+                return;
             }
+            try
+            {
+                try (Stream<Path> walk = Files.walk(workDir))
+                {
+                    for (Path path : walk.sorted(Comparator.reverseOrder()).toList())
+                    {
+                        Files.deleteIfExists(path);
+                    }
+                }
+                return;
+            }
+            catch (IOException e)
+            {
+                last = e;
+                Thread.sleep(100L);
+            }
+        }
+        if (last != null)
+        {
+            throw last;
         }
     }
 
@@ -419,7 +452,6 @@ public class MergeRulesCodecTest
         Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
         Files.createDirectory(target);
         Files.write(target.resolve("occupant.txt"), "x".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
-        Path temporary = target.resolveSibling("rules.xml.tmp"); //$NON-NLS-1$
 
         try
         {
@@ -431,7 +463,13 @@ public class MergeRulesCodecTest
             // The point of the test is what is left on disk afterwards.
         }
 
-        assertFalse("a failed write must not leave " + temporary, Files.exists(temporary)); //$NON-NLS-1$
+        // Any leftover, not one predicted name: the temporary is per-operation now, so naming it
+        // would make this assertion true of a directory full of litter.
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("a failed write must leave no temporary behind", List.of(target), //$NON-NLS-1$
+                list.toList());
+        }
     }
 
     private static void writeZip(Path zip, List<String> entryNames) throws IOException
@@ -445,5 +483,121 @@ public class MergeRulesCodecTest
                 zipOut.closeEntry();
             }
         }
+    }
+
+    // ============ The temporary is per OPERATION, not per target ============
+
+    /**
+     * The defect: the temporary was always {@code <target>.tmp}, so every write aimed at one path
+     * used the SAME scratch file. Two concurrent {@code merge_rules} writes interleaved as
+     * write-write-move-move - the second overwrote the first's bytes before either move ran, both
+     * moves succeeded, and BOTH calls reported that the document they had just validated was the
+     * one on disk, while the file held one set of rules and nobody could tell whose.
+     *
+     * <p>Pinned deterministically by leaving a file at the fixed legacy path and requiring the
+     * write to touch neither it nor its bytes: a writer that still used a name derived only from
+     * the target would overwrite it and then move it over the target, so it would be gone.</p>
+     */
+    @Test
+    public void testTheTemporaryIsPerOperationAndNotDerivedFromTheTargetAlone() throws Exception
+    {
+        Path file = workDir.resolve("out.xml"); //$NON-NLS-1$
+        Path fixedName = workDir.resolve("out.xml.tmp"); //$NON-NLS-1$
+        Files.write(fixedName, "another writer's half-written bytes".getBytes( //$NON-NLS-1$
+            StandardCharsets.UTF_8));
+
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
+
+        assertEquals("the write must still land its own document", FIXTURE, //$NON-NLS-1$
+            new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+        assertTrue("a temporary named after the target alone is shared by every writer aiming " //$NON-NLS-1$
+            + "at that path", Files.exists(fixedName)); //$NON-NLS-1$
+        assertEquals("and this write must not have taken another writer's scratch file", //$NON-NLS-1$
+            "another writer's half-written bytes", //$NON-NLS-1$
+            new String(Files.readAllBytes(fixedName), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The property itself: whatever ends up on disk after concurrent writes is ONE writer's
+     * complete document, never a mixture of two. With a per-operation temporary this holds by
+     * construction, which is why this passes deterministically here; on the shared temporary it
+     * held only by luck.
+     *
+     * <p>A move refused by the operating system is tolerated and counted rather than failed:
+     * replacing a file another thread is replacing at the same instant is allowed to fail on
+     * Windows, and that is a refusal, not a corrupted document. What may never happen is a write
+     * that RETURNS and leaves something no writer ever serialized.</p>
+     */
+    @Test
+    public void testConcurrentWritesToOnePathNeverLeaveASpliceOfTwoDocuments() throws Exception
+    {
+        Path file = workDir.resolve("shared.xml"); //$NON-NLS-1$
+        int writers = 6;
+        int rounds = 25;
+        List<String> documents = new ArrayList<>();
+        for (int writer = 0; writer < writers; writer++)
+        {
+            // Different LENGTHS as well as different content, so a splice cannot coincidentally
+            // read back as one of the whole documents.
+            StringBuilder name = new StringBuilder("Catalog.Alpha"); //$NON-NLS-1$
+            for (int pad = 0; pad <= writer * 7; pad++)
+            {
+                name.append('x');
+            }
+            documents.add(MergeRulesCodec.serialize(
+                MergeRulesCodec.parse(FIXTURE.replace("Catalog.Alpha", name.toString())))); //$NON-NLS-1$
+        }
+
+        AtomicInteger splices = new AtomicInteger();
+        AtomicInteger refused = new AtomicInteger();
+        AtomicInteger landed = new AtomicInteger();
+        List<Thread> threads = new ArrayList<>();
+        CountDownLatch go = new CountDownLatch(1);
+        for (int writer = 0; writer < writers; writer++)
+        {
+            String text = documents.get(writer);
+            threads.add(new Thread(() -> {
+                try
+                {
+                    go.await();
+                    for (int round = 0; round < rounds; round++)
+                    {
+                        try
+                        {
+                            MergeRulesCodec.write(file, MergeRulesCodec.parse(text));
+                            landed.incrementAndGet();
+                            String onDisk = new String(Files.readAllBytes(file),
+                                StandardCharsets.UTF_8);
+                            if (!documents.contains(onDisk))
+                            {
+                                splices.incrementAndGet();
+                            }
+                        }
+                        catch (IOException e)
+                        {
+                            refused.incrementAndGet();
+                        }
+                    }
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                catch (MergeRulesFormatException e)
+                {
+                    throw new IllegalStateException(e);
+                }
+            }));
+        }
+        threads.forEach(Thread::start);
+        go.countDown();
+        for (Thread thread : threads)
+        {
+            thread.join(TimeUnit.SECONDS.toMillis(60));
+        }
+
+        assertEquals("a write that returned left bytes no writer ever serialized (" //$NON-NLS-1$
+            + refused.get() + " writes were refused by the OS)", 0, splices.get()); //$NON-NLS-1$
+        assertTrue("the test proves nothing unless writes actually landed", landed.get() > 0); //$NON-NLS-1$
     }
 }
