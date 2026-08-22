@@ -39,6 +39,11 @@ REPO_ROOT = os.path.abspath(os.path.join(HARNESS_DIR, "..", ".."))
 PROJECT_REL = os.environ.get("MCP_PROJECT_REL", "tests/" + PROJECT)  # git path rel to repo root (fwd slashes for git)
 PROJECT_DIR = os.path.join(REPO_ROOT, *PROJECT_REL.split("/"))       # absolute project dir
 
+# Wall-clock when this run started (module import happens once, before the first test).
+# The EDT log ratchet uses it to look only at entries THIS run produced, so a stale workspace
+# log full of yesterday's noise cannot fail - or silently pass - today's run.
+RUN_STARTED_AT = time.time()
+
 # The YAXUnit test suite lives in a SEPARATE EDT extension project (V8ExtensionNature)
 # named "<base>.tests" — breakpoints in the test modules resolve against THIS project,
 # not the base configuration. Override with MCP_TESTS_PROJECT if the layout changes.
@@ -519,6 +524,11 @@ DEEP_MUTATION_TOOLS = frozenset({
 MODEL_MUTATION_TOOLS = frozenset({
     "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
     "apply_quick_fix", "build_external_objects",
+    # dcs authors schemas / settings / dynamic lists. It belongs here rather than in
+    # DEEP_MUTATION_TOOLS because a REFUSED call provably does not move the model: the writer
+    # validates the whole request before the first eSet, so only a successful call forfeits the
+    # reset shortcut.
+    "dcs",
     # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection, so
     # no marker in this repository's sources can reveal them. The ratchet pins them by name for
     # exactly that reason - see _REFLECTIVE_WRITERS in test_mutation_set_ratchet.py.

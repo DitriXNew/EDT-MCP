@@ -1443,27 +1443,26 @@ public class MetadataRenameService
                 new Class<?>[] {IProject.class}, project);
             invokeMethod(searchScopeSettings, "addProjects", new Class<?>[] {Collection.class}, projects); //$NON-NLS-1$
 
-            Object textSearchIndexProvider = getFieldValue(participant, "textSearchIndexProvider"); //$NON-NLS-1$
-            Object managerRegistry = getFieldValue(participant, "managerRegistry"); //$NON-NLS-1$
-            Object hostResourceManager = getFieldValue(participant, "hostResourceManager"); //$NON-NLS-1$
-
             @SuppressWarnings("unchecked")
             Collection<String> searchStrings = (Collection<String>) invokeMethod(supplier, "getSearchStrings", //$NON-NLS-1$
                 new Class<?>[] {EObject.class, String.class}, contextElement, oldName);
+            // TextSearcher's constructor is NOT stable across EDT builds: it has lost a leading
+            // boolean and gained a trailing IDerivedDataManagerProvider within the range we run on.
+            // Pinning any one signature is therefore wrong in both directions - and typing it is
+            // wrong too, because we COMPILE against the target platform but RUN on whatever EDT the
+            // user has, so the compiler would certify a signature the runtime does not have.
+            //
+            // So bind by TYPE instead of by position: take the widest public constructor whose every
+            // parameter can be satisfied from the participant's own collaborators, and let a genuinely
+            // unsatisfiable signature fail loudly below rather than degrade to "no exact matches".
+            List<Object> collaborators = new ArrayList<>(reflectiveFieldValues(participant));
+            collaborators.add(Activator.getDefault().getBmModelManager());
+            collaborators.add(searchScopeSettings);
+            collaborators.add(collector);
             Class<?> textSearcherClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearcher"); //$NON-NLS-1$
-            Class<?> searchScopeClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.TextSearchScopeSettings"); //$NON-NLS-1$
-            Class<?> collectorClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.ISearchResultCollector"); //$NON-NLS-1$
-            Class<?> indexProviderClass = getClassOrThrow("com._1c.g5.v8.dt.search.core.text.ITextSearchIndexProvider"); //$NON-NLS-1$
-            Class<?> propertyRegistryClass = getClassOrThrow("com._1c.g5.v8.dt.md.IExternalPropertyManagerRegistry"); //$NON-NLS-1$
-            Class<?> hostResourceManagerClass = getClassOrThrow("com._1c.g5.v8.dt.core.platform.management.IDtHostResourceManager"); //$NON-NLS-1$
             for (String searchString : searchStrings)
             {
-                Object searcher = textSearcherClass.getConstructor(String.class, boolean.class, searchScopeClass,
-                    collectorClass, getClassOrThrow("com._1c.g5.v8.dt.core.platform.IBmModelManager"), //$NON-NLS-1$
-                    indexProviderClass, propertyRegistryClass, hostResourceManagerClass)
-                    .newInstance(searchString, false, searchScopeSettings, collector,
-                        Activator.getDefault().getBmModelManager(), textSearchIndexProvider, managerRegistry,
-                        hostResourceManager);
+                Object searcher = newTextSearcher(textSearcherClass, searchString, collaborators);
                 invokeMethod(searcher, "search", //$NON-NLS-1$
                     new Class<?>[] {getClassOrThrow("org.eclipse.core.runtime.IProgressMonitor")}, progressMonitor); //$NON-NLS-1$
             }
@@ -3148,5 +3147,119 @@ public class MetadataRenameService
             getterName = "getResources"; //$NON-NLS-1$
         }
         return getterName;
+    }
+
+    /**
+     * Every non-null field value of an object, superclasses included. Used to gather a
+     * platform collaborator POOL without naming the fields: EDT injects them, and which ones exist
+     * varies by build.
+     */
+    private static List<Object> reflectiveFieldValues(Object target)
+    {
+        List<Object> values = new ArrayList<>();
+        Class<?> type = target == null ? null : target.getClass();
+        while (type != null && type != Object.class)
+        {
+            for (java.lang.reflect.Field field : type.getDeclaredFields())
+            {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers()))
+                {
+                    continue;
+                }
+                try
+                {
+                    field.setAccessible(true); // NOSONAR reflective access is required (EDT internals)
+                    Object value = field.get(target);
+                    if (value != null)
+                    {
+                        values.add(value);
+                    }
+                }
+                catch (Exception e) // NOSONAR an inaccessible field simply is not a collaborator
+                {
+                    continue;
+                }
+            }
+            type = type.getSuperclass();
+        }
+        return values;
+    }
+
+    /**
+     * Builds a {@code TextSearcher} by binding constructor parameters BY TYPE from a pool of
+     * collaborators, rather than by pinning one positional signature.
+     * <p>
+     * The constructor is not stable across EDT builds - within the range we support it has both
+     * lost a leading {@code boolean} and gained a trailing {@code IDerivedDataManagerProvider} - and
+     * we compile against the target platform while running on the user's EDT, so neither a typed
+     * call nor a fixed reflective signature is safe. Widest satisfiable constructor wins; the search
+     * string fills the sole {@link String} parameter and a {@code boolean} defaults to false.
+     *
+     * @param textSearcherClass the resolved {@code TextSearcher} class
+     * @param searchString the text to search for
+     * @param collaborators candidate argument values, tried by assignability
+     * @return the constructed searcher
+     * @throws ReflectiveOperationException when no constructor can be satisfied - a real failure
+     *             that must surface, never a silent fallback to "no matches"
+     */
+    private static Object newTextSearcher(Class<?> textSearcherClass, String searchString,
+        List<Object> collaborators) throws ReflectiveOperationException
+    {
+        java.lang.reflect.Constructor<?>[] candidates = textSearcherClass.getConstructors();
+        java.util.Arrays.sort(candidates,
+            (left, right) -> right.getParameterCount() - left.getParameterCount());
+        StringBuilder rejected = new StringBuilder();
+        for (java.lang.reflect.Constructor<?> candidate : candidates)
+        {
+            Object[] args = bindByType(candidate.getParameterTypes(), searchString, collaborators);
+            if (args != null)
+            {
+                return candidate.newInstance(args);
+            }
+            rejected.append(rejected.length() == 0 ? "" : ", ").append(candidate.getParameterCount())
+                .append(" params");
+        }
+        throw new NoSuchMethodException("No TextSearcher constructor could be satisfied from the "
+            + collaborators.size() + " collaborators EDT exposed (tried: " + rejected
+            + "). The platform signature changed again - re-read it from the running EDT's "
+            + "com._1c.g5.v8.dt.search.core jar, not from decompiled sources of another build.");
+    }
+
+    /** Arguments for one constructor, or {@code null} when a parameter cannot be satisfied. */
+    private static Object[] bindByType(Class<?>[] parameterTypes, String searchString,
+        List<Object> collaborators)
+    {
+        Object[] args = new Object[parameterTypes.length];
+        boolean stringUsed = false;
+        for (int i = 0; i < parameterTypes.length; i++)
+        {
+            Class<?> parameterType = parameterTypes[i];
+            if (!stringUsed && parameterType == String.class)
+            {
+                args[i] = searchString;
+                stringUsed = true;
+                continue;
+            }
+            if (parameterType == boolean.class || parameterType == Boolean.class)
+            {
+                args[i] = Boolean.FALSE;
+                continue;
+            }
+            Object match = null;
+            for (Object candidate : collaborators)
+            {
+                if (parameterType.isInstance(candidate))
+                {
+                    match = candidate;
+                    break;
+                }
+            }
+            if (match == null)
+            {
+                return null;
+            }
+            args[i] = match;
+        }
+        return stringUsed ? args : null;
     }
 }

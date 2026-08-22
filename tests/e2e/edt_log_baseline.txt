@@ -1,0 +1,29 @@
+# EDT-log baseline for test_edt_log_ratchet.py — normalized !MESSAGE text, one per line.
+#
+# Every line here is an entry the plugin writes to the EDT log at severity 4 (ERROR) during a
+# normal run. They are accepted so a genuinely NEW error cannot hide among them — not because
+# they are healthy.
+#
+# ALL of them are the same shape: a NEGATIVE test asks a tool to do something invalid, the tool
+# correctly refuses and returns an actionable error to the caller, and then ALSO logs an ERROR
+# with a stack trace. A rejected request is not a server error. The right fix is to demote
+# those log calls (warning, or nothing at all — the caller already got the answer), which would
+# let these lines be deleted. Until then they are pinned here, visible and countable.
+#
+# Do NOT add a line to make a red run green. If an entry is a real failure, fix the cause; if
+# it is a refusal, fix the log call. Deleting lines as they are cleaned up is the point.
+#
+# Deliberately absent: "Error collecting exact rename matches". That one was a REAL defect —
+# reflective construction of EDT's TextSearcher against a constructor the platform had changed,
+# swallowed by a catch and degraded to an empty match map. It is fixed by constructing
+# TextSearcher through the compiler instead, so it must never reappear.
+
+Error creating predefined item
+Error modifying predefined item
+Error creating form member
+Error creating form handler
+Error moving form item
+Failed to load BSL module: platform:/resource/TestConfiguration/src/CommonModules/NoSuchModule_e<n>e/Module.bsl
+Failed to load BSL module: platform:/resource/TestConfiguration/src/CommonModules/DoesNotExistModule/Module.bsl
+create_infobase: creation failed for C:\infobases\ci_probe_test
+Export failed
