@@ -14,9 +14,11 @@
 # it is a refusal, fix the log call. Deleting lines as they are cleaned up is the point.
 #
 # Deliberately absent: "Error collecting exact rename matches". That one was a REAL defect —
-# reflective construction of EDT's TextSearcher against a constructor the platform had changed,
-# swallowed by a catch and degraded to an empty match map. It is fixed by constructing
-# TextSearcher through the compiler instead, so it must never reappear.
+# reflective construction of EDT's TextSearcher against a pinned constructor the platform no
+# longer had, swallowed by a catch and degraded to an empty match map. Note that typing the
+# call is NOT the fix: the plugin compiles against the target platform but runs on the user's
+# EDT, so the compiler would certify a signature the runtime lacks. The arguments are bound by
+# TYPE instead, and an unsatisfiable signature now throws. It must never reappear.
 
 Error creating predefined item
 Error modifying predefined item

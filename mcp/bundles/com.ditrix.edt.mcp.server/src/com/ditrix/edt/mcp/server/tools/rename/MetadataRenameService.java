@@ -1446,8 +1446,10 @@ public class MetadataRenameService
             @SuppressWarnings("unchecked")
             Collection<String> searchStrings = (Collection<String>) invokeMethod(supplier, "getSearchStrings", //$NON-NLS-1$
                 new Class<?>[] {EObject.class, String.class}, contextElement, oldName);
-            // TextSearcher's constructor is NOT stable across EDT builds: it has lost a leading
-            // boolean and gained a trailing IDerivedDataManagerProvider within the range we run on.
+            // TextSearcher's constructor is NOT stable across EDT builds: search.core 13.0.0 takes
+            // seven parameters, 14.0.0 those same seven plus a trailing IDerivedDataManagerProvider,
+            // and NEITHER matches the eight-parameter shape (a boolean second) this code used to pin -
+            // that pin had been dead for at least two releases without anything noticing.
             // Pinning any one signature is therefore wrong in both directions - and typing it is
             // wrong too, because we COMPILE against the target platform but RUN on whatever EDT the
             // user has, so the compiler would certify a signature the runtime does not have.
@@ -3189,8 +3191,9 @@ public class MetadataRenameService
      * Builds a {@code TextSearcher} by binding constructor parameters BY TYPE from a pool of
      * collaborators, rather than by pinning one positional signature.
      * <p>
-     * The constructor is not stable across EDT builds - within the range we support it has both
-     * lost a leading {@code boolean} and gained a trailing {@code IDerivedDataManagerProvider} - and
+     * The constructor is not stable across EDT builds - {@code search.core} 13.0.0 declares seven
+     * parameters, 14.0.0 the same seven plus a trailing {@code IDerivedDataManagerProvider}, and the
+     * eight-parameter shape this code once pinned (a {@code boolean} second) matches neither - and
      * we compile against the target platform while running on the user's EDT, so neither a typed
      * call nor a fixed reflective signature is safe. Widest satisfiable constructor wins; the search
      * string fills the sole {@link String} parameter and a {@code boolean} defaults to false.

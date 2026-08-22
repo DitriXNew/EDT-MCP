@@ -8,11 +8,12 @@ A green suite is not the same as a healthy server. Every assertion here checks w
 RETURNED; nothing checks what it logged on the way. So a whole class of failure is invisible:
 the tool answers correctly while an exception is swallowed behind it.
 
-That is not hypothetical. `MetadataRenameService` built EDT's `TextSearcher` reflectively.
-The platform dropped a constructor parameter, every construction started throwing
-NoSuchMethodException, the `catch (Exception)` logged it and returned an empty match map -
-and rename kept "working" on its fallback path. 32 stack traces per run, every rename test
-green, nobody the wiser. The only place that failure was visible was the EDT log.
+That is not hypothetical. `MetadataRenameService` built EDT's `TextSearcher` reflectively
+against a pinned constructor. The platform's signature no longer matched it - and had not
+matched for at least two releases - so every construction threw NoSuchMethodException, the
+`catch (Exception)` logged it and returned an empty match map, and rename kept "working" on
+its fallback path. 32 stack traces per run, every rename test green, nobody the wiser. The
+only place that failure was visible was the EDT log.
 
 WHAT IT CHECKS
 --------------
