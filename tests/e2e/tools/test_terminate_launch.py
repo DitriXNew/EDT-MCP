@@ -1,7 +1,7 @@
 """
 e2e tests for terminate_launch (kind: read).
 
-terminate_launch kills/disconnects 1С launches started from THIS EDT instance,
+terminate_launch kills/disconnects 1C launches started from THIS EDT instance,
 selected via ONE of three mutually-exclusive modes:
   - launchConfigurationName               (single live launch by exact config name)
   - projectName + applicationId           (single live launch by project + appId)

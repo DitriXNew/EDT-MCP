@@ -39,7 +39,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🧪 **Query Validation** - Validate 1C query text in project context (syntax + semantic errors, optional DCS mode)
 - 🧩 **BSL Code Analysis** - Browse modules, inspect structure, read/write methods, search code, and analyze call hierarchy
 - 🖼️ **Form Inspection** - Get PNG screenshots and YAML layout snapshots from the form WYSIWYG editor
-- 🚀 **Application Management** - Get applications, update database, launch in debug mode, terminate EDT-launched 1С clients
+- 🚀 **Application Management** - Get applications, update database, launch in debug mode, terminate EDT-launched 1C clients
 - 🎯 **Status Bar** - Real-time server status with tool name, execution time, and interactive controls
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
