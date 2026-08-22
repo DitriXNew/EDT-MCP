@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
@@ -391,6 +392,28 @@ public class DcsSettingsWriterTest
         assertFalse(refused.isSuccess());
         assertTrue(refused.error(), refused.error().contains("dataPath")); //$NON-NLS-1$
         assertTrue(refused.error(), refused.error().contains("action='update'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplaceOnATableChildHolderResetsTheHoldersOwnScalars()
+    {
+        // A holder is not a collection - it carries viewMode, userSettingID and a presentation of
+        // its own alongside its items. Addressing it and replacing it must reset those too, or
+        // clearing the items leaves a half-replaced holder behind. The settings-level paths always
+        // did this; the table CHILD path copied instead.
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"table\"," //$NON-NLS-1$
+            + "\"name\":\"T\",\"selection\":{\"items\":[]," //$NON-NLS-1$
+            + "\"viewMode\":\"Normal\",\"userSettingID\":\"keepnot\"}}]}")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "selection"), "replace", "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+
+        DataCompositionTable table = (DataCompositionTable)replaced.settings().getItems().get(0);
+        assertTrue("a replaced holder must not keep the userSettingID it was never given", //$NON-NLS-1$
+            table.getSelection() == null || table.getSelection().getUserSettingID() == null
+                || table.getSelection().getUserSettingID().isEmpty());
     }
 
     private static DataCompositionSettings plan(JsonObject body)

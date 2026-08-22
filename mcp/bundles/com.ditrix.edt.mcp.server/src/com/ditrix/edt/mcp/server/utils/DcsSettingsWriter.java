@@ -1280,7 +1280,12 @@ public final class DcsSettingsWriter
         }
         if ("selection".equals(head)) //$NON-NLS-1$
         {
-            DataCompositionSelectedFields holder = copy(table.getSelection());
+            // A holder is not a collection: it carries viewMode, userSettingID and a presentation
+            // of its own alongside its items. The address ends AT it, so replace starts from
+            // nothing rather than from a copy - otherwise clearing the items still left the
+            // holder's own scalars set. Same idiom the settings-level paths already use.
+            DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null
+                : copy(table.getSelection());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
             String error = applySelection(holder, body, action, languages, where + "/selection"); //$NON-NLS-1$
             if (error == null) table.setSelection(holder);
@@ -1288,7 +1293,8 @@ public final class DcsSettingsWriter
         }
         if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
         {
-            DataCompositionConditionalAppearance holder = copy(table.getConditionalAppearance());
+            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
+                : copy(table.getConditionalAppearance());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
             String error = applyConditionalAppearance(holder, body, action, languages, version,
                 where + "/conditionalAppearance"); //$NON-NLS-1$
