@@ -154,9 +154,12 @@ public final class DcsDynamicListWriter
         {
             return Result.failureJson(items.errorJson());
         }
+        // The project's real version here too: a type='dynamicList' body can carry a whole
+        // listSettings block, conditional-appearance parameters included, so the earlier fix on the
+        // concrete-settings branch alone left this path validating against Version.LATEST.
         DcsSettingsWriter.SettingsResult settings = DcsSettingsWriter.planDynamicList(
             current.getListSettings(), action, TYPE_DYNAMIC_LIST, address,
-            DcsSettingsWriter.dynamicListMembers(normalized), languages);
+            DcsSettingsWriter.dynamicListMembers(normalized), languages, version);
         if (!settings.isSuccess())
         {
             return Result.failure(settings.error());

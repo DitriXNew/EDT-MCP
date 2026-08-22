@@ -4056,6 +4056,23 @@ public final class DcsSettingsWriter
     private static String removeSettingsPath(DataCompositionSettings settings, List<String> path,
         String type)
     {
+        // A destructive call must not follow the ADDRESS past a type that does not match it. The
+        // dispatch below keys purely on the address, so type='selection' with '#/.../filter'
+        // deleted the filter and reported success against the declared target. Reads already reject
+        // that mismatch; the write path used type only in the eventual error text.
+        //
+        // The check is "the type's own segment appears somewhere in the path", which is deliberately
+        // permissive: a holder can be nested (a table's '#/items/0/selection' is a legitimate
+        // selection address), so demanding it at a fixed position would refuse valid work.
+        List<String> expected = defaultPath(type);
+        if (!expected.isEmpty() && !path.contains(expected.get(0)))
+        {
+            return "action='remove' declared type='" + type + "', which addresses '" //$NON-NLS-1$ //$NON-NLS-2$
+                + expected.get(0) + "', but '" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$
+                + "' does not name it. Removing is not reversible, so the declared type and the " //$NON-NLS-1$
+                + "address must agree - re-run dcs action='get' and use the type that node was " //$NON-NLS-1$
+                + "rendered under."; //$NON-NLS-1$
+        }
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
         if (KEY_ITEMS.equals(head))

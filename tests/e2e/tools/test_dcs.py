@@ -22,7 +22,6 @@ from harness import (
     e2e_test,
     poll_diff_contains,
     poll_disk_contains,
-    poll_disk_lacks,
     read_disk,
     wait_for_project_ready,
 )
@@ -796,10 +795,14 @@ def test_dynamic_list_settings_accept_replace_and_remove_but_its_own_types_do_no
     # ON DISK, not just in the read-back: a settings write that only ever lived in memory would
     # satisfy every assertion above and still be lost on the next refresh. A dynamic list's
     # settings are exported to their OWN file, so that is the one to read.
+    assert "**ListSettings.dcss export scheduled:** `true`" in replaced.text,         "a settings replace must schedule the external file's export: %s" % replaced.text[:400]
     settings_rel = ("src/Catalogs/%s/Forms/ListForm/Attributes/List/ExtInfo/ListSettings.dcss"
                     % catalog_name)
-    poll_disk_lacks(settings_rel, "Reference",
-                    ctx="the replaced-away title must disappear from ListSettings.dcss")
+    # Wait for the file to EXIST before asserting what is not in it. An absence check on a missing
+    # file passes for the wrong reason - poll_disk_lacks is satisfied immediately by a file that was
+    # never written, which is how this assertion passed locally and failed on CI.
+    poll_disk_contains(settings_rel, "selection",
+                       ctx="the replaced settings must reach ListSettings.dcss")
     on_disk = read_disk(settings_rel)
     assert "Reference" not in on_disk,         "the title the replace never mentioned must not survive on disk: %s" % on_disk[:600]
 
