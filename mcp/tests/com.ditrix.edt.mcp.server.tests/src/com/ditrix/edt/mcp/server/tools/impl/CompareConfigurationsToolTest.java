@@ -11,6 +11,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -38,7 +41,9 @@ import org.eclipse.emf.common.util.EList;
 
 import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
+import com._1c.g5.v8.dt.compare.core.ComparisonProcessStatus;
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
+import com._1c.g5.v8.dt.compare.core.IComparisonManager;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
@@ -1134,6 +1139,129 @@ public class CompareConfigurationsToolTest
         {
             ComparisonEngine.uninstall();
         }
+    }
+
+    // ==================== A launch that never reached EDT ====================
+
+    /**
+     * The reservation is made BEFORE the batch is handed to EDT, so a hand-over that fails has to
+     * decide what becomes of it - and {@code ServiceUnavailableException} is the one failure that
+     * SETTLES the question: the facade throws it precisely because nothing reached the platform.
+     * <p>
+     * The reservation used to go through the ordinary hand-back, which cannot settle anything -
+     * with the service gone it could not ask EDT either, so it answered UNREACHABLE and
+     * deliberately KEPT the record. That record then named EDT's single comparison slot as taken by
+     * a comparison that had never started, and every later launch was refused by it until the idle
+     * TTL expired.
+     */
+    @Test
+    public void testALaunchThatNeverReachedEdtLeavesNoReservationBehind()
+    {
+        AtomicReference<IComparisonManager> service =
+            new AtomicReference<>(mock(IComparisonManager.class));
+        ComparisonEngine.install(service::get);
+        try
+        {
+            ComparisonEngine engine = ComparisonEngine.attached().orElseThrow();
+            // The service disappears between the availability check a launch makes and the
+            // hand-over itself - the gap this branch exists for.
+            service.set(null);
+
+            try
+            {
+                CompareConfigurationsTool.registerAndHandOver(engine, comparisonHandle(),
+                    new CompareMergeProcessBatch(List.of()));
+                fail("a launch that reached nothing must not report success"); //$NON-NLS-1$
+            }
+            catch (ComparisonException expected)
+            {
+                assertNotNull(expected.getMessage());
+            }
+
+            assertEquals("nothing started, so nothing may still be registered as holding the slot", //$NON-NLS-1$
+                0, engine.sessions().size());
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /** The same failure must SAY that the reservation is gone, not merely drop it silently. */
+    @Test
+    public void testALaunchThatNeverReachedEdtSaysTheReservationIsWithdrawn()
+    {
+        AtomicReference<IComparisonManager> service =
+            new AtomicReference<>(mock(IComparisonManager.class));
+        ComparisonEngine.install(service::get);
+        try
+        {
+            ComparisonEngine engine = ComparisonEngine.attached().orElseThrow();
+            service.set(null);
+
+            try
+            {
+                CompareConfigurationsTool.registerAndHandOver(engine, comparisonHandle(),
+                    new CompareMergeProcessBatch(List.of()));
+                fail("a launch that reached nothing must not report success"); //$NON-NLS-1$
+            }
+            catch (ComparisonException expected)
+            {
+                assertTrue("the message must say the launch never reached EDT: " //$NON-NLS-1$
+                    + expected.getMessage(), expected.getMessage().contains("never reached EDT")); //$NON-NLS-1$
+                assertTrue("and that the reservation is withdrawn: " + expected.getMessage(), //$NON-NLS-1$
+                    expected.getMessage().contains("withdrawn")); //$NON-NLS-1$
+            }
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * The control for the branch above: a launch EDT REACHED and refused is a different fact. What
+     * the platform did with the batch on the way is not established, so this one goes through the
+     * hand-back - the thing built for not knowing - and is not withdrawn on the caller's word.
+     */
+    @Test
+    public void testALaunchEdtReachedAndRefusedIsHandedBackRatherThanWithdrawn()
+    {
+        IComparisonManager manager = mock(IComparisonManager.class);
+        doThrow(new IllegalStateException("EDT says no")).when(manager).startComparison(any()); //$NON-NLS-1$
+        // EDT reports the comparison as under way, so the hand-back is not withheld: the point
+        // here is WHICH rollback runs, not the start guard.
+        when(manager.getStatus(any()))
+            .thenReturn(ComparisonProcessStatus.COMPARISON_PROCESS_INITIALIZATION_STARTED);
+        ComparisonEngine.install(() -> manager);
+        try
+        {
+            ComparisonEngine engine = ComparisonEngine.attached().orElseThrow();
+
+            try
+            {
+                CompareConfigurationsTool.registerAndHandOver(engine, comparisonHandle(),
+                    new CompareMergeProcessBatch(List.of()));
+                fail("a refused launch must not report success"); //$NON-NLS-1$
+            }
+            catch (ComparisonException expected)
+            {
+                assertTrue("the message must say EDT refused it: " + expected.getMessage(), //$NON-NLS-1$
+                    expected.getMessage().contains("EDT refused to start the comparison")); //$NON-NLS-1$
+                assertFalse("a reached platform is not a launch that never reached EDT: " //$NON-NLS-1$
+                    + expected.getMessage(), expected.getMessage().contains("never reached EDT")); //$NON-NLS-1$
+            }
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    private static ComparisonProcessHandle comparisonHandle()
+    {
+        return new ComparisonProcessHandle(new NamedDataSource("Demo"), //$NON-NLS-1$
+            new NamedDataSource("Other"), ComparisonScope.EMPTY_SCOPE); //$NON-NLS-1$
     }
 
     /**

@@ -53,6 +53,97 @@ public class MetadataPropertyIntrospectorTest
         return MdClassFactory.eINSTANCE.createCatalog();
     }
 
+    // ==================== A failed read is not an empty value ====================
+
+    /**
+     * The read of one property is guarded so that a single dangling proxy cannot abort the whole
+     * object. The guard used to answer {@code null} - the same answer as "this property is not
+     * set" - so a failure to read arrived at every consumer as a fact about the model.
+     */
+    @Test
+    public void testAFailedReadIsReportedAsFailedRatherThanEmpty()
+    {
+        PropertyInfo comment = MetadataPropertyIntrospector.find(explodingOn("comment"), "comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("the failure must not remove the property from the list", comment); //$NON-NLS-1$
+        assertTrue("a property whose read threw must say so", comment.readFailed); //$NON-NLS-1$
+        assertNull("and it carries no value, because none was read", comment.currentValue); //$NON-NLS-1$
+    }
+
+    /** The control: a property nobody set is empty, and that is NOT a failure. */
+    @Test
+    public void testAnUnsetPropertyIsEmptyAndNotAFailure()
+    {
+        PropertyInfo comment = MetadataPropertyIntrospector.find(explodingOn("name"), "comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(comment);
+        assertNull("nobody set it, so there is no value", comment.currentValue); //$NON-NLS-1$
+        assertFalse("but an unset property must not be reported as unreadable", comment.readFailed); //$NON-NLS-1$
+    }
+
+    /** One unreadable property must not make the others unreadable, nor stop the walk. */
+    @Test
+    public void testOnlyTheUnreadablePropertyIsMarked()
+    {
+        List<PropertyInfo> all = MetadataPropertyIntrospector.introspect(explodingOn("comment")); //$NON-NLS-1$
+
+        int failed = 0;
+        for (PropertyInfo info : all)
+        {
+            if (info.readFailed)
+            {
+                failed++;
+            }
+        }
+        assertEquals("exactly the one feature whose read threw is marked", 1, failed); //$NON-NLS-1$
+        assertTrue("and the rest of the object is still introspected", all.size() > 1); //$NON-NLS-1$
+    }
+
+    /**
+     * An object with two plain string properties whose {@code eGet} throws for ONE of them - the
+     * shape a dangling proxy takes when the resolver behind it is not available.
+     *
+     * @param failing the feature name whose read must throw
+     * @return the object
+     */
+    private static EObject explodingOn(String failing)
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("explodinglike"); //$NON-NLS-1$
+        pkg.setNsPrefix("explodinglike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/explodinglike"); //$NON-NLS-1$
+        EClass holder = f.createEClass();
+        holder.setName("ExplodingHolder"); //$NON-NLS-1$
+        addString(f, holder, "name"); //$NON-NLS-1$
+        addString(f, holder, "comment"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(holder);
+        return new ExplodingObject(holder, failing);
+    }
+
+    /** A dynamic EObject that refuses to yield ONE named feature. */
+    private static final class ExplodingObject
+        extends org.eclipse.emf.ecore.impl.DynamicEObjectImpl
+    {
+        private final String failing;
+
+        ExplodingObject(EClass eClass, String failing)
+        {
+            super(eClass);
+            this.failing = failing;
+        }
+
+        @Override
+        public Object eGet(EStructuralFeature feature)
+        {
+            if (failing.equals(feature.getName()))
+            {
+                throw new IllegalStateException("the value behind this feature cannot be resolved"); //$NON-NLS-1$
+            }
+            return super.eGet(feature);
+        }
+    }
+
     @Test
     public void testNameAndCommentAreAssignableStrings()
     {

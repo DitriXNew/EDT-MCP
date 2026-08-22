@@ -100,6 +100,82 @@ public class ComparisonNodeRendererTest
             text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
     }
 
+    // ==================== A failed read is not an empty cell ====================
+
+    /**
+     * The property table's empty cell means "no value on that side". A property the introspector
+     * could not READ arrived as the same empty cell, so a gap in what this server could see was
+     * published as a fact about the configuration.
+     */
+    @Test
+    public void testAnUnreadablePropertyIsMarkedRatherThanBlanked()
+    {
+        EObject main = unreadableComment("Products"); //$NON-NLS-1$
+        EObject other = mdObject("Products", "other comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        String row = rowContaining(text, "other comment"); //$NON-NLS-1$
+        assertNotNull("the property row must be rendered", row); //$NON-NLS-1$
+        assertTrue("the side that could not be read must say so, not look empty: " + row, //$NON-NLS-1$
+            row.contains(ComparisonNodeRenderer.UNREADABLE));
+    }
+
+    /**
+     * The worse half of the same fold: with BOTH sides unreadable the two blanks matched, the row
+     * counted as equal, and the document said the sides agree - about a property nobody read.
+     */
+    @Test
+    public void testTwoUnreadableSidesAreNotReportedAsAgreeing()
+    {
+        EObject main = unreadableComment("Products"); //$NON-NLS-1$
+        EObject other = unreadableComment("Products"); //$NON-NLS-1$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertFalse("nothing was read, so nothing may be called equal: " + text, //$NON-NLS-1$
+            text.contains("_" + ComparisonNodeRenderer.NO_DIFFERENCES //$NON-NLS-1$
+                + " in the compared properties._")); //$NON-NLS-1$
+        assertTrue("and the reader must be told how many rows could not be read: " + text, //$NON-NLS-1$
+            text.contains("1 not readable")); //$NON-NLS-1$
+    }
+
+    /**
+     * An unreadable side must not HIDE a difference either: what two readable sides establish is
+     * established whatever happened on the third.
+     */
+    @Test
+    public void testADifferenceBetweenTwoReadableSidesSurvivesAnUnreadableThird()
+    {
+        EObject main = mdObject("Products", "a"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = mdObject("Products", "b"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject ancestor = unreadableComment("Products"); //$NON-NLS-1$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, ancestor)));
+
+        assertTrue("the difference the readable sides carry must still be counted: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
+    }
+
+    /** The control: with every side readable the count keeps its plain shape. */
+    @Test
+    public void testAReadableTableSaysNothingAboutUnreadableRows()
+    {
+        EObject main = mdObject("Products", "a"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = mdObject("Products", "b"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertFalse("nothing failed, so nothing may be reported as unreadable: " + text, //$NON-NLS-1$
+            text.contains("not readable")); //$NON-NLS-1$
+        assertFalse("and no cell may carry the marker: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.UNREADABLE));
+    }
+
     // ==================== The lazy tree ====================
 
     @Test
@@ -709,6 +785,31 @@ public class ComparisonNodeRendererTest
         EObject object = new DynamicEObjectImpl(MODEL.mdClass);
         object.eSet(MODEL.mdName, name);
         object.eSet(MODEL.mdComment, comment);
+        return object;
+    }
+
+    /**
+     * An md-like object whose 'comment' cannot be read at all - the shape a dangling proxy takes
+     * when the resolver behind it is not available.
+     *
+     * @param name the readable name
+     * @return the object
+     */
+    private static EObject unreadableComment(String name)
+    {
+        EObject object = new DynamicEObjectImpl(MODEL.mdClass)
+        {
+            @Override
+            public Object eGet(org.eclipse.emf.ecore.EStructuralFeature feature)
+            {
+                if (MODEL.mdComment.getName().equals(feature.getName()))
+                {
+                    throw new IllegalStateException("the value behind this feature cannot be resolved"); //$NON-NLS-1$
+                }
+                return super.eGet(feature);
+            }
+        };
+        object.eSet(MODEL.mdName, name);
         return object;
     }
 

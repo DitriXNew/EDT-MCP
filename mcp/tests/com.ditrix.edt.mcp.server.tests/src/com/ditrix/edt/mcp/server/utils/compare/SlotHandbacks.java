@@ -18,7 +18,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
  * <p>
  * The test fragment shares the package with the bundle, so a helper here reaches the factory
  * without weakening it for production code. A stub backend can therefore answer with any of the
- * five verdicts while the bundle still has exactly one place that produces them.
+ * verdicts while the bundle still has exactly one place that produces them.
  */
 public final class SlotHandbacks
 {

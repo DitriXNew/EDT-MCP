@@ -79,6 +79,16 @@ public final class ComparisonNodeRenderer
     /** Rendered in place of {@link #NO_DIFFERENCES} while the node's own status is not {@code Finished}. */
     public static final String NOT_DETERMINED = "Not determined yet (subtree not finished)"; //$NON-NLS-1$
 
+    /**
+     * The cell for a property whose value could not be READ on that side.
+     * <p>
+     * It is not an empty cell, and that is the whole point: an empty cell is this document's way of
+     * saying "no value there", so rendering a failed read as one turns a gap in what this server
+     * could see into a statement about the configuration - the exact substitution the unfinished
+     * guard and the one-side guard exist to prevent, one level further down.
+     */
+    public static final String UNREADABLE = "_(could not be read)_"; //$NON-NLS-1$
+
     /** Rendered when the engine attached no comparison verdict to a node at all. */
     public static final String NO_VERDICT = "Not reported by the engine"; //$NON-NLS-1$
 
@@ -262,27 +272,40 @@ public final class ComparisonNodeRenderer
         }
 
         List<String> differing = new ArrayList<>();
+        List<String> undetermined = new ArrayList<>();
         List<String> equal = new ArrayList<>();
         for (Map.Entry<String, String[]> entry : rows.entrySet())
         {
-            if (differs(entry.getValue(), sides))
+            switch (compare(entry.getValue(), sides))
             {
-                differing.add(entry.getKey());
-            }
-            else
-            {
-                equal.add(entry.getKey());
+                case DIFFERENT:
+                    differing.add(entry.getKey());
+                    break;
+                case UNDETERMINED:
+                    undetermined.add(entry.getKey());
+                    break;
+                default:
+                    equal.add(entry.getKey());
+                    break;
             }
         }
         // Differing rows first: with a limit in play, the rows that carry the answer must survive
-        // truncation. Within each group the model's own feature order is preserved.
+        // truncation. Undetermined rows come next, ahead of the equal ones, because a row nobody
+        // could read is the second thing a reader needs and the one thing a silent truncation
+        // would turn into agreement. Within each group the model's own feature order is preserved.
         List<String> ordered = new ArrayList<>(differing);
+        ordered.addAll(undetermined);
         ordered.addAll(equal);
 
         int total = ordered.size();
         int shown = Math.min(total, request.limit);
         sb.append("**Properties:** ").append(total).append(" (").append(differing.size()) //$NON-NLS-1$ //$NON-NLS-2$
-            .append(" differing)").append(Pagination.truncationNotice(shown, total)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" differing"); //$NON-NLS-1$
+        if (!undetermined.isEmpty())
+        {
+            sb.append(", ").append(undetermined.size()).append(" not readable"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        sb.append(')').append(Pagination.truncationNotice(shown, total)).append("\n\n"); //$NON-NLS-1$
 
         if (total == 0)
         {
@@ -309,6 +332,15 @@ public final class ComparisonNodeRenderer
                 sb.append("_Only one side carries this object, so its properties have nothing to " //$NON-NLS-1$
                     + "be compared against._\n\n"); //$NON-NLS-1$
             }
+            else if (!undetermined.isEmpty())
+            {
+                // The same lie again, one step subtler: none of the rows that COULD be read
+                // differ, but some could not be read at all, and "no differences" would cover
+                // both with one word.
+                sb.append("_No differences among the properties that could be read; ") //$NON-NLS-1$
+                    .append(undetermined.size()).append(" could not be read on at least one " //$NON-NLS-1$
+                        + "side and are not claimed either way._\n\n"); //$NON-NLS-1$
+            }
             else
             {
                 sb.append('_').append(finished ? NO_DIFFERENCES : NOT_DETERMINED)
@@ -321,6 +353,12 @@ public final class ComparisonNodeRenderer
      * Adds {@code source}'s assignable properties into {@code rows} under column {@code index}. A
      * feature the side does not carry stays {@code null} and renders as an empty cell - which is also
      * how a side whose object is absent renders, and the summary table above says which case it is.
+     * <p>
+     * A property the introspector could not READ is the one case that does NOT render as an empty
+     * cell: it gets {@link #UNREADABLE}. Both arrive from the introspector as a {@code null}
+     * current value - the read is guarded so that one dangling proxy cannot abort the whole object
+     * - and folding them together published a failure as an absence, which on a three-column
+     * comparison also made two unreadable sides look like agreement.
      */
     private static void collectProperties(Map<String, String[]> rows, EObject source, int index)
     {
@@ -336,22 +374,65 @@ public final class ComparisonNodeRenderer
                 cells = new String[] {"", "", ""}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 rows.put(info.name, cells);
             }
-            cells[index] = info.currentValue == null ? "" : info.currentValue; //$NON-NLS-1$
+            if (info.readFailed)
+            {
+                cells[index] = UNREADABLE;
+            }
+            else
+            {
+                cells[index] = info.currentValue == null ? "" : info.currentValue; //$NON-NLS-1$
+            }
         }
     }
 
-    /** A row differs when the sides that HAVE an object do not all carry the same value. */
-    private static boolean differs(String[] values, EObject[] sides)
+    /** What one property row establishes about the sides that carry an object. */
+    private enum RowState
     {
-        Set<String> present = new LinkedHashSet<>();
+        /** Two sides that were both READ carry different values. */
+        DIFFERENT,
+        /** Nothing disagrees, but at least one side could not be read, so nothing is established. */
+        UNDETERMINED,
+        /** Every side that carries an object was read and they all agree. */
+        SAME
+    }
+
+    /**
+     * What a row establishes, as THREE answers rather than two.
+     * <p>
+     * A difference between two sides that were both read is established whatever happened on the
+     * third, so an unreadable side never hides a real difference. What it does prevent is the
+     * OPPOSITE claim: with a side unreadable, "these agree" is not something anybody observed, and
+     * the two-answer version reported exactly that - it compared the placeholder for a failed read
+     * with the placeholder for an absent value and found them equal.
+     *
+     * @param values the three rendered cells
+     * @param sides the three compared objects, {@code null} where the side has none
+     * @return what the row establishes
+     */
+    private static RowState compare(String[] values, EObject[] sides)
+    {
+        Set<String> readable = new LinkedHashSet<>();
+        boolean anyUnreadable = false;
         for (int i = 0; i < sides.length; i++)
         {
-            if (sides[i] != null)
+            if (sides[i] == null)
             {
-                present.add(values[i] == null ? "" : values[i]); //$NON-NLS-1$
+                continue;
+            }
+            if (UNREADABLE.equals(values[i]))
+            {
+                anyUnreadable = true;
+            }
+            else
+            {
+                readable.add(values[i] == null ? "" : values[i]); //$NON-NLS-1$
             }
         }
-        return present.size() > 1;
+        if (readable.size() > 1)
+        {
+            return RowState.DIFFERENT;
+        }
+        return anyUnreadable ? RowState.UNDETERMINED : RowState.SAME;
     }
 
     // ==================== Support state ====================

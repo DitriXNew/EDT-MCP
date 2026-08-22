@@ -63,7 +63,9 @@ from harness import (
 JOB_ID_ROW = re.compile(r"^\| jobId \| ([^|]+) \|\s*$", re.MULTILINE)
 COMPARISON_ID_ROW = re.compile(r"^\| comparisonId \| ([^|]+) \|\s*$", re.MULTILINE)
 # The launch journals this the moment EDT has ACCEPTED the batch - see _await_slot_taken.
-STARTED_LINE = re.compile(r"Comparison (cmp-\d+) started\.")
+# The id carries a per-registry token before its counter (cmp-<token>-<n>), so that an id kept
+# across a bundle reinstall or an EDT restart cannot address a different comparison.
+STARTED_LINE = re.compile(r"Comparison (cmp-[0-9a-z]+-\d+) started\.")
 
 NONEXISTENT_PROJECT = "NoSuchProject_cmpcfg_zzz"
 
@@ -122,7 +124,7 @@ def _finish(job_id):
 def _started_comparison_id(result):
     """The comparisonId out of a job's progress log, or None.
 
-    The launch publishes "Comparison cmp-N started." the moment the platform has accepted
+    The launch publishes "Comparison <id> started." the moment the platform has accepted
     the batch, so this names a comparison that reached EDT even when the job ended without
     a report.
     """

@@ -392,6 +392,76 @@ public class CompareConfigurationsTool implements IMcpTool
     }
 
     /**
+     * Registers the comparison, hands the batch to EDT, and rolls the registration back in the way
+     * the failure ALLOWS.
+     * <p>
+     * The registration comes first because the id has to exist before the platform can start
+     * anything under it, and that ordering is what makes the rollback a question at all. There are
+     * two failures and they are not the same fact:
+     * <ul>
+     *   <li>{@link ComparisonEngine.ServiceUnavailableException} is the platform's own proof that
+     *       the batch never left this process - the facade throws it precisely so that a launch
+     *       reaching nothing cannot be mistaken for a quiet success. There is nothing to end, so
+     *       the reservation is WITHDRAWN. Sending it through a hand-back instead was wrong twice
+     *       over: the hand-back is built for not knowing, and with the service gone it could not
+     *       know anything either, so it answered {@link SlotHandback.Verdict#UNREACHABLE} and
+     *       deliberately kept the record - which then named EDT's single slot as taken by a
+     *       comparison that had never started, and refused every later launch until the idle TTL
+     *       expired.</li>
+     *   <li>Any other failure means EDT was REACHED and refused, and what it did with the batch on
+     *       the way is not established here. That is the hand-back's case, and its own answer is
+     *       part of the message rather than dropped on the floor.</li>
+     * </ul>
+     * Package-scoped so the two rollbacks can be driven against a real registry.
+     *
+     * @param engine the installed facade
+     * @param handle the comparison to register
+     * @param batch the batch to hand over
+     * @return the id the comparison was registered under
+     * @throws ComparisonException when the registration or the hand-over failed; the message says
+     *     what became of the registration
+     */
+    static String registerAndHandOver(ComparisonEngine engine, ComparisonProcessHandle handle,
+        CompareMergeProcessBatch batch) throws ComparisonException
+    {
+        String id;
+        try
+        {
+            id = engine.sessions().register(handle, batch);
+        }
+        catch (IllegalStateException e)
+        {
+            // The bundle was taken down between the facade lookup at the top of start() and this
+            // line, so nothing here can own a comparison any more. Reported as a launch that did
+            // not happen - which it is, because registration comes BEFORE the batch reaches EDT
+            // and nothing has reached it yet.
+            throw new ComparisonException("The comparison was not started: this server's " //$NON-NLS-1$
+                + "comparison support is shutting down, so nothing here could own it. " //$NON-NLS-1$
+                + "Nothing reached EDT.", e); //$NON-NLS-1$
+        }
+        try
+        {
+            engine.start(batch);
+        }
+        catch (ComparisonEngine.ServiceUnavailableException e)
+        {
+            // The service went away between the facade lookup and this line. Nothing reached the
+            // platform, so nothing is reported as started - this used to return normally and the
+            // job went on to publish "Comparison ... started." for a comparison that did not
+            // exist - and the reservation is withdrawn rather than handed back.
+            throw new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())
+                + ' ' + engine.sessions().withdrawUnstartedLaunch(id).sentence(), e);
+        }
+        catch (RuntimeException e)
+        {
+            throw new ComparisonException("EDT refused to start the comparison: " //$NON-NLS-1$
+                + ComparisonFailures.describe(e) + ' '
+                + engine.sessions().handBack(id, Ending.CLOSED).sentence(), e);
+        }
+        return id;
+    }
+
+    /**
      * Checks the RAW 'scope' argument before it is parsed, because parsing is where the danger is.
      * <p>
      * {@code JsonUtils.extractArrayArgument} keeps only the PRIMITIVE elements of a JSON array and
@@ -2037,46 +2107,7 @@ public class CompareConfigurationsTool implements IMcpTool
 
             CompareMergeProcessBatch batch = new CompareMergeProcessBatch(
                 new CompareMergeProcessDescriptor(handle, settings));
-            String id;
-            try
-            {
-                id = engine.sessions().register(handle, batch);
-            }
-            catch (IllegalStateException e)
-            {
-                // The bundle was taken down between the facade lookup at the top of start() and
-                // this line, so nothing here can own a comparison any more. Reported as a launch
-                // that did not happen - which it is, because registration comes BEFORE the batch
-                // reaches EDT and nothing has reached it yet.
-                throw new ComparisonException("The comparison was not started: this server's " //$NON-NLS-1$
-                    + "comparison support is shutting down, so nothing here could own it. " //$NON-NLS-1$
-                    + "Nothing reached EDT.", e); //$NON-NLS-1$
-            }
-            try
-            {
-                engine.start(batch);
-            }
-            catch (ComparisonEngine.ServiceUnavailableException e)
-            {
-                // The service went away between the facade lookup at the top of start() and
-                // this line. Nothing reached the platform, so nothing is reported as started -
-                // this used to return normally and the job went on to publish "Comparison
-                // cmp-N started." for a comparison that did not exist.
-                throw new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())
-                    + ' ' + engine.sessions().handBack(id, Ending.CLOSED).sentence(), e);
-            }
-            catch (RuntimeException e)
-            {
-                // Registered before the launch and given back here: a session that outlives a
-                // failed launch would hold the slot against every later attempt. The hand-back's
-                // own answer is part of the message and not dropped on the floor - a rollback that
-                // failed leaves a registration behind, and the caller is the only one who can act
-                // on that.
-                throw new ComparisonException("EDT refused to start the comparison: " //$NON-NLS-1$
-                    + ComparisonFailures.describe(e) + ' '
-                    + engine.sessions().handBack(id, Ending.CLOSED).sentence(), e);
-            }
-            return id;
+            return registerAndHandOver(engine, handle, batch);
         }
 
         @Override

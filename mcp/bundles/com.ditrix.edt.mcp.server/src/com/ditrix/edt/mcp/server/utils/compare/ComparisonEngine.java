@@ -340,7 +340,7 @@ public final class ComparisonEngine
     {
         this.backend = backend;
         this.sessions = new ComparisonSessionRegistry(System::currentTimeMillis, idleTtlMillis,
-            this::end, backend::handles);
+            this::end, backend::handles, this::hasBegunOnPlatform, Thread::sleep);
     }
 
     /**
@@ -722,6 +722,40 @@ public final class ComparisonEngine
         {
             backend.stop(handle);
         }
+    }
+
+    /**
+     * Whether EDT has BEGUN a comparison, read from the status it reports for the handle.
+     * <p>
+     * A status is the evidence, and it is evidence of exactly the right thing. Measured from
+     * {@code ComparisonManager} bytecode (EDT 2026.2, {@code com._1c.g5.v8.dt.compare} 29.0.0):
+     * the session is created with a {@code null} status by the launch thread, and the FIRST status
+     * on it - {@code COMPARISON_PROCESS_INITIALIZATION_STARTED} - is stamped by
+     * {@code performComparisonProcess}, which nothing but the scheduled Eclipse job's own
+     * {@code run} reaches. So any status at all proves the job is past the point where cancelling
+     * it would skip {@code run} entirely, and no status leaves that unproven.
+     * <p>
+     * An UNAVAILABLE reading is passed through as unavailable rather than as "not begun": the
+     * registry treats the two differently, and the missing service that produces it is the same
+     * one that makes the hand-back itself fail loudly.
+     *
+     * @param session the session to ask about
+     * @return whether the comparison is under way, or {@link PlatformAnswer#unavailable()} when
+     *     EDT's comparison service could not be asked
+     */
+    private PlatformAnswer<Boolean> hasBegunOnPlatform(ComparisonSessionRegistry.ComparisonSession session)
+    {
+        ComparisonProcessHandle handle = session == null ? null : session.handle();
+        if (handle == null)
+        {
+            return PlatformAnswer.unavailable();
+        }
+        PlatformAnswer<ComparisonProcessStatus> answer = backend.status(handle);
+        if (answer == null || answer.isUnavailable())
+        {
+            return PlatformAnswer.unavailable();
+        }
+        return PlatformAnswer.of(Boolean.valueOf(answer.orElse(null) != null));
     }
 
     /**

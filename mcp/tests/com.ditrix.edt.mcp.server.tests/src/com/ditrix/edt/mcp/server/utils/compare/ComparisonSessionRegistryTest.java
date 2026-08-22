@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -128,13 +129,415 @@ public class ComparisonSessionRegistryTest
         }
     }
 
+    /**
+     * Answers whether EDT has BEGUN a comparison, and counts the pauses the wait spent.
+     * <p>
+     * The default is "begun": every test written before the hand-back learned to withhold one is
+     * about a comparison EDT is running, and answering anything else would silence them all
+     * instead of exercising them.
+     */
+    private static final class FakeLaunchProgress
+        implements ComparisonSessionRegistry.LaunchProgress
+    {
+        Boolean begun = Boolean.TRUE;
+        /** Whether EDT can be asked at all; when it cannot, there is no answer to give. */
+        boolean reachable = true;
+        int asked;
+        /** How many times the wait may ask before the answer flips to "begun". */
+        int beginsAfterAsks = -1;
+
+        @Override
+        public PlatformAnswer<Boolean> hasBegun(ComparisonSession session)
+        {
+            asked++;
+            if (!reachable)
+            {
+                return PlatformAnswer.unavailable();
+            }
+            if (beginsAfterAsks >= 0 && asked > beginsAfterAsks)
+            {
+                return PlatformAnswer.of(Boolean.TRUE);
+            }
+            return PlatformAnswer.of(begun);
+        }
+    }
+
+    /** Advances the fake clock instead of sleeping, so the wait is exercised in real time zero. */
+    private static final class FakePause
+        implements ComparisonSessionRegistry.Pause
+    {
+        final FakeClock clock;
+        int paused;
+
+        FakePause(FakeClock clock)
+        {
+            this.clock = clock;
+        }
+
+        @Override
+        public void millis(long millis)
+        {
+            paused++;
+            clock.now += millis;
+        }
+    }
+
     private final FakeClock clock = new FakeClock();
     private final RecordingReleaser releaser = new RecordingReleaser();
     private final FakeLiveHandles liveHandles = new FakeLiveHandles();
+    private final FakeLaunchProgress launchProgress = new FakeLaunchProgress();
+    private final FakePause pause = new FakePause(clock);
 
     private ComparisonSessionRegistry registry()
     {
-        return new ComparisonSessionRegistry(() -> clock.now, TTL, releaser, liveHandles);
+        return new ComparisonSessionRegistry(() -> clock.now, TTL, releaser, liveHandles, launchProgress,
+            pause);
+    }
+
+    // ==================== What the two new verdicts promise ====================
+    //
+    // One literal per @Test on purpose: JUnit stops a method at its first failed assertion, so a
+    // single method carrying five pins would only ever load the first of them, and an edit that
+    // dropped the other four would still go green.
+
+    @Test
+    public void testNotStartedYetIsNotAFreedSlot()
+    {
+        SlotHandback handback = SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1"); //$NON-NLS-1$
+
+        assertFalse("nothing was asked of EDT, so nothing may be claimed about its slot", //$NON-NLS-1$
+            handback.slotIsFree());
+    }
+
+    @Test
+    public void testNotStartedYetKeepsTheRecord()
+    {
+        SlotHandback handback = SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1"); //$NON-NLS-1$
+
+        assertTrue("the record must be kept, because the comparison may still be running", //$NON-NLS-1$
+            handback.recordKept());
+    }
+
+    @Test
+    public void testNotStartedYetIsTheOnlyVerdictThatSaysThePlatformHasNotBegun()
+    {
+        assertTrue(SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1") //$NON-NLS-1$
+            .platformHasNotBegun());
+        assertFalse("a service gap is a different fact and a different next move", //$NON-NLS-1$
+            SlotHandbacks.of(SlotHandback.Verdict.UNREACHABLE, "cmp-x-1").platformHasNotBegun()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotStartedYetSentenceSaysNothingWasAskedOfThePlatform()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("nothing was asked of the platform")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotStartedYetSentenceWarnsThatEndingItWouldCostEdtItsComparisonSupport()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("unable to run ANY comparison until it is restarted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotStartedYetSentenceTellsTheCallerToRepeatTheRequest()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("repeat the request")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotStartedYetSentenceSaysTheRecordIsKept()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.NOT_STARTED_YET, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("record here is KEPT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNeverStartedIsAFreeSlotBecauseNothingEverTookIt()
+    {
+        SlotHandback handback = SlotHandbacks.of(SlotHandback.Verdict.NEVER_STARTED, "cmp-x-1"); //$NON-NLS-1$
+
+        assertTrue("a launch that never happened holds nothing", handback.slotIsFree()); //$NON-NLS-1$
+        assertFalse("and it leaves no record to retry", handback.recordKept()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNeverStartedSentenceSaysTheLaunchNeverReachedEdt()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.NEVER_STARTED, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("never reached EDT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNeverStartedSentenceSaysTheRegistrationIsWithdrawn()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.NEVER_STARTED, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("withdrawn")); //$NON-NLS-1$
+    }
+
+    // ==================== A comparison EDT has not begun is not ended ====================
+
+    /**
+     * EDT SCHEDULES the comparison job and only then runs it, and the method that gives EDT's own
+     * slot back lives inside that job's run. Ending the comparison in between deletes the job
+     * before it ever runs, so that method never happens and EDT reports a comparison as active for
+     * the rest of its life. The hand-back must therefore withhold, not attempt.
+     */
+    @Test
+    public void testHandBackIsWithheldWhileEdtHasNotBegunTheComparison()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertEquals("a comparison EDT has not begun must not be ended", //$NON-NLS-1$
+            SlotHandback.Verdict.NOT_STARTED_YET, handback.verdict());
+    }
+
+    @Test
+    public void testWithheldHandBackAsksThePlatformNothingAtAll()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertTrue("nothing may be asked of EDT: the ask is what deletes the scheduled job", //$NON-NLS-1$
+            releaser.released.isEmpty());
+    }
+
+    @Test
+    public void testWithheldHandBackKeepsTheRecordSoItCanBeRepeated()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertEquals("the comparison is still running, so its record must stay", 1, registry.size()); //$NON-NLS-1$
+        assertTrue("and it must still be findable under its id", registry.find(id).isPresent()); //$NON-NLS-1$
+    }
+
+    /**
+     * The withheld hand-back must not turn an ordinary cancellation into a refusal: a launch is
+     * milliseconds old when {@code cancel_job} reaches it, so the caller is given the platform's
+     * own moment to get under way before anything is decided.
+     */
+    @Test
+    public void testHandBackWaitsForEdtToBeginAndThenEndsTheComparison()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        launchProgress.beginsAfterAsks = 3;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertEquals("once EDT is under way the comparison is ended for real", //$NON-NLS-1$
+            SlotHandback.Verdict.FREED, handback.verdict());
+        assertEquals("and the record goes, because the slot is confirmed free", 0, registry.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHandBackActuallyWaitedRatherThanAnsweringOnTheFirstReading()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        launchProgress.beginsAfterAsks = 3;
+        String id = registry.register(handle, batch());
+
+        registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertTrue("the wait has to be a wait: without a pause this answers on the first no", //$NON-NLS-1$
+            pause.paused > 0);
+    }
+
+    /**
+     * The wait is bounded, and the bound is what makes the verdict reachable at all: a comparison
+     * that is not starting must produce an answer rather than a caller stuck in a loop.
+     */
+    @Test
+    public void testTheWaitForEdtToBeginIsBounded()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertEquals(SlotHandback.Verdict.NOT_STARTED_YET, handback.verdict());
+        assertTrue("the wait must give up rather than spin: " + pause.paused + " pauses", //$NON-NLS-1$ //$NON-NLS-2$
+            pause.paused > 0 && pause.paused < 1000);
+    }
+
+    /**
+     * "Could not ask whether EDT has begun" is a fact about this server's reach, and folding it
+     * into "has not begun" would strand every session whenever the comparison service blinks. It
+     * is also harmless to let through: the same absent service makes the hand-back itself fail
+     * loudly, which is the verdict that keeps the record.
+     */
+    @Test
+    public void testUnaskableStartQuestionStillAttemptsTheHandBack()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.reachable = false;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        assertEquals("an unanswered question is not evidence that EDT has not begun", //$NON-NLS-1$
+            SlotHandback.Verdict.FREED, handback.verdict());
+        assertEquals("and the hand-back was really attempted", 1, releaser.released.size()); //$NON-NLS-1$
+    }
+
+    /**
+     * The idle sweep is the path where NOBODY is watching, so it is the one that must not brick
+     * EDT's comparison support on its own.
+     */
+    @Test
+    public void testSweepDoesNotEndAComparisonEdtHasNotBegun()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        registry.register(handle, batch());
+        clock.now += TTL + 1;
+
+        int reclaimed = registry.sweep();
+
+        assertEquals("nothing was reclaimed, because nothing was ended", 0, reclaimed); //$NON-NLS-1$
+        assertTrue("and EDT was asked for nothing", releaser.released.isEmpty()); //$NON-NLS-1$
+        assertEquals("the record stays, so a later sweep can retry", 1, registry.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReleaseAllDoesNotEndAComparisonEdtHasNotBegun()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        registry.register(handle, batch());
+
+        int freed = registry.releaseAll();
+
+        assertEquals("nothing could be given back", 0, freed); //$NON-NLS-1$
+        assertTrue("and the bundle stopping is not a reason to brick EDT's comparison support", //$NON-NLS-1$
+            releaser.released.isEmpty());
+    }
+
+    // ==================== A launch that never reached EDT ====================
+
+    @Test
+    public void testWithdrawingAnUnstartedLaunchDropsTheRecord()
+    {
+        ComparisonSessionRegistry registry = registry();
+        String id = registry.register(handle("Main"), batch()); //$NON-NLS-1$
+
+        SlotHandback handback = registry.withdrawUnstartedLaunch(id);
+
+        assertEquals(SlotHandback.Verdict.NEVER_STARTED, handback.verdict());
+        assertEquals("a reservation for a launch that never happened must not survive it", //$NON-NLS-1$
+            0, registry.size());
+    }
+
+    @Test
+    public void testWithdrawingAnUnstartedLaunchAsksThePlatformNothing()
+    {
+        ComparisonSessionRegistry registry = registry();
+        String id = registry.register(handle("Main"), batch()); //$NON-NLS-1$
+
+        registry.withdrawUnstartedLaunch(id);
+
+        assertTrue("there is nothing to end: the batch never left this process", //$NON-NLS-1$
+            releaser.released.isEmpty());
+        assertEquals("EDT is not even asked what it holds", 0, liveHandles.asked); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWithdrawingAnUnknownIdClaimsNothing()
+    {
+        ComparisonSessionRegistry registry = registry();
+
+        SlotHandback handback = registry.withdrawUnstartedLaunch("cmp-nothing"); //$NON-NLS-1$
+
+        assertEquals(SlotHandback.Verdict.NOT_REGISTERED, handback.verdict());
+        assertFalse("an unknown id is not a withdrawn reservation", handback.wasRegistered()); //$NON-NLS-1$
+    }
+
+    // ==================== Ids do not repeat across registry lives ====================
+
+    /**
+     * An id leaves this server and comes back on a later request. A bundle reinstall or an EDT
+     * restart builds a new registry, and with a bare counter the very first comparison of the new
+     * life reissued the id a client was still holding from the old one - so a stale
+     * releaseComparisonId released, or a stale node request read, a comparison the caller had never
+     * heard of.
+     */
+    @Test
+    public void testTwoRegistryLivesDoNotIssueTheSameId()
+    {
+        String first = registry().register(handle("Main"), batch()); //$NON-NLS-1$
+        String second = registry().register(handle("Main"), batch()); //$NON-NLS-1$
+
+        assertNotEquals("the first id of a new registry must not repeat the first id of the old", //$NON-NLS-1$
+            first, second);
+    }
+
+    @Test
+    public void testIdsWithinOneRegistryShareItsTokenAndCountUp()
+    {
+        ComparisonSessionRegistry registry = registry();
+
+        String first = registry.register(handle("Main"), batch()); //$NON-NLS-1$
+        String second = registry.register(handle("Main"), batch()); //$NON-NLS-1$
+
+        String token = first.substring("cmp-".length(), first.lastIndexOf('-')); //$NON-NLS-1$
+        assertFalse("an id without a registry token is the collision this test exists for: " //$NON-NLS-1$
+            + first, token.isEmpty());
+        assertEquals("the token identifies the registry, so it is the same for both", //$NON-NLS-1$
+            token, second.substring("cmp-".length(), second.lastIndexOf('-'))); //$NON-NLS-1$
+        assertTrue("and the counter still counts: " + first + ", " + second, //$NON-NLS-1$ //$NON-NLS-2$
+            first.endsWith("-1") && second.endsWith("-2")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The id is printed in reports and quoted back by hand, so it stays short and readable. */
+    @Test
+    public void testIdStaysShortAndReadable()
+    {
+        String id = registry().register(handle("Main"), batch()); //$NON-NLS-1$
+
+        assertTrue("an id must read as cmp-<token>-<n>: " + id, //$NON-NLS-1$
+            id.matches("cmp-[0-9a-z]+-[0-9]+")); //$NON-NLS-1$
+        assertTrue("an id a human quotes must stay short: " + id, id.length() <= 20); //$NON-NLS-1$
     }
 
     @Test

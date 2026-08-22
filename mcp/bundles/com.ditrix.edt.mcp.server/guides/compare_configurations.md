@@ -93,7 +93,7 @@ it deliberately outlives the job that produced the report. That also means it st
 the single slot. **When you are done reading it, release it:**
 
 ```json
-{"releaseComparisonId":"cmp-1"}
+{"releaseComparisonId":"cmp-mn4k7q2x-1"}
 ```
 
 `cancel_job` **cannot** do this, and it is worth being exact about why: once the
@@ -168,7 +168,7 @@ Return immediately with just the `jobId`:
 Give the slot back when you have finished reading a comparison:
 
 ```json
-{"releaseComparisonId":"cmp-1"}
+{"releaseComparisonId":"cmp-mn4k7q2x-1"}
 ```
 
 ## What it never does

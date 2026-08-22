@@ -75,7 +75,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
  *   <li><b>There is no partial hand-back, by construction.</b> Dropping the record is a removal
  *       from an in-memory map and cannot fail, so "the platform was told but the record could not
  *       be dropped" is unrepresentable. If the registry ever became durable that would stop being
- *       true, and the answer would be a different construction rather than a sixth verdict.</li>
+ *       true, and the answer would be a different construction rather than a seventh verdict.</li>
  *   <li><b>The last-tick ownership window stays open.</b> A launch claims an outstanding
  *       cancellation once, at its single exit. A hand-over that lands after that claim is owed by
  *       nobody and is answered only by the job's own result - the handler's own sentence promises
@@ -138,10 +138,46 @@ public final class SlotHandback
          */
         NOT_REGISTERED,
         /**
+         * The launch this id was reserved for NEVER REACHED EDT, so there was nothing to end and
+         * the reservation is withdrawn. The record is gone and THIS comparison holds nothing.
+         * <p>
+         * Distinct from {@link #ALREADY_FREE}, which is a READING of EDT and is produced by asking
+         * it. Nothing is asked here, and nothing needs to be: the registration is made before the
+         * batch is handed to the platform, and the one caller that may produce this verdict holds
+         * the platform's own proof that the hand-over failed -
+         * {@link ComparisonEngine.ServiceUnavailableException}, which the facade throws precisely
+         * so that a launch cannot be mistaken for a quiet success. Going through a hand-back
+         * instead answered {@link #UNREACHABLE} - the same missing service cannot be asked to end
+         * anything either - and that verdict deliberately KEEPS the record, so a launch that was
+         * refused before EDT saw it left a registration behind that named EDT's single slot as
+         * taken and made every later launch refuse.
+         */
+        NEVER_STARTED,
+        /**
          * EDT still held the comparison, the hand-back was attempted, and it did NOT complete. The
          * record is KEPT so the attempt can be repeated and so a refusal can still name it.
          */
         NOT_FREED,
+        /**
+         * EDT is not RUNNING the comparison yet - it may have been accepted and scheduled, or the
+         * hand-over may have failed on the way - so nothing was asked of the platform at all and
+         * the record is KEPT.
+         *
+         * <h2>Why a hand-back is withheld rather than attempted</h2>
+         * Measured from {@code ComparisonManager} bytecode (EDT 2026.2,
+         * {@code com._1c.g5.v8.dt.compare} 29.0.0): {@code startComparison} runs
+         * {@code startBatchComparison} on the CALLING thread, which registers the session and then
+         * SCHEDULES an Eclipse job; the comparison itself happens in that job's {@code run}, and
+         * {@code run} is also the only caller of {@code comparisonFinished} - the method that
+         * clears {@code activeComparisonBatch} and tells the batch scheduler the slot is free.
+         * Both hand-back verbs cancel that job. Cancelling it while it is still WAITING removes it
+         * before it ever runs, so {@code comparisonFinished} never happens: EDT then reports a
+         * comparison as active for the rest of the session, every later launch is queued instead of
+         * run, and no restart of this server can undo it. Withholding the hand-back for those few
+         * milliseconds costs a retry; performing it costs EDT's comparison support until EDT is
+         * restarted.
+         */
+        NOT_STARTED_YET,
         /**
          * The hand-back was attempted and NEVER REACHED the platform: EDT's comparison service was
          * not registered at that moment. The record is KEPT, for the same two reasons as
@@ -199,7 +235,7 @@ public final class SlotHandback
      * <p>
      * The one predicate a caller is meant to branch on, and the reason the verdicts are not
      * branched on outside the owner: "free" is a two-way question and the verdicts answer a
-     * five-way one, so every site that split them itself split them slightly differently.
+     * six-way one, so every site that split them itself split them slightly differently.
      * <p>
      * It is a statement about the NAMED comparison and not a reading of the slot. {@link
      * Verdict#FREED} saw EDT take the hand-back; {@link Verdict#ALREADY_FREE} saw that EDT no
@@ -208,11 +244,13 @@ public final class SlotHandback
      * What the predicate is FOR is the record-dropping invariant: the record goes exactly when
      * this comparison is known to hold nothing.
      *
-     * @return {@code true} for {@link Verdict#FREED} and {@link Verdict#ALREADY_FREE} only
+     * @return {@code true} for {@link Verdict#FREED}, {@link Verdict#ALREADY_FREE} and
+     *     {@link Verdict#NEVER_STARTED} only
      */
     public boolean slotIsFree()
     {
-        return verdict == Verdict.FREED || verdict == Verdict.ALREADY_FREE;
+        return verdict == Verdict.FREED || verdict == Verdict.ALREADY_FREE
+            || verdict == Verdict.NEVER_STARTED;
     }
 
     /**
@@ -223,7 +261,24 @@ public final class SlotHandback
      */
     public boolean recordKept()
     {
-        return verdict == Verdict.NOT_FREED || verdict == Verdict.UNREACHABLE;
+        return verdict == Verdict.NOT_FREED || verdict == Verdict.UNREACHABLE
+            || verdict == Verdict.NOT_STARTED_YET;
+    }
+
+    /**
+     * Whether the hand-back was WITHHELD because EDT has not begun the comparison yet.
+     * <p>
+     * Separate from {@link #recordKept()} because the caller's next move differs: this one becomes
+     * possible on its own within milliseconds and is simply repeated, while the other two wait on
+     * something outside the comparison - EDT finishing its start-up, or a failure in the EDT error
+     * log. It is not a judgement about the slot: nothing was asked of the platform, so nothing was
+     * observed about it.
+     *
+     * @return {@code true} only for {@link Verdict#NOT_STARTED_YET}
+     */
+    public boolean platformHasNotBegun()
+    {
+        return verdict == Verdict.NOT_STARTED_YET;
     }
 
     /**
@@ -265,10 +320,22 @@ public final class SlotHandback
                     + "NOT asked - a comparison started from EDT's own comparison window is never " //$NON-NLS-1$
                     + "registered here, so it would hold the slot under no id this server knows. " //$NON-NLS-1$
                     + "compare_configurations names the occupant when the next start is refused."; //$NON-NLS-1$
+            case NEVER_STARTED:
+                return "Comparison '" + comparisonId + "' never reached EDT - the launch was " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "refused before the platform was asked to run anything - so its " //$NON-NLS-1$
+                    + "registration here is withdrawn and it holds none of EDT's single " //$NON-NLS-1$
+                    + "comparison slot."; //$NON-NLS-1$
             case NOT_REGISTERED:
                 return "Nothing is registered here under comparison '" + comparisonId //$NON-NLS-1$
                     + "', so nothing was stopped and nothing is claimed about EDT's single " //$NON-NLS-1$
                     + "comparison slot."; //$NON-NLS-1$
+            case NOT_STARTED_YET:
+                return "EDT is not running comparison '" + comparisonId + "' YET, and ending a " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "comparison in that state leaves EDT unable to run ANY comparison until it " //$NON-NLS-1$
+                    + "is restarted - so nothing was asked of the platform and comparison '" //$NON-NLS-1$
+                    + comparisonId + "' may still be about to start. Its record here is KEPT: " //$NON-NLS-1$
+                    + "repeat the request, or use compare_configurations with " //$NON-NLS-1$
+                    + "releaseComparisonId='" + comparisonId + "' once it is under way."; //$NON-NLS-1$ //$NON-NLS-2$
             case NOT_FREED:
                 return "EDT still held comparison '" + comparisonId + "' and ending it did NOT " //$NON-NLS-1$ //$NON-NLS-2$
                     + "complete - the failure is in the EDT error log. Its record here is KEPT, " //$NON-NLS-1$

@@ -99,6 +99,16 @@ public final class MetadataPropertyIntrospector
         public final ValueKind valueKind;
         /** The current value rendered as text (may be {@code null} / empty). */
         public final String currentValue;
+        /**
+         * Whether reading or rendering the value FAILED, as opposed to the property being empty.
+         * <p>
+         * Both outcomes leave {@link #currentValue} {@code null}, and until this flag existed they
+         * were the same answer to a reader: a dangling proxy whose {@code eGet} threw rendered as
+         * the same blank as a property nobody had set. A consumer that shows values side by side
+         * then presents a failure as a fact about the model - and one that COMPARES them calls two
+         * sides equal because neither could be read.
+         */
+        public final boolean readFailed;
         /** For {@link ValueKind#ENUM}: the allowed literal names; empty otherwise. */
         public final List<String> allowedValues;
         /** The owning {@link EStructuralFeature} (for the applier; not serialized). */
@@ -120,6 +130,12 @@ public final class MetadataPropertyIntrospector
         PropertyInfo(String name, ValueKind valueKind, String currentValue, List<String> allowedValues,
             EStructuralFeature feature, boolean onExtInfo)
         {
+            this(name, valueKind, currentValue, allowedValues, feature, onExtInfo, false);
+        }
+
+        PropertyInfo(String name, ValueKind valueKind, String currentValue, List<String> allowedValues,
+            EStructuralFeature feature, boolean onExtInfo, boolean readFailed)
+        {
             this.name = name;
             this.valueKind = valueKind;
             this.currentValue = currentValue;
@@ -127,6 +143,7 @@ public final class MetadataPropertyIntrospector
                 : Collections.unmodifiableList(allowedValues);
             this.feature = feature;
             this.onExtInfo = onExtInfo;
+            this.readFailed = readFailed;
         }
     }
 
@@ -159,8 +176,9 @@ public final class MetadataPropertyIntrospector
             {
                 continue;
             }
-            result.add(new PropertyInfo(feature.getName(), kind, renderCurrent(obj, feature, kind),
-                allowedValuesFor(feature, kind), feature));
+            Rendered current = renderCurrent(obj, feature, kind);
+            result.add(new PropertyInfo(feature.getName(), kind, current.text,
+                allowedValuesFor(feature, kind), feature, false, current.failed));
         }
         return result;
     }
@@ -289,7 +307,7 @@ public final class MetadataPropertyIntrospector
             return null;
         }
         return new PropertyInfo(onExt.name, onExt.valueKind, onExt.currentValue, onExt.allowedValues,
-            onExt.feature, true);
+            onExt.feature, true, onExt.readFailed);
     }
 
     /**
@@ -400,9 +418,9 @@ public final class MetadataPropertyIntrospector
             ValueKind kind = classify(feature);
             if (kind != null)
             {
-                String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
-                result.add(new PropertyInfo(feature.getName(), kind, current,
-                    allowedValuesFor(feature, kind), feature, true));
+                Rendered current = extInfo != null ? renderCurrent(extInfo, feature, kind) : Rendered.ABSENT;
+                result.add(new PropertyInfo(feature.getName(), kind, current.text,
+                    allowedValuesFor(feature, kind), feature, true, current.failed));
             }
         }
         return result;
@@ -650,42 +668,70 @@ public final class MetadataPropertyIntrospector
         return values;
     }
 
-    private static String renderCurrent(EObject obj, EStructuralFeature feature, ValueKind kind)
+    /**
+     * One rendering attempt, kept apart from its result so that "nothing there" and "could not
+     * look" do not arrive at the caller as the same {@code null}.
+     */
+    private static final class Rendered
+    {
+        /** No value, and nothing went wrong: the property is genuinely empty. */
+        static final Rendered ABSENT = new Rendered(null, false);
+        /** Reading or rendering threw, so nothing is known about the value. */
+        static final Rendered FAILED = new Rendered(null, true);
+
+        final String text;
+        final boolean failed;
+
+        private Rendered(String text, boolean failed)
+        {
+            this.text = text;
+            this.failed = failed;
+        }
+
+        static Rendered of(String text)
+        {
+            return text == null ? ABSENT : new Rendered(text, false);
+        }
+    }
+
+    private static Rendered renderCurrent(EObject obj, EStructuralFeature feature, ValueKind kind)
     {
         // The whole render is guarded: reading or rendering one feature (e.g. a dangling type proxy
         // whose name resolver is unavailable) must NOT abort introspecting the rest of the object.
+        // The guard REPORTS, though - answering ABSENT here would make a failed read look like an
+        // unset property, which is the one thing a side-by-side comparison must never do.
         try
         {
             Object value = obj.eGet(feature);
             if (value == null)
             {
-                return null;
+                return Rendered.ABSENT;
             }
             switch (kind)
             {
                 case LOCALIZED_STRING:
-                    return renderLocalizedString(value);
+                    return Rendered.of(renderLocalizedString(value));
                 case TYPE_DESCRIPTION:
-                    return value instanceof TypeDescription ? renderType((TypeDescription)value) : null;
+                    return Rendered.of(value instanceof TypeDescription ? renderType((TypeDescription)value) : null);
                 case ENUM:
                     // Render via the literal NAME so "Current" shares the vocabulary of allowedValues.
-                    return value instanceof org.eclipse.emf.common.util.Enumerator enumerator
-                        ? enumerator.getName() : String.valueOf(value);
+                    return Rendered.of(value instanceof org.eclipse.emf.common.util.Enumerator enumerator
+                        ? enumerator.getName() : String.valueOf(value));
                 case REFERENCE:
-                    return value instanceof MdObject ? ((MdObject)value).getName() : null;
+                    return Rendered.of(value instanceof MdObject ? ((MdObject)value).getName() : null);
                 case MANY_REFERENCE:
-                    return renderReferenceList(value);
+                    return Rendered.of(renderReferenceList(value));
                 case STYLE_VALUE:
-                    return renderStyleValue(value);
+                    return Rendered.of(renderStyleValue(value));
                 case ADJUSTABLE_BOOLEAN:
-                    return renderAdjustableBoolean(value);
+                    return Rendered.of(renderAdjustableBoolean(value));
                 default:
-                    return String.valueOf(value);
+                    return Rendered.of(String.valueOf(value));
             }
         }
         catch (Exception e)
         {
-            return null;
+            return Rendered.FAILED;
         }
     }
 

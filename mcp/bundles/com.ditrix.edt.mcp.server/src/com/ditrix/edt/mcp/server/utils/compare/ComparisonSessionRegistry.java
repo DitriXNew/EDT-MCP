@@ -72,6 +72,14 @@ import com.ditrix.edt.mcp.server.Activator;
  * behind the invariant, and everything it does NOT promise, is written down once on
  * {@link SlotHandback}.
  * <p>
+ * A session EDT has accepted but NOT BEGUN is not ended either, and it is not dropped: the
+ * hand-back is WITHHELD, because both of EDT's ending verbs delete the Eclipse job the launch only
+ * scheduled, and the method that gives EDT's own slot back runs inside that job. That is
+ * {@link SlotHandback.Verdict#NOT_STARTED_YET}, and the reasoning is written down once on the
+ * verdict. {@link #handBack(String, SlotHandback.Ending)} - the path with a caller waiting on it -
+ * gives the platform a bounded moment to begin before it decides, so an ordinary cancellation of a
+ * fresh launch still cancels.
+ * <p>
  * A session that EDT has already forgotten is dropped WITHOUT being ended: asking the platform to
  * end a handle it no longer knows is not a no-op everywhere, and there is nothing left to give
  * back. That is the {@link SlotHandback.Verdict#ALREADY_FREE} answer: this comparison holds
@@ -98,8 +106,12 @@ import com.ditrix.edt.mcp.server.Activator;
  * a lease is open the sweep passes the session over, and closing the lease touches it, so the TTL
  * restarts from the end of the read rather than from its beginning.
  *
- * <p>Every mutating method is {@code synchronized}: the sweep runs from whichever call happens to
- * touch the registry next, so it races with ordinary lookups by construction.
+ * <p>Every method that touches the map does so under this object's monitor: the sweep runs from
+ * whichever call happens to touch the registry next, so it races with ordinary lookups by
+ * construction. The ONE deliberate exception is the wait inside
+ * {@link #handBack(String, SlotHandback.Ending)}, which takes and releases the monitor per reading
+ * rather than holding it - a hand-back that held it for the length of its wait would stall the poll
+ * of the very launch it is waiting for.
  */
 public final class ComparisonSessionRegistry
 {
@@ -109,6 +121,36 @@ public final class ComparisonSessionRegistry
      * that a forgotten comparison does not outlive the working day.
      */
     public static final long DEFAULT_IDLE_TTL_MILLIS = 30L * 60L * 1000L;
+
+    /**
+     * How long {@link #handBack(String, SlotHandback.Ending)} gives EDT to BEGIN a comparison it
+     * has accepted, before answering {@link SlotHandback.Verdict#NOT_STARTED_YET}.
+     * <p>
+     * The gap it covers is an Eclipse job waiting for a worker thread, which is ordinarily
+     * milliseconds and on a loaded machine is seconds; ten of them is generous for that and well
+     * inside the thirty seconds a committed cancellation handler is given. It is only ever spent
+     * in full when the comparison really is not starting, and then the answer says so instead of
+     * ending something EDT never began.
+     */
+    private static final long PLATFORM_START_BUDGET_MILLIS = 10_000L;
+
+    /** How often EDT is re-asked while {@link #PLATFORM_START_BUDGET_MILLIS} runs. */
+    private static final long PLATFORM_START_POLL_MILLIS = 50L;
+
+    /**
+     * Hands every registry instance a token no other instance in this JVM will use, seeded from
+     * the wall clock so that a LATER JVM does not reissue an earlier one's tokens.
+     * <p>
+     * An id leaves this server and comes back on a later request, and it outlives the registry
+     * that issued it: a client keeps the {@code comparisonId} from a finished job, the bundle is
+     * reinstalled or EDT is restarted, and the id is quoted at a registry that started counting
+     * from one again. With a plain counter that id addressed a DIFFERENT comparison - the caller
+     * released, or read the tree of, something it had never heard of. The token makes the collision
+     * unrepresentable within a JVM, because the counter only ever moves forward; across JVMs it
+     * rests on the clock having advanced further than the number of registries the previous one
+     * created, which for an OSGi bundle that installs one registry per start it always has.
+     */
+    private static final AtomicLong INSTANCE_TOKENS = new AtomicLong(System.currentTimeMillis());
 
     /** Ends one comparison on the platform, giving its virtual project and BM store back. */
     @FunctionalInterface
@@ -133,6 +175,42 @@ public final class ComparisonSessionRegistry
          *     is not
          */
         PlatformAnswer<List<ComparisonProcessHandle>> forProject(String projectName);
+    }
+
+    /**
+     * Asks EDT whether it has BEGUN a comparison, as opposed to merely accepting it.
+     * <p>
+     * The two are days apart in consequence and milliseconds apart in time, which is why this is a
+     * question of its own rather than a shade of {@link LiveHandles}: EDT lists a handle from the
+     * moment the launch thread registers its session, and only starts comparing when the Eclipse
+     * job it scheduled gets a worker. See {@link SlotHandback.Verdict#NOT_STARTED_YET} for what
+     * ending a comparison in between costs.
+     */
+    @FunctionalInterface
+    interface LaunchProgress
+    {
+        /**
+         * @param session the session to ask about
+         * @return {@code TRUE} once EDT reports that the comparison is under way, {@code FALSE}
+         *     when EDT answers and reports that it is not, or {@link PlatformAnswer#unavailable()}
+         *     when the question could not be asked at all - which is not the same statement
+         */
+        PlatformAnswer<Boolean> hasBegun(ComparisonSession session);
+    }
+
+    /**
+     * Waits, so that {@link #handBack(String, SlotHandback.Ending)} can give EDT the moment it
+     * needs to begin a comparison somebody has just asked to end. Injected so the wait is
+     * exercised by the tests without them sleeping through it.
+     */
+    @FunctionalInterface
+    interface Pause
+    {
+        /**
+         * @param millis how long to wait
+         * @throws InterruptedException when the waiting thread is interrupted
+         */
+        void millis(long millis) throws InterruptedException;
     }
 
     /**
@@ -337,14 +415,20 @@ public final class ComparisonSessionRegistry
     private static final ComparisonSessionRegistry DETACHED = new ComparisonSessionRegistry(
         System::currentTimeMillis, DEFAULT_IDLE_TTL_MILLIS, (session, ending) -> {
             // nothing to end: nothing can be registered here
-        }, projectName -> PlatformAnswer.of(Collections.emptyList()), false);
+        }, projectName -> PlatformAnswer.of(Collections.emptyList()),
+        session -> PlatformAnswer.unavailable(), millis -> {
+            // nothing can be registered here, so nothing is ever waited for
+        }, false);
 
     private final Map<String, ComparisonSession> sessions = new LinkedHashMap<>();
     private final AtomicLong idGenerator = new AtomicLong(1);
+    private final String instanceToken = Long.toString(INSTANCE_TOKENS.getAndIncrement(), Character.MAX_RADIX);
     private final LongSupplier clock;
     private final long idleTtlMillis;
     private final Releaser releaser;
     private final LiveHandles liveHandles;
+    private final LaunchProgress launchProgress;
+    private final Pause pause;
     private final boolean attached;
     /** Set once by {@link #closeAndReleaseAll()}; from then on nothing may be registered. */
     private boolean closed;
@@ -354,19 +438,25 @@ public final class ComparisonSessionRegistry
      * @param idleTtlMillis how long a session may sit untouched
      * @param releaser ends one comparison on the platform
      * @param liveHandles asks EDT what it currently holds
+     * @param launchProgress asks EDT whether it has BEGUN a comparison, not merely accepted it
+     * @param pause how {@link #handBack(String, SlotHandback.Ending)} waits between two of those
+     *     questions
      */
-    ComparisonSessionRegistry(LongSupplier clock, long idleTtlMillis, Releaser releaser, LiveHandles liveHandles)
+    ComparisonSessionRegistry(LongSupplier clock, long idleTtlMillis, Releaser releaser,
+        LiveHandles liveHandles, LaunchProgress launchProgress, Pause pause)
     {
-        this(clock, idleTtlMillis, releaser, liveHandles, true);
+        this(clock, idleTtlMillis, releaser, liveHandles, launchProgress, pause, true);
     }
 
     private ComparisonSessionRegistry(LongSupplier clock, long idleTtlMillis, Releaser releaser,
-        LiveHandles liveHandles, boolean attached)
+        LiveHandles liveHandles, LaunchProgress launchProgress, Pause pause, boolean attached)
     {
         this.clock = clock;
         this.idleTtlMillis = idleTtlMillis;
         this.releaser = releaser;
         this.liveHandles = liveHandles;
+        this.launchProgress = launchProgress;
+        this.pause = pause;
         this.attached = attached;
     }
 
@@ -421,7 +511,10 @@ public final class ComparisonSessionRegistry
                 + "virtual project would outlive the server. Nothing was started."); //$NON-NLS-1$
         }
         long now = clock.getAsLong();
-        String comparisonId = "cmp-" + idGenerator.getAndIncrement(); //$NON-NLS-1$
+        // Instance token FIRST, so the varying part a human tracks across a report stays at the
+        // end and the ids of one session share a prefix. See INSTANCE_TOKENS for what the token
+        // rules out.
+        String comparisonId = "cmp-" + instanceToken + '-' + idGenerator.getAndIncrement(); //$NON-NLS-1$
         String projectName = handle == null || handle.getMainDescriptor() == null
             ? null
             : handle.getMainDescriptor().getProjectName();
@@ -548,20 +641,45 @@ public final class ComparisonSessionRegistry
     /**
      * Ends one comparison, gives EDT's single slot back, and says what that actually achieved.
      * <p>
-     * <b>The one owner.</b> Nothing else in this bundle ends a comparison or drops its record: the
-     * platform's two lifetime verbs are package-scoped on {@link ComparisonEngine} and the session
-     * map is private here, so a caller has no other door. It gets a {@link SlotHandback} back and
+     * <b>The one owner.</b> Nothing else in this bundle ends a comparison: the platform's two
+     * lifetime verbs are package-scoped on {@link ComparisonEngine} and the session map is private
+     * here, so a caller has no other door. The single other method that drops a record -
+     * {@link #withdrawUnstartedLaunch(String)} - ends nothing, because it is only reachable when
+     * the platform was demonstrably never asked to start anything. It gets a {@link SlotHandback} back and
      * publishes {@link SlotHandback#sentence()}; it does not decide what happened, and it cannot
      * lose a failure by writing nothing, because the failure is inside the sentence it prints.
      * <p>
      * The record is dropped exactly when the slot is confirmed free - see the class javadoc for
      * the invariant and {@link SlotHandback} for what it does not promise.
      *
+     * <b>Somebody asked, so EDT is given time to begin.</b> This is the one hand-back path with a
+     * caller waiting on it, and the one where the comparison it names may have been launched
+     * milliseconds ago - {@code cancel_job} on a fresh launch is exactly that. A comparison EDT has
+     * accepted but not begun cannot be ended safely
+     * ({@link SlotHandback.Verdict#NOT_STARTED_YET}), so rather than refuse a cancellation that
+     * would have worked a moment later, this waits up to {@link #PLATFORM_START_BUDGET_MILLIS} for
+     * the platform to get under way and then decides. The wait is OUTSIDE this object's monitor:
+     * holding it would stall every other comparison call for the length of the wait, including the
+     * poll of the very launch being waited for.
+     *
      * @param comparisonId the id issued by {@link #register}
      * @param ending why the comparison is ending; it selects EDT's verb and nothing else
      * @return what was observed; never {@code null}
      */
-    public synchronized SlotHandback handBack(String comparisonId, SlotHandback.Ending ending)
+    public SlotHandback handBack(String comparisonId, SlotHandback.Ending ending)
+    {
+        awaitPlatformStart(comparisonId);
+        return handBackWhenAsked(comparisonId, ending);
+    }
+
+    /**
+     * The asked-for hand-back once the waiting is over, with the monitor taken.
+     *
+     * @param comparisonId the id issued by {@link #register}
+     * @param ending which platform verb to use
+     * @return what was observed
+     */
+    private synchronized SlotHandback handBackWhenAsked(String comparisonId, SlotHandback.Ending ending)
     {
         ComparisonSession session = comparisonId == null ? null : sessions.get(comparisonId);
         if (session == null)
@@ -569,6 +687,91 @@ public final class ComparisonSessionRegistry
             return SlotHandback.of(SlotHandback.Verdict.NOT_REGISTERED, comparisonId);
         }
         return handBackNow(session, ending);
+    }
+
+    /**
+     * Gives EDT a bounded chance to BEGIN a comparison before it is asked to end one.
+     * <p>
+     * It returns as soon as anything is settled, and every one of those outcomes is a reason to
+     * stop waiting rather than a reason to keep going: the platform has begun; the id answers to
+     * nothing here; EDT could not be asked at all; or the budget is spent. Nothing is decided here
+     * - {@link #handBackNow} asks the question again under the monitor and produces the verdict, so
+     * a comparison that begins during the last millisecond of the wait is still decided by one
+     * reading rather than by two that can disagree.
+     *
+     * @param comparisonId the id the caller quoted
+     */
+    private void awaitPlatformStart(String comparisonId)
+    {
+        long deadline = clock.getAsLong() + PLATFORM_START_BUDGET_MILLIS;
+        while (true)
+        {
+            ComparisonSession session = sessionFor(comparisonId);
+            if (session == null || hasBegun(session) != Boolean.FALSE)
+            {
+                return;
+            }
+            if (clock.getAsLong() >= deadline)
+            {
+                return;
+            }
+            try
+            {
+                pause.millis(PLATFORM_START_POLL_MILLIS);
+            }
+            catch (InterruptedException e)
+            {
+                // The caller is being torn down. Restore the flag and stop waiting; the hand-back
+                // still runs and still refuses to end a comparison EDT has not begun, so an
+                // interrupt costs a retry and cannot cost EDT's comparison support.
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    /**
+     * @param comparisonId the id the caller quoted
+     * @return the registered session, or {@code null} - read under the monitor, because the wait
+     *     around it deliberately does not hold it
+     */
+    private synchronized ComparisonSession sessionFor(String comparisonId)
+    {
+        return comparisonId == null ? null : sessions.get(comparisonId);
+    }
+
+    /**
+     * Withdraws the registration made for a launch that NEVER REACHED EDT.
+     * <p>
+     * <b>Why this is not a hand-back.</b> A hand-back reasons about a comparison the platform may
+     * be running, so when it cannot reach the platform it keeps the record - it does not know. Here
+     * there is nothing to know: the registration is made BEFORE the batch is handed over, and this
+     * is called only when the hand-over itself failed in a way that proves the platform was never
+     * asked. Routing that through {@link #handBack(String, SlotHandback.Ending)} produced
+     * {@link SlotHandback.Verdict#UNREACHABLE} - the absent service cannot be asked to end anything
+     * either - and left a registration that named EDT's single slot as taken by a comparison that
+     * had never been started, refusing every later launch until the idle TTL expired.
+     * <p>
+     * <b>The proof is the caller's and cannot be invented.</b> The one thing this method cannot
+     * establish for itself is that nothing was started, so the caller supplies it - the same shape
+     * as {@link SlotHandback.Ending}, which is the one fact a caller knows that the owner cannot.
+     * In this bundle the only such proof is
+     * {@link ComparisonEngine.ServiceUnavailableException} out of {@link ComparisonEngine#start},
+     * which the facade throws precisely so that a launch that reached nothing cannot be mistaken
+     * for one that succeeded quietly. A caller that is merely UNSURE must use the hand-back, which
+     * is built to be unsure.
+     *
+     * @param comparisonId the id issued by {@link #register} for the launch that failed
+     * @return {@link SlotHandback.Verdict#NEVER_STARTED}, or
+     *     {@link SlotHandback.Verdict#NOT_REGISTERED} when nothing answers to the id
+     */
+    public synchronized SlotHandback withdrawUnstartedLaunch(String comparisonId)
+    {
+        if (comparisonId == null || sessions.remove(comparisonId) == null)
+        {
+            return SlotHandback.of(SlotHandback.Verdict.NOT_REGISTERED, comparisonId);
+        }
+        return SlotHandback.of(SlotHandback.Verdict.NEVER_STARTED, comparisonId);
     }
 
     /**
@@ -674,10 +877,12 @@ public final class ComparisonSessionRegistry
      * ended and the ONE place a record is dropped.
      * <p>
      * Three inputs, one answer, no room for a caller to recombine them: what EDT says about the
-     * handle ({@link Liveness}, which is {@link PlatformAnswer} folded into three named cases), and
-     * whether the platform accepted the hand-back. The order is load-bearing - liveness FIRST,
-     * because asking EDT to end a handle it no longer knows is not a no-op everywhere, and the
-     * answer decides whether there is anything to attempt at all.
+     * handle ({@link Liveness}, which is {@link PlatformAnswer} folded into three named cases),
+     * whether EDT has BEGUN the comparison, and whether the platform accepted the hand-back. The
+     * order is load-bearing, and both questions come before the attempt for the same kind of
+     * reason: asking EDT to end a handle it no longer knows is not a no-op everywhere, and asking
+     * it to end one it has not started yet costs EDT its comparison support for the rest of the
+     * session ({@link SlotHandback.Verdict#NOT_STARTED_YET}).
      *
      * @param session the session to end
      * @param ending which platform verb to use
@@ -693,6 +898,16 @@ public final class ComparisonSessionRegistry
             sessions.remove(comparisonId);
             return SlotHandback.of(SlotHandback.Verdict.ALREADY_FREE, comparisonId);
         }
+        if (hasBegun(session) == Boolean.FALSE)
+        {
+            // EDT holds the comparison and has NOT begun running it. Asked to end it now, EDT
+            // would delete the Eclipse job it had only scheduled, and the method that gives EDT's
+            // own slot back lives inside that job - so EDT would report a comparison as active for
+            // the rest of its life. Nothing is asked of the platform and the record is kept, which
+            // is what lets this be repeated a moment later. See
+            // SlotHandback.Verdict.NOT_STARTED_YET.
+            return SlotHandback.of(SlotHandback.Verdict.NOT_STARTED_YET, comparisonId);
+        }
         // Attempted on BOTH remaining readings, HELD and UNKNOWN alike. "Could not ask whether EDT
         // still holds it" is not a reason to leave a comparison running: the liveness question
         // also goes unanswered when the PROJECT fails to resolve, and skipping the hand-back then
@@ -703,6 +918,56 @@ public final class ComparisonSessionRegistry
             sessions.remove(comparisonId);
         }
         return SlotHandback.of(verdict, comparisonId);
+    }
+
+    /**
+     * Whether EDT has BEGUN this comparison, as three answers folded into a nullable Boolean.
+     * <p>
+     * Only a definite {@code FALSE} withholds a hand-back, and the two readings that are not one
+     * both answer {@code null} - "nothing was established" - on purpose:
+     * <ul>
+     *   <li>the session carries no handle, so there is no platform job to protect and no hand-back
+     *       to withhold;</li>
+     *   <li>EDT could not be asked. That is the same absent service that makes the hand-back itself
+     *       throw {@link ComparisonEngine.ServiceUnavailableException}, so letting it through costs
+     *       nothing - it arrives at {@link SlotHandback.Verdict#UNREACHABLE}, which keeps the
+     *       record too - while treating it as "not begun" would put a fact about this server's
+     *       reach into a statement about the comparison, the fold this whole class exists to
+     *       undo.</li>
+     * </ul>
+     * <b>The honest boundary.</b> "Begun" is read from EDT reporting a status for the handle, and
+     * EDT stamps the first one inside the job's own run. A job that has started but not reached
+     * that stamp - it is still opening the workspace operation - therefore reads as NOT begun, and
+     * a hand-back is withheld although it would have been safe. That direction is the harmless one:
+     * it costs a repeat, while the other direction costs EDT's comparison support until EDT is
+     * restarted.
+     *
+     * @param session the session to ask about
+     * @return {@link Boolean#TRUE} when the comparison is under way, {@link Boolean#FALSE} when EDT
+     *     answers that it is not, or {@code null} when nothing was established
+     */
+    private Boolean hasBegun(ComparisonSession session)
+    {
+        if (session == null || session.handle() == null)
+        {
+            return null;
+        }
+        PlatformAnswer<Boolean> answer;
+        try
+        {
+            answer = launchProgress.hasBegun(session);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not ask whether EDT has started comparison " //$NON-NLS-1$
+                + session.comparisonId(), e);
+            return null;
+        }
+        if (answer == null || answer.isUnavailable())
+        {
+            return null;
+        }
+        return answer.orElse(null);
     }
 
     /**

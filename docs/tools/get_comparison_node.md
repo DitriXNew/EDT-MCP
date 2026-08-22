@@ -68,10 +68,10 @@ The same honesty applies one level down: when only one side carries the object, 
 - **Potential problems** - labelled **POTENTIAL**: the engine reports them by inspecting the comparison, before anything is applied. A definitive blocking / non-blocking verdict would require a merge run, which this read-only toolset never performs, so the list is possibilities, not results. `Problem` and `Details` are EDT's own diagnostic wording, reproduced verbatim - the platform builds those strings from its NLS bundles under the workbench locale, so on a Russian EDT they read in Russian; the table says so above itself, and `Node id` is the locale-free identity of a row.
 
 ## Examples
-- By FQN: `{comparisonId: "cmp-1", objectFqn: "Catalog.Products"}`.
-- Russian FQN, other side: `{comparisonId: "cmp-1", objectFqn: "Справочник.Товары", side: "other"}`.
-- Two levels of children, bigger tables: `{comparisonId: "cmp-1", objectFqn: "Catalog.Products", depth: 2, limit: 300}`.
-- By node id from the report, without waiting: `{comparisonId: "cmp-1", nodeId: 128, waitSeconds: 0}`.
+- By FQN: `{comparisonId: "cmp-mn4k7q2x-1", objectFqn: "Catalog.Products"}`.
+- Russian FQN, other side: `{comparisonId: "cmp-mn4k7q2x-1", objectFqn: "Справочник.Товары", side: "other"}`.
+- Two levels of children, bigger tables: `{comparisonId: "cmp-mn4k7q2x-1", objectFqn: "Catalog.Products", depth: 2, limit: 300}`.
+- By node id from the report, without waiting: `{comparisonId: "cmp-mn4k7q2x-1", nodeId: 128, waitSeconds: 0}`.
 
 ## Notes & gotchas
 - Every label this tool COMPUTES is language-neutral by construction: names come from the raw symlink segment, kinds from the node's own EClass name. The platform's locale-dependent node labeller is deliberately not used, so nothing this tool writes changes with the IDE language. The one exception is the platform's own text in the Potential problems table, which is declared as such where it is rendered.
