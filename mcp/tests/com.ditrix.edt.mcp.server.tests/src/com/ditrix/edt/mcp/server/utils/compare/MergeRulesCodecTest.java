@@ -1786,4 +1786,155 @@ public class MergeRulesCodecTest
         }
         out.write("</Settings>\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
     }
+
+    // ==== A namespace is REFUSED at the parse, because it could not be carried ====
+
+    // The model holds elements under their LOCAL name and keys attributes by local name, so none
+    // of the three shapes a namespace takes survives a rewrite: a declaration is not an attribute
+    // and is never even read, a prefixed element comes back stripped, and two attributes differing
+    // only by their prefix land on ONE key - the second deleting the first. That last one is why
+    // this is a refusal and not a stated difference: it does not rewrite the payload, it deletes a
+    // value out of it, while the report goes on counting the block as preserved. Each shape gets
+    // its own test, and each fixture is written so that only its own check can fire: a prefixed
+    // name normally carries its declaration on the very same element, so the checks are ordered
+    // prefix-first and these documents pick the branch they mean to pin.
+
+    @Test
+    public void testANamespaceDeclarationOnTheRootIsRefusedNamingIt()
+    {
+        // Nothing is prefixed here: the declaration alone must stop the parse, because a
+        // declaration is invisible to the reader that would have to write it back.
+        try
+        {
+            MergeRulesCodec.parse("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+                + "<Settings Format_version=\"2.0\" xmlns:ext=\"urn:x\">\n" //$NON-NLS-1$
+                + "  <MergeSettings/>\n</Settings>\n"); //$NON-NLS-1$
+            fail("a declaration that cannot be written back must not be read past"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the declaration it found: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("xmlns:ext=\"urn:x\"")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testADefaultNamespaceDeclarationIsRefusedToo()
+    {
+        // A default namespace changes what every element in the file MEANS while leaving every
+        // local name - the root's included - exactly as this codec reads them, so it would sail
+        // past the root check and be re-emitted as a document about something else.
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\" xmlns=\"urn:x\">" //$NON-NLS-1$
+                + "<MergeSettings/></Settings>"); //$NON-NLS-1$
+            fail("a default namespace is a namespace"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the declaration it found: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("xmlns=\"urn:x\"")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAPrefixedElementIsRefusedNamingIt()
+    {
+        // Read, this element becomes <Payload> and the prefix is gone from the rewrite.
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\">" //$NON-NLS-1$
+                + "<ext:Payload xmlns:ext=\"urn:x\">keep me</ext:Payload>" //$NON-NLS-1$
+                + "<MergeSettings/></Settings>"); //$NON-NLS-1$
+            fail("an element whose prefix a rewrite would drop must not be read"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the prefixed element: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("<ext:Payload>")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTwoAttributesDifferingOnlyByPrefixAreRefusedRatherThanCollapsed()
+    {
+        // THE EXPENSIVE ONE. Both attributes are reported with the local name 'a', so the map that
+        // holds them keeps whichever was written last and the other value is destroyed outright -
+        // while the report keeps calling the block preserved.
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\" xmlns:ext=\"urn:x\" ext:a=\"1\" a=\"2\"/>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("one attribute silently overwriting the other must be refused, not performed"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the prefixed attribute: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("'ext:a'")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTheImplicitXmlPrefixIsRefusedWithNothingDeclaredAnywhere()
+    {
+        // The 'xml' prefix is bound by the XML spec itself, so this document declares NO namespace
+        // and the collision above happens with the declaration check seeing nothing at all. It is
+        // the case only the attribute check can catch - and it is exactly the xml:space the layout
+        // rule says it cannot honour.
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\" xml:space=\"preserve\" space=\"x\"/>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("a prefix needs no declaration to destroy the attribute beside it"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the prefixed attribute: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("'xml:space'")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTheNamespaceRefusalSaysWhereAGoodFileComesFrom()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\" xmlns:ext=\"urn:x\"/>"); //$NON-NLS-1$
+            fail("a namespaced document must be refused"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("a refusal the caller cannot act on is half a refusal: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("Save merge settings")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTheNamespaceRefusalSaysWhatReadingItWouldHaveCost()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\" xmlns:ext=\"urn:x\"/>"); //$NON-NLS-1$
+            fail("a namespaced document must be refused"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("refusing a file is only justified by naming what reading it would do: " //$NON-NLS-1$
+                + e.getMessage(), e.getMessage().contains("DESTROYS")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAFileWithoutNamespacesIsStillReadAndRewrittenUnchanged() throws Exception
+    {
+        // The control. The check must key on what the READER reports as a prefix, not on text that
+        // merely looks like one: the fixture is full of colons (every top-object key is
+        // 'Main:Other:Ancestor'), and none of them is a namespace.
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        assertEquals(4, document.decisions().size());
+        assertEquals("a file the format allows must round-trip byte for byte as it always did", //$NON-NLS-1$
+            FIXTURE, MergeRulesCodec.serialize(document));
+    }
 }

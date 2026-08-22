@@ -64,6 +64,15 @@ import java.util.Optional;
  * future rule survives a rewrite too - only a rule this plugin is asked to AUTHOR is parsed
  * and validated, and that happens in the tool, which is also the only place that may name the
  * platform's rule enum.
+ * <p>
+ * <b>"By construction" means the one input this model could not hold is never admitted into
+ * it:</b> a document that uses an XML namespace. A prefix has no place here - an element is held
+ * under its LOCAL name and its attributes are keyed by local names - so a declaration could not
+ * be written back at all, a prefixed element would come back stripped, and two attributes
+ * differing only by their prefix would collapse onto one key, the second deleting the first.
+ * Rather than admit such a file and quietly rewrite the very payload this promise is about,
+ * {@link MergeRulesCodec} REFUSES it at the parse; the refusal there also records why this format
+ * never legitimately carries one.
  */
 public final class MergeRulesDocument
 {

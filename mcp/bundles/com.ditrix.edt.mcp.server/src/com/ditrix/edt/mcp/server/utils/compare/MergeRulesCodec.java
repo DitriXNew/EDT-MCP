@@ -70,13 +70,25 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
  * exactly the part of the file this codec has no other way to carry. They are kept in the prolog
  * and the epilog as well, where XML puts them outside the root element.
  * <p>
- * Three differences are known and stated rather than implied, because all three are invisible to
- * any XML reader: an element with empty content is re-emitted self-closing ({@code <A></A>}
- * becomes {@code <A/>} - the same empty content); the whitespace between a processing
- * instruction's target and its data is re-emitted as ONE space, because a parser reports the data
- * with that separator already consumed and how many spaces the file spelled is not knowable from
- * what was read; and a namespace PREFIX is not modelled (this format declares none; local names
- * are what both readers key on).
+ * Two differences are known and stated rather than implied, because both are invisible to any XML
+ * reader: an element with empty content is re-emitted self-closing ({@code <A></A>} becomes
+ * {@code <A/>} - the same empty content); and the whitespace between a processing instruction's
+ * target and its data is re-emitted as ONE space, because a parser reports the data with that
+ * separator already consumed and how many spaces the file spelled is not knowable from what was
+ * read.
+ * <p>
+ * <b>A document that uses an XML namespace is REFUSED, not read.</b> Namespace prefixes are not
+ * modelled, and for this format that is not a gap: EDT's own serializer never writes one - it
+ * makes no {@code writeNamespace} / {@code setPrefix} call anywhere - and its reader keys on
+ * local names, so a prefix can only come from a hand edit, a block pasted in from somewhere else,
+ * or a future EDT. What such a file cannot be is CARRIED, and that is why it is refused instead
+ * of being read with a stated difference: a namespace declaration is not an attribute, so it is
+ * never seen and can never be written back; a prefixed element is read under its local name and
+ * comes back stripped; and two attributes that differ only by their prefix share one local name,
+ * so the second overwrites the first and a value is deleted outright. Refusing a payload is
+ * honest, silently mangling one is not - and the lossless promise on {@link MergeRulesDocument}
+ * holds BECAUSE of this refusal. Modelling prefixes is a different job of a different size, and
+ * no legitimate file of this format needs it. See {@code rejectNamespaceUse}.
  */
 public final class MergeRulesCodec
 {
@@ -874,6 +886,7 @@ public final class MergeRulesCodec
             {
                 // Whatever has been read so far belongs to the element still open above.
                 flushText(stack.peek(), pending);
+                rejectNamespaceUse(reader);
                 if (stack.size() >= MAX_ELEMENT_DEPTH)
                 {
                     throw new MergeRulesFormatException(tooDeep(reader.getLocalName()));
@@ -915,6 +928,57 @@ public final class MergeRulesCodec
             }
         }
         return tree;
+    }
+
+    /**
+     * Refuses one element that uses an XML namespace, in any of the three shapes it can take.
+     * <p>
+     * <b>The three shapes are checked separately because a reader reports them separately, and
+     * each of them breaks the round trip on its own.</b> A namespace DECLARATION is not an
+     * attribute - {@code getAttributeCount()} does not count it - so it is never read and can
+     * never be written back; a PREFIXED ELEMENT is reported under its local name, so it comes back
+     * with the prefix gone; and a PREFIXED ATTRIBUTE shares its local name with an unprefixed
+     * sibling, so the two land on ONE key in the attribute map and the second silently DESTROYS
+     * the first. The third is the reason this is a refusal rather than a stated difference: the
+     * other two rewrite the file, that one deletes a value out of it.
+     * <p>
+     * <b>The order is prefix first, declaration last</b>, so the refusal names the thing that is
+     * actually in the way rather than the declaration that merely enabled it - and so each of the
+     * three checks is reachable on its own, since a prefixed name normally carries its declaration
+     * on the very same element. The implicit {@code xml} prefix needs no declaration at all
+     * ({@code xml:space="preserve"} beside a plain {@code space} attribute is the collision above
+     * with nothing declared anywhere), which is the case only the attribute check can catch.
+     *
+     * @param reader the stream reader positioned on a START_ELEMENT
+     * @throws MergeRulesFormatException when the element carries a prefix, a prefixed attribute or
+     *             a namespace declaration
+     */
+    private static void rejectNamespaceUse(XMLStreamReader reader) throws MergeRulesFormatException
+    {
+        String elementPrefix = reader.getPrefix();
+        if (elementPrefix != null && !elementPrefix.isEmpty())
+        {
+            throw new MergeRulesFormatException(usesNamespace("the element '<" + elementPrefix //$NON-NLS-1$
+                + ':' + reader.getLocalName() + ">' is prefixed")); //$NON-NLS-1$
+        }
+        for (int i = 0; i < reader.getAttributeCount(); i++)
+        {
+            String attributePrefix = reader.getAttributePrefix(i);
+            if (attributePrefix != null && !attributePrefix.isEmpty())
+            {
+                throw new MergeRulesFormatException(usesNamespace("the attribute '" //$NON-NLS-1$
+                    + attributePrefix + ':' + reader.getAttributeLocalName(i) + "' on '<" //$NON-NLS-1$
+                    + reader.getLocalName() + ">' is prefixed")); //$NON-NLS-1$
+            }
+        }
+        if (reader.getNamespaceCount() > 0)
+        {
+            String declaredPrefix = reader.getNamespacePrefix(0);
+            String declaration = declaredPrefix == null || declaredPrefix.isEmpty()
+                ? "xmlns" : "xmlns:" + declaredPrefix; //$NON-NLS-1$ //$NON-NLS-2$
+            throw new MergeRulesFormatException(usesNamespace("'<" + reader.getLocalName() //$NON-NLS-1$
+                + ">' declares " + declaration + "=\"" + reader.getNamespaceURI(0) + '"')); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     /**
@@ -1000,9 +1064,10 @@ public final class MergeRulesCodec
      * <p>
      * <b>What the rule cannot tell apart</b> is significant whitespace that is ENTIRELY
      * whitespace - {@code <A> <B/> </A>} where the spaces are meant. XML carries no in-band signal
-     * for it other than {@code xml:space="preserve"}, which this codec cannot honour because it
-     * does not model namespace prefixes (stated on the class) and this format declares none. The
-     * merge-settings format has no such element; one that had would need the prefix modelled first.
+     * for it other than {@code xml:space="preserve"}, which never reaches this rule: an attribute
+     * with a prefix means the document uses a namespace, and such a document is REFUSED at the
+     * parse (stated on the class). The merge-settings format has no such element; one that had
+     * would need the prefix modelled first, which is what that refusal declines to fake.
      *
      * @param element the element whose children are complete
      */
@@ -1036,6 +1101,26 @@ public final class MergeRulesCodec
         {
             element.children().removeIf(Element::isText);
         }
+    }
+
+    /**
+     * The one refusal every namespace shape ends in, naming what was found and what to do.
+     *
+     * @param found what the reader saw, phrased as a clause
+     * @return the message
+     */
+    private static String usesNamespace(String found)
+    {
+        return "The merge-settings document uses an XML namespace (" + found //$NON-NLS-1$
+            + ") and was not read. The merge-settings format declares none: EDT's own serializer " //$NON-NLS-1$
+            + "never writes a namespace and its reader keys on local names, so a prefix here comes " //$NON-NLS-1$
+            + "from a hand edit or a block pasted in from somewhere else. Reading it would not " //$NON-NLS-1$
+            + "carry it through: a declaration is not an attribute and cannot be written back, a " //$NON-NLS-1$
+            + "prefixed element comes back without its prefix, and two attributes that differ only " //$NON-NLS-1$
+            + "by their prefix share one name - the second DESTROYS the first and its value is " //$NON-NLS-1$
+            + "gone. Refusing the file is what keeps that payload intact, because a rewrite of it " //$NON-NLS-1$
+            + "would not. Save the settings again from EDT's comparison window ('Save merge " //$NON-NLS-1$
+            + "settings'), or remove the foreign block from the file, and read it again."; //$NON-NLS-1$
     }
 
     private static String tooDeep(String tag)
