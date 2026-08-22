@@ -116,5 +116,8 @@ Import-Package: com._1c.g5.v8.bm.common.collections,
  com._1c.g5.v8.dt.dcs.model.core,
  com._1c.g5.v8.dt.dcs.model.common,
  com._1c.g5.v8.dt.dcs.model.settings,
+ com._1c.g5.v8.dt.dcs.parameters,
+ com._1c.g5.v8.dt.dcs.parameters.appearance,
+ com._1c.g5.v8.dt.dcs.path,
  com._1c.g5.v8.dt.form.model,
  com._1c.g5.v8.dt.xdto.model

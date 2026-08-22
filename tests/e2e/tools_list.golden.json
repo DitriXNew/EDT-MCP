@@ -957,7 +957,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Inspect and upsert/update 1C DCS schemas, shared settings, and form dynamic lists. Call action='get' first, pass its hash as expectedHash for index-addressed mutations, and call get_tool_guide('dcs') for body shapes.",
+    "description": "Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
     "inputSchema": {
       "properties": {
         "action": {

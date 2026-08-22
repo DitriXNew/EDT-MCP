@@ -20,6 +20,8 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
@@ -147,14 +149,39 @@ public class DcsSettingsWriterTest
     }
 
     @Test
-    public void testConditionalAppearanceAcceptsScaffoldingButRefusesRules()
+    public void testConditionalAppearanceRuleIsAuthoredWithItsFieldsAndFilter()
     {
-        JsonObject body = json("{\"conditionalAppearance\":{\"items\":[{}]}}"); //$NON-NLS-1$
+        JsonObject body = json("{\"conditionalAppearance\":{\"items\":[{\"use\":true," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Amount\"}}]}," //$NON-NLS-1$
+            + "\"filter\":{\"items\":[{\"left\":{\"kind\":\"field\",\"value\":\"Amount\"}," //$NON-NLS-1$
+            + "\"comparisonType\":\"Less\",\"right\":[{\"kind\":\"number\",\"value\":0}]}]}}]}}"); //$NON-NLS-1$
+        DataCompositionSettings settings = plan(body);
+
+        assertEquals(1, settings.getConditionalAppearance().getItems().size());
+        DataCompositionConditionalAppearanceItem rule =
+            settings.getConditionalAppearance().getItems().get(0);
+        assertTrue(rule.isUse());
+        assertEquals("Amount", ((DataCompositionAppearanceField)rule.getSelection().getItems() //$NON-NLS-1$
+            .get(0)).getField().getValue());
+        DataCompositionFilterItem condition = (DataCompositionFilterItem)rule.getFilter().getItems().get(0);
+        assertEquals("Amount", ((DataCompositionField)condition.getLeft()).getValue()); //$NON-NLS-1$
+        assertEquals(new BigDecimal("0"), ((NumberValue)condition.getRight().get(0)).getValue()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAppearanceBlockNeedsTheEdtRuntimeAndSaysSoInsteadOfAcceptingAnything()
+    {
+        // The accepted appearance keys come from the platform's own DcsAppearanceParameters, which
+        // resolves mcore type proxies and therefore only loads inside a running EDT - not in this
+        // headless fixture. What IS provable here is the safe degrade: the writer refuses the block
+        // rather than waving unknown keys through. Whether a VALID key is accepted, and whether an
+        // invalid one is named in the refusal, is provable only against a live workbench.
+        JsonObject body = json("{\"conditionalAppearance\":{\"items\":[" //$NON-NLS-1$
+            + "{\"appearance\":{\"NoSuchAppearanceKey\":true}}]}}"); //$NON-NLS-1$
         DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,
             java.util.Collections.emptyList(), "upsert", "userSettings", body, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(result.isSuccess());
-        assertTrue(result.error().contains("conditionalAppearance.items")); //$NON-NLS-1$
-        assertTrue(result.error().contains("items:[]")); //$NON-NLS-1$
+        assertFalse("an appearance block must never be accepted unvalidated", result.isSuccess()); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("appearance")); //$NON-NLS-1$
     }
 
     @Test

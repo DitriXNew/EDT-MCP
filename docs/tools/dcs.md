@@ -1,6 +1,6 @@
 # dcs
 
-Inspect and upsert/update 1C DCS schemas, shared settings, and form dynamic lists. Call action='get' first, pass its hash as expectedHash for index-addressed mutations, and call get_tool_guide('dcs') for body shapes.
+Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first, pass its hash as expectedHash for index-addressed mutations, and call get_tool_guide('dcs') for body shapes.
 
 ## Parameters
 

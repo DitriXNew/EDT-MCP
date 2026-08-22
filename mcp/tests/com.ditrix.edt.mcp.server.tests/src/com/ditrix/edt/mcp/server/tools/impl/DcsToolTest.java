@@ -49,9 +49,12 @@ public class DcsToolTest
         assertEquals("dcs", tool.getName()); //$NON-NLS-1$
         assertEquals(DcsTool.NAME, tool.getName());
         assertEquals(ResponseType.MARKDOWN, tool.getResponseType());
+        // The description carries the protocol a caller cannot infer from the schema: read first,
+        // carry the hash into a destructive or index-addressed write, and where the body shapes are.
+        // Capability lists belong in the guide, so pin only these clauses.
         assertTrue(tool.getDescription().contains("get_tool_guide('dcs')")); //$NON-NLS-1$
         assertTrue(tool.getDescription().contains("expectedHash")); //$NON-NLS-1$
-        assertTrue(tool.getDescription().contains("upsert/update")); //$NON-NLS-1$
+        assertTrue(tool.getDescription().contains("action='get'")); //$NON-NLS-1$
     }
 
     @Test
@@ -67,8 +70,12 @@ public class DcsToolTest
         assertEquals("object", properties.getAsJsonObject("body").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("integer", properties.getAsJsonObject("limit").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("integer", properties.getAsJsonObject("offset").get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertTrue(properties.getAsJsonObject("action").get("description").getAsString() //$NON-NLS-1$ //$NON-NLS-2$
-            .contains("current writes support upsert/update")); //$NON-NLS-1$
+        // The action prose must warn about the two destructive verbs, since their semantics are not
+        // recoverable from the enum tokens alone.
+        String actionDescription =
+            properties.getAsJsonObject("action").get("description").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(actionDescription, actionDescription.contains("replace")); //$NON-NLS-1$
+        assertTrue(actionDescription, actionDescription.contains("remove")); //$NON-NLS-1$
     }
 
     @Test

@@ -32,7 +32,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`adopt_metadata_object`](adopt_metadata_object.md) | Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can… |
 | [`create_launch_config`](create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
-| [`dcs`](dcs.md) | Inspect and upsert/update 1C DCS schemas, shared settings, and form dynamic lists. Call action='get' first, pass its hash as expectedHash… |
+| [`dcs`](dcs.md) | Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first, pass its hash as expectedHash… |
 | [`delete_launch_config`](delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
 | [`delete_metadata`](delete_metadata.md) | Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a… |
 | [`export_common_picture`](export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |

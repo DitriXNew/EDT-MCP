@@ -394,15 +394,35 @@ public class DcsWriterTest
     }
 
     @Test
-    public void testNonQueryDataSetTypeIsError()
+    public void testObjectDataSetIsAuthoredWithItsObjectName()
     {
-        Result r = DcsWriter.apply(newSchema(),
-            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"object\"}]}"), null); //$NON-NLS-1$
-        assertTrue("a non-query data set type must error in v1", r.hasError()); //$NON-NLS-1$
-        assertTrue("the error must name the offending token", r.error.contains("object")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("the error must point at 'query'", r.error.contains("query")); //$NON-NLS-1$ //$NON-NLS-2$
-        // A rejected spec must not have mutated the model.
-        // (nothing to assert on the schema beyond it staying empty)
+        DataCompositionSchema schema = newSchema();
+        Result r = DcsWriter.apply(schema,
+            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"object\",\"objectName\":\"Catalog.Products\"}]}"), //$NON-NLS-1$
+            null);
+        assertFalse(r.hasError());
+        assertEquals(1, schema.getDataSets().size());
+        DataSet authored = schema.getDataSets().get(0);
+        assertTrue("an 'object' data set must land as DataSetObject, not a query set", //$NON-NLS-1$
+            authored instanceof DataCompositionSchemaDataSetObject);
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetObject)authored).getObjectName());
+    }
+
+    @Test
+    public void testUnknownDataSetTypeErrorsAndListsEveryAcceptedKind()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result r = DcsWriter.apply(schema,
+            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"spreadsheet\"}]}"), null); //$NON-NLS-1$
+        assertTrue("an unknown data set type must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the offending token", r.error.contains("spreadsheet")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String accepted : new String[] { "query", "object", "union" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("the error must list the accepted kind '" + accepted + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                r.error.contains(accepted));
+        }
+        assertTrue("a rejected spec must not mutate the schema", schema.getDataSets().isEmpty()); //$NON-NLS-1$
     }
 
     @Test

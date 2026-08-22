@@ -1,14 +1,18 @@
 ## Guide
 
 `dcs` addresses a data composition schema (DCS) or a form attribute's dynamic-list
-configuration as one root plus an optional fragment. Both root kinds support `get`,
-`upsert`, and `update`. Schema authoring covers the schema layer, settings variants,
-default settings, structure groups, selection, filters, order, and data/output parameter
-values. Dynamic lists expose their ext-info scalars, schema-style fields/calculated
-fields/parameters, and the same settings implementation through `listSettings`.
-`replace` and `remove` are not implemented. Conditional-appearance rules, tables, user fields,
-and object/union data-set authoring are read-only; an empty conditional-appearance holder can
-still be materialized with its shared scaffolding.
+configuration as one root plus an optional fragment. Both root kinds support every action:
+`get`, `upsert`, `update`, `replace` and `remove`.
+
+Authoring covers the schema layer (data sources, query/object/union data sets, fields,
+parameters, calculated fields, total fields, data-set links), the settings layer (default
+settings, named variants, structure groups, tables, selection, filters, order, conditional
+appearance, user fields, and data/output parameter values), and dynamic lists — their
+ext-info scalars, schema-style fields/calculated fields/parameters, and `listSettings`,
+which goes through the same settings implementation as a report variant.
+
+Charts are read-only by design: `get` renders an existing chart and its address, and a
+write never discards it, but chart authoring is not offered.
 
 ### Start with a root summary
 
@@ -126,8 +130,8 @@ same kind inside a named variant, address that variant's `settings` subtree expl
 | `get` | Read a root summary, collection page, or full node | Must be absent | Must be absent; the current `hash` is returned | Implemented |
 | `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target; omitted members stay unchanged | Required | Required for every index-addressed target | Schema, settings, and dynamic lists |
 | `update` | Modify an existing node only; never create | Required | Required for every index-addressed target | Schema, settings, and dynamic lists |
-| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required | Always required | Not implemented |
-| `remove` | Remove exactly one fragment-addressed node | Must be absent | Always required | Not implemented |
+| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required | Always required | Schema, settings, and dynamic lists |
+| `remove` | Remove exactly one fragment-addressed node | Must be absent | Always required | Schema, settings, and dynamic lists |
 
 An empty array is a no-op in `upsert` and clears that collection in `replace`. `update`
 rejects schema-layer root/collection targets where no single existing node is selected;
@@ -154,7 +158,7 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 | `schema` | Root schema: `{dataSources?, dataSets?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
 | `dynamicList` | Dynamic-list ext-info: `{queryText?, mainTable?, dynamicDataRead?, autoFillAvailableFields?, customQuery?, autoSaveUserSettings?, getInvisibleFieldPresentations?, keyType?, keyField?, fields?, calculatedFields?, parameters?, listSettings?}`. Existing dynamic-list conversion safety gates still apply. |
 | `dataSource` | `{name, type?}`; natural key is `name`; `type` defaults to `"Local"`. |
-| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object/union data sets are read-only. |
+| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. |
 | `field` | `{dataPath, field?, title?:PresentationSpec, role?, useRestriction?}`; natural key is `dataPath`. `DataCompositionField` values use their string path. |
 | `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?}`; natural key is `name`. |
 | `calculatedField` | `{dataPath, title?:PresentationSpec, expression?}`; natural key is `dataPath`. |
@@ -165,9 +169,9 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 | `filter` | `{items:[{kind?:"item", left?:ValueSpec, comparisonType?, right?:ValueSpec[], use?, ...ItemScaffold} | {kind:"group", groupType?, use?, items:[...], ...ItemScaffold}], ...HolderScaffold}`. Groups can be nested; items are ordered/indexed. |
 | `dataParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `order` | `{items:[{kind?:"item", field?:ValueSpec, orderType?, use?, viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
-| `conditionalAppearance` | Rules are read-only. Inside a `userSettings`, `defaultSettings`, variant `settings`, or `listSettings` body, `{items:[], ...HolderScaffold}` materializes the empty holder without authoring rules. A non-empty `items` payload is refused. |
-| `table` | Read-only in the current implementation. |
-| `userField` | Read-only in the current implementation. |
+| `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. `appearance` keys are validated against the platform parameter list for the project version; an unknown key is refused and the valid keys are listed. |
+| `table` | `{kind?:"table", name?, use?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. |
+| `userField` | Expression field: `{kind:"expression", dataPath, use?, title?:PresentationSpec, detailExpression?, detailExpressionPresentation?, totalExpression?, totalExpressionPresentation?}`. Case field: `{kind:"case", dataPath, use?, title?:PresentationSpec, variants?}`. Items are ordered/indexed. |
 | `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `userSettings` | Whole settings body: `{items?, selection?, filter?, dataParameters?, order?, conditionalAppearance?:{items:[], ...HolderScaffold}, outputParameters?, itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec}`. Never use these fields to store invented MCP IDs. |
 

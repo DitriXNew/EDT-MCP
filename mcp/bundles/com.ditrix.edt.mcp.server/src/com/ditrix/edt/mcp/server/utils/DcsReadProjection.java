@@ -20,11 +20,20 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
+import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 
 /**
@@ -140,6 +149,124 @@ public final class DcsReadProjection
         StringBuilder result = new StringBuilder();
         appendObjectOutline(result, settings, address, 0, language);
         return result.toString();
+    }
+
+    /** Returns canonical addresses of nodes that refer to an identity being removed or renamed. */
+    public static List<String> referenceAddresses(EObject root, String rootFqn, String kind,
+        String identity)
+    {
+        if (root == null || identity == null || identity.isEmpty())
+        {
+            return Collections.emptyList();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        collectReferences(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind,
+            identity, result);
+        return new ArrayList<>(result);
+    }
+
+    /** Lists schema/settings subtypes that the writer cannot reproduce, with canonical addresses. */
+    public static List<String> unmodellableNodes(EObject root, String rootFqn)
+    {
+        if (root == null) return Collections.emptyList();
+        List<String> result = new ArrayList<>();
+        collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
+            "", result); //$NON-NLS-1$
+        return result;
+    }
+
+    private static void collectUnmodellable(EObject object, String address, String collection,
+        List<String> result)
+    {
+        boolean unsupported = object instanceof DataSet
+            && !(object instanceof DataCompositionSchemaDataSetQuery)
+            && !(object instanceof DataCompositionSchemaDataSetObject)
+            && !(object instanceof DataCompositionSchemaDataSetUnion)
+            || object instanceof DataSetField
+                && !(object instanceof DataCompositionSchemaDataSetField)
+            || object instanceof StructureItem && !(object instanceof DataCompositionGroup)
+                && !(object instanceof DataCompositionTable)
+            || "nestedSchemas".equals(collection) || "templates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
+            || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
+            || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
+            || "totalFieldsTemplates".equals(collection); //$NON-NLS-1$
+        if (unsupported)
+        {
+            result.add(object.eClass().getName() + " at " + address); //$NON-NLS-1$
+            return;
+        }
+        for (EReference reference : object.eClass().getEAllContainments())
+        {
+            Object value = object.eGet(reference);
+            String feature = canonicalFeature(reference.getName());
+            String featureAddress = child(address, feature);
+            if (reference.isMany() && value instanceof List<?>)
+            {
+                List<?> children = (List<?>)value;
+                for (int i = 0; i < children.size(); i++)
+                {
+                    Object contained = children.get(i);
+                    if (contained instanceof EObject)
+                    {
+                        EObject childObject = (EObject)contained;
+                        collectUnmodellable(childObject, child(featureAddress,
+                            selector(feature, object, childObject, i)), feature, result);
+                    }
+                }
+            }
+            else if (value instanceof EObject)
+            {
+                collectUnmodellable((EObject)value, featureAddress, feature, result);
+            }
+        }
+    }
+
+    private static void collectReferences(EObject object, String address, String kind,
+        String identity, Set<String> result)
+    {
+        if (("field".equals(kind) || "calculatedField".equals(kind) || "totalField".equals(kind)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            && object instanceof DataCompositionField
+            && identity.equals(((DataCompositionField)object).getValue()))
+        {
+            result.add(parentAddress(address));
+        }
+        if ("parameter".equals(kind) && object instanceof DataCompositionParameter //$NON-NLS-1$
+            && identity.equals(((DataCompositionParameter)object).getValue()))
+        {
+            result.add(parentAddress(address));
+        }
+        if ("dataSet".equals(kind) && object instanceof DataCompositionSchemaDataSetLink) //$NON-NLS-1$
+        {
+            DataCompositionSchemaDataSetLink link = (DataCompositionSchemaDataSetLink)object;
+            if (identity.equals(link.getSourceDataSet()) || identity.equals(link.getDestinationDataSet()))
+            {
+                result.add(address);
+            }
+        }
+        for (EReference reference : object.eClass().getEAllContainments())
+        {
+            Object value = object.eGet(reference);
+            String feature = canonicalFeature(reference.getName());
+            String featureAddress = child(address, feature);
+            if (reference.isMany() && value instanceof List<?>)
+            {
+                List<?> children = (List<?>)value;
+                for (int i = 0; i < children.size(); i++)
+                {
+                    Object contained = children.get(i);
+                    if (contained instanceof EObject)
+                    {
+                        EObject childObject = (EObject)contained;
+                        collectReferences(childObject, child(featureAddress,
+                            selector(feature, object, childObject, i)), kind, identity, result);
+                    }
+                }
+            }
+            else if (value instanceof EObject)
+            {
+                collectReferences((EObject)value, featureAddress, kind, identity, result);
+            }
+        }
     }
 
     private static Result renderRootCollection(String rootFqn, TargetKind kind, EObject root,

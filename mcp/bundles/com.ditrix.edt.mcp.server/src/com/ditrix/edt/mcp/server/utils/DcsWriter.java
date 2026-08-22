@@ -22,7 +22,10 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterUse;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestriction;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
@@ -119,6 +122,7 @@ public final class DcsWriter
     private static final String KEY_PARAMETERS = "parameters"; //$NON-NLS-1$
     private static final String KEY_CALCULATED_FIELDS = "calculatedFields"; //$NON-NLS-1$
     private static final String KEY_TOTAL_FIELDS = "totalFields"; //$NON-NLS-1$
+    private static final String KEY_DATA_SET_LINKS = "dataSetLinks"; //$NON-NLS-1$
 
     // ---- per-entry keys -----------------------------------------------------------------------
 
@@ -138,6 +142,17 @@ public final class DcsWriter
     private static final String KEY_CONNECTION_STRING = "connectionString"; //$NON-NLS-1$
     private static final String KEY_USE_RESTRICTION = "useRestriction"; //$NON-NLS-1$
     private static final String KEY_GROUPS = "groups"; //$NON-NLS-1$
+    private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
+    private static final String KEY_OBJECT_NAME = "objectName"; //$NON-NLS-1$
+    private static final String KEY_SOURCE_DATA_SET = "sourceDataSet"; //$NON-NLS-1$
+    private static final String KEY_DESTINATION_DATA_SET = "destinationDataSet"; //$NON-NLS-1$
+    private static final String KEY_SOURCE_EXPRESSION = "sourceExpression"; //$NON-NLS-1$
+    private static final String KEY_DESTINATION_EXPRESSION = "destinationExpression"; //$NON-NLS-1$
+    private static final String KEY_PARAMETER = "parameter"; //$NON-NLS-1$
+    private static final String KEY_PARAMETER_LIST_ALLOWED = "parameterListAllowed"; //$NON-NLS-1$
+    private static final String KEY_LINK_CONDITION = "linkCondition"; //$NON-NLS-1$
+    private static final String KEY_START_EXPRESSION = "startExpression"; //$NON-NLS-1$
+    private static final String KEY_REQUIRED = "required"; //$NON-NLS-1$
 
     // ---- validation error-message stems (java:S1192) --------------------------------------------
 
@@ -167,6 +182,8 @@ public final class DcsWriter
 
     /** The only v1-supported data set type token. */
     private static final String TYPE_QUERY = "query"; //$NON-NLS-1$
+    private static final String TYPE_OBJECT = "object"; //$NON-NLS-1$
+    private static final String TYPE_UNION = "union"; //$NON-NLS-1$
 
     /**
      * The default data source type: the current infobase. The platform-canonical token is {@code "Local"}
@@ -404,6 +421,7 @@ public final class DcsWriter
 
         int sources = applyDataSets(schema, plan);
         int fields = applyFields(schema, plan);
+        applyDataSetLinks(schema, plan);
         int calculatedFields = applyCalculatedFields(schema, plan);
         int totalFields = applyTotalFields(schema, plan);
         for (int i = 0; i < plan.parameters.size(); i++)
@@ -744,24 +762,30 @@ public final class DcsWriter
 
         for (DataSetPlan setPlan : plan.dataSets)
         {
-            DataCompositionSchemaDataSetQuery dataSet = getOrCreateQueryDataSet(schema, setPlan.name);
-            if (setPlan.query != null)
+            DataSet dataSet = getOrCreateDataSet(schema.getDataSets(), setPlan);
+            if (dataSet instanceof DataCompositionSchemaDataSetQuery)
             {
-                dataSet.setQuery(setPlan.query);
+                DataCompositionSchemaDataSetQuery query = (DataCompositionSchemaDataSetQuery)dataSet;
+                if (setPlan.query != null) query.setQuery(setPlan.query);
+                String sourceName = ensureSourceName(schema, setPlan.dataSource, defaultSourceName);
+                if (defaultSourceName == null) defaultSourceName = sourceName;
+                query.setDataSource(sourceName);
+                query.setAutoFillAvailableFields(setPlan.autoFill != null
+                    ? setPlan.autoFill.booleanValue() : setPlan.fields.isEmpty());
             }
-            String sourceName = setPlan.dataSource;
-            if (sourceName == null)
+            else if (dataSet instanceof DataCompositionSchemaDataSetObject)
             {
-                if (defaultSourceName == null)
-                {
-                    defaultSourceName = DEFAULT_DATA_SOURCE_NAME;
-                }
-                sourceName = defaultSourceName;
+                DataCompositionSchemaDataSetObject object = (DataCompositionSchemaDataSetObject)dataSet;
+                String sourceName = ensureSourceName(schema, setPlan.dataSource, defaultSourceName);
+                if (defaultSourceName == null) defaultSourceName = sourceName;
+                object.setDataSource(sourceName);
+                object.setObjectName(setPlan.objectName);
             }
-            ensureDataSource(schema, sourceName, LOCAL_SOURCE_TYPE);
-            dataSet.setDataSource(sourceName);
-            dataSet.setAutoFillAvailableFields(
-                setPlan.autoFill != null ? setPlan.autoFill.booleanValue() : setPlan.fields.isEmpty());
+            if (dataSet instanceof DataCompositionSchemaDataSetUnion)
+            {
+                applyNestedDataSets(schema, ((DataCompositionSchemaDataSetUnion)dataSet).getItems(),
+                    setPlan.items, defaultSourceName);
+            }
         }
         return schema.getDataSources().size();
     }
@@ -776,12 +800,13 @@ public final class DcsWriter
             {
                 continue;
             }
-            DataCompositionSchemaDataSetQuery dataSet = getOrCreateQueryDataSet(schema, setPlan.name);
+            DataSet dataSet = getOrCreateDataSet(schema.getDataSets(), setPlan);
             for (FieldPlan fieldPlan : setPlan.fields)
             {
                 applyField(dataSet, fieldPlan);
                 count++;
             }
+            count += applyNestedFields(schema, setPlan, dataSet);
         }
         return count;
     }
@@ -791,7 +816,7 @@ public final class DcsWriter
      * path, sets its {@code dataPath} / {@code field} (the source query column, defaulted to the data
      * path), an optional {@code title} {@link Presentation}, and an optional structured role.
      */
-    private static void applyField(DataCompositionSchemaDataSetQuery dataSet, FieldPlan plan)
+    private static void applyField(DataSet dataSet, FieldPlan plan)
     {
         DataCompositionSchemaDataSetField field = getOrCreateField(dataSet, plan.dataPath);
         field.setDataPath(plan.dataPath);
@@ -990,25 +1015,32 @@ public final class DcsWriter
      * data set before this method is called, because appending a second subtype under the same natural
      * key would produce a schema the 1C serializer refuses.
      */
-    private static DataCompositionSchemaDataSetQuery getOrCreateQueryDataSet(DataCompositionSchema schema,
-        String name)
+    private static DataSet getOrCreateDataSet(List<DataSet> dataSets, DataSetPlan plan)
     {
-        for (DataSet existing : schema.getDataSets())
+        for (DataSet existing : dataSets)
         {
-            if (existing instanceof DataCompositionSchemaDataSetQuery && name.equals(existing.getName()))
+            if (plan.name.equals(existing.getName()))
             {
-                return (DataCompositionSchemaDataSetQuery)existing;
+                return existing;
             }
         }
-        DataCompositionSchemaDataSetQuery dataSet = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
-            .createDataCompositionSchemaDataSetQuery();
-        dataSet.setName(name);
-        schema.getDataSets().add(dataSet);
+        DataSet dataSet;
+        if (TYPE_OBJECT.equals(plan.type))
+            dataSet = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetObject();
+        else if (TYPE_UNION.equals(plan.type))
+            dataSet = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetUnion();
+        else
+            dataSet = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetQuery();
+        dataSet.setName(plan.name);
+        dataSets.add(dataSet);
         return dataSet;
     }
 
     /** Find-or-creates a data set field by data path. */
-    private static DataCompositionSchemaDataSetField getOrCreateField(DataCompositionSchemaDataSetQuery dataSet,
+    private static DataCompositionSchemaDataSetField getOrCreateField(DataSet dataSet,
         String dataPath)
     {
         for (DataSetField existing : dataSet.getFields())
@@ -1023,6 +1055,82 @@ public final class DcsWriter
             .createDataCompositionSchemaDataSetField();
         dataSet.getFields().add(field);
         return field;
+    }
+
+    private static String ensureSourceName(DataCompositionSchema schema, String requested,
+        String defaultSourceName)
+    {
+        String result = requested != null ? requested
+            : defaultSourceName != null ? defaultSourceName : DEFAULT_DATA_SOURCE_NAME;
+        ensureDataSource(schema, result, LOCAL_SOURCE_TYPE);
+        return result;
+    }
+
+    private static void applyNestedDataSets(DataCompositionSchema schema, List<DataSet> target,
+        List<DataSetPlan> plans, String defaultSourceName)
+    {
+        for (DataSetPlan plan : plans)
+        {
+            DataSet dataSet = getOrCreateDataSet(target, plan);
+            if (dataSet instanceof DataCompositionSchemaDataSetQuery)
+            {
+                DataCompositionSchemaDataSetQuery query = (DataCompositionSchemaDataSetQuery)dataSet;
+                query.setQuery(plan.query);
+                query.setDataSource(ensureSourceName(schema, plan.dataSource, defaultSourceName));
+                query.setAutoFillAvailableFields(plan.autoFill != null ? plan.autoFill.booleanValue()
+                    : plan.fields.isEmpty());
+            }
+            else if (dataSet instanceof DataCompositionSchemaDataSetObject)
+            {
+                DataCompositionSchemaDataSetObject object = (DataCompositionSchemaDataSetObject)dataSet;
+                object.setObjectName(plan.objectName);
+                object.setDataSource(ensureSourceName(schema, plan.dataSource, defaultSourceName));
+            }
+            else
+            {
+                applyNestedDataSets(schema, ((DataCompositionSchemaDataSetUnion)dataSet).getItems(),
+                    plan.items, defaultSourceName);
+            }
+        }
+    }
+
+    private static int applyNestedFields(DataCompositionSchema schema, DataSetPlan plan, DataSet dataSet)
+    {
+        if (!(dataSet instanceof DataCompositionSchemaDataSetUnion)) return 0;
+        int count = 0;
+        List<DataSet> targets = ((DataCompositionSchemaDataSetUnion)dataSet).getItems();
+        for (DataSetPlan child : plan.items)
+        {
+            DataSet target = getOrCreateDataSet(targets, child);
+            for (FieldPlan field : child.fields)
+            {
+                applyField(target, field);
+                count++;
+            }
+            count += applyNestedFields(schema, child, target);
+        }
+        return count;
+    }
+
+    private static void applyDataSetLinks(DataCompositionSchema schema, Plan plan)
+    {
+        for (DataSetLinkPlan linkPlan : plan.dataSetLinks)
+        {
+            DataCompositionSchemaDataSetLink link =
+                com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                    .createDataCompositionSchemaDataSetLink();
+            link.setSourceDataSet(linkPlan.sourceDataSet);
+            link.setDestinationDataSet(linkPlan.destinationDataSet);
+            link.setSourceExpression(linkPlan.sourceExpression);
+            link.setDestinationExpression(linkPlan.destinationExpression);
+            if (linkPlan.parameter != null) link.setParameter(linkPlan.parameter);
+            if (linkPlan.parameterListAllowed != null)
+                link.setParameterListAllowed(linkPlan.parameterListAllowed.booleanValue());
+            if (linkPlan.linkCondition != null) link.setLinkConditionExpression(linkPlan.linkCondition);
+            if (linkPlan.startExpression != null) link.setStartExpression(linkPlan.startExpression);
+            if (linkPlan.required != null) link.setRequired(linkPlan.required.booleanValue());
+            schema.getDataSetLinks().add(link);
+        }
     }
 
     /** Find-or-creates a total field by data path. */
@@ -1128,17 +1236,15 @@ public final class DcsWriter
                 }
                 matching = existing;
             }
-            if (matching != null && !(matching instanceof DataCompositionSchemaDataSetQuery))
+            if (matching != null && !dataSetMatches(matching, dataSet.type))
             {
                 return "Data set '" + dataSet.name + "' already exists as kind '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + dataSetKind(matching) + "', so it cannot also be authored as kind 'query'. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Rename the clashing data set, or use action='replace' when subtype replacement " //$NON-NLS-1$
-                    + "is available."; //$NON-NLS-1$
+                    + dataSetKind(matching) + "', so it cannot also be authored as kind '" //$NON-NLS-1$
+                    + dataSet.type + "'. Rename the clashing data set or replace its exact node."; //$NON-NLS-1$
             }
-            if (matching instanceof DataCompositionSchemaDataSetQuery)
+            if (matching != null)
             {
-                String fieldError = validateFieldSubtypes((DataCompositionSchemaDataSetQuery)matching,
-                    dataSet);
+                String fieldError = validateFieldSubtypes(matching, dataSet);
                 if (fieldError != null)
                 {
                     return fieldError;
@@ -1148,7 +1254,7 @@ public final class DcsWriter
         return existingDuplicateKeys(schema);
     }
 
-    private static String validateFieldSubtypes(DataCompositionSchemaDataSetQuery existing,
+    private static String validateFieldSubtypes(DataSet existing,
         DataSetPlan plan)
     {
         for (FieldPlan field : plan.fields)
@@ -1244,6 +1350,9 @@ public final class DcsWriter
 
     private static String dataSetKind(DataSet dataSet)
     {
+        if (dataSet instanceof DataCompositionSchemaDataSetQuery) return TYPE_QUERY;
+        if (dataSet instanceof DataCompositionSchemaDataSetObject) return TYPE_OBJECT;
+        if (dataSet instanceof DataCompositionSchemaDataSetUnion) return TYPE_UNION;
         String className = dataSet.eClass().getName();
         if (className.endsWith("DataSetObject")) //$NON-NLS-1$
         {
@@ -1254,6 +1363,13 @@ public final class DcsWriter
             return "union"; //$NON-NLS-1$
         }
         return className;
+    }
+
+    private static boolean dataSetMatches(DataSet dataSet, String type)
+    {
+        return TYPE_QUERY.equals(type) && dataSet instanceof DataCompositionSchemaDataSetQuery
+            || TYPE_OBJECT.equals(type) && dataSet instanceof DataCompositionSchemaDataSetObject
+            || TYPE_UNION.equals(type) && dataSet instanceof DataCompositionSchemaDataSetUnion;
     }
 
     // ---- parsing / validation (pure, no model) ------------------------------------------------
@@ -1287,7 +1403,7 @@ public final class DcsWriter
             return ParseResult.failed(presentationError);
         }
         String unknown = unknownMembers(spec, "body", KEY_DATA_SOURCES, KEY_DATA_SETS, //$NON-NLS-1$
-            KEY_PARAMETERS, KEY_CALCULATED_FIELDS, KEY_TOTAL_FIELDS);
+            KEY_PARAMETERS, KEY_CALCULATED_FIELDS, KEY_TOTAL_FIELDS, KEY_DATA_SET_LINKS);
         if (unknown != null)
         {
             return ParseResult.failed(unknown);
@@ -1298,6 +1414,10 @@ public final class DcsWriter
         if (error == null)
         {
             error = parseDataSets(spec, plan, languages);
+        }
+        if (error == null)
+        {
+            error = parseDataSetLinks(spec, plan);
         }
         if (error == null)
         {
@@ -1317,10 +1437,11 @@ public final class DcsWriter
         }
         if (spec.entrySet().isEmpty() && plan.dataSets.isEmpty() && plan.parameters.isEmpty()
             && plan.dataSources.isEmpty()
-            && plan.calculatedFields.isEmpty() && plan.totalFields.isEmpty())
+            && plan.calculatedFields.isEmpty() && plan.totalFields.isEmpty()
+            && plan.dataSetLinks.isEmpty())
         {
             return ParseResult.failed("The 'dcs' payload is empty: provide at least one of 'dataSets', " //$NON-NLS-1$
-                + "'parameters', 'dataSources', 'calculatedFields' or 'totalFields', e.g. " //$NON-NLS-1$
+                + "'parameters', 'dataSources', 'dataSetLinks', 'calculatedFields' or 'totalFields', e.g. " //$NON-NLS-1$
                 + "{dataSets:[{name:'DataSet1'," //$NON-NLS-1$
                 + "type:'query',query:'SELECT ...'}]}."); //$NON-NLS-1$
         }
@@ -1379,35 +1500,55 @@ public final class DcsWriter
         DcsPresentationParser.LanguageContext languages)
     {
         String where = KEY_DATA_SETS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+        DataSetParseResult result = parseDataSet(entry, where, languages);
+        if (result.error == null)
+        {
+            plan.dataSets.add(result.plan);
+        }
+        return result.error;
+    }
+
+    private static DataSetParseResult parseDataSet(JsonObject entry, String where,
+        DcsPresentationParser.LanguageContext languages)
+    {
         String unknown = unknownMembers(entry, where, KEY_NAME, KEY_TYPE, KEY_QUERY,
-            KEY_DATA_SOURCE, KEY_AUTO_FILL, KEY_FIELDS);
+            KEY_DATA_SOURCE, KEY_AUTO_FILL, KEY_FIELDS, KEY_OBJECT_NAME, KEY_ITEMS);
         if (unknown != null)
         {
-            return unknown;
+            return DataSetParseResult.failed(unknown);
         }
         String name = nonEmptyString(entry, KEY_NAME);
         if (name == null)
         {
-            return ERR_DATA_SET + where + ERR_NEEDS_NAME;
+            return DataSetParseResult.failed(ERR_DATA_SET + where + ERR_NEEDS_NAME);
         }
         String type = nonEmptyString(entry, KEY_TYPE);
-        if (type != null && !TYPE_QUERY.equalsIgnoreCase(type))
+        if (type == null)
         {
-            return ERR_DATA_SET + where + ") 'type' must be 'query' in v1; got '" + type //$NON-NLS-1$
-                + "'. Object / union data sets are deferred to v2."; //$NON-NLS-1$
+            type = TYPE_QUERY;
         }
-        String query = nonEmptyString(entry, KEY_QUERY);
-        if (query == null)
+        if (!TYPE_QUERY.equalsIgnoreCase(type) && !TYPE_OBJECT.equalsIgnoreCase(type)
+            && !TYPE_UNION.equalsIgnoreCase(type))
         {
-            return "A query data set (" + where + ") needs a non-empty 'query'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return DataSetParseResult.failed(ERR_DATA_SET + where + ") has unsupported type '" //$NON-NLS-1$
+                + type + "'. Use query, object, or union."); //$NON-NLS-1$
         }
+        String query = stringMember(entry, KEY_QUERY);
+        String objectName = stringMember(entry, KEY_OBJECT_NAME);
+        if (TYPE_QUERY.equalsIgnoreCase(type) && !entry.has(KEY_QUERY))
+            return DataSetParseResult.failed("A query data set (" + where //$NON-NLS-1$
+                + ") needs a 'query' member. Pass an empty string only when intentionally resetting it."); //$NON-NLS-1$
+        if (TYPE_OBJECT.equalsIgnoreCase(type) && !entry.has(KEY_OBJECT_NAME))
+            return DataSetParseResult.failed("An object data set (" + where //$NON-NLS-1$
+                + ") needs an 'objectName' member. Pass an empty string only when intentionally resetting it."); //$NON-NLS-1$
         String dataSource = nonEmptyString(entry, KEY_DATA_SOURCE);
         Boolean autoFill = boolMember(entry, KEY_AUTO_FILL);
 
         List<JsonObject> fieldEntries = objectArray(entry, KEY_FIELDS);
         if (fieldEntries == null)
         {
-            return ERR_DATA_SET + where + ") '" + KEY_FIELDS + "' must be an array of objects."; //$NON-NLS-1$ //$NON-NLS-2$
+            return DataSetParseResult.failed(ERR_DATA_SET + where + ") '" + KEY_FIELDS //$NON-NLS-1$
+                + "' must be an array of objects."); //$NON-NLS-1$
         }
         List<FieldPlan> fields = new ArrayList<>();
         for (int i = 0; i < fieldEntries.size(); i++)
@@ -1416,11 +1557,60 @@ public final class DcsWriter
                 where + "." + KEY_FIELDS + "[" + i + "]", languages); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             if (field.error != null)
             {
-                return field.error;
+                return DataSetParseResult.failed(field.error);
             }
             fields.add(field.plan);
         }
-        plan.dataSets.add(new DataSetPlan(name, query, dataSource, autoFill, fields));
+        List<JsonObject> itemEntries = objectArray(entry, KEY_ITEMS);
+        if (itemEntries == null)
+        {
+            return DataSetParseResult.failed(ERR_DATA_SET + where + ") 'items' must be an array of objects."); //$NON-NLS-1$
+        }
+        if (!TYPE_UNION.equalsIgnoreCase(type) && !itemEntries.isEmpty())
+        {
+            return DataSetParseResult.failed("Data set '" + name + "' at " + where //$NON-NLS-1$ //$NON-NLS-2$
+                + " can use 'items' only with type='union'. Remove items or change its type."); //$NON-NLS-1$
+        }
+        List<DataSetPlan> items = new ArrayList<>();
+        for (int i = 0; i < itemEntries.size(); i++)
+        {
+            DataSetParseResult child = parseDataSet(itemEntries.get(i),
+                where + ".items[" + i + "]", languages); //$NON-NLS-1$ //$NON-NLS-2$
+            if (child.error != null) return child;
+            items.add(child.plan);
+        }
+        return DataSetParseResult.ok(new DataSetPlan(name, type.toLowerCase(), query, dataSource,
+            objectName, autoFill, fields, items));
+    }
+
+    private static String parseDataSetLinks(JsonObject spec, Plan plan)
+    {
+        List<JsonObject> entries = objectArray(spec, KEY_DATA_SET_LINKS);
+        if (entries == null) return "'dataSetLinks' must be an array of objects."; //$NON-NLS-1$
+        for (int i = 0; i < entries.size(); i++)
+        {
+            JsonObject entry = entries.get(i);
+            String where = KEY_DATA_SET_LINKS + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            String unknown = unknownMembers(entry, where, KEY_SOURCE_DATA_SET, KEY_DESTINATION_DATA_SET,
+                KEY_SOURCE_EXPRESSION, KEY_DESTINATION_EXPRESSION, KEY_PARAMETER,
+                KEY_PARAMETER_LIST_ALLOWED, KEY_LINK_CONDITION, KEY_START_EXPRESSION, KEY_REQUIRED);
+            if (unknown != null) return unknown;
+            String source = nonEmptyString(entry, KEY_SOURCE_DATA_SET);
+            String destination = nonEmptyString(entry, KEY_DESTINATION_DATA_SET);
+            String sourceExpression = nonEmptyString(entry, KEY_SOURCE_EXPRESSION);
+            String destinationExpression = nonEmptyString(entry, KEY_DESTINATION_EXPRESSION);
+            if (source == null || destination == null || sourceExpression == null
+                || destinationExpression == null)
+            {
+                return "Data-set link '" + where + "' needs non-empty sourceDataSet, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "destinationDataSet, sourceExpression, and destinationExpression. Add the " //$NON-NLS-1$
+                    + "missing member and retry."; //$NON-NLS-1$
+            }
+            plan.dataSetLinks.add(new DataSetLinkPlan(source, destination, sourceExpression,
+                destinationExpression, stringMember(entry, KEY_PARAMETER),
+                boolMember(entry, KEY_PARAMETER_LIST_ALLOWED), stringMember(entry, KEY_LINK_CONDITION),
+                stringMember(entry, KEY_START_EXPRESSION), boolMember(entry, KEY_REQUIRED)));
+        }
         return null;
     }
 
@@ -1960,6 +2150,7 @@ public final class DcsWriter
     {
         final List<DataSourcePlan> dataSources = new ArrayList<>();
         final List<DataSetPlan> dataSets = new ArrayList<>();
+        final List<DataSetLinkPlan> dataSetLinks = new ArrayList<>();
         final List<ParameterPlan> parameters = new ArrayList<>();
         final List<CalculatedFieldPlan> calculatedFields = new ArrayList<>();
         final List<TotalFieldPlan> totalFields = new ArrayList<>();
@@ -1984,19 +2175,63 @@ public final class DcsWriter
     static final class DataSetPlan
     {
         final String name;
+        final String type;
         final String query;
         final String dataSource;
+        final String objectName;
         final Boolean autoFill;
         final List<FieldPlan> fields;
+        final List<DataSetPlan> items;
 
-        DataSetPlan(String name, String query, String dataSource, Boolean autoFill, List<FieldPlan> fields)
+        DataSetPlan(String name, String type, String query, String dataSource, String objectName,
+            Boolean autoFill, List<FieldPlan> fields, List<DataSetPlan> items)
         {
             this.name = name;
+            this.type = type;
             this.query = query;
             this.dataSource = dataSource;
+            this.objectName = objectName;
             this.autoFill = autoFill;
             this.fields = fields;
+            this.items = items;
         }
+    }
+
+    static final class DataSetLinkPlan
+    {
+        final String sourceDataSet;
+        final String destinationDataSet;
+        final String sourceExpression;
+        final String destinationExpression;
+        final String parameter;
+        final Boolean parameterListAllowed;
+        final String linkCondition;
+        final String startExpression;
+        final Boolean required;
+
+        DataSetLinkPlan(String sourceDataSet, String destinationDataSet, String sourceExpression,
+            String destinationExpression, String parameter, Boolean parameterListAllowed,
+            String linkCondition, String startExpression, Boolean required)
+        {
+            this.sourceDataSet = sourceDataSet;
+            this.destinationDataSet = destinationDataSet;
+            this.sourceExpression = sourceExpression;
+            this.destinationExpression = destinationExpression;
+            this.parameter = parameter;
+            this.parameterListAllowed = parameterListAllowed;
+            this.linkCondition = linkCondition;
+            this.startExpression = startExpression;
+            this.required = required;
+        }
+    }
+
+    private static final class DataSetParseResult
+    {
+        final DataSetPlan plan; final String error;
+        private DataSetParseResult(DataSetPlan plan, String error)
+        { this.plan = plan; this.error = error; }
+        static DataSetParseResult ok(DataSetPlan plan) { return new DataSetParseResult(plan, null); }
+        static DataSetParseResult failed(String error) { return new DataSetParseResult(null, error); }
     }
 
     /** A validated data set field (a data path + optional source field / title / role). */

@@ -34,12 +34,13 @@ import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.ditrix.edt.mcp.server.utils.DcsDynamicListContent;
 import com.ditrix.edt.mcp.server.utils.DcsDynamicListWriter;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
+import com.ditrix.edt.mcp.server.utils.DcsMutationGuard;
+import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DcsReadProjection;
 import com.ditrix.edt.mcp.server.utils.DcsRootReader;
 import com.ditrix.edt.mcp.server.utils.DcsSchemaContent;
 import com.ditrix.edt.mcp.server.utils.DcsSchemaWriter;
 import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
-import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -94,9 +95,9 @@ public class DcsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Inspect and upsert/update 1C DCS schemas, shared settings, and form dynamic lists. " //$NON-NLS-1$
-            + "Call action='get' first, pass its hash as expectedHash for " //$NON-NLS-1$
-            + "index-addressed mutations, and call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
+        return "Read and author 1C DCS schemas, their settings variants, and form dynamic lists. " //$NON-NLS-1$
+            + "Call action='get' first; replace, remove and any index-addressed edit require its " //$NON-NLS-1$
+            + "hash as expectedHash. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
 
     @Override
@@ -105,7 +106,8 @@ public class DcsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_FQN, "DCS root FQN, optionally followed by an RFC-6901 '#/...' pointer.", true) //$NON-NLS-1$
-            .enumProperty(KEY_ACTION, "Operation; current writes support upsert/update.", true, ACTIONS) //$NON-NLS-1$
+            .enumProperty(KEY_ACTION, "Operation; replace resets omitted members, remove deletes one node.", //$NON-NLS-1$
+                true, ACTIONS)
             .enumProperty(KEY_TYPE, "Target kind; body shapes are in get_tool_guide('dcs').", true, TYPES) //$NON-NLS-1$
             .objectProperty(KEY_BODY, "Mutation body; forbidden for get/remove and required by the other mutations.") //$NON-NLS-1$
             .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
@@ -191,17 +193,22 @@ public class DcsTool implements IMcpTool
             display.syncExec(() -> result.set(executeGet(projectName, parsed.address(), type,
                 language, limit, offset)));
         }
-        else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action))
+        else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
+            || ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action))
         {
-            JsonObject parsedBody = JsonParser.parseString(body).getAsJsonObject();
+            JsonObject parsedBody = ACTION_REMOVE.equals(action) ? null
+                : JsonParser.parseString(body).getAsJsonObject();
             display.syncExec(() -> result.set(executeWrite(projectName, parsed.address(), action, type,
                 parsedBody, expectedHash, language)));
         }
         else
         {
+            // Unreachable: ACTION_SET is validated above, and every member of it is dispatched
+            // by one of the branches. Kept so a future action added to ACTIONS without a branch
+            // fails loudly instead of silently returning nothing.
             return ToolResult.error("Action '" + action //$NON-NLS-1$
-                + "' is not implemented. Use action='get', 'upsert', or 'update'; no model " //$NON-NLS-1$
-                + "changes were made.").toJson(); //$NON-NLS-1$
+                + "' has no handler. Use one of: " + String.join(", ", ACTION_SET) //$NON-NLS-1$ //$NON-NLS-2$
+                + "; no model changes were made.").toJson(); //$NON-NLS-1$
         }
         return result.get();
     }
@@ -416,16 +423,21 @@ public class DcsTool implements IMcpTool
                     expectedHash, languages, typeResolver, services.version());
             }
 
-            String schemaMembersError = "schema".equals(type) ? schemaRootMembersError(body) : null; //$NON-NLS-1$
+            String schemaMembersError = "schema".equals(type) && body != null //$NON-NLS-1$
+                ? schemaRootMembersError(body) : null;
             if (schemaMembersError != null)
             {
                 return ToolResult.error(schemaMembersError).toJson();
             }
             boolean settingsWrite = DcsSettingsWriter.supports(type)
-                || "schema".equals(type) && DcsSettingsWriter.schemaMembers(body).size() > 0; //$NON-NLS-1$
-            JsonObject schemaBody = "schema".equals(type) ? schemaLayerMembers(body) : body; //$NON-NLS-1$
+                || "schema".equals(type) && body != null //$NON-NLS-1$
+                    && (DcsSettingsWriter.schemaMembers(body).size() > 0
+                        || ACTION_REPLACE.equals(action));
+            JsonObject schemaBody = "schema".equals(type) && body != null //$NON-NLS-1$
+                ? schemaLayerMembers(body) : body;
             DcsSchemaWriter.PrepareResult prepared = DcsSettingsWriter.supports(type)
-                || "schema".equals(type) && schemaBody.size() == 0 ? null //$NON-NLS-1$
+                || "schema".equals(type) && schemaBody != null && schemaBody.size() == 0 //$NON-NLS-1$
+                    && !ACTION_REPLACE.equals(action) ? null
                 : DcsSchemaWriter.prepare(action, type, address, schemaBody, languages);
             if (prepared != null && !prepared.isSuccess())
             {
@@ -463,10 +475,15 @@ public class DcsTool implements IMcpTool
                     DcsSettingsWriter.SchemaResult settings = null;
                     if (settingsWrite)
                     {
+                        if (ACTION_REPLACE.equals(action))
+                        {
+                            String refusal = DcsMutationGuard.replaceError(content.schema(), address);
+                            if (refusal != null) throw DcsWriteFailure.message(refusal);
+                        }
                         JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
                             ? DcsSettingsWriter.schemaMembers(body) : body;
                         settings = DcsSettingsWriter.planSchema(content.schema(), action, type,
-                            address, settingsBody, languages);
+                            address, settingsBody, languages, services.version());
                         if (!settings.isSuccess())
                         {
                             throw DcsWriteFailure.message(settings.error());
