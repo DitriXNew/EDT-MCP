@@ -805,7 +805,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
+    "description": "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -823,6 +823,14 @@
           "type": "object"
         },
         "expectedHash": {
+          "type": "string"
+        },
+        "format": {
+          "description": "Read output; defaults to md. xml is only for a bare schema get.",
+          "enum": [
+            "md",
+            "xml"
+          ],
           "type": "string"
         },
         "fqn": {

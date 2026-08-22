@@ -44,6 +44,7 @@ import com.ditrix.edt.mcp.server.utils.DcsSchemaWriter;
 import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
+import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -66,7 +67,11 @@ public class DcsTool implements IMcpTool
     private static final String KEY_BODY = "body"; //$NON-NLS-1$
     private static final String KEY_EXPECTED_HASH = "expectedHash"; //$NON-NLS-1$
     private static final String KEY_LANGUAGE = "language"; //$NON-NLS-1$
+    private static final String KEY_FORMAT = "format"; //$NON-NLS-1$
     private static final String KEY_OFFSET = "offset"; //$NON-NLS-1$
+
+    private static final String FORMAT_MD = "md"; //$NON-NLS-1$
+    private static final String FORMAT_XML = "xml"; //$NON-NLS-1$
 
     private static final String ACTION_GET = "get"; //$NON-NLS-1$
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
@@ -87,6 +92,7 @@ public class DcsTool implements IMcpTool
 
     private static final Set<String> ACTION_SET = new LinkedHashSet<>(Arrays.asList(ACTIONS));
     private static final Set<String> TYPE_SET = new LinkedHashSet<>(Arrays.asList(TYPES));
+    private static final Set<String> FORMAT_SET = new LinkedHashSet<>(Arrays.asList(FORMAT_MD, FORMAT_XML));
 
     @Override
     public String getName()
@@ -97,7 +103,8 @@ public class DcsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Read and author 1C DCS schemas, their settings variants, and form dynamic lists. " //$NON-NLS-1$
+        return "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, " //$NON-NLS-1$
+            + "and form dynamic lists. " //$NON-NLS-1$
             + "Call action='get' first; replace, remove and any index-addressed edit require its " //$NON-NLS-1$
             + "hash as expectedHash. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
@@ -114,8 +121,10 @@ public class DcsTool implements IMcpTool
             .objectProperty(KEY_BODY, "Mutation body; forbidden for get/remove and required by the other mutations.") //$NON-NLS-1$
             .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
             .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for presentations.") //$NON-NLS-1$
-            .integerProperty(McpKeys.LIMIT, "Collection page size; clamped to 1..1000 for get.") //$NON-NLS-1$
-            .integerProperty(KEY_OFFSET, "Zero-based collection offset for get.") //$NON-NLS-1$
+            .enumProperty(KEY_FORMAT, "Read output; defaults to md. xml is only for a bare schema get.", //$NON-NLS-1$
+                false, FORMAT_MD, FORMAT_XML)
+            .integerProperty(McpKeys.LIMIT, "Markdown collection page size, or XML chunk characters.") //$NON-NLS-1$
+            .integerProperty(KEY_OFFSET, "Zero-based collection or XML character offset for get.") //$NON-NLS-1$
             .build();
     }
 
@@ -123,6 +132,13 @@ public class DcsTool implements IMcpTool
     public ResponseType getResponseType()
     {
         return ResponseType.MARKDOWN;
+    }
+
+    @Override
+    public ResponseType getResponseType(Map<String, String> params)
+    {
+        return FORMAT_XML.equals(JsonUtils.extractStringArgument(params, KEY_FORMAT))
+            ? ResponseType.JSON : getResponseType();
     }
 
     @Override
@@ -134,7 +150,7 @@ public class DcsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        // Keep all nine reads explicit: SchemaExecuteParamParityTest checks both directions.
+        // Keep all ten reads explicit: SchemaExecuteParamParityTest checks both directions.
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String rawFqn = JsonUtils.extractStringArgument(params, KEY_FQN);
         String action = JsonUtils.extractStringArgument(params, KEY_ACTION);
@@ -142,7 +158,11 @@ public class DcsTool implements IMcpTool
         String body = JsonUtils.extractStringArgument(params, KEY_BODY);
         String expectedHash = JsonUtils.extractStringArgument(params, KEY_EXPECTED_HASH);
         String language = JsonUtils.extractStringArgument(params, KEY_LANGUAGE);
-        int rawLimit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, Pagination.DEFAULT_LIMIT);
+        String rawFormat = JsonUtils.extractStringArgument(params, KEY_FORMAT);
+        String format = rawFormat == null ? FORMAT_MD : rawFormat;
+        int defaultLimit = FORMAT_XML.equals(format) ? DcsXmlCodec.DEFAULT_CHUNK_CHARS
+            : Pagination.DEFAULT_LIMIT;
+        int rawLimit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
         int offset = JsonUtils.extractIntArgument(params, KEY_OFFSET, 0);
 
         String required = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_FQN,
@@ -161,6 +181,11 @@ public class DcsTool implements IMcpTool
             return ToolResult.error("Unknown type '" + type + "'. Use one of: " //$NON-NLS-1$ //$NON-NLS-2$
                 + String.join(", ", TYPE_SET) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        if (!FORMAT_SET.contains(format))
+        {
+            return ToolResult.error("Unknown format '" + format + "'. Use 'md' (default) or 'xml'.") //$NON-NLS-1$ //$NON-NLS-2$
+                .toJson();
+        }
         String integerError = validateIntegerArguments(params, offset);
         if (integerError != null)
         {
@@ -177,12 +202,18 @@ public class DcsTool implements IMcpTool
         {
             return ToolResult.error(parsed.failure().message()).toJson();
         }
-        String shapeError = validateActionShape(params, action, body, expectedHash, parsed.address());
+        String formatError = validateFormat(format, action, type, parsed.address());
+        if (formatError != null)
+        {
+            return formatError;
+        }
+        String shapeError = validateActionShape(params, action, type, body, expectedHash, parsed.address());
         if (shapeError != null)
         {
             return shapeError;
         }
-        int limit = Pagination.clampLimit(rawLimit, Pagination.MAX_LIMIT);
+        int limit = FORMAT_XML.equals(format) ? Math.max(1, rawLimit)
+            : Pagination.clampLimit(rawLimit, Pagination.MAX_LIMIT);
         Display display = Display.getDefault();
         if (display == null || display.isDisposed())
         {
@@ -193,7 +224,7 @@ public class DcsTool implements IMcpTool
         if (ACTION_GET.equals(action))
         {
             display.syncExec(() -> result.set(executeGet(projectName, parsed.address(), type,
-                language, limit, offset)));
+                language, format, limit, offset)));
         }
         else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
             || ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action))
@@ -221,7 +252,8 @@ public class DcsTool implements IMcpTool
         if (rawLimit != null && !isInteger(rawLimit))
         {
             return ToolResult.error("limit '" + rawLimit //$NON-NLS-1$
-                + "' is not an integer. Pass a whole number; get clamps it to 1..1000.").toJson(); //$NON-NLS-1$
+                + "' is not an integer. Pass a whole number; Markdown gets clamp it to 1..1000, " //$NON-NLS-1$
+                + "while XML gets use it as the requested character chunk size.").toJson(); //$NON-NLS-1$
         }
         String rawOffset = JsonUtils.extractStringArgument(params, KEY_OFFSET);
         if (rawOffset != null && !isInteger(rawOffset))
@@ -251,7 +283,7 @@ public class DcsTool implements IMcpTool
         }
     }
 
-    private static String validateActionShape(Map<String, String> params, String action, String body,
+    private static String validateActionShape(Map<String, String> params, String action, String type, String body,
         String expectedHash, DcsAddress address)
     {
         boolean hasBody = params.containsKey(KEY_BODY);
@@ -262,6 +294,15 @@ public class DcsTool implements IMcpTool
         {
             return ToolResult.error("body '" + body //$NON-NLS-1$
                 + "' is not a JSON object. Pass one object matching the selected type's guide shape.").toJson(); //$NON-NLS-1$
+        }
+        if (hasBody)
+        {
+            String xmlBodyError = validateXmlBody(action, type, address,
+                JsonParser.parseString(body).getAsJsonObject());
+            if (xmlBodyError != null)
+            {
+                return xmlBodyError;
+            }
         }
         if (hasHash && (expectedHash == null || !expectedHash.matches("[0-9a-f]{20}"))) //$NON-NLS-1$
         {
@@ -313,6 +354,51 @@ public class DcsTool implements IMcpTool
         return null;
     }
 
+    private static String validateFormat(String format, String action, String type, DcsAddress address)
+    {
+        if (!FORMAT_XML.equals(format))
+        {
+            return null;
+        }
+        if (ACTION_GET.equals(action) && "schema".equals(type) && !address.hasPointer()) //$NON-NLS-1$
+        {
+            return null;
+        }
+        return ToolResult.error("format='xml' is not allowed with action='" + action + "', type='" //$NON-NLS-1$ //$NON-NLS-2$
+            + type + "', fqn='" + address + "'. Use format='xml' only with action='get', " //$NON-NLS-1$ //$NON-NLS-2$
+            + "type='schema', and a bare root FQN without a '#/...' fragment.").toJson(); //$NON-NLS-1$
+    }
+
+    private static String validateXmlBody(String action, String type, DcsAddress address, JsonObject body)
+    {
+        if (!body.has(FORMAT_XML))
+        {
+            return null;
+        }
+        if (body.size() != 1)
+        {
+            Set<String> otherMembers = new LinkedHashSet<>(body.keySet());
+            otherMembers.remove(FORMAT_XML);
+            return ToolResult.error("body.xml is mutually exclusive with every other schema body member, " //$NON-NLS-1$
+                + "but the body also contains: " + String.join(", ", otherMembers) //$NON-NLS-1$
+                + ". Pass either body={\"xml\":\"...\"} or the structured schema members, not both.").toJson(); //$NON-NLS-1$
+        }
+        if (!ACTION_REPLACE.equals(action) || !"schema".equals(type) || address.hasPointer()) //$NON-NLS-1$
+        {
+            return ToolResult.error("body.xml is not allowed with action='" + action + "', type='" //$NON-NLS-1$ //$NON-NLS-2$
+                + type + "', fqn='" + address + "'. Use body.xml only with action='replace', " //$NON-NLS-1$ //$NON-NLS-2$
+                + "type='schema', and a bare root FQN without a '#/...' fragment.").toJson(); //$NON-NLS-1$
+        }
+        JsonElement xml = body.get(FORMAT_XML);
+        if (!xml.isJsonPrimitive() || !xml.getAsJsonPrimitive().isString()
+            || xml.getAsString().trim().isEmpty())
+        {
+            return ToolResult.error("body.xml must be a non-empty string containing the complete " //$NON-NLS-1$
+                + "DataCompositionSchema XML returned by dcs format='xml'.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
     private static boolean isJsonObject(String body)
     {
         try
@@ -327,7 +413,7 @@ public class DcsTool implements IMcpTool
     }
 
     private static String executeGet(String projectName, DcsAddress address, String type,
-        String language, int limit, int offset)
+        String language, String format, int limit, int offset)
     {
         try
         {
@@ -354,12 +440,46 @@ public class DcsTool implements IMcpTool
                 return ToolResult.error(resolution.failure().message()).toJson();
             }
             DcsTargetResolver.Target target = resolution.target();
+            DcsXmlCodec codec = null;
+            if (FORMAT_XML.equals(format))
+            {
+                if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
+                {
+                    return ToolResult.error("format='xml' with type='schema' cannot read dynamic-list root '" //$NON-NLS-1$
+                        + target.normalizedRootFqn() + "'. Use format='md' with type='dynamicList'; " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "XML is only available for a DataCompositionSchema root.").toJson(); //$NON-NLS-1$
+                }
+                DcsXmlCodec.ResolveResult codecResult = DcsXmlCodec.resolve(context.project());
+                if (!codecResult.isSuccess())
+                {
+                    return ToolResult.error(codecResult.error()).toJson();
+                }
+                codec = codecResult.codec();
+            }
+            DcsXmlCodec resolvedCodec = codec;
             return BmTransactions.executeAndRollback(model, "DcsGet", (tx, monitor) -> //$NON-NLS-1$
             {
                 DcsRootReader.Result read = DcsRootReader.read(tx, target);
                 if (!read.isSuccess())
                 {
                     return ToolResult.error(read.error()).toJson();
+                }
+                if (FORMAT_XML.equals(format))
+                {
+                    if (!(read.root() instanceof com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema))
+                    {
+                        return ToolResult.error("format='xml' requires a non-empty DataCompositionSchema at '" //$NON-NLS-1$
+                            + target.normalizedRootFqn() + "'. Create schema content with dcs upsert, " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "then retry the bare schema get.").toJson(); //$NON-NLS-1$
+                    }
+                    DcsXmlCodec.XmlResult xml = resolvedCodec.serialize(
+                        (com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema)read.root());
+                    if (!xml.isSuccess())
+                    {
+                        return ToolResult.error(xml.error()).toJson();
+                    }
+                    String hash = DcsHash.compute(read.root());
+                    return DcsXmlCodec.serializePageEnvelope(xml.xml(), hash, offset, limit);
                 }
                 String hash = DcsHash.compute(read.root());
                 DcsReadProjection.Result projection = DcsReadProjection.render(
@@ -421,23 +541,46 @@ public class DcsTool implements IMcpTool
                 DcsWriter.typeResolver(context.configuration(), services.version());
             if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
             {
+                if (body != null && body.has(FORMAT_XML))
+                {
+                    return ToolResult.error("body.xml with type='schema' cannot replace dynamic-list root '" //$NON-NLS-1$
+                        + target.normalizedRootFqn() + "'. Use a bare DataCompositionSchema root, or " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "author this dynamic list with its structured body and type='dynamicList'.").toJson(); //$NON-NLS-1$
+                }
                 return executeDynamicListWrite(context, target, address, action, type, body,
                     expectedHash, languages, typeResolver, services.version());
             }
 
-            String schemaMembersError = "schema".equals(type) && body != null //$NON-NLS-1$
+            com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema importedSchema = null;
+            if (body != null && body.has(FORMAT_XML))
+            {
+                DcsXmlCodec.ResolveResult codecResult = DcsXmlCodec.resolve(context.project());
+                if (!codecResult.isSuccess())
+                {
+                    return ToolResult.error(codecResult.error()).toJson();
+                }
+                DcsXmlCodec.SchemaResult decoded = codecResult.codec().deserialize(body.get(FORMAT_XML).getAsString());
+                if (!decoded.isSuccess())
+                {
+                    return ToolResult.error(decoded.error()).toJson();
+                }
+                importedSchema = decoded.schema();
+            }
+            com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema detachedImport = importedSchema;
+            String schemaMembersError = detachedImport == null && "schema".equals(type) && body != null //$NON-NLS-1$
                 ? schemaRootMembersError(body) : null;
             if (schemaMembersError != null)
             {
                 return ToolResult.error(schemaMembersError).toJson();
             }
-            boolean settingsWrite = DcsSettingsWriter.supports(type)
+            boolean settingsWrite = detachedImport == null && (DcsSettingsWriter.supports(type)
                 || "schema".equals(type) && body != null //$NON-NLS-1$
                     && (DcsSettingsWriter.schemaMembers(body).size() > 0
-                        || ACTION_REPLACE.equals(action));
-            JsonObject schemaBody = "schema".equals(type) && body != null //$NON-NLS-1$
+                        || ACTION_REPLACE.equals(action)));
+            JsonObject schemaBody = detachedImport == null && "schema".equals(type) && body != null //$NON-NLS-1$
                 ? schemaLayerMembers(body) : body;
-            DcsSchemaWriter.PrepareResult prepared = DcsSettingsWriter.supports(type)
+            DcsSchemaWriter.PrepareResult prepared = detachedImport != null ? null
+                : DcsSettingsWriter.supports(type)
                 || "schema".equals(type) && schemaBody != null && schemaBody.size() == 0 //$NON-NLS-1$
                     && !ACTION_REPLACE.equals(action) ? null
                 : DcsSchemaWriter.prepare(action, type, address, schemaBody, languages);
@@ -474,6 +617,12 @@ public class DcsTool implements IMcpTool
                     {
                         throw DcsWriteFailure.message(content.error());
                     }
+                    if (detachedImport != null)
+                    {
+                        DcsXmlCodec.replaceContent(content.schema(), detachedImport);
+                        return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
+                            null, false, true);
+                    }
                     DcsSettingsWriter.SchemaResult settings = null;
                     if (settingsWrite)
                     {
@@ -509,7 +658,7 @@ public class DcsTool implements IMcpTool
                         settings.plan().commit(content.schema());
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
-                        counts, settingsWrite);
+                        counts, settingsWrite, false);
                 });
             }
             catch (DcsWriteFailure e)
@@ -534,7 +683,8 @@ public class DcsTool implements IMcpTool
                     + "action='get'.").toJson(); //$NON-NLS-1$
             }
             DcsWriter.Result counts = outcome.applied;
-            String countsText = counts == null ? "none" //$NON-NLS-1$
+            String countsText = outcome.xmlReplaced ? "xml=wholesale" //$NON-NLS-1$
+                : counts == null ? "none" //$NON-NLS-1$
                 : "dataSources=" + counts.dataSources + ", dataSets=" + counts.dataSets //$NON-NLS-1$ //$NON-NLS-2$
                     + ", fields=" + counts.fields + ", parameters=" + counts.parameters //$NON-NLS-1$ //$NON-NLS-2$
                     + ", calculatedFields=" + counts.calculatedFields + ", totalFields=" //$NON-NLS-1$ //$NON-NLS-2$
@@ -844,14 +994,16 @@ public class DcsTool implements IMcpTool
         final String contentFqn;
         final DcsWriter.Result applied;
         final boolean settingsApplied;
+        final boolean xmlReplaced;
 
         WriteOutcome(String hash, String contentFqn, DcsWriter.Result applied,
-            boolean settingsApplied)
+            boolean settingsApplied, boolean xmlReplaced)
         {
             this.hash = hash;
             this.contentFqn = contentFqn;
             this.applied = applied;
             this.settingsApplied = settingsApplied;
+            this.xmlReplaced = xmlReplaced;
         }
     }
 

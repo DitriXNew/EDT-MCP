@@ -9,6 +9,7 @@ resources lazily, and a read must still roll that model side effect back.
 import os
 import re
 import time
+import xml.etree.ElementTree as ET
 
 from harness import (
     PROJECT,
@@ -32,6 +33,13 @@ MAIN_DCS_TEMPLATE = (
     "\u0421\u0445\u0435\u043c\u0430\u041a\u043e\u043c\u043f\u043e\u043d\u043e\u0432\u043a\u0438"
     "\u0414\u0430\u043d\u043d\u044b\u0445"
 )
+
+_UUID_RE = re.compile(
+    r"(?i)(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])"
+)
+
+_OUTPUT_GUARD_NOTICE = "so the response stays under the size cap."
 
 
 def _seed_report(name, data_set_names=("DataSet1",)):
@@ -155,6 +163,288 @@ def _hash(result):
 def _projection_without_hash(result):
     parts = result.text.split("\n\n", 1)
     return parts[1] if len(parts) == 2 else result.text
+
+
+def _xml_structure(xml):
+    """Canonical structural XML with volatile UUID values normalized."""
+    normalized = _UUID_RE.sub("00000000-0000-0000-0000-000000000000", xml)
+    root = ET.fromstring(normalized)
+
+    def node(element):
+        text = element.text
+        if text is not None and not text.strip():
+            text = None
+        return (
+            element.tag,
+            tuple(sorted(element.attrib.items())),
+            text,
+            tuple(node(child) for child in element),
+        )
+
+    return node(root)
+
+
+def _read_all_xml(fqn, limit=None):
+    """Read every JSON-envelope page and enforce the transfer invariants."""
+    offset = 0
+    chunks = []
+    pages = []
+    transfer_hash = None
+    total_chars = None
+    while True:
+        extra = {"format": "xml", "offset": offset}
+        if limit is not None:
+            extra["limit"] = limit
+        result = _get(fqn, "schema", **extra)
+        assert_ok(result, "read DCS XML chunk at offset %d" % offset)
+        page = result.structured
+        assert isinstance(page, dict), \
+            "format=xml must return a JSON envelope, got: %r" % (page,)
+        assert page.get("success") is True, "XML envelope must report success: %r" % page
+        assert page.get("offset") == offset, \
+            "XML page must start at requested offset %d: %r" % (offset, page)
+        assert "hasMore" in page and type(page["hasMore"]) is bool, \
+            "XML envelope must carry an explicit boolean hasMore: %r" % page
+        assert isinstance(page.get("totalChars"), int) and page["totalChars"] >= 0, \
+            "XML envelope must carry totalChars: %r" % page
+        assert re.fullmatch(r"[0-9a-f]{20}", page.get("hash", "")), \
+            "every XML chunk must carry the normal 20-character DCS hash: %r" % page
+        assert isinstance(page.get("xml"), str), "XML envelope must carry a string chunk: %r" % page
+
+        if transfer_hash is None:
+            transfer_hash = page["hash"]
+            total_chars = page["totalChars"]
+        else:
+            assert page["hash"] == transfer_hash, \
+                "the schema changed during the paged XML transfer"
+            assert page["totalChars"] == total_chars, \
+                "totalChars changed during the paged XML transfer"
+
+        chunk = page["xml"]
+        assert _OUTPUT_GUARD_NOTICE not in chunk, \
+            "OutputSizeGuard must never splice its truncation notice into an XML chunk"
+        has_more = page["hasMore"]
+        if has_more:
+            assert "nextOffset" in page and type(page["nextOffset"]) is int, \
+                "a non-terminal XML page must carry numeric nextOffset: %r" % page
+            next_offset = page["nextOffset"]
+            assert next_offset == offset + len(chunk), \
+                "nextOffset must equal offset plus this chunk length: %r" % page
+            assert next_offset > offset, "a non-final XML page must make progress: %r" % page
+        else:
+            assert "nextOffset" not in page, \
+                "a terminal XML page must omit nextOffset and use hasMore=false: %r" % page
+        chunks.append(chunk)
+        pages.append(page)
+        if not has_more:
+            break
+        offset = page["nextOffset"]
+
+    document = "".join(chunks)
+    assert len(document) == total_chars, \
+        "concatenated XML length must equal totalChars (%d != %d)" % (len(document), total_chars)
+    return document, pages
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk():
+    language = "Language.E2EDcsRussianXml"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": language}),
+              "declare Russian for the bilingual XML fixture")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": language,
+        "properties": [{"name": "languageCode", "value": "ru"}],
+    }), "assign the Russian language code")
+    wait_for_project_ready()
+
+    source_name = "E2EDcsXmlSource"
+    source_root = "Report." + source_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": source_root}),
+              "create the source XML report")
+    wait_for_project_ready()
+    authored = _write(source_root, "upsert", "schema", {
+        "dataSources": [{"name": "DataSource1", "type": "Local"}],
+        "dataSets": [{
+            "name": "Sales",
+            "type": "query",
+            "dataSource": "DataSource1",
+            "query": "SELECT 1 AS Customer, 2 AS Amount",
+            "autoFillFields": False,
+            "fields": [{
+                "dataPath": "Customer",
+                "field": "Customer",
+                "title": {"en": "Customer", "ru": "\u041a\u043b\u0438\u0435\u043d\u0442"},
+            }, {
+                "dataPath": "Amount",
+                "field": "Amount",
+                "title": {"en": "Amount", "ru": "\u0421\u0443\u043c\u043c\u0430"},
+            }],
+        }],
+        "parameters": [{
+            "name": "Period",
+            "title": {"en": "Period", "ru": "\u041f\u0435\u0440\u0438\u043e\u0434"},
+            "use": "Always",
+        }],
+        "variants": [{
+            "name": "ManagerView",
+            "presentation": {"en": "Manager view", "ru": "\u0414\u043b\u044f \u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044f"},
+            "settings": {
+                "selection": {"items": [{
+                    "field": {"kind": "field", "value": "Customer"},
+                    "use": True,
+                }]},
+                "filter": {"items": [{
+                    "left": {"kind": "field", "value": "Amount"},
+                    "comparisonType": "Greater",
+                    "right": [{"kind": "number", "value": 0}],
+                    "use": True,
+                }]},
+                "order": {"items": [{
+                    "field": {"kind": "field", "value": "Customer"},
+                    "orderType": "Asc",
+                    "use": True,
+                }]},
+                "conditionalAppearance": {"items": [{
+                    "use": True,
+                    "selection": {"items": [{
+                        "field": {"kind": "field", "value": "Amount"},
+                    }]},
+                    "filter": {"items": [{
+                        "left": {"kind": "field", "value": "Amount"},
+                        "comparisonType": "Less",
+                        "right": [{"kind": "number", "value": 0}],
+                    }]},
+                }]},
+            },
+        }],
+    }, language="en")
+    assert_ok(authored, "author the non-trivial bilingual source schema")
+
+    source_rel = _poll_report_dcs(source_name, ctx="the XML round-trip source schema")
+    poll_disk_contains(source_rel, "ManagerView",
+                       ctx="the complete source fixture must reach Template.dcs")
+    source_disk = read_disk(source_rel)
+
+    source_xml, source_pages = _read_all_xml(source_root)
+    assert len(source_pages) == 1 and source_pages[0]["hasMore"] is False, \
+        "the small fixture must exercise the single-chunk XML contract"
+    assert "DataCompositionSchema" in source_xml, \
+        "format=xml must return the complete serialized schema: %s" % source_xml[:400]
+
+    target_name = "E2EDcsXmlTarget"
+    target_root = "Report." + target_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": target_root}),
+              "create the fresh XML target report")
+    wait_for_project_ready()
+    target_before = _get(target_root, "schema")
+    assert_ok(target_before, "read the fresh target hash required by replace")
+
+    replaced = _write(target_root, "replace", "schema", {"xml": source_xml},
+                      expectedHash=_hash(target_before))
+    assert_ok(replaced, "replace the fresh target with the serialized source XML")
+    assert "xml=wholesale" in replaced.text, \
+        "the result must identify the wholesale XML replacement: %s" % replaced.text[:400]
+
+    target_rel = _poll_report_dcs(target_name, ctx="the XML round-trip target schema")
+    poll_disk_contains(target_rel, "ManagerView",
+                       ctx="the replaced schema must be present on disk before comparison")
+    target_disk = read_disk(target_rel)
+    assert _xml_structure(target_disk) == _xml_structure(source_disk), \
+        "source and target Template.dcs files must be structurally identical after UUID normalization"
+
+    target_xml, target_pages = _read_all_xml(target_root)
+    assert len(target_pages) == 1 and target_pages[0]["hasMore"] is False, \
+        "the copied small schema must still fit in one XML chunk"
+    assert _xml_structure(target_xml) == _xml_structure(source_xml), \
+        "the target model must contain the complete source schema after wholesale replacement"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_large_xml_schema_pages_past_output_guard_and_round_trips_whole_document():
+    language = "Language.E2EDcsLargeRussianXml"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": language}),
+              "declare Russian for the large bilingual XML fixture")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": language,
+        "properties": [{"name": "languageCode", "value": "ru"}],
+    }), "assign the Russian language code for the large fixture")
+    wait_for_project_ready()
+
+    source_name = "E2EDcsLargeXmlSource"
+    source_root = "Report." + source_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": source_root}),
+              "create the large XML source report")
+    wait_for_project_ready()
+
+    field_count = 512
+    fields = []
+    for index in range(field_count):
+        field_name = "TransferField%04d" % index
+        fields.append({
+            "dataPath": field_name,
+            "field": field_name,
+            "title": {
+                "en": "Transfer field title %04d" % index,
+                "ru": "\u041f\u043e\u043b\u0435 \u0434\u0430\u043d\u043d\u044b\u0445 %04d" % index,
+            },
+        })
+    authored = _write(source_root, "upsert", "schema", {
+        "dataSources": [{"name": "DataSource1", "type": "Local"}],
+        "dataSets": [{
+            "name": "LargeTransfer",
+            "type": "query",
+            "dataSource": "DataSource1",
+            "query": "SELECT 1 AS TransferField0000",
+            "autoFillFields": False,
+            "fields": fields,
+        }],
+    }, language="en")
+    assert_ok(authored, "author a DCS fixture larger than the output guard")
+
+    source_rel = _poll_report_dcs(source_name, ctx="the large XML source schema")
+    poll_disk_contains(source_rel, "Transfer field title 0511",
+                       ctx="all large-fixture fields must reach Template.dcs")
+    source_disk = read_disk(source_rel)
+    assert len(source_disk) > 100_000, \
+        "the regression fixture must exceed OutputSizeGuard.MAX_CONTENT_CHARS: %d" % len(source_disk)
+
+    source_xml, pages = _read_all_xml(source_root)
+    assert len(pages) > 1 and all(
+        page["hasMore"] is True and type(page["nextOffset"]) is int
+        for page in pages[:-1]
+    ), \
+        "every non-terminal chunk must carry hasMore=true and numeric nextOffset"
+    assert "hasMore" in pages[-1] and pages[-1]["hasMore"] is False, \
+        "the terminal chunk must carry the explicit hasMore=false wire signal"
+    assert pages[0]["hasMore"] is True, \
+        "the first chunk must prove that a >100,000-character schema is paged"
+    assert pages[0]["totalChars"] > 100_000, \
+        "the EDT-serialized transfer itself must exceed the guard budget"
+
+    target_name = "E2EDcsLargeXmlTarget"
+    target_root = "Report." + target_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": target_root}),
+              "create the fresh large XML target report")
+    wait_for_project_ready()
+    target_before = _get(target_root, "schema")
+    assert_ok(target_before, "read the fresh large target hash required by replace")
+
+    replaced = _write(target_root, "replace", "schema", {"xml": source_xml},
+                      expectedHash=_hash(target_before))
+    assert_ok(replaced, "replace the target with the reassembled whole XML document")
+    assert "xml=wholesale" in replaced.text, \
+        "the large replacement must use the wholesale XML path: %s" % replaced.text[:400]
+
+    target_rel = _poll_report_dcs(target_name, ctx="the large XML target schema")
+    poll_disk_contains(target_rel, "Transfer field title 0511",
+                       ctx="the reassembled large schema must reach the target Template.dcs")
+    target_disk = read_disk(target_rel)
+    assert _xml_structure(target_disk) == _xml_structure(source_disk), \
+        "large source and target Template.dcs files must match after UUID normalization"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")

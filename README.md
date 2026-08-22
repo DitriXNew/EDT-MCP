@@ -500,7 +500,7 @@ with `python docs/generate_tool_docs.py`.
 | [`adopt_metadata_object`](docs/tools/adopt_metadata_object.md) | Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can… |
 | [`create_launch_config`](docs/tools/create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](docs/tools/create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
-| [`dcs`](docs/tools/dcs.md) | Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first, pass its hash as expectedHash… |
+| [`dcs`](docs/tools/dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, and form dynamic lists. Call action='get' first; replace, remove… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
 | [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a… |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |
@@ -695,9 +695,22 @@ Errors are reported the same way regardless of a tool's normal format — see th
 
 - **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects` (which switches to JSON when called with `format='json'`), `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `validate_xdto_package`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `debug_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
-- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, `git`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
+- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, `git`, `dcs` when called with `format="xml"`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
 - **Image tools**: `get_form_screenshot` — returns the rendered form as an EmbeddedResource with an `image/*` `mimeType`.
+
+#### DCS XML transfers
+
+`dcs` with `action="get"`, `type="schema"`, and `format="xml"` returns
+`{success,totalChars,offset,hasMore,nextOffset?,hash,xml}`. Begin at `offset=0`, append
+`xml`, and while `hasMore` is true repeat with the numeric `nextOffset`; require the
+20-character `hash` to stay the same on every page so a mid-transfer schema change is
+detected. The server measures each escaped JSON envelope and shrinks its XML chunk before
+returning if necessary, so the 100000-character content guard never truncates XML. Each
+page request re-serializes the whole schema, making transfer cost O(pages × schema size);
+raise `limit` when the client tolerates larger results to reduce the page count. Concatenate
+all chunks, then send the WHOLE document in ONE `replace` as `body.xml`; writes are not chunked. See
+[`dcs`](docs/tools/dcs.md) for the paging loop and replacement example.
 
 #### Error contract
 

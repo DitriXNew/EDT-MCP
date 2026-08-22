@@ -1,8 +1,9 @@
 ## Guide
 
 `dcs` addresses a data composition schema (DCS) or a form attribute's dynamic-list
-configuration as one root plus an optional fragment. Both root kinds support every action:
-`get`, `upsert`, `update`, `replace` and `remove`.
+configuration as one root plus an optional fragment. It supports `get`, `upsert`,
+`update`, `replace` and `remove`; the action table below defines the valid root/layer
+combinations.
 
 Authoring covers the schema layer (data sources, query/object/union data sets, fields,
 parameters, calculated fields, total fields, data-set links), the settings layer (default
@@ -13,6 +14,89 @@ which goes through the same settings implementation as a report variant.
 
 Charts are read-only by design: `get` renders an existing chart and its address, and a
 write never discards it, but chart authoring is not offered.
+
+### Lossless XML round-trip
+
+Use `format:"xml"` only with `action:"get"`, `type:"schema"`, and a bare schema root
+without a `#/...` fragment:
+
+```json
+{
+  "projectName": "MyProject",
+  "fqn": "Report.Sales",
+  "action": "get",
+  "type": "schema",
+  "format": "xml"
+}
+```
+
+The response is a JSON page envelope:
+
+```json
+{
+  "success": true,
+  "totalChars": 134118,
+  "offset": 0,
+  "hasMore": true,
+  "nextOffset": 40000,
+  "hash": "0123456789abcdef0123",
+  "xml": "<?xml version=..."
+}
+```
+
+`xml` is a character chunk of the complete `DataCompositionSchema` XML produced by EDT's
+own `DcsV8Serializer`. `limit` requests the raw chunk size (default `40000`) and `offset`
+selects its zero-based character start. The tool measures the serialized JSON envelope
+after escaping and shrinks a chunk when necessary, so the project-wide output guard never
+truncates XML. Chunk boundaries never split a UTF-16 surrogate pair.
+
+Page while `hasMore` is true, using the numeric `nextOffset` carried by those pages, and
+concatenate `xml` in `offset` order. The terminal page always carries `hasMore=false` and
+omits `nextOffset`. Verify that `hash` is unchanged on every page. The hash is the same
+20-character structural hash returned by a normal Markdown get; if it changes during the
+transfer, discard the chunks and restart because the schema changed mid-read:
+
+```text
+offset = 0; hash = null; chunks = []; hasMore = true
+while hasMore:
+  page = dcs(get schema, format="xml", offset=offset)
+  require hash is null or page.hash == hash
+  hash = page.hash
+  chunks += page.xml
+  hasMore = page.hasMore
+  if hasMore: offset = page.nextOffset
+xml = concatenate(chunks)
+```
+
+Every page request re-serializes the whole schema, so a transfer costs O(pages × schema
+size). Callers whose clients tolerate larger results can raise `limit` to reduce the page
+count. No server-side snapshot is cached; verify the unchanged `hash` on every page.
+
+This is the lossless path for copying a schema whose full designer vocabulary is not
+represented by the structured bodies below.
+
+To import it, read the destination root once in the default `md` format to obtain that
+destination's current hash, then replace it:
+
+```json
+{
+  "projectName": "MyProject",
+  "fqn": "Report.SalesCopy",
+  "action": "replace",
+  "type": "schema",
+  "expectedHash": "<hash from the destination schema get>",
+  "body": {"xml": "<DataCompositionSchema ...>...</DataCompositionSchema>"}
+}
+```
+
+Send the reassembled WHOLE document in that one `replace`; `body.xml` is not chunked and
+must never receive an individual page. It is mutually exclusive with every structured
+schema member, is accepted only for `replace` + `schema` at a bare root, and still requires
+`expectedHash`. The XML is deserialized before the write; malformed or truncated XML is
+refused without mutation. Inside the existing BM write transaction, every imported schema
+feature is deep-copied into the already attached external-property root. Keeping that root
+preserves its BM FQN; the normal DCS force-export path then writes `Template.dcs` after
+commit.
 
 ### Start with a root summary
 
@@ -130,7 +214,7 @@ same kind inside a named variant, address that variant's `settings` subtree expl
 | `get` | Read a root summary, collection page, or full node | Must be absent | Must be absent; the current `hash` is returned | Implemented |
 | `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target; omitted members stay unchanged | Required | Required for every index-addressed target | Schema, settings, and dynamic lists |
 | `update` | Modify an existing node only; never create | Required | Required for every index-addressed target | Schema, settings, and dynamic lists |
-| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required | Always required | Schema and settings, a dynamic list below `#/listSettings` |
+| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required structured body, or `{xml:"..."}` for a bare schema root | Always required | Schema and settings, a dynamic list below `#/listSettings` |
 | `remove` | Remove exactly one fragment-addressed node | Must be absent | Always required | Schema and settings, a dynamic list below `#/listSettings` |
 
 `replace` and `remove` act on the settings layer. On a dynamic list that means an address below
@@ -159,7 +243,7 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 
 | `type` | Target / body shape |
 | --- | --- |
-| `schema` | Root schema: `{dataSources?, dataSets?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
+| `schema` | Root schema: `{dataSources?, dataSets?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
 | `dynamicList` | Dynamic-list ext-info: `{queryText?, mainTable?, dynamicDataRead?, autoFillAvailableFields?, customQuery?, autoSaveUserSettings?, getInvisibleFieldPresentations?, keyType?, keyField?, fields?, calculatedFields?, parameters?, listSettings?}`. Existing dynamic-list conversion safety gates still apply. |
 | `dataSource` | `{name, type?}`; natural key is `name`; `type` defaults to `"Local"`. |
 | `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. |
