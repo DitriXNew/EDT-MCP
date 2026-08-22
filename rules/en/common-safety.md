@@ -12,7 +12,10 @@
 
 - **BSL** (`.bsl`) — **only** via MCP EDT (`read_module_source`, `write_module_source`, `read_method_source`).
 - **Metadata** (`.mdo`) — direct file editing is possible, but when an MCP tool is available prefer it (`create_metadata`, `modify_metadata`, `rename_metadata_object`, `delete_metadata`).
-- **Forms** (`Form.form`) — direct file editing is possible, but with care (see `edt-metadata.md`).
+- **Forms** (`Form.form`) — use structured MCP operations by default. Direct
+  editing is a last resort only when no structured operation can represent the
+  change, the user explicitly authorizes the risk, and the full procedure in
+  `edt-metadata.md` is followed.
 - **Other XML** (roles, common commands, etc.) — direct file editing is acceptable; UUID rules see in `edt-metadata.md`.
 - **Non-1C files** (JSON, JS, Python, docker, shell) — the client's standard file/search/shell tools.
 

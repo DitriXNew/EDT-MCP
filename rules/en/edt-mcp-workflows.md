@@ -93,21 +93,37 @@ Short form:
 ## 9. Running YAxUnit tests
 
 - Normal run: `run_yaxunit_tests` with `projectName` — JUnit XML is parsed; the response is in Markdown.
-- When a test fails and the reason is unclear: `debug_yaxunit_tests` + `set_breakpoint` in the relevant test, then proceed as in section 7.
+- When a test fails and the reason is unclear: `set_breakpoint` in the relevant
+  test, then `run_yaxunit_tests(debug=true)`. If the start is pending, retain
+  its `jobId` and poll that exact job with `get_job_status` until it returns the
+  intended launch handle or a terminal failure; only then continue with
+  `wait_for_break` as in section 7. If the caller-approved deadline expires,
+  do not abandon ownership: either cancel with authorization and confirm
+  terminal cleanup, or obtain an explicit accepted handoff of the retained
+  `jobId` and task-owned breakpoint obligations. Without cancellation or
+  handoff, the run remains unsettled and reconciliation must continue.
 
 ## 10. Profiling
 
 1. An active debug session is required (see section 7); you have the `applicationId`.
-2. `start_profiling` with `applicationId` — toggle ON.
+2. `start_profiling` with `applicationId`. Continue only when the result
+   confirms that this call started a new profiling window; otherwise preserve
+   the already-active measurement and report that an attributable window
+   cannot be established without disrupting its owner.
 3. Execute the scenario in 1C:Enterprise.
-4. `start_profiling` with the same `applicationId` again — toggle OFF.
-5. `get_profiling_results` (optional `moduleFilter`, `minFrequency`) — per-module / per-line, call counts, timing.
+4. `stop_profiling` with the same `applicationId` only for the profiling window
+   started and therefore owned by this task.
+5. Read `get_profiling_results` while the global profiling surface remains
+   quiescent; otherwise treat the result as unattributed unless identity can be
+   matched independently.
 
 ## 11. Working with forms
 
 1. `get_form_layout_snapshot` with `projectName` + `formPath`, `mode: compact` — form structure as YAML.
 2. If a visual view is needed — `get_form_screenshot` with `projectName` + `formPath`.
-3. Edits to `.form` — via `Read` + `Edit` (following the rules in `edt-metadata.md`).
+3. Use structured metadata/form operations for changes. Direct `.form` editing
+   is only an explicitly authorized last resort under `common-safety.md` and
+   `edt-metadata.md`.
 
 ## 12. Problem and check analysis
 
