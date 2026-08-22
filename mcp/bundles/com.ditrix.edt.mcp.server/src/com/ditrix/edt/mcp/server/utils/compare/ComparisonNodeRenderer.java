@@ -20,7 +20,6 @@ import com._1c.g5.v8.dt.bsl.compare.BslModuleComparisonNode;
 import com._1c.g5.v8.dt.bsl.compare.BslModuleSectionComparisonNode;
 import com._1c.g5.v8.dt.common.StringUtils;
 import com._1c.g5.v8.dt.compare.core.PotentialMergeProblemDescription;
-import com._1c.g5.v8.dt.compare.model.ComparisonFlags;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
 import com._1c.g5.v8.dt.compare.model.ComparisonSide;
@@ -46,9 +45,15 @@ import com.ditrix.edt.mcp.server.utils.compare.SupportStateReader.SupportState;
  * ({@code Unfinished} / {@code HasUnfinishedChildren} / {@code Finished}), so a node whose status is
  * not {@code Finished} has an empty or partial child list for a reason that has nothing to do with
  * the objects being equal. Every place that would otherwise say {@link #NO_DIFFERENCES} says
- * {@link #NOT_DETERMINED} instead while the node is unfinished, and the document opens with
+ * {@link #NOT_DETERMINED} instead while the node is unfinished, every {@code State} cell reads
+ * {@link ComparisonNodeState#NOT_COMPARED}, and the document opens with
  * {@link #NOT_FINISHED_NOTICE}. Rendering "no differences" over an uncompared subtree is the exact
  * lie this design exists to prevent.</li>
+ * <li><b>The state of a node is decoded ONCE, for both views.</b> Every {@code State} cell here is
+ * {@link ComparisonNodeState#label()}, the same text {@link ComparisonTreeReport} puts in its
+ * {@code Change} column for the same node. This class decided it separately until that separation
+ * made the two documents contradict each other on a node both sides had changed the same way; see
+ * {@link ComparisonNodeState} for what the two answers were.</li>
  * <li><b>Every label this class COMPUTES is locale-free.</b> Names come from the raw symlink
  * segment and from {@link StringUtils#nameToText}. The platform's own node labeller is deliberately
  * NOT used: it routes through a label function that branches on {@code Locale.getDefault()}, which
@@ -73,7 +78,15 @@ import com.ditrix.edt.mcp.server.utils.compare.SupportStateReader.SupportState;
  */
 public final class ComparisonNodeRenderer
 {
-    /** Rendered when the node is finished and nothing differs. NEVER rendered for an unfinished node. */
+    /**
+     * Rendered for a SECTION of this document that is finished and holds nothing differing - the
+     * property table, the module-section list, the child outline. NEVER rendered for an unfinished
+     * node.
+     * <p>
+     * It is not the vocabulary of the {@code State} column: what a NODE is doing across the three
+     * sides is named by {@link ComparisonNodeState}, so that this document and the report it was
+     * reached from cannot word the same node differently.
+     */
     public static final String NO_DIFFERENCES = "No differences"; //$NON-NLS-1$
 
     /** Rendered in place of {@link #NO_DIFFERENCES} while the node's own status is not {@code Finished}. */
@@ -88,9 +101,6 @@ public final class ComparisonNodeRenderer
      * guard and the one-side guard exist to prevent, one level further down.
      */
     public static final String UNREADABLE = "_(could not be read)_"; //$NON-NLS-1$
-
-    /** Rendered when the engine attached no comparison verdict to a node at all. */
-    public static final String NO_VERDICT = "Not reported by the engine"; //$NON-NLS-1$
 
     /** Opening notice for a node the engine has not finished comparing. */
     public static final String NOT_FINISHED_NOTICE = "Subtree not finished"; //$NON-NLS-1$
@@ -831,8 +841,17 @@ public final class ComparisonNodeRenderer
     }
 
     /**
-     * Decodes the node's difference state from {@code ComparisonFlags} and the one-sided markers.
-     * While the node is unfinished this NEVER reports {@link #NO_DIFFERENCES}.
+     * The node's difference state, decoded by {@link ComparisonNodeState} and by nothing here.
+     * <p>
+     * This method used to decide it, and it decided it from MAIN-vs-OTHER alone: a node both sides
+     * had edited the SAME way away from the common ancestor answered {@code hasChangedMainOther()}
+     * with false and fell through to {@link #NO_DIFFERENCES}, while the report the caller reached
+     * this document FROM called the very same node "changed on both sides". One decision, rendered
+     * by both views, is what stops that from coming back - see {@link ComparisonNodeState}.
+     *
+     * @param node the node, may be {@code null}
+     * @param finished whether the addressed node's subtree has been compared
+     * @return the state's wire text, or {@code ""} for a {@code null} node
      */
     private static String stateOf(ComparisonNode node, boolean finished)
     {
@@ -840,30 +859,7 @@ public final class ComparisonNodeRenderer
         {
             return ""; //$NON-NLS-1$
         }
-        ComparisonFlags flags = node.getComparisonFlags();
-        if (flags != null && flags.hasDoubleChanges())
-        {
-            return "CONFLICT (changed on both sides)"; //$NON-NLS-1$
-        }
-        if (node.isOneSideNode())
-        {
-            return "ONE SIDE (" + sideLabel(node.getNodeSide()) + " only)"; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (flags == null)
-        {
-            // No flags object is the ABSENCE of a verdict, not a verdict of "equal". Reporting it
-            // as "no differences" would invent a comparison result the engine never produced.
-            return NO_VERDICT;
-        }
-        if (flags.hasChangedMainOther())
-        {
-            return "CHANGED (main vs other)"; //$NON-NLS-1$
-        }
-        if (flags.hasDiffsMainOther())
-        {
-            return "CHANGED IN SUBTREE"; //$NON-NLS-1$
-        }
-        return finished ? NO_DIFFERENCES : NOT_DETERMINED;
+        return ComparisonNodeState.decode(node, finished).label();
     }
 
     private static EObject asEObject(IComparedObjects<?> objects, ComparisonSide side)

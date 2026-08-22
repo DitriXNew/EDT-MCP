@@ -128,6 +128,33 @@ public final class ComparisonFailures
     }
 
     /**
+     * Refuses a launch because ANOTHER launch has already claimed EDT's single comparison slot and
+     * is still preparing its comparison.
+     * <p>
+     * A separate refusal from {@link #alreadyRunning(String)}, because the remedy is different and
+     * the id is not usable. There is no comparison yet: nothing to cancel, nothing to release, no
+     * id a caller could quote - only a launch a few seconds ahead, which will either start its
+     * comparison or give the slot back. Wording this as "already running" would send the caller to
+     * {@code cancel_job} and {@code releaseComparisonId} for a comparison that does not exist.
+     *
+     * @param projectName the project the standing claim was taken for, or {@code null} when it is
+     *     not known
+     * @return the refusal
+     */
+    public static ToolResult launchInFlight(String projectName)
+    {
+        String project = projectName == null || projectName.isEmpty()
+            ? "another project" //$NON-NLS-1$
+            : "'" + projectName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        return ToolResult.error("Another compare_configurations call has already claimed EDT's " //$NON-NLS-1$
+            + "single comparison slot for " + project + " and is still preparing its " //$NON-NLS-1$ //$NON-NLS-2$
+            + "comparison - EDT allows one at a time and a second one is refused rather than " //$NON-NLS-1$
+            + "queued. There is no comparison to cancel or release yet, so wait for that call to " //$NON-NLS-1$
+            + "report its jobId - poll it with get_job_status - and start this one when it has " //$NON-NLS-1$
+            + "finished, or when it has reported that it could not start."); //$NON-NLS-1$
+    }
+
+    /**
      * Upper-cases the first character, so a clause written to be embedded mid-sentence can also
      * open one.
      *

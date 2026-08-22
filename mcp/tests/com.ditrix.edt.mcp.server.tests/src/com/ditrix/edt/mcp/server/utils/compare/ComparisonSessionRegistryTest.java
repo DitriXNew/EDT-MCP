@@ -194,6 +194,243 @@ public class ComparisonSessionRegistryTest
             pause);
     }
 
+    // ==================== The slot is CLAIMED, not merely found free ====================
+    //
+    // A launch used to ask activeComparisonId() and then register at the far end of its
+    // preparation - two git revisions resolved, the project looked up, the batch built. Two
+    // launches arriving together both read "free", both spent that minute, and both registered;
+    // EDT refused the second batch, but its registration stood and named the slot as taken by a
+    // comparison that had never started. These tests pin the claim that replaces the reading.
+
+    @Test
+    public void testASecondLaunchIsRefusedWhileTheFirstStillHoldsItsClaim()
+    {
+        ComparisonSessionRegistry registry = registry();
+
+        SlotClaim first = registry.claimSlot("Trade"); //$NON-NLS-1$
+        // Nothing has been registered yet - this is exactly the window the whole preparation used
+        // to run in, with the slot free as far as every reading was concerned.
+        SlotClaim second = registry.claimSlot("Erp"); //$NON-NLS-1$
+
+        assertTrue("the first launch must get the slot", first.granted()); //$NON-NLS-1$
+        assertFalse("and the second must not, even though nothing is registered yet", //$NON-NLS-1$
+            second.granted());
+        assertEquals("no session exists yet, so nothing may claim one does", 0, registry.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusedLaunchIsToldALaunchIsInFlightAndNotToCancelAComparison()
+    {
+        ComparisonSessionRegistry registry = registry();
+        registry.claimSlot("Trade"); //$NON-NLS-1$
+
+        String message = registry.claimSlot("Erp").refusal().toJson(); //$NON-NLS-1$
+
+        assertTrue("the refusal must name the project being prepared: " + message, //$NON-NLS-1$
+            message.contains("Trade")); //$NON-NLS-1$
+        assertTrue("and say what is actually happening: " + message, //$NON-NLS-1$
+            message.contains("still preparing its comparison")); //$NON-NLS-1$
+        assertFalse("there is no comparison yet, so sending the caller to releaseComparisonId " //$NON-NLS-1$
+            + "would name an id that answers to nothing: " + message, //$NON-NLS-1$
+            message.contains("releaseComparisonId")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGrantedIdIsTheIdTheComparisonKeeps()
+    {
+        ComparisonSessionRegistry registry = registry();
+        SlotClaim claim = registry.claimSlot("Trade"); //$NON-NLS-1$
+
+        String id = registry.adoptClaim(claim.comparisonId(), handle("Trade"), batch()); //$NON-NLS-1$
+
+        assertEquals("the caller quotes the id the slot was reserved under, or the reservation " //$NON-NLS-1$
+            + "and the comparison are two different things to the reader", //$NON-NLS-1$
+            claim.comparisonId(), id);
+        assertNotNull("and it must resolve to the session", registry.handle(id)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAdoptedClaimStopsBlockingTheNextLaunchAndTheSessionTakesOver()
+    {
+        ComparisonSessionRegistry registry = registry();
+        SlotClaim claim = registry.claimSlot("Trade"); //$NON-NLS-1$
+        registry.adoptClaim(claim.comparisonId(), handle("Trade"), batch()); //$NON-NLS-1$
+
+        String message = registry.claimSlot("Erp").refusal().toJson(); //$NON-NLS-1$
+
+        assertTrue("now there IS a comparison, so the refusal is the one that names it: " //$NON-NLS-1$
+            + message, message.contains(claim.comparisonId()));
+    }
+
+    @Test
+    public void testWithdrawingAClaimGivesTheSlotToTheNextLaunch()
+    {
+        ComparisonSessionRegistry registry = registry();
+        SlotClaim first = registry.claimSlot("Trade"); //$NON-NLS-1$
+
+        assertTrue("the launch that took the claim gives it back", //$NON-NLS-1$
+            registry.withdrawClaim(first.comparisonId()));
+
+        assertTrue("and the slot is free again", registry.claimSlot("Erp").granted()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The invariant a claim must not be able to break: a record is dropped exactly when this server
+     * KNOWS the slot came back, and withdrawing a claim is not knowledge about a comparison. It
+     * must therefore not be able to touch one, however the id is spelled.
+     */
+    @Test
+    public void testWithdrawingNeverDropsARegisteredSession()
+    {
+        ComparisonSessionRegistry registry = registry();
+        String registered = registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+
+        assertFalse("a registered comparison is not a claim and cannot be withdrawn as one", //$NON-NLS-1$
+            registry.withdrawClaim(registered));
+        assertEquals("the record of a comparison EDT may be running must survive", 1, //$NON-NLS-1$
+            registry.size());
+        assertNotNull(registry.handle(registered));
+    }
+
+    /**
+     * ...and the same for a claim that has ALREADY become a session, which is the shape the tool
+     * calls this in: a {@code finally} that cannot know how far the launch got calls it with the
+     * claim's id every time the hand-over did not complete, and the hand-over failing AFTER EDT was
+     * reached is precisely when the record has to be kept.
+     */
+    @Test
+    public void testWithdrawingAnAdoptedClaimDoesNothingAtAll()
+    {
+        ComparisonSessionRegistry registry = registry();
+        SlotClaim claim = registry.claimSlot("Trade"); //$NON-NLS-1$
+        registry.adoptClaim(claim.comparisonId(), handle("Trade"), batch()); //$NON-NLS-1$
+
+        assertFalse("the claim is spent; what stands now is a session", //$NON-NLS-1$
+            registry.withdrawClaim(claim.comparisonId()));
+        assertEquals(1, registry.size());
+    }
+
+    @Test
+    public void testAWithdrawnClaimCannotBeAdopted()
+    {
+        ComparisonSessionRegistry registry = registry();
+        SlotClaim claim = registry.claimSlot("Trade"); //$NON-NLS-1$
+        registry.withdrawClaim(claim.comparisonId());
+
+        try
+        {
+            registry.adoptClaim(claim.comparisonId(), handle("Trade"), batch()); //$NON-NLS-1$
+            fail("a launch that gave the slot back must not be able to register under it"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage(),
+                expected.getMessage().contains("no longer holds EDT's single comparison slot")); //$NON-NLS-1$
+        }
+        assertEquals(0, registry.size());
+    }
+
+    @Test
+    public void testAClaimIsRefusedWhileARegisteredComparisonHoldsTheSlot()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        String live = registry.register(handle, batch());
+
+        SlotClaim claim = registry.claimSlot("Erp"); //$NON-NLS-1$
+
+        assertFalse(claim.granted());
+        assertTrue(claim.refusal().toJson(), claim.refusal().toJson().contains(live));
+    }
+
+    /**
+     * A claim whose launch never came back for it is the one thing that could hold the slot with
+     * nobody watching, so it has a budget of its own. Measured on the fake clock, not slept
+     * through.
+     */
+    @Test
+    public void testAClaimNobodyCameBackForIsReclaimed()
+    {
+        ComparisonSessionRegistry registry = registry();
+        registry.claimSlot("Trade"); //$NON-NLS-1$
+
+        assertFalse("inside the budget the claim still holds the slot", //$NON-NLS-1$
+            registry.claimSlot("Erp").granted()); //$NON-NLS-1$
+
+        clock.now += 5L * 60L * 1000L;
+
+        assertTrue("past it, the slot goes to the launch that is actually here", //$NON-NLS-1$
+            registry.claimSlot("Erp").granted()); //$NON-NLS-1$
+    }
+
+    /**
+     * Two threads asking together get exactly one grant. The claim is the whole point of the
+     * change, and "the check and the take are one step" is not visible in a single-threaded test.
+     *
+     * @throws Exception when a worker cannot be joined
+     */
+    @Test
+    public void testTwoThreadsClaimingTogetherProduceExactlyOneGrant() throws Exception
+    {
+        ComparisonSessionRegistry registry = registry();
+        int workers = 8;
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(workers);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger granted =
+            new java.util.concurrent.atomic.AtomicInteger();
+        List<Thread> threads = new ArrayList<>();
+        for (int i = 0; i < workers; i++)
+        {
+            Thread thread = new Thread(() -> {
+                ready.countDown();
+                try
+                {
+                    go.await();
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (registry.claimSlot("Trade").granted()) //$NON-NLS-1$
+                {
+                    granted.incrementAndGet();
+                }
+            });
+            threads.add(thread);
+            thread.start();
+        }
+        ready.await();
+        go.countDown();
+        for (Thread thread : threads)
+        {
+            thread.join();
+        }
+
+        assertEquals("EDT runs one comparison at a time, so exactly one launch may prepare one", //$NON-NLS-1$
+            1, granted.get());
+    }
+
+    /**
+     * A claim and a registration draw on the same counter, so an id this registry has handed out is
+     * never handed out again - the property the instance token exists to protect, extended to the
+     * new minting site.
+     */
+    @Test
+    public void testAWithdrawnClaimsIdIsNeverIssuedAgain()
+    {
+        ComparisonSessionRegistry registry = registry();
+        SlotClaim withdrawn = registry.claimSlot("Trade"); //$NON-NLS-1$
+        registry.withdrawClaim(withdrawn.comparisonId());
+
+        String registered = registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+
+        assertNotEquals("a claim and a registration draw on the SAME counter: an id a client " //$NON-NLS-1$
+            + "kept from a refused launch must never come back naming a different comparison", //$NON-NLS-1$
+            withdrawn.comparisonId(), registered);
+    }
+
     // ==================== What the two new verdicts promise ====================
     //
     // One literal per @Test on purpose: JUnit stops a method at its first failed assertion, so a

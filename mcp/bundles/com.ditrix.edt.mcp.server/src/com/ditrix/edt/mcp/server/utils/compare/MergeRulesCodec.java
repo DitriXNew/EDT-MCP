@@ -15,8 +15,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -268,6 +271,19 @@ public final class MergeRulesCodec
      * the same file identity the caller's own guard accepted.
      *
      * <p>
+     * <b>The replacement keeps the target's permissions.</b> A move replaces the directory entry,
+     * so the file that ends up on the path is the TEMPORARY's inode with the temporary's mode -
+     * and {@code Files.createTempFile} creates one readable by its owner alone. Replacing a rules
+     * file a team shares would therefore have narrowed it to whoever ran the write, silently, on
+     * every save. The mode of whatever is on the path is carried onto the temporary BEFORE the
+     * move, so the replacement is atomic in its permissions as well as in its bytes; a filesystem
+     * with no POSIX view - Windows - has no mode to carry and is left alone. A path with nothing on
+     * it has no mode to inherit either, so such a file keeps the temporary's own - which is the
+     * restrictive one, and the safe direction for a file this call is creating. Under
+     * {@link Target#MUST_NOT_EXIST} there IS something on the path by then: the reservation this
+     * method made with {@code Files.createFile}, so the finished file wears the process default
+     * rather than the temporary's owner-only mode.
+     * <p>
      * <b>The move itself always replaces</b>, and it has to: it moves the temporary onto the
      * target. What {@link Target#MUST_NOT_EXIST} adds is a RESERVATION taken before a single byte
      * is written - {@code Files.createFile}, the create-if-absent the filesystem performs as one
@@ -323,6 +339,10 @@ public final class MergeRulesCodec
             temporary = Files.createTempFile(parent, resolved.getFileName().toString() + '.',
                 ".tmp"); //$NON-NLS-1$
             Files.write(temporary, serialize(document).getBytes(StandardCharsets.UTF_8));
+            // Before the move, never after: after it there is a window in which the file on the
+            // caller's path is readable by its owner alone, and a reader that lost the race gets a
+            // permission error on a file that is about to be perfectly readable.
+            inheritPermissions(resolved, temporary);
             try
             {
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING,
@@ -347,6 +367,70 @@ public final class MergeRulesCodec
                 cleanUp(resolved, e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Carries the POSIX mode of whatever is on {@code target} onto the {@code replacement} that is
+     * about to take its place.
+     * <p>
+     * A move replaces an inode, so without this the replacement arrives wearing
+     * {@code Files.createTempFile}'s own mode - owner-only - and a merge-rules file a team shares
+     * becomes unreadable to everyone but the account that last wrote it. Nothing about that is
+     * visible in the answer the caller gets: the write succeeds and reports the rules as written.
+     * <p>
+     * Three things are deliberately NOT done here.
+     * <ul>
+     * <li><b>Nothing is invented for a path that is empty.</b> A target that does not exist has no
+     * mode to inherit, and Java cannot read the process umask, so guessing one would be this
+     * method asserting a permission set nobody chose. Such a file keeps the temporary's own, which
+     * is the restrictive direction. Note that a {@link Target#MUST_NOT_EXIST} write does NOT reach
+     * this case: its reservation is already on the path, created with the process default, and
+     * that is what gets carried.</li>
+     * <li><b>A filesystem without POSIX permissions is not a failure.</b> Windows has no mode to
+     * carry, and the view is simply absent there; treating that as an error would make every write
+     * on Windows fail over a concept that does not exist on it.</li>
+     * <li><b>Ownership is not copied.</b> Only the mode is. Changing a file's owner or group needs
+     * privileges this process usually does not have, and attempting it would turn a successful
+     * write into a failure on exactly the shared file this is meant to protect.</li>
+     * </ul>
+     *
+     * @param target the file about to be replaced
+     * @param replacement the temporary that will replace it
+     * @throws IOException when the mode could be read but not applied - which happens before the
+     *     move, so the target is still untouched and the caller's cleanup runs
+     */
+    private static void inheritPermissions(Path target, Path replacement) throws IOException
+    {
+        PosixFileAttributeView view =
+            Files.getFileAttributeView(target, PosixFileAttributeView.class);
+        if (view == null)
+        {
+            return;
+        }
+        Set<PosixFilePermission> permissions;
+        try
+        {
+            permissions = view.readAttributes().permissions();
+        }
+        catch (NoSuchFileException e) // NOSONAR nothing on the path is a state, not a failure
+        {
+            // Read rather than probed with exists(): one syscall answers both questions, and a
+            // check followed by a read can be overtaken between the two.
+            return;
+        }
+        catch (UnsupportedOperationException e) // NOSONAR the filesystem answered "no such concept"
+        {
+            // The view existed but the store does not really keep POSIX attributes.
+            return;
+        }
+        try
+        {
+            Files.setPosixFilePermissions(replacement, permissions);
+        }
+        catch (UnsupportedOperationException e) // NOSONAR as above, on the writing side
+        {
+            // Nothing to carry onto: the temporary's own mode stands.
         }
     }
 

@@ -17,14 +17,18 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -678,6 +682,158 @@ public class MergeRulesCodecTest
         // there, so it may not be inflated by the payload's own words.
         assertEquals("only the Correspondences section is a block this tool does not interpret", 1, //$NON-NLS-1$
             MergeRulesCodec.parse(MIXED_CONTENT_FIXTURE).preservedSectionCount());
+    }
+
+    // ============ A replacement must not narrow who can read the file ============
+
+    /**
+     * The bytes land in a temporary and the temporary is MOVED over the target, so what ends up on
+     * the path is the temporary's inode wearing the temporary's mode - and
+     * {@code Files.createTempFile} creates one readable by its owner alone. A merge-rules file a
+     * team shares would therefore have been narrowed to whoever ran the write, on every save, with
+     * nothing in the answer saying so.
+     * <p>
+     * Skipped rather than failed where there is no POSIX mode to speak of: Windows has no concept
+     * for this test to assert about, and a test that reddens there is a test that gets deleted.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testReplacingAFileKeepsThePermissionsItHad() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("shared.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw-r--")); //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals("a shared rules file must still be the team's after this tool rewrites it", //$NON-NLS-1$
+            "rw-rw-r--", //$NON-NLS-1$
+            PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    }
+
+    /**
+     * The control for the test above: the bytes really were replaced. Without it, a write that
+     * failed to write anything at all would keep the mode and pass.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testTheFileWhosePermissionsSurvivedIsTheOneThatWasRewritten() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("shared.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw-r--")); //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertTrue("the decision must be on disk, or the mode was kept by doing nothing", //$NON-NLS-1$
+            new String(Files.readAllBytes(file), StandardCharsets.UTF_8)
+                .contains("DoNotMerge")); //$NON-NLS-1$
+    }
+
+    /**
+     * An executable bit is carried too, and it is the sharper case: it is the one permission a
+     * whitelist of "the ones that matter" would have dropped, and a copy that only ever widens
+     * would keep it by accident rather than by carrying the target's mode.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testTheWholeModeIsCarriedAndNotJustTheReadableBits() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("odd-mode.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rwxr-x---")); //$NON-NLS-1$
+
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals("rwxr-x---", //$NON-NLS-1$
+            PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    }
+
+    /**
+     * A path with nothing on it has no mode to inherit, and Java cannot read the umask, so the new
+     * file keeps the temporary's own - which is owner-only, the restrictive direction. Pinned so
+     * that "carry the target's mode" is never quietly turned into "invent one": a mode this code
+     * made up would be a permission set nobody chose, on a file it is creating for the caller.
+     *
+     * @throws Exception when the write fails
+     */
+    @Test
+    public void testAPathWithNothingOnItGetsNoInventedMode() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("brand-new.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        Set<PosixFilePermission> actual = Files.getPosixFilePermissions(file);
+        assertEquals("a file created out of nothing keeps the temporary's own owner-only mode: " //$NON-NLS-1$
+            + PosixFilePermissions.toString(actual), "rw-------", //$NON-NLS-1$
+            PosixFilePermissions.toString(actual));
+    }
+
+    /**
+     * {@link MergeRulesCodec.Target#MUST_NOT_EXIST} reserves the path with {@code Files.createFile}
+     * before a byte is written, so by the time the mode is carried there IS something on the path -
+     * the reservation, created with the process default. The finished file therefore wears that
+     * default rather than the temporary's owner-only mode, and a probe created the same way is what
+     * says so without this test having to guess the umask of the machine it runs on.
+     *
+     * @throws Exception when the write fails
+     */
+    @Test
+    public void testAReservedPathKeepsTheModeItsReservationWasCreatedWith() throws Exception
+    {
+        assumePosix();
+        Path probe = Files.createFile(workDir.resolve("probe.xml")); //$NON-NLS-1$
+        Set<PosixFilePermission> fromCreateFile = Files.getPosixFilePermissions(probe);
+        Path file = workDir.resolve("reserved.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST);
+
+        assertEquals("the reservation's own mode is what the finished file must wear", //$NON-NLS-1$
+            PosixFilePermissions.toString(fromCreateFile),
+            PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    }
+
+    /**
+     * The write still works where there are no POSIX permissions at all - Windows. This one runs
+     * everywhere, so the branch that has to do nothing is exercised on the machine where it has to
+     * do nothing.
+     *
+     * @throws Exception when the write fails
+     */
+    @Test
+    public void testAFilesystemWithoutPosixPermissionsIsNotAFailure() throws Exception
+    {
+        Path file = workDir.resolve("plain.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertTrue(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)
+            .contains("DoNotMerge")); //$NON-NLS-1$
+    }
+
+    /** Skips a test that has nothing to assert on a filesystem with no POSIX mode. */
+    private static void assumePosix()
+    {
+        Assume.assumeTrue("this filesystem has no POSIX permissions to preserve", //$NON-NLS-1$
+            FileSystems.getDefault().supportedFileAttributeViews().contains("posix")); //$NON-NLS-1$
     }
 
     // ============ A write must not destroy the identity of its target ============

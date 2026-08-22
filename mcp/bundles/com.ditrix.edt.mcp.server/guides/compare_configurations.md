@@ -77,10 +77,14 @@ still being compared.
 | `changed on both sides` | both did, without the platform calling it a conflict |
 | `differs between main and other` | the two sides differ, with no ancestor verdict |
 | `identical` | compared, and equal |
+| `not reported by the engine` | the engine attached no verdict to this node at all |
 | `not compared yet` | the tree is lazy and has not reached this node |
 
-`not compared yet` is **not** a statement about equality. Poll the job again, or expand
-the node with `get_comparison_node`, which waits for that node specifically.
+`not compared yet` and `not reported by the engine` are **not** statements about equality,
+and neither is dropped by `changedOnly`. Poll the job again, or expand the node with
+`get_comparison_node`, which waits for that node specifically and reports the state in this
+same vocabulary - the two documents decode it in one place, so they cannot word one node
+differently.
 
 ## One comparison at a time, and it stays open when it finishes
 

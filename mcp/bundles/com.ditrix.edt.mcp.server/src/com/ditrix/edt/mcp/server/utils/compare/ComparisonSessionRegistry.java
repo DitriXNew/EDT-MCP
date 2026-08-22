@@ -18,6 +18,7 @@ import java.util.function.LongSupplier;
 import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
  * Owns the lifetime of every live comparison this server started, keyed by a {@code comparisonId}
@@ -136,6 +137,19 @@ public final class ComparisonSessionRegistry
 
     /** How often EDT is re-asked while {@link #PLATFORM_START_BUDGET_MILLIS} runs. */
     private static final long PLATFORM_START_POLL_MILLIS = 50L;
+
+    /**
+     * How long a {@link SlotClaim} may stand before the slot is taken back from it.
+     * <p>
+     * A claim is held for exactly as long as one launch spends preparing - resolving two git
+     * revisions, looking the project up, building the batch - and it is given up either way at the
+     * end of that. This budget is the backstop for the launch that never reaches either end: a job
+     * thread killed outright, or a bundle torn down under it. Five minutes is far longer than the
+     * preparation takes even on a large repository, and far shorter than the idle TTL a stranded
+     * claim would otherwise borrow - which is what makes it a backstop rather than a deadline the
+     * work has to beat.
+     */
+    private static final long CLAIM_BUDGET_MILLIS = 5L * 60L * 1000L;
 
     /**
      * Hands every registry instance a token no other instance in this JVM will use, seeded from
@@ -430,6 +444,19 @@ public final class ComparisonSessionRegistry
     private final LaunchProgress launchProgress;
     private final Pause pause;
     private final boolean attached;
+
+    /**
+     * The id claimed by a launch that is preparing but has not registered its session yet, or
+     * {@code null} when nobody is preparing one. See {@link SlotClaim}.
+     */
+    private String claimedComparisonId;
+
+    /** The project the standing claim was taken for, for the refusal a second launch gets. */
+    private String claimedProjectName;
+
+    /** When the standing claim was taken, measured by {@link #clock}. */
+    private long claimedAtMillis;
+
     /** Set once by {@link #closeAndReleaseAll()}; from then on nothing may be registered. */
     private boolean closed;
 
@@ -479,6 +506,142 @@ public final class ComparisonSessionRegistry
     }
 
     /**
+     * Claims EDT's single comparison slot for a launch that is about to PREPARE one, in one
+     * indivisible step.
+     *
+     * <h2>Why this exists, and why it is taken first</h2>
+     * A launch used to ask {@link #activeComparisonId()} and then register its session at the far
+     * end of its preparation - two git revisions resolved, the project looked up, the batch built.
+     * The whole of that ran between the question and the answer being acted on, so two launches
+     * arriving together both read "nothing is running", both prepared, and both registered. EDT
+     * refused the second batch, but its registration stood, and this registry's own refusals are
+     * computed from registrations: the slot was recorded as taken by a comparison that had never
+     * started, and every later launch was refused until the idle TTL expired.
+     * <p>
+     * Claiming stakes the INTENT under this object's monitor, before any of that work. Of two
+     * launches exactly one is granted, and the loser is refused with a sentence rather than
+     * discovering the conflict from the platform a minute of git later.
+     *
+     * <h2>What a claim costs, and what it does not</h2>
+     * A claim is given up either way - {@link #adoptClaim} turns it into the session, in the same
+     * step as the registration, and {@link #withdrawClaim} drops it when the preparation failed.
+     * Withdrawing touches ONLY the claim: it cannot drop the record of a comparison the platform
+     * may be running, because it does not look at the session map at all. The rule that a record
+     * survives whenever this server does not know what became of the comparison lives in
+     * {@link #handBack(String, SlotHandback.Ending)} and is untouched here.
+     * <p>
+     * A claim that neither happens to is reclaimed after {@link #CLAIM_BUDGET_MILLIS} - the
+     * backstop for a launch thread that died between the two.
+     *
+     * @param projectName the project the launch is being prepared for, for the refusal a second
+     *     launch is given (may be {@code null})
+     * @return a granted claim carrying the id the launch must register under, or a refused one
+     *     carrying the owner's own sentence about what holds the slot
+     */
+    public synchronized SlotClaim claimSlot(String projectName)
+    {
+        if (!attached)
+        {
+            return SlotClaim.refused(ComparisonFailures.serviceUnavailable());
+        }
+        if (closed)
+        {
+            return SlotClaim.refused(ToolResult.error("This server's comparison support has " //$NON-NLS-1$
+                + "been shut down, so a comparison cannot be started - nothing would own it and " //$NON-NLS-1$
+                + "its virtual project would outlive the server. Nothing was started. Restart " //$NON-NLS-1$
+                + "EDT and try again.")); //$NON-NLS-1$
+        }
+        expireStaleClaim();
+        if (claimedComparisonId != null)
+        {
+            return SlotClaim.refused(ComparisonFailures.launchInFlight(claimedProjectName));
+        }
+        // Asked here and not before: this reclaims every session past its TTL, so a slot held by
+        // an abandoned comparison is given back to the caller entitled to it in the same
+        // indivisible step that hands out the claim.
+        String active = activeComparisonId();
+        if (active != null)
+        {
+            return SlotClaim.refused(ComparisonFailures.alreadyRunning(active));
+        }
+        claimedComparisonId = nextComparisonId();
+        claimedProjectName = projectName;
+        claimedAtMillis = clock.getAsLong();
+        return SlotClaim.granted(claimedComparisonId);
+    }
+
+    /**
+     * Turns a standing claim into the registration for the comparison about to be handed to EDT,
+     * keeping the id the claim was granted under.
+     *
+     * @param comparisonId the id from {@link SlotClaim#comparisonId()}
+     * @param handle EDT's handle
+     * @param batch the batch the comparison is launched with
+     * @return the same id, now a registered session
+     * @throws IllegalStateException when the facade is gone, the registry is closed, or the claim
+     *     is no longer standing - all three mean nothing may be started under this id, and this is
+     *     called before the batch leaves this process
+     */
+    public synchronized String adoptClaim(String comparisonId, ComparisonProcessHandle handle,
+        CompareMergeProcessBatch batch)
+    {
+        requireRegistrable();
+        if (comparisonId == null || !comparisonId.equals(claimedComparisonId))
+        {
+            // Reachable two ways, and neither may become a session: the claim was withdrawn by the
+            // launch's own failure path, or it outlived CLAIM_BUDGET_MILLIS and the slot went to
+            // somebody else. Registering anyway would put two sessions in a one-comparison
+            // registry, which is the state the claim exists to make unrepresentable.
+            throw new IllegalStateException("The comparison was not started: this launch no " //$NON-NLS-1$
+                + "longer holds EDT's single comparison slot, so nothing was handed to the " //$NON-NLS-1$
+                + "platform. Start compare_configurations again."); //$NON-NLS-1$
+        }
+        claimedComparisonId = null;
+        claimedProjectName = null;
+        return put(comparisonId, handle, batch);
+    }
+
+    /**
+     * Gives up a claim whose launch never reached the platform.
+     * <p>
+     * It touches the CLAIM and nothing else. A claim names no handle and no comparison EDT knows
+     * about, so dropping one cannot lose a comparison that may be running - the case
+     * {@link #handBack(String, SlotHandback.Ending)} keeps a record for. Once the claim has been
+     * adopted this does nothing at all, which is what makes it safe to call from a {@code finally}
+     * that cannot know how far the launch got.
+     *
+     * @param comparisonId the id from {@link SlotClaim#comparisonId()} (may be {@code null})
+     * @return {@code true} when this call withdrew the claim, {@code false} when there was no such
+     *     claim to withdraw - because it was adopted, was already withdrawn, or had expired
+     */
+    public synchronized boolean withdrawClaim(String comparisonId)
+    {
+        if (comparisonId == null || !comparisonId.equals(claimedComparisonId))
+        {
+            return false;
+        }
+        claimedComparisonId = null;
+        claimedProjectName = null;
+        return true;
+    }
+
+    /**
+     * Drops a claim whose launch never came back for it.
+     * <p>
+     * Called from {@link #claimSlot(String)} alone, because that is the only answer a stale claim
+     * can distort: everything else in this registry reasons about SESSIONS, and a claim is not one.
+     */
+    private void expireStaleClaim()
+    {
+        if (claimedComparisonId != null
+            && clock.getAsLong() - claimedAtMillis >= CLAIM_BUDGET_MILLIS)
+        {
+            claimedComparisonId = null;
+            claimedProjectName = null;
+        }
+    }
+
+    /**
      * Registers a comparison that is about to be started.
      * <p>
      * The project name is taken from the handle's MAIN descriptor rather than passed in: that is
@@ -491,6 +654,18 @@ public final class ComparisonSessionRegistry
      * @return the id the caller quotes on later requests
      */
     public synchronized String register(ComparisonProcessHandle handle, CompareMergeProcessBatch batch)
+    {
+        requireRegistrable();
+        return put(nextComparisonId(), handle, batch);
+    }
+
+    /**
+     * The two reasons nothing may be registered at all, asked in one place so a claim adopted and
+     * a session registered cannot answer them differently.
+     *
+     * @throws IllegalStateException when the facade is not installed or the registry is closed
+     */
+    private void requireRegistrable()
     {
         if (!attached)
         {
@@ -510,15 +685,36 @@ public final class ComparisonSessionRegistry
                 + "down, so a comparison cannot be registered - nothing would own it and its " //$NON-NLS-1$
                 + "virtual project would outlive the server. Nothing was started."); //$NON-NLS-1$
         }
-        long now = clock.getAsLong();
+    }
+
+    /**
+     * @return the next id, minted for a claim or for a registration - never for both, so no id
+     *     this registry has issued is ever issued a second time
+     */
+    private String nextComparisonId()
+    {
         // Instance token FIRST, so the varying part a human tracks across a report stays at the
         // end and the ids of one session share a prefix. See INSTANCE_TOKENS for what the token
         // rules out.
-        String comparisonId = "cmp-" + instanceToken + '-' + idGenerator.getAndIncrement(); //$NON-NLS-1$
+        return "cmp-" + instanceToken + '-' + idGenerator.getAndIncrement(); //$NON-NLS-1$
+    }
+
+    /**
+     * Puts one session in the map under an id already minted.
+     *
+     * @param comparisonId the id
+     * @param handle EDT's handle
+     * @param batch the batch
+     * @return the id
+     */
+    private String put(String comparisonId, ComparisonProcessHandle handle,
+        CompareMergeProcessBatch batch)
+    {
         String projectName = handle == null || handle.getMainDescriptor() == null
             ? null
             : handle.getMainDescriptor().getProjectName();
-        sessions.put(comparisonId, new ComparisonSession(comparisonId, projectName, handle, batch, now));
+        sessions.put(comparisonId,
+            new ComparisonSession(comparisonId, projectName, handle, batch, clock.getAsLong()));
         return comparisonId;
     }
 
@@ -842,6 +1038,11 @@ public final class ComparisonSessionRegistry
     public synchronized int closeAndReleaseAll()
     {
         closed = true;
+        // A standing claim goes with them. It names no handle, so there is nothing to end - but
+        // leaving it would let a launch still in flight adopt it into a registry nobody will sweep
+        // again, which is the very thing the closed flag exists to refuse.
+        claimedComparisonId = null;
+        claimedProjectName = null;
         return releaseAll();
     }
 

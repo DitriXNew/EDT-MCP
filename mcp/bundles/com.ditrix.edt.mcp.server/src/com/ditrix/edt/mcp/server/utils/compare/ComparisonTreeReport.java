@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
-import com._1c.g5.v8.dt.compare.model.ComparisonFlags;
 import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
 import com._1c.g5.v8.dt.compare.model.ComparisonSide;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
@@ -45,8 +44,8 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
  * would report objects the caller never named as objects the caller chose.</li>
  * <li><b>An unfinished node is not an equal node.</b> The tree is lazy: a node whose
  * {@link ComparisonNodeStatus} is not {@code FINISHED} has not been compared yet, so it is
- * rendered as {@link Change#NOT_COMPARED} and never counted as, or described with, an
- * absence of differences.</li>
+ * rendered as {@link ComparisonNodeState#NOT_COMPARED} and never counted as, or described
+ * with, an absence of differences.</li>
  * <li><b>An empty tree is not an equal tree.</b> A comparison that produced no top node at
  * all compared nothing, so no claim about the sides can be derived from it. That case is
  * reachable without any failure: {@link ComparisonScopeBuilder} validates only the LEADING
@@ -76,66 +75,6 @@ public final class ComparisonTreeReport
         // Utility class
     }
 
-    /**
-     * How one top object differs across the three sides.
-     * <p>
-     * Decoded from {@link ComparisonFlags} and the node's own one-sided markers, never
-     * guessed from the symlinks: a symlink is present on a side the object does not exist on
-     * whenever the engine matched it by name.
-     */
-    public enum Change
-    {
-        /** The platform itself marked the node as changed on both sides. */
-        CONFLICT("CONFLICT (changed on both sides)", true), //$NON-NLS-1$
-        /** Present on the other side only, and absent from the common ancestor. */
-        ADDED_ON_OTHER("added on other", true), //$NON-NLS-1$
-        /** Present on the main side only, and absent from the common ancestor. */
-        ADDED_ON_MAIN("added on main", true), //$NON-NLS-1$
-        /** Present on the other side and the ancestor, so the main side dropped it. */
-        DELETED_ON_MAIN("deleted on main", true), //$NON-NLS-1$
-        /** Present on the main side and the ancestor, so the other side dropped it. */
-        DELETED_ON_OTHER("deleted on other", true), //$NON-NLS-1$
-        /** Present in the common ancestor only. */
-        ONLY_IN_ANCESTOR("deleted on both sides", true), //$NON-NLS-1$
-        /** Both sides moved away from the ancestor without the platform calling it a conflict. */
-        CHANGED_ON_BOTH("changed on both sides", true), //$NON-NLS-1$
-        /** Only the other side moved away from the ancestor. */
-        CHANGED_ON_OTHER("changed on other", true), //$NON-NLS-1$
-        /** Only the main side moved away from the ancestor. */
-        CHANGED_ON_MAIN("changed on main", true), //$NON-NLS-1$
-        /** The two sides differ, but not relative to the ancestor in a way the flags name. */
-        DIFFERS("differs between main and other", true), //$NON-NLS-1$
-        /** Compared, and equal on every side. */
-        IDENTICAL("identical", false), //$NON-NLS-1$
-        /** Not compared yet - the tree is lazy, so this is NOT a statement about equality. */
-        NOT_COMPARED("not compared yet", true); //$NON-NLS-1$
-
-        private final String label;
-        private final boolean differs;
-
-        Change(String label, boolean differs)
-        {
-            this.label = label;
-            this.differs = differs;
-        }
-
-        /** @return the stable wire text for this state */
-        public String label()
-        {
-            return label;
-        }
-
-        /**
-         * @return {@code true} when this state must survive the {@code changedOnly} filter;
-         *     {@link #NOT_COMPARED} does, because dropping it would silently present an
-         *     uncompared subtree as an equal one
-         */
-        public boolean differs()
-        {
-            return differs;
-        }
-    }
-
     /** One top comparison node, copied out of the comparison's BM store into plain data. */
     public static final class Node
     {
@@ -143,7 +82,7 @@ public final class ComparisonTreeReport
         private final String mainSymlink;
         private final String otherSymlink;
         private final String ancestorSymlink;
-        private final Change change;
+        private final ComparisonNodeState change;
         private final String status;
 
         /**
@@ -155,7 +94,7 @@ public final class ComparisonTreeReport
          * @param status the platform's own node-status literal
          */
         public Node(long nodeId, String mainSymlink, String otherSymlink, String ancestorSymlink,
-            Change change, String status)
+            ComparisonNodeState change, String status)
         {
             this.nodeId = nodeId;
             this.mainSymlink = mainSymlink;
@@ -190,7 +129,7 @@ public final class ComparisonTreeReport
         }
 
         /** @return the decoded three-sided state */
-        public Change getChange()
+        public ComparisonNodeState getChange()
         {
             return change;
         }
@@ -250,7 +189,8 @@ public final class ComparisonTreeReport
 
         /**
          * @param limit largest number of rows to keep; clamped into {@code [1, MAX_LIMIT]}
-         * @param changedOnly keep only nodes whose state is not {@link Change#IDENTICAL}
+         * @param changedOnly keep only nodes whose state is not
+         *     {@link ComparisonNodeState#IDENTICAL}
          */
         public Collector(int limit, boolean changedOnly)
         {
@@ -285,12 +225,12 @@ public final class ComparisonTreeReport
                 return;
             }
             total++;
-            Change change = node.getChange();
-            if (change == Change.CONFLICT)
+            ComparisonNodeState change = node.getChange();
+            if (change == ComparisonNodeState.CONFLICT)
             {
                 conflicts++;
             }
-            if (change == Change.NOT_COMPARED)
+            if (change == ComparisonNodeState.NOT_COMPARED)
             {
                 notCompared++;
             }
@@ -348,6 +288,11 @@ public final class ComparisonTreeReport
 
     /**
      * Copies one platform node, decoding its three-sided state.
+     * <p>
+     * The state is decoded by {@link ComparisonNodeState}, which is also what
+     * {@link ComparisonNodeRenderer} renders when the caller expands one of these rows. Deciding it
+     * here as well is what let the two documents disagree - see that enum for the case they
+     * disagreed on.
      *
      * @param node the platform node
      * @return the plain copy
@@ -356,81 +301,8 @@ public final class ComparisonTreeReport
     {
         ComparisonNodeStatus status = node.getComparisonStatus();
         return new Node(node.bmGetId(), node.getMainSymlink(), node.getOtherSymlink(),
-            node.getCommonAncestorSymlink(), decode(node, status),
+            node.getCommonAncestorSymlink(), ComparisonNodeState.decode(node, status),
             status == null ? "unknown" : status.getLiteral()); //$NON-NLS-1$
-    }
-
-    /**
-     * Decides what happened to one top object.
-     * <p>
-     * The order is the contract. An unfinished node is answered first, because every later
-     * question would be answered from flags the engine has not filled in yet. A conflict is
-     * answered next, from {@code hasDoubleChanges()} - the platform's own verdict, not a
-     * count of changed sides. Then presence, then change relative to the ancestor.
-     *
-     * @param node the platform node
-     * @param status the node's comparison status (may be {@code null})
-     * @return the decoded state
-     */
-    private static Change decode(TopComparisonNode node, ComparisonNodeStatus status)
-    {
-        if (status != ComparisonNodeStatus.FINISHED)
-        {
-            return Change.NOT_COMPARED;
-        }
-        ComparisonFlags flags = node.getComparisonFlags();
-        if (flags == null)
-        {
-            flags = ComparisonFlags.NO_FLAGS;
-        }
-        if (flags.hasDoubleChanges())
-        {
-            return Change.CONFLICT;
-        }
-        if (node.isOneSideNode())
-        {
-            return decodeOneSided(node.getNodeSide(), node.isAncestorObjectExists());
-        }
-        boolean changedOnMain = flags.hasChanged(ComparisonSide.COMMON_ANCESTOR, ComparisonSide.MAIN);
-        boolean changedOnOther =
-            flags.hasChanged(ComparisonSide.COMMON_ANCESTOR, ComparisonSide.OTHER);
-        if (changedOnMain && changedOnOther)
-        {
-            return Change.CHANGED_ON_BOTH;
-        }
-        if (changedOnOther)
-        {
-            return Change.CHANGED_ON_OTHER;
-        }
-        if (changedOnMain)
-        {
-            return Change.CHANGED_ON_MAIN;
-        }
-        if (flags.hasChanged(ComparisonSide.MAIN, ComparisonSide.OTHER))
-        {
-            return Change.DIFFERS;
-        }
-        return Change.IDENTICAL;
-    }
-
-    /**
-     * Names the one-sided case, which the ancestor turns into an addition or a deletion.
-     *
-     * @param side the side the object exists on (may be {@code null})
-     * @param ancestorExists whether the common ancestor still has the object
-     * @return the decoded state
-     */
-    private static Change decodeOneSided(ComparisonSide side, boolean ancestorExists)
-    {
-        if (side == ComparisonSide.OTHER)
-        {
-            return ancestorExists ? Change.DELETED_ON_MAIN : Change.ADDED_ON_OTHER;
-        }
-        if (side == ComparisonSide.MAIN)
-        {
-            return ancestorExists ? Change.DELETED_ON_OTHER : Change.ADDED_ON_MAIN;
-        }
-        return Change.ONLY_IN_ANCESTOR;
     }
 
     /**

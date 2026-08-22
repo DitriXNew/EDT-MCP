@@ -256,7 +256,7 @@ public class ComparisonNodeRendererTest
         String text = render(node, ComparisonNodeStatus.FINISHED, access(null));
 
         assertTrue("a both-sides change is the conflict the caller must see: " + text, //$NON-NLS-1$
-            text.contains("CONFLICT (changed on both sides)")); //$NON-NLS-1$
+            text.contains("| State | " + ComparisonNodeState.CONFLICT.label() + " |")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -268,7 +268,7 @@ public class ComparisonNodeRendererTest
             access(null));
 
         assertTrue("a node with no flags must be reported as unjudged: " + text, //$NON-NLS-1$
-            text.contains("| State | " + ComparisonNodeRenderer.NO_VERDICT + " |")); //$NON-NLS-1$ //$NON-NLS-2$
+            text.contains("| State | " + ComparisonNodeState.NOT_REPORTED.label() + " |")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -283,7 +283,34 @@ public class ComparisonNodeRendererTest
         String text = render(node, ComparisonNodeStatus.FINISHED, access(null));
 
         assertTrue("an engine verdict of 'unchanged' renders as such: " + text, //$NON-NLS-1$
+            text.contains("| State | " + ComparisonNodeState.IDENTICAL.label() + " |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The three-way defect: main and other carry the SAME edit away from the common ancestor, so
+     * they do not differ from EACH OTHER - and this document used to answer "No differences" for a
+     * node the comparison report the caller came from calls "changed on both sides".
+     * <p>
+     * Agreement between the two documents is pinned by {@code ComparisonNodeStateTest}; this test
+     * pins the half of it that lives here, and it fails on the old renderer with
+     * {@code | State | No differences |}.
+     */
+    @Test
+    public void testANodeBothSidesChangedIsNotReportedAsHavingNoDifferences()
+    {
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        ComparisonFlags flags = new ComparisonFlags();
+        flags.setHasChanged(ComparisonSide.COMMON_ANCESTOR, ComparisonSide.MAIN);
+        flags.setHasChanged(ComparisonSide.COMMON_ANCESTOR, ComparisonSide.OTHER);
+        when(node.getComparisonFlags()).thenReturn(flags);
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null));
+
+        assertFalse("a node that moved away from the ancestor on BOTH sides is not an equal " //$NON-NLS-1$
+            + "node: " + text, //$NON-NLS-1$
             text.contains("| State | " + ComparisonNodeRenderer.NO_DIFFERENCES + " |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and it must be named the way the report names it: " + text, //$NON-NLS-1$
+            text.contains("| State | " + ComparisonNodeState.CHANGED_ON_BOTH.label() + " |")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== Form node ====================

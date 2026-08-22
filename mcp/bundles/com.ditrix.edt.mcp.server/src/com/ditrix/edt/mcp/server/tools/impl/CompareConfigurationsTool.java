@@ -58,6 +58,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.Compari
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
+import com.ditrix.edt.mcp.server.utils.compare.SlotClaim;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback.Ending;
 import com.ditrix.edt.mcp.server.utils.git.GitRevisionResolver;
@@ -392,8 +393,8 @@ public class CompareConfigurationsTool implements IMcpTool
     }
 
     /**
-     * Registers the comparison, hands the batch to EDT, and rolls the registration back in the way
-     * the failure ALLOWS.
+     * Registers the comparison under the id its claim was granted, hands the batch to EDT, and
+     * rolls the registration back in the way the failure ALLOWS.
      * <p>
      * The registration comes first because the id has to exist before the platform can start
      * anything under it, and that ordering is what makes the rollback a question at all. There are
@@ -415,29 +416,31 @@ public class CompareConfigurationsTool implements IMcpTool
      * Package-scoped so the two rollbacks can be driven against a real registry.
      *
      * @param engine the installed facade
+     * @param claim the claim this launch holds on EDT's single slot; the session takes its id, so
+     *     the comparison a caller quotes is the one the slot was reserved under
      * @param handle the comparison to register
      * @param batch the batch to hand over
      * @return the id the comparison was registered under
      * @throws ComparisonException when the registration or the hand-over failed; the message says
      *     what became of the registration
      */
-    static String registerAndHandOver(ComparisonEngine engine, ComparisonProcessHandle handle,
-        CompareMergeProcessBatch batch) throws ComparisonException
+    static String registerAndHandOver(ComparisonEngine engine, SlotClaim claim,
+        ComparisonProcessHandle handle, CompareMergeProcessBatch batch) throws ComparisonException
     {
         String id;
         try
         {
-            id = engine.sessions().register(handle, batch);
+            id = engine.sessions().adoptClaim(claim.comparisonId(), handle, batch);
         }
         catch (IllegalStateException e)
         {
-            // The bundle was taken down between the facade lookup at the top of start() and this
-            // line, so nothing here can own a comparison any more. Reported as a launch that did
-            // not happen - which it is, because registration comes BEFORE the batch reaches EDT
-            // and nothing has reached it yet.
-            throw new ComparisonException("The comparison was not started: this server's " //$NON-NLS-1$
-                + "comparison support is shutting down, so nothing here could own it. " //$NON-NLS-1$
-                + "Nothing reached EDT.", e); //$NON-NLS-1$
+            // Three ways here, and all three mean the same thing to a caller: the bundle was taken
+            // down between the facade lookup at the top of start() and this line, or this launch
+            // no longer holds the slot it claimed. Reported as a launch that did not happen -
+            // which it is, because the registration comes BEFORE the batch reaches EDT and nothing
+            // has reached it yet.
+            throw new ComparisonException("The comparison was not started: " //$NON-NLS-1$
+                + e.getMessage() + " Nothing reached EDT.", e); //$NON-NLS-1$
         }
         try
         {
@@ -721,15 +724,64 @@ public class CompareConfigurationsTool implements IMcpTool
         Launch launch) throws Exception
     {
         progress.add("Resolving the project and the two revisions."); //$NON-NLS-1$
-        // Asked again on the job thread: the check in execute() is a fast refusal, but the
-        // slot can be taken between that check and this launch, and the engine would then
-        // refuse with an assertion rather than a sentence.
+        // Asked again on the job thread: the check in execute() is a fast refusal, and it cannot
+        // see a comparison started between that check and this launch - a comparison opened from
+        // EDT's own interface among them, which no claim of ours can rule out either.
         String live = backend.activeComparisonId();
         if (live != null)
         {
             throw new ComparisonException(refusalText(live));
         }
 
+        // ...and then the slot is TAKEN, not merely found free. Every check above is a reading,
+        // and the whole preparation - two git revisions, the project lookup, the batch - used to
+        // run between the reading and the registration that acted on it. Two jobs arriving
+        // together both read "free", both spent that minute, and both registered; EDT refused the
+        // second batch, but its registration stood and named the slot as taken by a comparison
+        // that had never started. The claim is granted under the registry's monitor, so exactly
+        // one of them gets it.
+        SlotClaim claim = backend.claimSlot(request);
+        if (!claim.granted())
+        {
+            throw new ComparisonException(messageOf(claim.refusal()));
+        }
+        boolean handedOver = false;
+        try
+        {
+            String id = handOver(request, progress, launch, claim);
+            handedOver = true;
+            return conclude(request, progress, launch, id,
+                pollUntilConcluded(progress, launch, id));
+        }
+        finally
+        {
+            if (!handedOver)
+            {
+                // The loser of every race that can still happen after the claim - a cancelled
+                // job, a revision that would not resolve, a project EDT does not know - gives up
+                // its OWN claim, and nothing else. A claim names no handle, so this cannot drop
+                // the record of a comparison that may be running; that record is kept precisely
+                // when this server does not know, and withdrawing a claim is the case where it
+                // does.
+                backend.withdrawClaim(claim);
+            }
+        }
+    }
+
+    /**
+     * Hands the prepared batch to EDT under a claim already granted, and publishes the launch to
+     * the cancellation handler.
+     *
+     * @param request the validated request
+     * @param progress the job's reporter
+     * @param launch the state shared with the cancellation handler
+     * @param claim this launch's claim on EDT's single slot
+     * @return this plugin's id for the started comparison
+     * @throws ComparisonException when the comparison could not be started
+     */
+    private String handOver(LaunchRequest request, ProgressReporter progress, Launch launch,
+        SlotClaim claim) throws ComparisonException
+    {
         // Handing a batch to EDT cannot be taken back: the platform owns the comparison from
         // that moment, and a job published as a retryable timeout would invite a second launch
         // that the engine's one-at-a-time assertion refuses. Commit FIRST, in one step with the
@@ -754,7 +806,7 @@ public class CompareConfigurationsTool implements IMcpTool
         String id = null;
         try
         {
-            id = backend.start(request);
+            id = backend.start(request, claim);
         }
         finally
         {
@@ -769,8 +821,7 @@ public class CompareConfigurationsTool implements IMcpTool
         launch.comparisonId.set(id);
         launch.armed.countDown();
         progress.add("Comparison " + id + " started."); //$NON-NLS-1$ //$NON-NLS-2$
-
-        return conclude(request, progress, launch, id, pollUntilConcluded(progress, launch, id));
+        return id;
     }
 
     /**
@@ -1261,13 +1312,23 @@ public class CompareConfigurationsTool implements IMcpTool
      * resolved independently, so they can arrive spelled differently; a comparison whose "other"
      * side reads the project and whose "ancestor" side reads nothing would report the ancestor as
      * empty and every object as added since it - a difference that is an artefact of the spelling.
+     * <p>
+     * And BOTH are GUARDED, for the same reason they are both canonicalised. The two revisions are
+     * resolved by two independent calls, so they can answer with two DIFFERENT work trees - the
+     * project's repository binding changed between them, or one revision resolved through a linked
+     * worktree - and checking only the other side let the ancestor's data source be built over a
+     * repository nothing had established the project lives in. The mismatch is refused first and
+     * names both paths, because "the ancestor read nothing" and "the ancestor read a different
+     * repository" call for different fixes and neither is visible in a comparison that quietly
+     * succeeds.
      *
      * @param projectName the project name, for the message
      * @param projectPath the project location as the workspace records it
      * @param otherWorkTree the work tree the other revision resolved to, may be {@code null}
      * @param ancestorWorkTree the work tree the ancestor revision resolved to, may be {@code null}
      * @return the canonical paths to build the data sources from
-     * @throws ComparisonException when the project provably lies outside the work tree
+     * @throws ComparisonException when the two sides resolved to different work trees, or when the
+     *     project provably lies outside one of them
      */
     // Package-private so the canonicalisation can be pinned without an EDT workspace, the same way
     // requireProjectInsideWorkTree is.
@@ -1276,8 +1337,49 @@ public class CompareConfigurationsTool implements IMcpTool
     {
         GitSidePaths sides = new GitSidePaths(toRealForm(projectPath), toRealForm(otherWorkTree),
             toRealForm(ancestorWorkTree));
+        requireOneWorkTree(projectName, sides.otherWorkTree(), sides.ancestorWorkTree());
         requireProjectInsideWorkTree(projectName, sides.projectPath(), sides.otherWorkTree());
+        requireProjectInsideWorkTree(projectName, sides.projectPath(), sides.ancestorWorkTree());
         return sides;
+    }
+
+    /**
+     * Refuses a launch whose two revisions resolved to DIFFERENT git work trees.
+     * <p>
+     * A three-way comparison is three views of one repository. The two revisions are resolved by
+     * two independent calls, though, so nothing in the call chain makes them answer with the same
+     * work tree: a repository binding that changed between the two resolutions, or a revision that
+     * resolved through a linked worktree, produces two, and the comparison would then read its
+     * "other" side out of one repository and its ancestor out of another. The result is a report
+     * whose every difference is an artefact of the pairing, presented as a difference between
+     * revisions.
+     * <p>
+     * Compared in REAL form, and only when BOTH are known: one side that could not be resolved to a
+     * work tree at all is a gap in what this server could see, not a mismatch, and the per-side
+     * guard already declines to claim anything about it.
+     *
+     * @param projectName the project name, for the message
+     * @param otherWorkTree the other side's work tree in real form, may be {@code null}
+     * @param ancestorWorkTree the ancestor side's work tree in real form, may be {@code null}
+     * @throws ComparisonException when the two sides name two different work trees
+     */
+    // Package-private for the same reason requireProjectInsideWorkTree is.
+    static void requireOneWorkTree(String projectName, Path otherWorkTree, Path ancestorWorkTree)
+        throws ComparisonException
+    {
+        if (otherWorkTree == null || ancestorWorkTree == null
+            || otherWorkTree.equals(ancestorWorkTree))
+        {
+            return;
+        }
+        throw new ComparisonException("The two revisions of '" + projectName //$NON-NLS-1$
+            + "' resolved to DIFFERENT git work trees: the other side to " + otherWorkTree //$NON-NLS-1$
+            + " and the common ancestor to " + ancestorWorkTree //$NON-NLS-1$
+            + ". A three-way comparison is three views of ONE repository, so the two sides would " //$NON-NLS-1$
+            + "be read out of two, and every difference in the report would be an artefact of " //$NON-NLS-1$
+            + "that pairing rather than of the revisions. Name two revisions of the same " //$NON-NLS-1$
+            + "repository, and check the project's binding with 'git rev-parse " //$NON-NLS-1$
+            + "--show-toplevel'."); //$NON-NLS-1$
     }
 
     /** The canonical paths one launch hands to the platform's two git data sources. */
@@ -1893,11 +1995,37 @@ public class CompareConfigurationsTool implements IMcpTool
         String activeComparisonId();
 
         /**
+         * Claims EDT's single comparison slot for this launch, in ONE indivisible step.
+         * <p>
+         * Distinct from {@link #activeComparisonId()} because a reading is not a reservation: the
+         * whole preparation of a launch runs between the two, and two launches that both read
+         * "free" both used to prepare and both used to register. See
+         * {@code ComparisonSessionRegistry.claimSlot}.
+         *
          * @param request the validated request
+         * @return a granted claim carrying the id to start under, or a refused one carrying the
+         *     owner's own sentence about what holds the slot
+         */
+        SlotClaim claimSlot(LaunchRequest request);
+
+        /**
+         * @param request the validated request
+         * @param claim this launch's granted claim; the started comparison keeps its id
          * @return this plugin's id for the started comparison
          * @throws ComparisonException when the comparison could not be started
          */
-        String start(LaunchRequest request) throws ComparisonException;
+        String start(LaunchRequest request, SlotClaim claim) throws ComparisonException;
+
+        /**
+         * Gives up a claim whose launch never reached the platform.
+         * <p>
+         * It touches the claim alone. A claim names no handle, so this can never drop the record
+         * of a comparison that may be running - the case a hand-back keeps a record for - and once
+         * the claim has been adopted it does nothing at all.
+         *
+         * @param claim the claim to give up
+         */
+        void withdrawClaim(SlotClaim claim);
 
         /**
          * @param comparisonId the started comparison
@@ -1996,7 +2124,22 @@ public class CompareConfigurationsTool implements IMcpTool
         }
 
         @Override
-        public String start(LaunchRequest request) throws ComparisonException
+        public SlotClaim claimSlot(LaunchRequest request)
+        {
+            // The INSTALLED registry, like every other ownership question here: ComparisonEngine
+            // .get() also reports "unavailable" while EDT's service is momentarily unregistered,
+            // and the slot is this server's bookkeeping rather than the platform's.
+            return ComparisonSessionRegistry.shared().claimSlot(request.getProjectName());
+        }
+
+        @Override
+        public void withdrawClaim(SlotClaim claim)
+        {
+            ComparisonSessionRegistry.shared().withdrawClaim(claim.comparisonId());
+        }
+
+        @Override
+        public String start(LaunchRequest request, SlotClaim claim) throws ComparisonException
         {
             ComparisonEngine engine = ComparisonEngine.get().orElseThrow(
                 () -> new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())));
@@ -2020,7 +2163,7 @@ public class CompareConfigurationsTool implements IMcpTool
             {
                 throw new ComparisonException(messageOf(scoping.errorJson()));
             }
-            return launch(engine, request, other, ancestor, scopeObject(scoping));
+            return launch(engine, request, claim, other, ancestor, scopeObject(scoping));
         }
 
         /**
@@ -2050,6 +2193,7 @@ public class CompareConfigurationsTool implements IMcpTool
          *
          * @param engine the read-only facade
          * @param request the validated request
+         * @param claim the claim this launch holds on EDT's single slot
          * @param other the resolved other revision
          * @param ancestor the resolved ancestor revision
          * @param scope the comparison scope
@@ -2057,8 +2201,8 @@ public class CompareConfigurationsTool implements IMcpTool
          * @throws ComparisonException when the project is not a 1C project or the launch fails
          */
         private static String launch(ComparisonEngine engine, LaunchRequest request,
-            GitRevisionResolver.Revision other, GitRevisionResolver.Revision ancestor,
-            ComparisonScope scope) throws ComparisonException
+            SlotClaim claim, GitRevisionResolver.Revision other,
+            GitRevisionResolver.Revision ancestor, ComparisonScope scope) throws ComparisonException
         {
             IProject project = ProjectContext.of(request.getProjectName()).project();
             IV8ProjectManager projectManager = Activator.getDefault().getV8ProjectManager();
@@ -2107,7 +2251,7 @@ public class CompareConfigurationsTool implements IMcpTool
 
             CompareMergeProcessBatch batch = new CompareMergeProcessBatch(
                 new CompareMergeProcessDescriptor(handle, settings));
-            return registerAndHandOver(engine, handle, batch);
+            return registerAndHandOver(engine, claim, handle, batch);
         }
 
         @Override

@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,7 @@ import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.core.IComparisonManager;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Backend;
@@ -62,6 +64,8 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
+import com.ditrix.edt.mcp.server.utils.compare.SlotClaim;
+import com.ditrix.edt.mcp.server.utils.compare.SlotClaims;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback.Ending;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandbacks;
@@ -783,8 +787,10 @@ public class CompareConfigurationsToolTest
 
         try
         {
-            new CompareConfigurationsTool.EngineBackend().start(new LaunchRequest(
-                "TestConfiguration", "HEAD", "HEAD~1", null, null, 100, true)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new CompareConfigurationsTool.EngineBackend().start(
+                new LaunchRequest("TestConfiguration", "HEAD", "HEAD~1", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    true),
+                SlotClaims.granted("cmp-x-1")); //$NON-NLS-1$
             org.junit.Assert.fail("a launch with no comparison service must be refused"); //$NON-NLS-1$
         }
         catch (ComparisonException e)
@@ -1169,7 +1175,8 @@ public class CompareConfigurationsToolTest
 
             try
             {
-                CompareConfigurationsTool.registerAndHandOver(engine, comparisonHandle(),
+                CompareConfigurationsTool.registerAndHandOver(engine,
+                    engine.sessions().claimSlot("Demo"), comparisonHandle(), //$NON-NLS-1$
                     new CompareMergeProcessBatch(List.of()));
                 fail("a launch that reached nothing must not report success"); //$NON-NLS-1$
             }
@@ -1201,7 +1208,8 @@ public class CompareConfigurationsToolTest
 
             try
             {
-                CompareConfigurationsTool.registerAndHandOver(engine, comparisonHandle(),
+                CompareConfigurationsTool.registerAndHandOver(engine,
+                    engine.sessions().claimSlot("Demo"), comparisonHandle(), //$NON-NLS-1$
                     new CompareMergeProcessBatch(List.of()));
                 fail("a launch that reached nothing must not report success"); //$NON-NLS-1$
             }
@@ -1240,7 +1248,8 @@ public class CompareConfigurationsToolTest
 
             try
             {
-                CompareConfigurationsTool.registerAndHandOver(engine, comparisonHandle(),
+                CompareConfigurationsTool.registerAndHandOver(engine,
+                    engine.sessions().claimSlot("Demo"), comparisonHandle(), //$NON-NLS-1$
                     new CompareMergeProcessBatch(List.of()));
                 fail("a refused launch must not report success"); //$NON-NLS-1$
             }
@@ -1598,6 +1607,209 @@ public class CompareConfigurationsToolTest
         }
     }
 
+    // ============ The slot is claimed before the launch prepares, and given back ============
+
+    /**
+     * The launch TAKES the slot rather than finding it free, and hands that same claim to the
+     * start. Preparation is where a launch spends its time - two git revisions, the project lookup,
+     * the batch - and it used to run between the reading that said "free" and the registration that
+     * acted on it, so two launches could both read "free" and both register.
+     */
+    @Test
+    public void testTheSlotIsClaimedAndTheClaimIsWhatTheLaunchStartsUnder()
+    {
+        tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("exactly one claim per launch", 1, backend.claims()); //$NON-NLS-1$
+        assertNotNull("and the start must be handed it, not left to mint an id of its own", //$NON-NLS-1$
+            backend.lastClaim());
+        assertTrue(backend.lastClaim().granted());
+        assertEquals("a claim that became a comparison is not still standing", //$NON-NLS-1$
+            List.of(), backend.standingClaims());
+    }
+
+    /**
+     * A launch that failed before EDT gives its OWN claim back. Without this the slot stays held by
+     * a launch that no longer exists, and every later one is refused - the leak in the shape it
+     * takes once a claim is what holds the slot.
+     */
+    @Test
+    public void testALaunchThatFailedBeforeEdtWithdrawsItsOwnClaim()
+    {
+        backend.failStartWith("otherRevision 'no-such-branch' does not resolve to a commit."); //$NON-NLS-1$
+
+        String result = tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(result, "# Background job: failed"); //$NON-NLS-1$
+        assertEquals("the claim this launch took is the claim this launch gives back", //$NON-NLS-1$
+            1, backend.withdrawnClaims().size());
+        assertEquals("so the slot is free for the next launch", //$NON-NLS-1$
+            List.of(), backend.standingClaims());
+    }
+
+    /**
+     * ...and the control that keeps that from being a blanket rollback: a launch that REACHED EDT
+     * withdraws nothing. Its claim became the session, and dropping that record while this server
+     * does not know what became of the comparison is the one thing the hand-back exists to prevent.
+     */
+    @Test
+    public void testALaunchThatReachedEdtWithdrawsNothing()
+    {
+        tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("nothing may be withdrawn once the batch has left this process", //$NON-NLS-1$
+            List.of(), backend.withdrawnClaims());
+    }
+
+    /**
+     * A refused claim reaches the caller in the OWNER's own words. The two refusals - a comparison
+     * that is open, a launch that is still starting - have different remedies, and a caller
+     * re-wording either of them is how one situation comes to be described two ways.
+     */
+    @Test
+    public void testARefusedClaimIsReportedWithTheOwnersOwnSentence()
+    {
+        backend.refuseClaimWith(ToolResult.error("Another compare_configurations call has " //$NON-NLS-1$
+            + "already claimed EDT's single comparison slot for 'Erp'.")); //$NON-NLS-1$
+
+        String result = tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(result, "already claimed EDT's single comparison slot for 'Erp'."); //$NON-NLS-1$
+        assertEquals("nothing may be started on a slot this launch does not hold", //$NON-NLS-1$
+            0, backend.starts());
+    }
+
+    // ============ Both sides must name ONE repository, and the project must be in it ============
+
+    /**
+     * The ancestor side was never checked at all: the guard only ever asked about the OTHER work
+     * tree, so a project provably outside the ANCESTOR's repository passed and that data source was
+     * built anyway. It reads nothing there, and the report calls every object "added since the
+     * ancestor" - the exact outcome the guard exists to prevent, on the side it did not look at.
+     * <p>
+     * The other side is deliberately unresolved here, because that is the only arrangement in which
+     * the ancestor check is the one thing that can fire: with both work trees known they must be
+     * the SAME tree to get past the mismatch guard, and a project inside one is inside the other.
+     */
+    @Test
+    public void testAProjectOutsideTheAncestorWorkTreeIsRefusedToo() throws Exception
+    {
+        Path ancestorTree = Files.createTempDirectory("cmp-ancestor").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createTempDirectory("cmp-project").toRealPath(); //$NON-NLS-1$
+        try
+        {
+            // Nothing to say about the other side, and the old guard asked about nothing else.
+            CompareConfigurationsTool.requireProjectInsideWorkTree("Demo", project, null); //$NON-NLS-1$
+
+            CompareConfigurationsTool.gitSidePaths("Demo", project, null, ancestorTree); //$NON-NLS-1$
+            org.junit.Assert.fail("expected a refusal naming the ancestor work tree"); //$NON-NLS-1$
+        }
+        catch (ComparisonException e)
+        {
+            String message = e.getMessage();
+            assertTrue(message, message.contains(project.toString()));
+            assertTrue("the ancestor work tree must be named: " + message, //$NON-NLS-1$
+                message.contains(ancestorTree.toString()));
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(ancestorTree);
+        }
+    }
+
+    /**
+     * Two revisions resolved independently can answer with two DIFFERENT repositories - the
+     * project's binding changed between the two calls, or one resolved through a linked worktree.
+     * Reading one side out of each is a report whose every difference is an artefact of the
+     * pairing, so the mismatch is refused and BOTH paths are named: "the ancestor read nothing" and
+     * "the ancestor read another repository" are fixed differently.
+     */
+    @Test
+    public void testTwoDifferentWorkTreesAreRefusedNamingBoth() throws Exception
+    {
+        Path otherTree = Files.createTempDirectory("cmp-other").toRealPath(); //$NON-NLS-1$
+        Path ancestorTree = Files.createTempDirectory("cmp-ancestor").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createDirectory(otherTree.resolve("project")); //$NON-NLS-1$
+        try
+        {
+            CompareConfigurationsTool.gitSidePaths("Demo", project, otherTree, ancestorTree); //$NON-NLS-1$
+            org.junit.Assert.fail("expected a refusal for two different work trees"); //$NON-NLS-1$
+        }
+        catch (ComparisonException e)
+        {
+            String message = e.getMessage();
+            // The MISMATCH must be what is reported, not the per-side check that fires behind it.
+            // Without this line the test passes on a build with no mismatch guard at all: the
+            // project lives under the other work tree, so the "not inside the work tree" refusal
+            // for the ANCESTOR happens to quote both paths as well.
+            assertTrue("the refusal must name the mismatch itself: " + message, //$NON-NLS-1$
+                message.contains("resolved to DIFFERENT git work trees")); //$NON-NLS-1$
+            assertTrue(message, message.contains("Demo")); //$NON-NLS-1$
+            assertTrue("the other side's path must be named: " + message, //$NON-NLS-1$
+                message.contains(otherTree.toString()));
+            assertTrue("and the ancestor's, or the reader cannot see WHICH two: " + message, //$NON-NLS-1$
+                message.contains(ancestorTree.toString()));
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(otherTree);
+            Files.deleteIfExists(ancestorTree);
+        }
+    }
+
+    /**
+     * The mismatch is decided in REAL form, like every other path question here: two spellings of
+     * one work tree are one work tree, and refusing them would turn the fix into a false refusal.
+     */
+    @Test
+    public void testTwoSpellingsOfOneWorkTreeAreNotAMismatch() throws Exception
+    {
+        Path workTree = Files.createTempDirectory("cmp-worktree").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createDirectory(workTree.resolve("project")); //$NON-NLS-1$
+        try
+        {
+            CompareConfigurationsTool.GitSidePaths sides = CompareConfigurationsTool.gitSidePaths(
+                "Demo", project, workTree, workTree.resolve("project").resolve("..")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+            assertEquals(sides.otherWorkTree(), sides.ancestorWorkTree());
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(workTree);
+        }
+    }
+
+    /**
+     * One side that resolved to no work tree at all is a gap in what this server could see, not a
+     * mismatch. Refusing on it would fail launches on the strength of a difference nobody measured
+     * - the same collapse the per-side guard already declines to make.
+     */
+    @Test
+    public void testASideWithNoWorkTreeIsNotAMismatch() throws Exception
+    {
+        Path workTree = Files.createTempDirectory("cmp-worktree").toRealPath(); //$NON-NLS-1$
+        Path project = Files.createDirectory(workTree.resolve("project")); //$NON-NLS-1$
+        try
+        {
+            CompareConfigurationsTool.requireOneWorkTree("Demo", workTree, null); //$NON-NLS-1$
+            CompareConfigurationsTool.requireOneWorkTree("Demo", null, workTree); //$NON-NLS-1$
+            CompareConfigurationsTool.requireOneWorkTree("Demo", null, null); //$NON-NLS-1$
+
+            CompareConfigurationsTool.GitSidePaths sides =
+                CompareConfigurationsTool.gitSidePaths("Demo", project, null, workTree); //$NON-NLS-1$
+
+            assertEquals(workTree, sides.ancestorWorkTree());
+        }
+        finally
+        {
+            Files.deleteIfExists(project);
+            Files.deleteIfExists(workTree);
+        }
+    }
+
     // ============ An empty local registry is not a statement about EDT ============
 
     @Test
@@ -1661,6 +1873,12 @@ public class CompareConfigurationsToolTest
         private final AtomicReference<Ending> lastEnding = new AtomicReference<>();
         private final AtomicInteger starts = new AtomicInteger();
         private final AtomicInteger handBacks = new AtomicInteger();
+        private final AtomicInteger claims = new AtomicInteger();
+        private final AtomicReference<ToolResult> claimRefusal = new AtomicReference<>();
+        private final AtomicReference<SlotClaim> lastClaim = new AtomicReference<>();
+        private final List<String> standingClaims = Collections.synchronizedList(new ArrayList<>());
+        private final List<String> withdrawnClaims =
+            Collections.synchronizedList(new ArrayList<>());
         private final CountDownLatch started = new CountDownLatch(1);
         private final CountDownLatch startEntered = new CountDownLatch(1);
         private final CountDownLatch startGate = new CountDownLatch(1);
@@ -1686,8 +1904,33 @@ public class CompareConfigurationsToolTest
         }
 
         @Override
-        public String start(LaunchRequest request) throws ComparisonException
+        public SlotClaim claimSlot(LaunchRequest request)
         {
+            claims.incrementAndGet();
+            ToolResult refusal = claimRefusal.get();
+            if (refusal != null)
+            {
+                return SlotClaims.refused(refusal);
+            }
+            // Minted like the registry mints one, and REMEMBERED: a claim that is handed out and
+            // never given back is the leak this whole construction is about, so the test can see
+            // both halves.
+            String id = "claim-" + claims.get(); //$NON-NLS-1$
+            standingClaims.add(id);
+            return SlotClaims.granted(id);
+        }
+
+        @Override
+        public void withdrawClaim(SlotClaim claim)
+        {
+            withdrawnClaims.add(claim.comparisonId());
+            standingClaims.remove(claim.comparisonId());
+        }
+
+        @Override
+        public String start(LaunchRequest request, SlotClaim claim) throws ComparisonException
+        {
+            lastClaim.set(claim);
             lastRequest.set(request);
             Launch arriving = requestStopDuringStart.getAndSet(null);
             if (arriving != null)
@@ -1717,6 +1960,10 @@ public class CompareConfigurationsToolTest
             }
             String id = "cmp-" + starts.incrementAndGet(); //$NON-NLS-1$
             lastComparisonId.set(id);
+            // The claim becomes the session, exactly as adoptClaim does it: from here on there is
+            // nothing to withdraw, and a test that saw a withdrawal here would be seeing a record
+            // dropped over a comparison that HAD reached the platform.
+            standingClaims.remove(claim.comparisonId());
             started.countDown();
             return id;
         }
@@ -1773,6 +2020,36 @@ public class CompareConfigurationsToolTest
         void setActiveComparisonId(String id)
         {
             activeComparisonId.set(id);
+        }
+
+        /** Makes the next claim be refused with {@code refusal}, as a taken slot would. */
+        void refuseClaimWith(ToolResult refusal)
+        {
+            claimRefusal.set(refusal);
+        }
+
+        /** @return the claims handed out and neither adopted nor withdrawn */
+        List<String> standingClaims()
+        {
+            return List.copyOf(standingClaims);
+        }
+
+        /** @return the claims given back, in order */
+        List<String> withdrawnClaims()
+        {
+            return List.copyOf(withdrawnClaims);
+        }
+
+        /** @return how many claims were asked for */
+        int claims()
+        {
+            return claims.get();
+        }
+
+        /** @return the claim the last start was given, or {@code null} */
+        SlotClaim lastClaim()
+        {
+            return lastClaim.get();
         }
 
         /** Makes the next hand-back observe {@code verdict} instead of a freed slot. */
