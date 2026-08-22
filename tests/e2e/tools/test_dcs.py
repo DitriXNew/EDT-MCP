@@ -47,10 +47,12 @@ def _seed_report(name, data_set_names=("DataSet1",)):
             "autoFillFields": False,
             "fields": [{"dataPath": "Amount%d" % (index + 1)}],
         })
-    assert_ok(call("modify_metadata", {
+    assert_ok(call("dcs", {
         "projectName": PROJECT,
         "fqn": fqn,
-        "dcs": {"dataSets": data_sets},
+        "action": "upsert",
+        "type": "schema",
+        "body": {"dataSets": data_sets},
     }), "author report DCS " + fqn)
     wait_for_project_ready()
     return fqn
@@ -244,16 +246,28 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
 
     first_query = "SELECT 101 AS E2EDcsWriteFirst"
     second_query = "SELECT 202 AS E2EDcsWriteSecond"
-    created = _write(root, "upsert", "dataSet", {
-        "name": "Sales",
-        "type": "query",
-        "query": first_query,
-        "autoFillFields": False,
-        "fields": [{"dataPath": "Amount"}],
+    field = "E2EDcsExplicitAmount"
+    parameter = "E2EDcsTypedPeriod"
+    created = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "Sales",
+            "type": "query",
+            "query": first_query,
+            "autoFillFields": False,
+            "fields": [{"dataPath": field}],
+        }],
+        "parameters": [{
+            "name": parameter,
+            "valueType": {"types": [{"kind": "Date", "fractions": "Date"}]},
+        }],
     })
-    assert_ok(created, "author a query dataset through dcs")
+    assert_ok(created, "author a schema batch with a query dataset and typed parameter")
     poll_diff_contains("E2EDcsWriteFirst",
                        ctx="the dcs write must force-export the first query to disk")
+    poll_diff_contains(field,
+                       ctx="the explicit dataset field must force-export to Template.dcs")
+    poll_diff_contains(parameter,
+                       ctx="the typed schema parameter must force-export to Template.dcs")
 
     updated = _write(root + "#/dataSets/Sales", "upsert", "dataSet", {
         "query": second_query,
@@ -274,8 +288,211 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
     on_disk = read_disk(dcs_rel)
     assert "E2EDcsWriteSecond" in on_disk, "the committed query must persist in %s" % dcs_rel
     assert "E2EDcsWriteFirst" not in on_disk, "the old query must be replaced in %s" % dcs_rel
+    assert field in on_disk, "the explicit dataset field must persist in %s" % dcs_rel
+    assert parameter in on_disk, "the typed parameter must persist in %s" % dcs_rel
+    assert "<dataSourceType>Local</dataSourceType>" in on_disk, \
+        "the lazy-created data source must use EDT's canonical Local token in %s" % dcs_rel
     assert on_disk.count("<name>Sales</name>") == 1, \
         "the report's .dcs must contain one Sales dataset, not duplicate natural keys"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_calculated_field_upserts_in_place_and_persists_to_disk():
+    report_name = "E2EDcsWriteCalculated"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for calculated-field write")
+    wait_for_project_ready()
+
+    data_path = "E2EDcsCalcMargin"
+    first_expression = "E2EDcsRevenue - E2EDcsCost"
+    second_expression = "E2EDcsRevenue * 2 - E2EDcsCost"
+    created = _write(root, "upsert", "calculatedField", {
+        "dataPath": data_path,
+        "expression": first_expression,
+        "title": "Margin",
+    })
+    assert_ok(created, "author a calculated field through dcs")
+    poll_diff_contains(first_expression,
+                       ctx="the calculated field expression must reach Template.dcs")
+
+    dcs_rel = _find_report_dcs(report_name)
+    assert dcs_rel is not None, "the first calculated-field write must materialize Template.dcs"
+    first_disk = read_disk(dcs_rel)
+    assert data_path in first_disk and first_expression in first_disk, \
+        "the calculated field and expression must persist in %s" % dcs_rel
+
+    updated = _write(root + "#/calculatedFields/" + data_path, "upsert", "calculatedField", {
+        "expression": second_expression,
+    })
+    assert_ok(updated, "update the calculated field by its natural-key address")
+    poll_diff_contains(second_expression,
+                       ctx="the updated calculated-field expression must reach Template.dcs")
+
+    second_disk = read_disk(dcs_rel)
+    assert second_expression in second_disk, "the updated expression must persist in %s" % dcs_rel
+    assert first_expression not in second_disk, "the old expression must be removed from %s" % dcs_rel
+    assert second_disk.count(data_path) == 1, \
+        "the calculated field must be updated in place, never duplicated in %s" % dcs_rel
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_unsupported_root_is_a_clean_non_mutating_error():
+    root = "Catalog.Catalog"
+    result = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "DataSet1",
+            "type": "query",
+            "query": "SELECT Ref FROM Catalog.Catalog",
+        }],
+    })
+    error = assert_error(result, "a Catalog is not a supported DCS root")
+    assert_error_quality(error, names=[root], suggests=["Report.<Name>", "CommonTemplate"],
+                         ctx="the unsupported-root error names the target and valid root shapes")
+    assert_no_diff("a rejected unsupported-root write must change nothing on disk")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_localized_title_rejects_an_undeclared_language():
+    report_name = "E2EDcsUndeclaredLocale"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for undeclared-locale validation")
+    wait_for_project_ready()
+
+    result = _write(root, "upsert", "parameter", {
+        "name": "Period",
+        "title": {"fr_CA": "Periode"},
+    })
+    error = assert_error(result, "a DCS title in an undeclared language")
+    assert_error_quality(error, names=["fr_CA"], suggests=["en"],
+                         ctx="the locale error names the bad code and declared alternatives")
+    assert "fr_CA" not in diff(), "a rejected locale must not reach disk"
+    assert "Periode" not in diff(), "a rejected localized title must not reach disk"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_localized_title_uses_the_declared_language_code_spelling():
+    report_name = "E2EDcsCanonicalLocale"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for language-code canonicalization")
+    wait_for_project_ready()
+
+    result = _write(root, "upsert", "parameter", {
+        "name": "Period",
+        "title": {"EN": "Period"},
+    })
+    assert_ok(result, "accept a declared language code in another case")
+    dcs_rel = _find_report_dcs(report_name)
+    assert dcs_rel is not None, "the localized parameter write must materialize Template.dcs"
+    on_disk = read_disk(dcs_rel)
+    assert ">en<" in on_disk, \
+        "the title must use the configuration's declared spelling 'en': %s" % on_disk[:700]
+    assert ">EN<" not in on_disk, \
+        "the requested casing must not create a second language key: %s" % on_disk[:700]
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_localized_title_warns_for_a_declared_but_unused_language():
+    language = "Language.E2EDcsFrench"
+    report_name = "E2EDcsUnusedLocale"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": language}),
+              "add a second configuration language")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": language,
+        "properties": [{"name": "languageCode", "value": "fr"}],
+    }), "assign the second language code")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for unused-language warning")
+    wait_for_project_ready()
+
+    unused = _write(root, "upsert", "parameter", {
+        "name": "Period",
+        "title": {"fr": "P\u00e9riode"},
+    })
+    assert_ok(unused, "write a title in a declared but unused language")
+    assert "**localeUnusedInConfiguration:** `true` (fr)." in unused.text, \
+        "the Markdown result must warn about the declared but unused language:\n%s" % unused.text
+    assert "Ask the user before translating further." in unused.text, \
+        "the unused-language warning must remain actionable"
+
+    in_use = _write(root + "#/parameters/Period", "upsert", "parameter", {
+        "title": {"en": "Period"},
+    })
+    assert_ok(in_use, "write the same title in the configuration's in-use language")
+    assert "localeUnusedInConfiguration" not in in_use.text, \
+        "the configuration's in-use language must not produce the warning: %s" % in_use.text
+
+    valid_schema = _write(root, "upsert", "schema", {
+        "dataSources": [{"name": "DataSource1", "type": "Local"}],
+        "parameters": [{"name": "Period", "title": {"en": "Period"}}],
+    })
+    assert_ok(valid_schema, "write a titleless data source beside an in-use localized title")
+    assert "localeUnusedInConfiguration" not in valid_schema.text, \
+        "members without a presentation must not produce a language warning: %s" % valid_schema.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_unsupported_title_locations_are_rejected_without_a_locale_warning():
+    root = "Report.E2EDcsUnsupportedTitle"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for unsupported-title validation")
+    wait_for_project_ready()
+    before = diff()
+
+    on_source = _write(root, "upsert", "schema", {
+        "dataSources": [{
+            "name": "DataSource1",
+            "type": "Local",
+            "title": {"fr": "Ignored"},
+        }],
+    })
+    source_error = assert_error(on_source, "a data source has no title member")
+    assert_error_quality(source_error, names=["title", "dataSources[0]"],
+                         suggests=["Accepted members", "Remove 'title'"],
+                         ctx="unsupported data-source presentations explain the valid body shape")
+    assert "localeUnusedInConfiguration" not in on_source.text, \
+        "an unsupported presentation must not produce a locale warning"
+    assert diff() == before, "a rejected data-source title must not change the project"
+
+    nested_lookalike = _write(root, "upsert", "schema", {
+        "dataSources": [{
+            "name": "DataSource1",
+            "type": "Local",
+            "parameters": [{"title": {"fr_CA": "Ignored"}}],
+        }],
+    })
+    nested_error = assert_error(nested_lookalike,
+                                "a data source has no nested parameters member")
+    assert_error_quality(nested_error, names=["parameters", "dataSources[0]"],
+                         suggests=["Accepted members", "Remove 'parameters'"],
+                         ctx="unsupported nested look-alikes explain the valid body shape")
+    assert "localeUnusedInConfiguration" not in nested_lookalike.text, \
+        "an unsupported nested presentation must not produce a locale warning"
+    assert diff() == before, "a rejected nested look-alike member must not change the project"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_localized_title_rejects_duplicate_canonical_language_codes():
+    report_name = "E2EDcsDuplicateLocale"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for duplicate-language validation")
+    wait_for_project_ready()
+
+    result = _write(root, "upsert", "parameter", {
+        "name": "Period",
+        "title": {"en": "Period", "EN": "Other"},
+    })
+    error = assert_error(result, "one canonical language named twice")
+    assert_error_quality(error, names=["en"], suggests=["once"],
+                         ctx="the duplicate-language error names the code and corrective action")
+    assert "Other" not in diff(), "a rejected duplicate language must not reach disk"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -507,16 +724,16 @@ def test_dynamic_list_write_persists_form_and_external_list_settings_files():
 
 
 @e2e_test(tool="dcs", kind="read")
-def test_unimplemented_mutation_action_is_a_clean_non_mutating_error():
+def test_unknown_action_is_a_clean_non_mutating_error():
     result = call("dcs", {
         "projectName": PROJECT,
         "fqn": "Report.DoesNotNeedToExist",
-        "action": "replace",
+        "action": "merge",
         "type": "dataSet",
         "body": {"name": "DataSet1"},
         "expectedHash": "00000000000000000000",
     })
-    error = assert_error(result, "unimplemented replace action")
-    assert_error_quality(error, names=["replace"], suggests=["get", "upsert"],
-                         ctx="unimplemented actions name the working alternatives")
-    assert_no_diff("a rejected unimplemented action must not change the project")
+    error = assert_error(result, "unknown action")
+    assert_error_quality(error, names=["merge"], suggests=["get", "upsert"],
+                         ctx="unknown actions name the supported alternatives")
+    assert_no_diff("a rejected unknown action must not change the project")

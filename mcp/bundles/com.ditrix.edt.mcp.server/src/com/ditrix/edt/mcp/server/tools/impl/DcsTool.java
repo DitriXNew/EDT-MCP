@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.google.gson.JsonElement;
@@ -539,7 +541,8 @@ public class DcsTool implements IMcpTool
             return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
                 + "`\n\n**Hash:** `" + outcome.hash + "`\n\n**Export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
                 + "\n\n**Settings applied:** `" + outcome.settingsApplied + "`" //$NON-NLS-1$ //$NON-NLS-2$
-                + "\n\n**Schema applied:** " + countsText; //$NON-NLS-1$
+                + "\n\n**Schema applied:** " + countsText //$NON-NLS-1$
+                + localeUnusedNote(context, languages);
         }
         catch (RuntimeException e)
         {
@@ -684,7 +687,47 @@ public class DcsTool implements IMcpTool
             + "`\n\n**Hash:** `" + written.hash + "`\n\n**Form.form export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
             + "\n\n**ListSettings.dcss export scheduled:** `" //$NON-NLS-1$
             + (written.settingsFqn != null) + "`\n\n**Applied:** " //$NON-NLS-1$
-            + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)); //$NON-NLS-1$ //$NON-NLS-2$
+            + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)) //$NON-NLS-1$ //$NON-NLS-2$
+            + localeUnusedNote(context, languages);
+    }
+
+    /**
+     * The "you just wrote into a language nothing else uses" prompt, carrying the same rule as the
+     * {@code localeUnusedInConfiguration} flag {@code create_metadata} / {@code modify_metadata}
+     * return - this tool answers in Markdown, so it says it in prose instead of a JSON field.
+     * <p>
+     * NOT an error: the language IS declared, so the text will display. It is a prompt to ASK the
+     * user, because the configuration's own synonym has no text in that language - it may be a
+     * single-language build, or a language this configuration does not support yet. A payload
+     * writes many titles at once, so this reports the languages rather than a per-property list.
+     *
+     * @param context the resolved project/configuration
+     * @param languages the parse context, whose used codes are the ones this call actually wrote
+     * @return the Markdown note, or an empty string when every written language is in use
+     */
+    private static String localeUnusedNote(ProjectContext.ConfigurationResult context,
+        DcsPresentationParser.LanguageContext languages)
+    {
+        if (context == null || languages == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        List<String> unused = new ArrayList<>();
+        for (String code : languages.usedCodes())
+        {
+            if (MetadataLanguageUtils.isDeclaredButUnused(context.configuration(), code))
+            {
+                unused.add(code);
+            }
+        }
+        if (unused.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        Collections.sort(unused);
+        return "\n\n**localeUnusedInConfiguration:** `true` (" + String.join(", ", unused) //$NON-NLS-1$ //$NON-NLS-2$
+            + "). The text will display - the language is declared - but the configuration's own " //$NON-NLS-1$
+            + "synonym has no text in it. Ask the user before translating further."; //$NON-NLS-1$
     }
 
     private static DynamicListExtInfo dynamicListExtInfo(EObject member)

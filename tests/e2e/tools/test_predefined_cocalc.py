@@ -6,7 +6,7 @@ delete_metadata on the shared predefined FQN grammar
     ChartOfCalculationTypes.<OwnerName>.Predefined.<ItemName>
 
 This is a deliberately CROSS-TOOL depth file (the documented one-file-per-tool exception,
-like test_predefined_items.py / test_modify_metadata_dcs.py): the feature spans four
+like test_predefined_items.py / test_dcs.py): the feature spans four
 existing tools, each already covered by its own primary per-tool file, so this file's
 tool= tags reuse those already-covered names and add DEPTH for THIS owner kind rather than
 duplicating each tool's general contract - the e2e coverage ratchet counts by tool NAME,

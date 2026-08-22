@@ -6,7 +6,7 @@ delete_metadata / get_metadata_details on a dedicated FQN grammar
 
 OwnerType in {Catalog, ChartOfCharacteristicTypes}. This is a deliberately CROSS-TOOL
 file (the documented one-file-per-tool exception, like test_extension_coverage.py /
-test_modify_metadata_dcs.py): the feature spans four existing tools, each of which
+test_dcs.py): the feature spans four existing tools, each of which
 already has its own primary per-tool file — this file's tool= tags match those real,
 already-covered tool names, so it adds DEPTH for this one feature rather than
 duplicating each tool's general contract tests.

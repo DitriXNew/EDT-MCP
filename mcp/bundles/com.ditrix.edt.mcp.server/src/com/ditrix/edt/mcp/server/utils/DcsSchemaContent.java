@@ -100,14 +100,6 @@ public final class DcsSchemaContent
             target.normalizedRootFqn());
     }
 
-    /** Shared legacy/report entry used by {@code modify_metadata.dcs}. */
-    public static ResolveResult resolveReport(IBmTransaction transaction, Report report,
-        IModelObjectFactory factory, Version version, ITopObjectFqnGenerator generator, String fqn)
-    {
-        BasicTemplate template = findOrCreateMainTemplate(report, factory, version);
-        return resolveTemplateContent(transaction, template, generator, fqn);
-    }
-
     private static BasicTemplate findOrCreateMainTemplate(Report report, IModelObjectFactory factory,
         Version version)
     {

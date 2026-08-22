@@ -509,7 +509,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_common_pictures`](docs/tools/list_common_pictures.md) | List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, p… |
 | [`list_configurations`](docs/tools/list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
 | [`list_subsystems`](docs/tools/list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
-| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of a metadata node - an object, a member, or a FORM member (item / attribute / command / handler) - addressed by a 1C full-name FQN, as proper… |
+| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata'). |
 | [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ### Code

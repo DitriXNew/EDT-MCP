@@ -44,7 +44,7 @@ import com.google.gson.JsonPrimitive;
 /**
  * Authors the CONTENT of a 1C Data Composition Schema (\u0421\u041a\u0414 / a {@code .dcs}
  * resource) - the {@link DataCompositionSchema} model behind a Report's Data Composition Schema
- * {@code BasicTemplate} - from the structured {@code dcs} JSON a client passes to {@code modify_metadata}.
+ * {@code BasicTemplate} - from the structured schema body a client passes to the {@code dcs} tool.
  * The writer is a pure, typed EMF transformation: it takes an already-resolved
  * {@link DataCompositionSchema} (reached by the caller inside a BM boundary from
  * {@code BasicTemplate.getTemplate()}) and applies a parsed spec of data sources / query data sets (with
@@ -52,7 +52,7 @@ import com.google.gson.JsonPrimitive;
  * {@code DcsFactory} singletons) - never a reflective {@code eSet}, never opening a transaction or
  * force-exporting (the caller owns both, exactly like {@link SpreadsheetTemplateWriter}).
  *
- * <p>The v1 {@code dcs} payload shape:</p>
+ * <p>The schema body shape:</p>
  *
  * <pre>
  * {
@@ -335,11 +335,11 @@ public final class DcsWriter
      * front (so a malformed entry mutates nothing), resolves every parameter value type through
      * {@code typeResolver} before any mutation, then find-or-creates the data sources / query data sets
      * (with their fields) / parameters with the typed DCS API. Does NOT open a transaction and does NOT
-     * force-export - the caller ({@code ModifyMetadataTool}) reaches the schema inside its own BM write
+     * force-export - the caller ({@code DcsTool}) reaches the schema inside its own BM write
      * boundary and drains it to the {@code .dcs} after this returns.
      *
      * @param schema the report's Data Composition Schema content (must not be {@code null})
-     * @param spec the {@code dcs} payload (see the class javadoc for the shape)
+     * @param spec the schema body (see the class javadoc for the shape)
      * @param typeResolver builds a parameter's value type from its {@code valueType} spec; may be
      *            {@code null} only when no parameter carries a {@code valueType}
      * @return a {@link Result} - check {@link Result#hasError()} first; {@link Result#error} is a ready
@@ -351,9 +351,8 @@ public final class DcsWriter
     }
 
     /**
-     * Shared parameter-type resolver used by both {@code dcs} and the legacy
-     * {@code modify_metadata.dcs} adapter. It deliberately routes through the one metadata type
-     * grammar in {@link MetadataTypeBuilder}.
+     * Shared parameter-type resolver used by the {@code dcs} tool. It deliberately routes through
+     * the one metadata type grammar in {@link MetadataTypeBuilder}.
      */
     public static TypeResolver typeResolver(Configuration configuration, Version version)
     {
@@ -371,8 +370,8 @@ public final class DcsWriter
     }
 
     /**
-     * Applies a DCS payload with shared configured-language validation for every nested presentation.
-     * The language context also records the canonical codes used by the payload.
+     * Applies a DCS schema body with shared configured-language validation for every nested
+     * presentation. The language context also records the canonical codes used by the body.
      */
     public static Result apply(DataCompositionSchema schema, JsonObject spec, TypeResolver typeResolver,
         DcsPresentationParser.LanguageContext languages)

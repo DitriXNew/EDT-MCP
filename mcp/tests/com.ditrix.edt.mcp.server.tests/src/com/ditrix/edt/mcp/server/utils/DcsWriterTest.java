@@ -372,7 +372,7 @@ public class DcsWriterTest
     public void testEmptyPayloadIsError()
     {
         Result r = DcsWriter.apply(newSchema(), json("{}"), null); //$NON-NLS-1$
-        assertTrue("an empty dcs payload must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("an empty dcs schema body must error", r.hasError()); //$NON-NLS-1$
     }
 
     @Test
