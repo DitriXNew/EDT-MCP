@@ -728,20 +728,10 @@ public class GetComparisonNodeTool implements IMcpTool
      */
     private String noKnownComparisonsText()
     {
-        PlatformAnswer<Boolean> active = source.edtHasActiveComparison();
-        if (active.isUnavailable())
-        {
-            return "no comparison started through this server is registered, and EDT's " //$NON-NLS-1$
-                + "comparison service could not be asked whether one is running"; //$NON-NLS-1$
-        }
-        if (Boolean.TRUE.equals(active.orElse(Boolean.FALSE)))
-        {
-            return "no comparison started through this server is registered, but EDT reports " //$NON-NLS-1$
-                + "one occupying its single comparison slot - it was started outside this " //$NON-NLS-1$
-                + "server, so only EDT can address or end it"; //$NON-NLS-1$
-        }
-        return "no comparison started through this server is registered, and EDT reports none " //$NON-NLS-1$
-            + "running"; //$NON-NLS-1$
+        // Worded in ONE place, shared with compare_configurations' own refusal: the same claim
+        // lived in both tools and only one of them was corrected, which is how the second one
+        // went on telling callers that nothing was running.
+        return ComparisonFailures.noKnownComparisonsText(source.edtHasActiveComparison());
     }
 
     private static String unknownObjectError(String comparisonId, String objectFqn, String symlink)

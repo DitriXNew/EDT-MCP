@@ -1348,10 +1348,56 @@ public class CompareConfigurationsToolTest
         }
     }
 
+    // ============ An empty local registry is not a statement about EDT ============
+
+    @Test
+    public void testReleasingAnUnknownIdDoesNotClaimEdtIsIdleWhenItWasNotAsked()
+    {
+        backend.refuseRelease();
+        backend.setLiveComparisonIds(List.of());
+        backend.setEdtHasActiveComparison(PlatformAnswer.unavailable());
+
+        String message = errorMessage(tool.execute(Map.of("releaseComparisonId", "cmp-nope"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(message, message.contains("could not be asked")); //$NON-NLS-1$
+        assertFalse("an unasked platform must not be reported as an idle one: " + message, //$NON-NLS-1$
+            message.contains("EDT reports none running")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReleasingAnUnknownIdSaysWhenEdtItselfHoldsTheSlot()
+    {
+        // The window this exists for: a comparison started from the workbench occupies EDT's one
+        // slot and is never registered here, so an empty local list proves nothing about it.
+        backend.refuseRelease();
+        backend.setLiveComparisonIds(List.of());
+        backend.setEdtHasActiveComparison(PlatformAnswer.of(Boolean.TRUE));
+
+        String message = errorMessage(tool.execute(Map.of("releaseComparisonId", "cmp-nope"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(message, message.contains("started outside this server")); //$NON-NLS-1$
+        assertFalse("and it must not invite a launch the platform will refuse: " + message, //$NON-NLS-1$
+            message.contains("start one with compare_configurations")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReleasingAnUnknownIdMaySayNothingRunsWhenEdtAnsweredSo()
+    {
+        backend.refuseRelease();
+        backend.setLiveComparisonIds(List.of());
+        backend.setEdtHasActiveComparison(PlatformAnswer.of(Boolean.FALSE));
+
+        String message = errorMessage(tool.execute(Map.of("releaseComparisonId", "cmp-nope"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(message, message.contains("EDT reports none running")); //$NON-NLS-1$
+    }
+
     /** A comparison backend that answers from the test instead of from EDT. */
     private static final class StubBackend implements Backend
     {
         private final AtomicReference<String> activeComparisonId = new AtomicReference<>();
+        private final AtomicReference<PlatformAnswer<Boolean>> edtHasActiveComparison =
+            new AtomicReference<>(PlatformAnswer.of(Boolean.FALSE));
         private final AtomicReference<String> lastComparisonId = new AtomicReference<>();
         private final AtomicReference<LaunchRequest> lastRequest = new AtomicReference<>();
         private final AtomicReference<String> startFailure = new AtomicReference<>();
@@ -1461,6 +1507,17 @@ public class CompareConfigurationsToolTest
         public List<String> liveComparisonIds()
         {
             return liveComparisonIds;
+        }
+
+        @Override
+        public PlatformAnswer<Boolean> edtHasActiveComparison()
+        {
+            return edtHasActiveComparison.get();
+        }
+
+        void setEdtHasActiveComparison(PlatformAnswer<Boolean> answer)
+        {
+            edtHasActiveComparison.set(answer);
         }
 
         void setActiveComparisonId(String id)

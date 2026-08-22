@@ -375,7 +375,7 @@ public class CompareConfigurationsTool implements IMcpTool
             // "the comparison you named is closed" are different facts, and a caller acting
             // on the second would believe a slot was freed that somebody else still holds.
             return ComparisonFailures.unknownComparison(comparisonId,
-                backend.liveComparisonIds()).toJson();
+                backend.liveComparisonIds(), backend.edtHasActiveComparison()).toJson();
         }
         if (!handback.slotIsFree())
         {
@@ -1866,6 +1866,17 @@ public class CompareConfigurationsTool implements IMcpTool
 
         /** @return the comparison ids a caller may still quote, oldest first */
         List<String> liveComparisonIds();
+
+        /**
+         * Whether EDT itself reports something in its single comparison slot.
+         * <p>
+         * Asked only to keep a refusal honest: an empty local registry proves nothing about a
+         * comparison launched from the workbench, which is never registered here.
+         *
+         * @return EDT's answer, or {@link PlatformAnswer#unavailable()} when the comparison
+         *         service could not be asked - a third case, and not a "no"
+         */
+        PlatformAnswer<Boolean> edtHasActiveComparison();
     }
     /**
      * The production backend: the read-only {@link ComparisonEngine} facade plus the session
@@ -2287,6 +2298,14 @@ public class CompareConfigurationsTool implements IMcpTool
         public List<String> liveComparisonIds()
         {
             return ComparisonSessionRegistry.shared().ids();
+        }
+
+        @Override
+        public PlatformAnswer<Boolean> edtHasActiveComparison()
+        {
+            Optional<ComparisonEngine> engine = ComparisonEngine.attached();
+            return engine.isEmpty() ? PlatformAnswer.unavailable()
+                : engine.get().hasActiveComparison();
         }
     }
 }

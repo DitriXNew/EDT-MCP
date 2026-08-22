@@ -99,13 +99,61 @@ public final class ComparisonFailures
     }
 
     /**
+     * Upper-cases the first character, so a clause written to be embedded mid-sentence can also
+     * open one.
+     *
+     * @param text the clause
+     * @return the same text starting with a capital
+     */
+    private static String capitalise(String text)
+    {
+        return text.isEmpty() ? text : Character.toUpperCase(text.charAt(0)) + text.substring(1);
+    }
+
+    /**
+     * What to say when this server holds no comparison of its own.
+     * <p>
+     * An empty local registry proves only that nothing was started THROUGH THIS SERVER. EDT's
+     * single slot can be held by a comparison launched from the workbench, which is never
+     * registered here - so "we have none" must not be rendered as "none is running", or the
+     * caller is told to start one that the platform will then refuse. The three answers are kept
+     * apart, "could not be asked" included, and this is the ONE place that words them: the same
+     * claim used to live in two tools, and only one of them was corrected.
+     *
+     * @param edtHasActiveComparison EDT's own answer about its slot, or
+     *            {@link PlatformAnswer#unavailable()} when the service could not be asked
+     * @return the clause, without a trailing stop
+     */
+    public static String noKnownComparisonsText(PlatformAnswer<Boolean> edtHasActiveComparison)
+    {
+        PlatformAnswer<Boolean> active =
+            edtHasActiveComparison == null ? PlatformAnswer.unavailable() : edtHasActiveComparison;
+        if (active.isUnavailable())
+        {
+            return "no comparison started through this server is registered, and EDT's " //$NON-NLS-1$
+                + "comparison service could not be asked whether one is running"; //$NON-NLS-1$
+        }
+        if (Boolean.TRUE.equals(active.orElse(Boolean.FALSE)))
+        {
+            return "no comparison started through this server is registered, but EDT reports " //$NON-NLS-1$
+                + "one occupying its single comparison slot - it was started outside this " //$NON-NLS-1$
+                + "server, so only EDT can address or end it"; //$NON-NLS-1$
+        }
+        return "no comparison started through this server is registered, and EDT reports none " //$NON-NLS-1$
+            + "running"; //$NON-NLS-1$
+    }
+
+    /**
      * The caller quoted a {@code comparisonId} that names nothing any more.
      *
      * @param comparisonId the value the caller passed
      * @param liveIds the ids that ARE registered right now (possibly empty)
+     * @param edtHasActiveComparison EDT's answer about its slot, used only when {@code liveIds} is
+     *            empty - see {@link #noKnownComparisonsText}
      * @return the refusal
      */
-    public static ToolResult unknownComparison(String comparisonId, List<String> liveIds)
+    public static ToolResult unknownComparison(String comparisonId, List<String> liveIds,
+        PlatformAnswer<Boolean> edtHasActiveComparison)
     {
         StringBuilder message = new StringBuilder();
         message.append("Comparison '").append(comparisonId) //$NON-NLS-1$
@@ -113,7 +161,8 @@ public final class ComparisonFailures
             .append("after sitting idle."); //$NON-NLS-1$
         if (liveIds == null || liveIds.isEmpty())
         {
-            message.append(" No comparison is running right now - start one with compare_configurations."); //$NON-NLS-1$
+            message.append(' ').append(capitalise(noKnownComparisonsText(edtHasActiveComparison)))
+                .append('.');
         }
         else
         {
