@@ -411,8 +411,16 @@ public class CompareConfigurationsTool implements IMcpTool
      *       comparison that had never started, and refused every later launch until the idle TTL
      *       expired.</li>
      *   <li>Any other failure means EDT was REACHED and refused, and what it did with the batch on
-     *       the way is not established here. That is the hand-back's case, and its own answer is
-     *       part of the message rather than dropped on the floor.</li>
+     *       the way is not established BY THE THROW. So the platform is asked, through
+     *       {@link ComparisonSessionRegistry#handBackRefusedLaunch}: on the reading where EDT
+     *       answers that it is not running this comparison, the refused launch has nothing left to
+     *       give back and its reservation is WITHDRAWN; on every reading that establishes nothing -
+     *       EDT could not be asked, the hand-back failed, EDT had begun after all - the ordinary
+     *       hand-back answer stands and the record is KEPT. A caller who could not ask still keeps
+     *       the record; only being told no drops it. Refusing to ask at all is what left a
+     *       comparison started from EDT's own interface between the slot check and this line
+     *       holding a registration for a launch EDT had rejected, and that registration refused
+     *       every later launch until the idle TTL expired.</li>
      * </ul>
      * Package-scoped so the two rollbacks can be driven against a real registry.
      *
@@ -458,9 +466,13 @@ public class CompareConfigurationsTool implements IMcpTool
         }
         catch (RuntimeException e)
         {
+            // EDT was reached and said no. The refusal is the caller's half of the proof; the
+            // other half is EDT's own answer about the comparison, which the rollback asks for -
+            // see the javadoc above and handBackRefusedLaunch for why a refusal must not be filed
+            // under "we do not know".
             throw new ComparisonException("EDT refused to start the comparison: " //$NON-NLS-1$
                 + ComparisonFailures.describe(e) + ' '
-                + engine.sessions().handBack(id, Ending.CLOSED).sentence(), e);
+                + engine.sessions().handBackRefusedLaunch(id, Ending.CLOSED).sentence(), e);
         }
         return id;
     }

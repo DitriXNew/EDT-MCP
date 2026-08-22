@@ -59,11 +59,20 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  *
  * <h2>ONE owner of the decision to give the slot back</h2>
  * {@link #handBack(String, SlotHandback.Ending)} is the only code in this bundle that ends a
- * comparison or drops its record, and {@link SlotHandback} is what it answers with. Every other
- * path here — the idle {@link #sweep()}, {@link #releaseAll()} on the way out of the bundle — goes
- * through the same private step, so all three obey one invariant:
+ * comparison, and {@link SlotHandback} is what it answers with. Every other path here — the idle
+ * {@link #sweep()}, {@link #releaseAll()} on the way out of the bundle — goes through the same
+ * private step, so all three obey one invariant:
  * <p>
  * <b>The record is dropped exactly when the slot is CONFIRMED free.</b>
+ * <p>
+ * Two further methods drop a record without ending anything, and both are ROLLBACKS of a launch
+ * that failed rather than ways to end a comparison:
+ * {@link #withdrawUnstartedLaunch(String)}, reachable only when the platform was demonstrably
+ * never asked to start anything, and
+ * {@link #handBackRefusedLaunch(String, SlotHandback.Ending)}, which goes through the hand-back
+ * above and drops the record only on the reading where EDT itself answers that it is not running
+ * the comparison. Neither weakens the invariant: both leave the named comparison holding nothing,
+ * which is what {@link SlotHandback#slotIsFree()} reports for them.
  * <p>
  * A session that could not be given back therefore STAYS registered, whether the hand-back failed
  * or could not be attempted at all. That is the honest state - it may still hold the slot - and it
@@ -839,11 +848,16 @@ public final class ComparisonSessionRegistry
      * <p>
      * <b>The one owner.</b> Nothing else in this bundle ends a comparison: the platform's two
      * lifetime verbs are package-scoped on {@link ComparisonEngine} and the session map is private
-     * here, so a caller has no other door. The single other method that drops a record -
-     * {@link #withdrawUnstartedLaunch(String)} - ends nothing, because it is only reachable when
-     * the platform was demonstrably never asked to start anything. It gets a {@link SlotHandback} back and
-     * publishes {@link SlotHandback#sentence()}; it does not decide what happened, and it cannot
-     * lose a failure by writing nothing, because the failure is inside the sentence it prints.
+     * here, so a caller has no other door. The two other methods that drop a record -
+     * {@link #withdrawUnstartedLaunch(String)} and
+     * {@link #handBackRefusedLaunch(String, SlotHandback.Ending)} - are both rollbacks of a launch
+     * that failed: the first ends nothing, because it is only reachable when the platform was
+     * demonstrably never asked to start anything; the second goes through this one and drops the
+     * record only on the reading where EDT itself answers that it is not running the comparison.
+     * <p>
+     * A caller gets a {@link SlotHandback} back and publishes {@link SlotHandback#sentence()}; it
+     * does not decide what happened, and it cannot lose a failure by writing nothing, because the
+     * failure is inside the sentence it prints.
      * <p>
      * The record is dropped exactly when the slot is confirmed free - see the class javadoc for
      * the invariant and {@link SlotHandback} for what it does not promise.
@@ -883,6 +897,74 @@ public final class ComparisonSessionRegistry
             return SlotHandback.of(SlotHandback.Verdict.NOT_REGISTERED, comparisonId);
         }
         return handBackNow(session, ending);
+    }
+
+    /**
+     * Rolls back the registration made for a launch the PLATFORM REFUSED, in the way the
+     * platform's own answers allow.
+     * <p>
+     * <b>Why the ordinary hand-back is not enough here.</b> The registration is made before the
+     * batch is handed over, so a hand-over that fails has to decide what becomes of it. The
+     * hand-back is built for NOT KNOWING and it answers
+     * {@link SlotHandback.Verdict#NOT_STARTED_YET} for a comparison EDT reports no status for -
+     * which deliberately KEEPS the record, because ending a comparison EDT has merely scheduled
+     * costs EDT its comparison support for the rest of the session. That is right when nobody
+     * refused anything. It is wrong after a refusal: the launch is never going to begin, so the
+     * kept record names EDT's single slot as taken by a comparison that does not exist and refuses
+     * every later launch until the idle TTL expires. Measured live: a comparison started from EDT's
+     * own interface between a launch's slot check and its hand-over produces exactly that.
+     * <p>
+     * <b>What the caller supplies, and what it may not.</b> The one fact this object cannot
+     * establish for itself is that the platform REFUSED - that is the caller's throw, the same
+     * shape as {@link SlotHandback.Ending}. Everything else is asked of EDT here, and the
+     * withdrawal happens only on EDT's own definite answer: it is the {@code NOT_STARTED_YET}
+     * reading, taken under this monitor, that says the comparison is not running. A caller cannot
+     * assert the withdrawal, and a reading that establishes nothing -
+     * {@link SlotHandback.Verdict#UNREACHABLE} when EDT could not be asked,
+     * {@link SlotHandback.Verdict#NOT_FREED} when the hand-back itself failed - keeps the record
+     * exactly as it does on every other path. The rule "keep it when we do not know" is not
+     * weakened; what changes is that "the platform said no" stops being filed under not knowing.
+     * <p>
+     * The reading and the drop share ONE monitor hold, so a comparison that begins in the last
+     * millisecond of the wait is decided by one reading rather than by two that can disagree.
+     *
+     * @param comparisonId the id issued by {@link #register} for the launch the platform refused
+     * @param ending why the comparison is ending; it selects EDT's verb and nothing else, and is
+     *     used only on the readings where a hand-back is actually attempted
+     * @return what was observed; never {@code null}
+     */
+    public SlotHandback handBackRefusedLaunch(String comparisonId, SlotHandback.Ending ending)
+    {
+        awaitPlatformStart(comparisonId);
+        return withdrawRefusedWhenAsked(comparisonId, ending);
+    }
+
+    /**
+     * The refused-launch rollback once the waiting is over, with the monitor taken.
+     *
+     * @param comparisonId the id the caller quoted
+     * @param ending which platform verb to use where one is used at all
+     * @return what was observed
+     */
+    private synchronized SlotHandback withdrawRefusedWhenAsked(String comparisonId,
+        SlotHandback.Ending ending)
+    {
+        ComparisonSession session = comparisonId == null ? null : sessions.get(comparisonId);
+        if (session == null)
+        {
+            return SlotHandback.of(SlotHandback.Verdict.NOT_REGISTERED, comparisonId);
+        }
+        SlotHandback handback = handBackNow(session, ending);
+        if (handback.verdict() != SlotHandback.Verdict.NOT_STARTED_YET)
+        {
+            // EDT either took the hand-back, or had already forgotten the handle, or could not be
+            // asked, or refused the hand-back. None of those is the platform answering that it is
+            // not running the comparison, so none of them earns a withdrawal - the ordinary
+            // answer stands, record and all.
+            return handback;
+        }
+        sessions.remove(comparisonId);
+        return SlotHandback.of(SlotHandback.Verdict.LAUNCH_REFUSED, comparisonId);
     }
 
     /**

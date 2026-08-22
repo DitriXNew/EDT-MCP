@@ -75,7 +75,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
  *   <li><b>There is no partial hand-back, by construction.</b> Dropping the record is a removal
  *       from an in-memory map and cannot fail, so "the platform was told but the record could not
  *       be dropped" is unrepresentable. If the registry ever became durable that would stop being
- *       true, and the answer would be a different construction rather than a seventh verdict.</li>
+ *       true, and the answer would be a different construction rather than one more verdict.</li>
  *   <li><b>The last-tick ownership window stays open.</b> A launch claims an outstanding
  *       cancellation once, at its single exit. A hand-over that lands after that claim is owed by
  *       nobody and is answered only by the job's own result - the handler's own sentence promises
@@ -153,6 +153,33 @@ public final class SlotHandback
          * taken and made every later launch refuse.
          */
         NEVER_STARTED,
+        /**
+         * EDT was REACHED, REFUSED the launch, and then ANSWERED that it is not running the
+         * comparison. There is nothing to end, so the reservation is withdrawn. The record is gone
+         * and THIS comparison holds nothing.
+         *
+         * <h2>Two answers, both the platform's own</h2>
+         * {@link #NEVER_STARTED} rests on a proof that the batch never left this process. Here it
+         * did leave: {@code startComparison} was called and threw, so what the platform did with
+         * the batch on the way is not established by the throw alone. The second answer is what
+         * settles it - after the registry's platform-start budget, EDT
+         * still reports no status for the handle, which is EDT saying it is not running this
+         * comparison. A refused hand-over plus "not running" is a refusal, and a refusal leaves
+         * nothing behind to give back.
+         * <p>
+         * <b>It is produced ONLY from a definite answer.</b> "EDT could not be asked" is
+         * {@link #UNREACHABLE} and "the hand-back was attempted and failed" is {@link #NOT_FREED};
+         * both KEEP the record, because neither of them is the platform answering no. That is the
+         * rule this verdict does not weaken: the record survives not knowing, and goes only on
+         * being told.
+         * <p>
+         * <b>What it does not close.</b> A platform that accepted and scheduled the batch, threw
+         * anyway, and then took longer than the budget to begin would be withdrawn here and would
+         * go on to run under an id this server no longer holds. The alternative was measured and
+         * is worse: keeping the record names EDT's single slot as taken by a comparison that was
+         * refused, and every later launch is refused by it until the idle TTL expires.
+         */
+        LAUNCH_REFUSED,
         /**
          * EDT still held the comparison, the hand-back was attempted, and it did NOT complete. The
          * record is KEPT so the attempt can be repeated and so a refusal can still name it.
@@ -235,7 +262,7 @@ public final class SlotHandback
      * <p>
      * The one predicate a caller is meant to branch on, and the reason the verdicts are not
      * branched on outside the owner: "free" is a two-way question and the verdicts answer a
-     * six-way one, so every site that split them itself split them slightly differently.
+     * seven-way one, so every site that split them itself split them slightly differently.
      * <p>
      * It is a statement about the NAMED comparison and not a reading of the slot. {@link
      * Verdict#FREED} saw EDT take the hand-back; {@link Verdict#ALREADY_FREE} saw that EDT no
@@ -244,13 +271,13 @@ public final class SlotHandback
      * What the predicate is FOR is the record-dropping invariant: the record goes exactly when
      * this comparison is known to hold nothing.
      *
-     * @return {@code true} for {@link Verdict#FREED}, {@link Verdict#ALREADY_FREE} and
-     *     {@link Verdict#NEVER_STARTED} only
+     * @return {@code true} for {@link Verdict#FREED}, {@link Verdict#ALREADY_FREE},
+     *     {@link Verdict#NEVER_STARTED} and {@link Verdict#LAUNCH_REFUSED} only
      */
     public boolean slotIsFree()
     {
         return verdict == Verdict.FREED || verdict == Verdict.ALREADY_FREE
-            || verdict == Verdict.NEVER_STARTED;
+            || verdict == Verdict.NEVER_STARTED || verdict == Verdict.LAUNCH_REFUSED;
     }
 
     /**
@@ -323,6 +350,11 @@ public final class SlotHandback
             case NEVER_STARTED:
                 return "Comparison '" + comparisonId + "' never reached EDT - the launch was " //$NON-NLS-1$ //$NON-NLS-2$
                     + "refused before the platform was asked to run anything - so its " //$NON-NLS-1$
+                    + "registration here is withdrawn and it holds none of EDT's single " //$NON-NLS-1$
+                    + "comparison slot."; //$NON-NLS-1$
+            case LAUNCH_REFUSED:
+                return "EDT refused to start comparison '" + comparisonId + "' and then " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "answered that it is not running it, so there was nothing to end - its " //$NON-NLS-1$
                     + "registration here is withdrawn and it holds none of EDT's single " //$NON-NLS-1$
                     + "comparison slot."; //$NON-NLS-1$
             case NOT_REGISTERED:

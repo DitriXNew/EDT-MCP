@@ -13,6 +13,7 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +49,7 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec.MergeRulesFormatE
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Decision;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.TopObjectKey;
+import com.ditrix.edt.mcp.server.utils.compare.PathMutex;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -446,6 +448,62 @@ public class MergeRulesTool implements IMcpTool
                     + ". Omit it to author a fresh rules file.").toJson(); //$NON-NLS-1$
             }
         }
+
+        PathMutex mutex = PathMutex.take(file);
+        try
+        {
+            return writeUnderMutex(file, base, basedOn, comparisonId, rawDecisions, limit);
+        }
+        finally
+        {
+            mutex.release();
+        }
+    }
+
+    /**
+     * Everything from "is a file already there" to the write itself, with this process holding the
+     * target path against every other call in it.
+     *
+     * <h2>What the mutex is FOR</h2>
+     * An in-place update is a READ-MODIFY-WRITE: the document is read from {@code basedOn}, this
+     * call's decisions are applied to it in memory, and the result replaces the target. Two calls
+     * that name the same existing file as both {@code filePath} and {@code basedOn} are a case the
+     * reservation cannot cover - the reservation refuses a target that must NOT exist, and here
+     * the file exists legitimately. Unserialised, both read the SAME old document, both pass the
+     * guard, and each writes its own additions over the other's: the first call's decisions
+     * disappear and the second call's report says everything was recorded. That is the report
+     * claiming more than happened, which this tool refuses everywhere else.
+     * <p>
+     * <b>Held across the whole sequence, including the validation.</b> Releasing it after the read
+     * would restore the race exactly: what has to be indivisible is not the read and not the
+     * write, but the interval between them.
+     *
+     * <h2>What it does NOT guarantee</h2>
+     * <ul>
+     * <li><b>Nothing across processes.</b> It is a lock in this JVM only. Another EDT, an editor,
+     * or a person with a text editor can still write the file between this read and this write.
+     * The single filesystem step the codec performs keeps the file from being seen half-written;
+     * it cannot keep a foreign write from being lost.</li>
+     * <li><b>Nothing across spellings.</b> The key is the absolute, normalised path, so the same
+     * file reached through a symbolic link, a junction, or - on a case-insensitive filesystem - a
+     * different case is a DIFFERENT key and is not serialised against this one. Widening the key
+     * to the file's real identity is a filesystem question ({@code Files.isSameFile}) that cannot
+     * be asked of a path that does not exist yet, which is the ordinary case for a fresh write.</li>
+     * <li><b>It is not a file lock.</b> Nothing here prevents anyone reading the file, and no
+     * lock survives this call.</li>
+     * </ul>
+     *
+     * @param file the absolute, normalised target
+     * @param base the absolute, normalised starting point, or {@code null} for a fresh document
+     * @param basedOn the {@code basedOn} argument exactly as it arrived, for the report
+     * @param comparisonId the live comparison to validate against, or {@code null}
+     * @param rawDecisions the decisions as sent
+     * @param limit the cap on reported rows
+     * @return the report, or the refusal
+     */
+    private String writeUnderMutex(Path file, Path base, String basedOn, String comparisonId,
+        List<JsonObject> rawDecisions, int limit)
+    {
         // The guard is on WHICH file is about to be replaced, not on whether a starting point was
         // named: 'basedOn' one file and writing over ANOTHER discards the target's decisions just
         // as completely as writing over it with a fresh document, and the report would then name
@@ -501,12 +559,22 @@ public class MergeRulesTool implements IMcpTool
         int existingDecisions = document.decisions().size();
 
         List<RequestedDecision> requested = new ArrayList<>();
+        // The normalised path, not the raw one, and that is the point: two spellings the platform
+        // reads as the same node - a type token against a feature name, a leading root marker,
+        // padding around a key - arrive here as ONE path. See the refusal for what a duplicate
+        // costs.
+        Map<List<String>, Integer> firstSeenAt = new HashMap<>();
         for (int i = 0; i < rawDecisions.size(); i++)
         {
             ParsedDecision parsed = parseDecision(rawDecisions.get(i), i + 1);
             if (parsed.refusal != null)
             {
                 return parsed.refusal;
+            }
+            Integer earlier = firstSeenAt.putIfAbsent(parsed.decision.path, i + 1);
+            if (earlier != null)
+            {
+                return duplicatePathRefusal(earlier.intValue(), i + 1, parsed.decision.path);
             }
             requested.add(parsed.decision);
         }
@@ -665,6 +733,40 @@ public class MergeRulesTool implements IMcpTool
     private static String renderPath(List<String> path)
     {
         return renderFullPath(fullPathOf(path));
+    }
+
+    /**
+     * Refuses two decisions in one call that address the SAME node.
+     *
+     * <h2>Why this is a refusal and not "the last one wins"</h2>
+     * The document is a tree keyed by path, so a second decision on a path simply overwrites the
+     * node the first one set. Only one rule reaches the file - and the report then counts what the
+     * CALL carried, so it says "2 decisions recorded (2 new)" for a file holding one. This tool's
+     * contract runs the other way: the report never claims more than happened. A silent overwrite
+     * is also not a thing the caller can have meant, because there is no way to tell which of the
+     * two they wanted; the array simply says two different things about one node.
+     * <p>
+     * <b>Both positions, and the path as this tool READ it.</b> The positions are what the caller
+     * edits, and the normalised path is what makes a non-obvious collision legible - the two
+     * spellings may look nothing alike in the request ({@code Catalog} and {@code catalogs} are
+     * one collection) and rendering the raw input would leave the caller unable to see why they
+     * collided. The rendered path is this tool's own text, built from keys that have already
+     * passed every character check above.
+     *
+     * @param first the 1-based position of the decision that claimed the path
+     * @param second the 1-based position of the decision that collided with it
+     * @param path the normalised key chain below the root
+     * @return the refusal
+     */
+    private static String duplicatePathRefusal(int first, int second, List<String> path)
+    {
+        return ToolResult.error("Nothing was written: decisions #" + first + " and #" + second //$NON-NLS-1$ //$NON-NLS-2$
+            + " in '" + KEY_DECISIONS + "' both address " + renderPath(path) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Only one rule can be recorded on a node, so the later one would silently " //$NON-NLS-1$
+            + "overwrite the earlier and the report would count both as written. Send one " //$NON-NLS-1$
+            + "decision per node - keep the rule you want and drop the other. Two keys that " //$NON-NLS-1$
+            + "look different can still be one node: a collection is normalised to its model " //$NON-NLS-1$
+            + "feature name, so 'Catalog' and 'catalogs' are the same address.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -962,7 +1064,11 @@ public class MergeRulesTool implements IMcpTool
             return;
         }
         String key = path.get(0);
-        if (MergeRulesDocument.isTopObjectKey(key) || MergeRulesDocument.isPositionKey(key))
+        // The SHAPE, not the well-formedness: a key spelled like a top-object key is one the
+        // caller meant as a top-object key, however badly, and running it through the type-token
+        // table would rewrite it into something they never sent. Whether its three components name
+        // anything is validatePath's question.
+        if (MergeRulesDocument.hasTopObjectKeyShape(key) || MergeRulesDocument.isPositionKey(key))
         {
             return;
         }
@@ -1021,6 +1127,11 @@ public class MergeRulesTool implements IMcpTool
                     + "rules change, so they are reported but never authored - address the " //$NON-NLS-1$
                     + "collection or the object by name instead.").toJson(); //$NON-NLS-1$
             }
+            String emptySide = emptyTopObjectSideRefusal(key, position);
+            if (emptySide != null)
+            {
+                return emptySide;
+            }
             boolean topObjectLevel = i == MergeRulesDocument.MAX_AUTHORABLE_DEPTH - 1;
             if (topObjectLevel && !MergeRulesDocument.isTopObjectKey(key))
             {
@@ -1031,7 +1142,7 @@ public class MergeRulesTool implements IMcpTool
                     + "it was renamed. Read an existing rules file with mode 'read' to see the " //$NON-NLS-1$
                     + "exact keys.").toJson(); //$NON-NLS-1$
             }
-            if (!topObjectLevel && MergeRulesDocument.isTopObjectKey(key))
+            if (!topObjectLevel && MergeRulesDocument.hasTopObjectKeyShape(key))
             {
                 return ToolResult.error("Decision #" + position + ": '" + key + "' is an object key " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + "(three names) at the collection level. A collection is keyed by the model " //$NON-NLS-1$
@@ -1039,6 +1150,42 @@ public class MergeRulesTool implements IMcpTool
             }
         }
         return null;
+    }
+
+    /**
+     * Refuses a key that is SHAPED like a top-object key but leaves one of its three sides empty.
+     * <p>
+     * <b>Two colons are not proof of the shape.</b> {@code A::A} carries exactly two separators, so
+     * the shape test passed it, and the middle component is not a name and not the platform's
+     * {@code NONE} either - it is nothing. EDT matches these keys by string equality, so a decision
+     * recorded under one matches no node in any comparison: reported as written, never applicable.
+     * That is the failure mode this tool refuses everywhere else, and without a live comparison to
+     * consult it is the only place the key can be caught at all.
+     * <p>
+     * Asked of EVERY level, not just the object level, so that the collection level keeps refusing
+     * a three-part key rather than quietly recording one as a collection name.
+     *
+     * @param key one key of the chain, already trimmed
+     * @param position the decision's position, for the message
+     * @return the refusal, or {@code null} when the key is not a malformed top-object key
+     */
+    private static String emptyTopObjectSideRefusal(String key, int position)
+    {
+        List<String> empty = MergeRulesDocument.emptyTopObjectKeySides(key);
+        if (empty.isEmpty())
+        {
+            return null;
+        }
+        String sides = empty.size() == 1 ? "the " + empty.get(0) + " side is" //$NON-NLS-1$ //$NON-NLS-2$
+            : "the " + String.join(" and ", empty) + " sides are"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return ToolResult.error("Decision #" + position + ": '" + key + "' has the three parts of " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "an object key, but " + sides + " empty. Nothing was written. Every part must NAME " //$NON-NLS-1$ //$NON-NLS-2$
+            + "something: the object's name on that side, or the literal " //$NON-NLS-1$
+            + MergeRulesDocument.SIDE_ABSENT + " when the object does not exist there. An empty " //$NON-NLS-1$
+            + "part matches no node in any comparison, so the decision would be recorded and " //$NON-NLS-1$
+            + "never applied. Send 'A:A:A' when the name is the same everywhere, 'A:" //$NON-NLS-1$
+            + MergeRulesDocument.SIDE_ABSENT + ":" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$ //$NON-NLS-2$
+            + "' when only the main side has it.").toJson(); //$NON-NLS-1$
     }
 
     /**

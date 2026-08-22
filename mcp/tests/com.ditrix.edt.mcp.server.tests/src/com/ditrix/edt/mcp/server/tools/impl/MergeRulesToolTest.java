@@ -28,6 +28,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import org.eclipse.emf.common.util.BasicEList;
@@ -1428,6 +1431,208 @@ public class MergeRulesToolTest
             result.startsWith("# Merge rules written:")); //$NON-NLS-1$
         assertTrue("and the writer escapes it rather than dropping it", //$NON-NLS-1$
             read(target).contains("Key=\"a&#9;b\"")); //$NON-NLS-1$
+    }
+
+    // ============ Two decisions on one node are two answers to one question ============
+
+    @Test
+    public void testTwoDecisionsOnTheSamePathAreRefusedByPosition() throws IOException
+    {
+        // The tree is keyed by path, so the second decision simply overwrites the node the first
+        // one set: ONE rule reaches the file while the report counts what the CALL carried and
+        // says two were recorded. This tool's contract runs the other way round.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}," //$NON-NLS-1$ //$NON-NLS-2$
+                + "{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "#1", "#2", "commonModules"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheDuplicateRefusalNamesTheNormalisedPathAndNotTheRawInput() throws IOException
+    {
+        // Two spellings of ONE collection - the metadata type token and the model feature name -
+        // are the same node, and the refusal has to show the address that made them collide.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"Catalog\"],\"rule\":\"GetFromOther\"}," //$NON-NLS-1$ //$NON-NLS-2$
+                + "{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "#1", "#2", "$$Root$$ / catalogs"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTwoDecisionsOnDifferentNodesAreStillWritten() throws IOException
+    {
+        // The control: the refusal is about ONE node addressed twice, not about two decisions.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}," //$NON-NLS-1$ //$NON-NLS-2$
+                + "{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        String written = read(target);
+        assertTrue(written, written.contains("Key=\"commonModules\" MergeRule=\"GetFromOther\"")); //$NON-NLS-1$
+        assertTrue(written, written.contains("Key=\"catalogs\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+    }
+
+    // ============ Two colons are the SHAPE of an object key, not the proof ============
+
+    @Test
+    public void testAnObjectKeyWithAnEmptyMiddleSideIsRefused() throws IOException
+    {
+        // 'A::A' carries exactly two separators, so a count-only check passed it. The middle part
+        // is not a name and not NONE - it is nothing, and EDT matches these keys by string
+        // equality, so the decision would be recorded and could never be applied.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",\"A::A\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "#1", "A::A", "the other side is empty", "NONE"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnObjectKeyWithAnEmptyMainSideIsRefusedNamingThatSide()
+    {
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[\"commonModules\",\":A:A\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "the main side is empty"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnObjectKeyWithAnEmptyAncestorSideIsRefusedNamingThatSide()
+    {
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[\"commonModules\",\"A:A: \"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Whitespace is not a name either: EDT would look for a node called " " and find none.
+        assertErrorNaming(result, "the ancestor side is empty"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnObjectKeyWithTwoEmptySidesNamesBoth()
+    {
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[\"commonModules\",\"A::\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "the other and ancestor sides are empty"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedObjectKeyIsRefusedAtTheCollectionLevelToo()
+    {
+        // Asked of EVERY key, not only the object one: at the collection level 'A::A' used to be
+        // caught as "an object key where a collection name belongs", and a shape test that had
+        // stopped recognising it would have let it through as a collection name instead.
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[\"A::A\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "A::A"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoneIsStillALegalSideBecauseItNamesAnAbsentObject() throws IOException
+    {
+        // The control that keeps the rule honest: NONE is how the platform spells "the object
+        // does not exist on this side", so it is a name and an empty part is not.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"path\":[\"commonModules\",\"A:NONE:NONE\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue(read(target).contains("Key=\"A:NONE:NONE\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWellFormedObjectKeyIsStillWritten() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"path\":[\"commonModules\",\"A:B:C\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue(read(target).contains("Key=\"A:B:C\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+    }
+
+    // ============ Two in-place updates of one file do not lose each other ============
+
+    /**
+     * Two calls that update the SAME existing file are a read-modify-write each, and the
+     * reservation cannot cover them: it refuses a target that must not exist, and here the file
+     * exists legitimately. Unserialised, both read the same starting document and each writes only
+     * its own additions, so one caller's decisions vanish while both reports claim success.
+     * <p>
+     * The interleaving is forced rather than hoped for. The injected authority is consulted INSIDE
+     * the critical section - after the read, before the write - so the first call parks there and
+     * waits for the second to finish. With the sequence serialised the second call cannot even
+     * start, that wait expires, and both decisions survive; without it the second call runs to
+     * completion inside the window and one of the two is lost whichever order the writes land in.
+     *
+     * @throws Exception when a worker cannot be joined
+     */
+    @Test
+    public void testTwoConcurrentInPlaceUpdatesKeepBothSetsOfDecisions() throws Exception
+    {
+        Path target = seedFixture();
+        CountDownLatch firstIsInside = new CountDownLatch(1);
+        CountDownLatch secondHasFinished = new CountDownLatch(1);
+
+        MergeRulesTool parking = new MergeRulesTool(id -> {
+            firstIsInside.countDown();
+            try
+            {
+                secondHasFinished.await(2, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return Optional.empty();
+        });
+
+        AtomicReference<String> firstResult = new AtomicReference<>();
+        Thread first = new Thread(() -> firstResult.set(parking.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+            "filePath", target.toString(), "basedOn", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"GetFromOther\"}]")))); //$NON-NLS-1$ //$NON-NLS-2$
+        first.start();
+        assertTrue("the first call never reached the critical section", //$NON-NLS-1$
+            firstIsInside.await(10, TimeUnit.SECONDS));
+
+        AtomicReference<String> secondResult = new AtomicReference<>();
+        Thread second = new Thread(() -> {
+            secondResult.set(call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "basedOn", target.toString(), //$NON-NLS-1$
+                "decisions", "[{\"path\":[\"documents\"],\"rule\":\"DoNotMerge\"}]"))); //$NON-NLS-1$ //$NON-NLS-2$
+            secondHasFinished.countDown();
+        });
+        second.start();
+
+        first.join(30_000L);
+        second.join(30_000L);
+        assertNotNull("the first call did not finish", firstResult.get()); //$NON-NLS-1$
+        assertNotNull("the second call did not finish", secondResult.get()); //$NON-NLS-1$
+
+        String written = read(target);
+        assertTrue("both calls reported success, so both decisions must be in the file - the " //$NON-NLS-1$
+            + "first one is missing:\n" + written, //$NON-NLS-1$
+            written.contains("Key=\"catalogs\" MergeRule=\"GetFromOther\"")); //$NON-NLS-1$
+        assertTrue("the second call's decision is missing:\n" + written, //$NON-NLS-1$
+            written.contains("Key=\"documents\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+        assertTrue("and neither may have discarded what the file already held:\n" + written, //$NON-NLS-1$
+            written.contains("Key=\"Alpha:Beta:Gamma\" MergeRule=\"MergePrioritizingMain\"")); //$NON-NLS-1$
     }
 
     private String call(Map<String, String> params)

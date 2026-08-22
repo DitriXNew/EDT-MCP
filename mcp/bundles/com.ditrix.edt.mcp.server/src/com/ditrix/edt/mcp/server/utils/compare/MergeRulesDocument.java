@@ -378,13 +378,72 @@ public final class MergeRulesDocument
     /**
      * Whether a key addresses a top object, i.e. carries the three names
      * {@code main:other:ancestor}.
+     * <p>
+     * <b>Two separators are the SHAPE, not the proof.</b> Counting them alone accepted
+     * {@code A::A}, whose middle component is not the name of a side and not
+     * {@link #SIDE_ABSENT} either - it is nothing. EDT keys its nodes by string equality, so such
+     * a key matches no node in any comparison; a decision written under it is reported as recorded
+     * and can never be applied, which is the one failure this whole slice is built to refuse. So
+     * every component has to NAME something. {@link #SIDE_ABSENT} is a name in that sense - it is
+     * how the platform spells "the object does not exist on this side" - while an empty or
+     * whitespace-only component is not.
+     *
+     * @param key a node key
+     * @return {@code true} when the key has exactly two separators AND all three components name
+     *         something
+     */
+    public static boolean isTopObjectKey(String key)
+    {
+        return hasTopObjectKeyShape(key) && emptyTopObjectKeySides(key).isEmpty();
+    }
+
+    /**
+     * Whether a key is SHAPED like a top-object key - three colon-separated components - whether
+     * or not each of them names something.
+     * <p>
+     * Separate from {@link #isTopObjectKey(String)} because the two answer different questions,
+     * and a caller that refuses a malformed key needs the first: a key with two separators and an
+     * empty component is a top-object key the caller MEANT, spelled wrongly, and telling them so
+     * is worth more than treating it as some other kind of key.
      *
      * @param key a node key
      * @return {@code true} when the key has exactly two separators
      */
-    public static boolean isTopObjectKey(String key)
+    public static boolean hasTopObjectKeyShape(String key)
     {
         return key != null && countSeparators(key) == 2;
+    }
+
+    /**
+     * Which sides of a top-object-shaped key name nothing.
+     *
+     * @param key a key that {@link #hasTopObjectKeyShape(String)} accepts; anything else answers
+     *            empty, because a key that is not that shape has no sides to report on
+     * @return the side names ({@code main} / {@code other} / {@code ancestor}) whose component is
+     *         empty or whitespace only, in that order; empty when every component names something
+     */
+    public static List<String> emptyTopObjectKeySides(String key)
+    {
+        if (!hasTopObjectKeyShape(key))
+        {
+            return Collections.emptyList();
+        }
+        int first = key.indexOf(KEY_SEPARATOR);
+        int second = key.indexOf(KEY_SEPARATOR, first + 1);
+        List<String> empty = new ArrayList<>();
+        if (key.substring(0, first).isBlank())
+        {
+            empty.add("main"); //$NON-NLS-1$
+        }
+        if (key.substring(first + 1, second).isBlank())
+        {
+            empty.add("other"); //$NON-NLS-1$
+        }
+        if (key.substring(second + 1).isBlank())
+        {
+            empty.add("ancestor"); //$NON-NLS-1$
+        }
+        return empty;
     }
 
     /**

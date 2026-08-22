@@ -1327,9 +1327,66 @@ public class CompareConfigurationsToolTest
     }
 
     /**
-     * The control for the branch above: a launch EDT REACHED and refused is a different fact. What
-     * the platform did with the batch on the way is not established, so this one goes through the
-     * hand-back - the thing built for not knowing - and is not withdrawn on the caller's word.
+     * A launch EDT REACHED and refused - which is what a comparison started from EDT's own
+     * interface between the slot check and the hand-over produces - leaves no reservation behind
+     * once EDT itself answers that it is not running it.
+     * <p>
+     * It used to. The rollback went through the ordinary hand-back, which is built for NOT
+     * KNOWING: a comparison EDT reports no status for answers {@code NOT_STARTED_YET} and that
+     * verdict deliberately KEEPS the record, because ending a comparison EDT has merely scheduled
+     * costs EDT its comparison support until it is restarted. That is right when nobody refused
+     * anything, and wrong here: the launch was refused and is never going to begin, so the kept
+     * record named EDT's single slot as taken by a comparison that did not exist and refused every
+     * later launch until the idle TTL expired.
+     */
+    @Test
+    public void testALaunchEdtRefusedAndReportsItIsNotRunningLeavesNoReservation()
+    {
+        IComparisonManager manager = mock(IComparisonManager.class);
+        doThrow(new IllegalStateException("EDT says no")).when(manager).startComparison(any()); //$NON-NLS-1$
+        // The mock answers NO status for the handle, which is EDT saying it is not running this
+        // comparison - the reading the withdrawal rests on. Left at the default deliberately: a
+        // stubbed status would be pinning the stub rather than the rollback.
+        ComparisonEngine.install(() -> manager);
+        try
+        {
+            ComparisonEngine engine = ComparisonEngine.attached().orElseThrow();
+
+            try
+            {
+                CompareConfigurationsTool.registerAndHandOver(engine,
+                    engine.sessions().claimSlot("Demo"), comparisonHandle(), //$NON-NLS-1$
+                    new CompareMergeProcessBatch(List.of()));
+                fail("a refused launch must not report success"); //$NON-NLS-1$
+            }
+            catch (ComparisonException expected)
+            {
+                assertTrue("the message must say EDT refused it: " + expected.getMessage(), //$NON-NLS-1$
+                    expected.getMessage().contains("EDT refused to start the comparison")); //$NON-NLS-1$
+                assertTrue("and that the registration is withdrawn: " + expected.getMessage(), //$NON-NLS-1$
+                    expected.getMessage().contains("registration here is withdrawn")); //$NON-NLS-1$
+                // The OTHER withdrawal says this, and saying it here would be a lie: EDT was
+                // reached and answered. Pinned separately because both sentences carry the
+                // "withdrawn" clause, so the assertion above cannot tell the two apart.
+                assertFalse("EDT was reached and refused, so this is not a launch that never " //$NON-NLS-1$
+                    + "reached it: " + expected.getMessage(), //$NON-NLS-1$
+                    expected.getMessage().contains("never reached EDT")); //$NON-NLS-1$
+            }
+
+            assertEquals("a launch EDT refused must not go on holding EDT's single slot here", //$NON-NLS-1$
+                0, engine.sessions().size());
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * The control for the branch above: what settles the withdrawal is EDT's own answer, not the
+     * caller's throw. With EDT reporting the comparison as UNDER WAY, the refusal is still a
+     * refusal but nothing says the comparison is not running - so the ordinary hand-back runs, and
+     * this one really does end something on the platform.
      */
     @Test
     public void testALaunchEdtReachedAndRefusedIsHandedBackRatherThanWithdrawn()

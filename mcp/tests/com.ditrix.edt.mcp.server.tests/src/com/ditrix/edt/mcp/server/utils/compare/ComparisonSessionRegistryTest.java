@@ -730,6 +730,154 @@ public class ComparisonSessionRegistryTest
         assertFalse("an unknown id is not a withdrawn reservation", handback.wasRegistered()); //$NON-NLS-1$
     }
 
+    // ==================== A launch EDT REACHED and refused ====================
+    //
+    // The reservation is made before the batch is handed over, so a refusal has to decide what
+    // becomes of it. The ordinary hand-back answers NOT_STARTED_YET for a comparison EDT reports
+    // no status for, and that verdict KEEPS the record - right when nobody refused anything, wrong
+    // after a refusal, because that launch is never going to begin and the kept record then names
+    // EDT's single slot as taken by a comparison that does not exist. What must NOT change is the
+    // rule underneath it: the record survives not knowing, and goes only on being told.
+
+    @Test
+    public void testARefusedLaunchIsWithdrawnWhenEdtAnswersItIsNotRunningIt()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBackRefusedLaunch(id, SlotHandback.Ending.CLOSED);
+
+        assertEquals("a refusal plus an answer of 'not running it' is a refusal, not an unknown", //$NON-NLS-1$
+            SlotHandback.Verdict.LAUNCH_REFUSED, handback.verdict());
+        assertEquals("the reservation for a refused launch must not outlive it and refuse every " //$NON-NLS-1$
+            + "later launch until the idle TTL expires", 0, registry.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARefusedLaunchIsWithdrawnWithoutAskingEdtToEndAnything()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        registry.handBackRefusedLaunch(id, SlotHandback.Ending.CLOSED);
+
+        assertTrue("ending a comparison EDT has only scheduled deletes the job that gives EDT's " //$NON-NLS-1$
+            + "own slot back - the withdrawal must not do it either", releaser.released.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARefusedLaunchKeepsItsRecordWhenEdtCouldNotBeAsked()
+    {
+        // The rule that must NOT be weakened: "could not ask" is a fact about this server's reach,
+        // not the platform answering no, and a record dropped on it would leave a comparison that
+        // may be running addressable by nobody.
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.reachable = false;
+        releaser.serviceGone = true;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBackRefusedLaunch(id, SlotHandback.Ending.CLOSED);
+
+        assertEquals(SlotHandback.Verdict.UNREACHABLE, handback.verdict());
+        assertEquals("nothing was established, so the record stays", 1, registry.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARefusedLaunchWhoseHandBackFailsKeepsItsRecord()
+    {
+        // EDT had begun it after all and then refused the hand-back. That is not "not running it"
+        // either, so the ordinary answer stands and the comparison is still addressable.
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        releaser.explode = true;
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBackRefusedLaunch(id, SlotHandback.Ending.CLOSED);
+
+        assertEquals(SlotHandback.Verdict.NOT_FREED, handback.verdict());
+        assertEquals("a failed hand-back keeps the record on this path like on every other", //$NON-NLS-1$
+            1, registry.size());
+    }
+
+    @Test
+    public void testARefusedLaunchEdtHadBegunIsHandedBackNormally()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        String id = registry.register(handle, batch());
+
+        SlotHandback handback = registry.handBackRefusedLaunch(id, SlotHandback.Ending.CLOSED);
+
+        assertEquals("EDT was running it, so it is ENDED and not merely forgotten", //$NON-NLS-1$
+            SlotHandback.Verdict.FREED, handback.verdict());
+        assertEquals("and the platform really was asked", 1, releaser.released.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWithdrawingARefusedLaunchOnAnUnknownIdClaimsNothing()
+    {
+        ComparisonSessionRegistry registry = registry();
+
+        SlotHandback handback =
+            registry.handBackRefusedLaunch("cmp-nothing", SlotHandback.Ending.CLOSED); //$NON-NLS-1$
+
+        assertEquals(SlotHandback.Verdict.NOT_REGISTERED, handback.verdict());
+        assertFalse("an unknown id is not a withdrawn reservation", handback.wasRegistered()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLaunchRefusedIsAFreeSlotBecauseTheRefusedLaunchHoldsNothing()
+    {
+        SlotHandback handback = SlotHandbacks.of(SlotHandback.Verdict.LAUNCH_REFUSED, "cmp-x-1"); //$NON-NLS-1$
+
+        assertTrue("a launch the platform refused holds none of the slot", handback.slotIsFree()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLaunchRefusedLeavesNoRecordToRetry()
+    {
+        SlotHandback handback = SlotHandbacks.of(SlotHandback.Verdict.LAUNCH_REFUSED, "cmp-x-1"); //$NON-NLS-1$
+
+        assertFalse("there is nothing to retry: the launch was refused", handback.recordKept()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLaunchRefusedSentenceSaysEdtRefusedToStartIt()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.LAUNCH_REFUSED, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("EDT refused to start comparison")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLaunchRefusedSentenceSaysTheRegistrationIsWithdrawn()
+    {
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.LAUNCH_REFUSED, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertTrue(sentence, sentence.contains("registration here is withdrawn")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLaunchRefusedSentenceIsNotTheNeverReachedEdtOne()
+    {
+        // The two withdrawals are different facts: one is "the batch never left this process",
+        // this one is "EDT was reached, said no, and answers that it is not running it". A caller
+        // reading the wrong sentence would look for the failure in the wrong place.
+        String sentence = SlotHandbacks.of(SlotHandback.Verdict.LAUNCH_REFUSED, "cmp-x-1").sentence(); //$NON-NLS-1$
+
+        assertFalse(sentence, sentence.contains("never reached EDT")); //$NON-NLS-1$
+    }
+
     // ==================== Ids do not repeat across registry lives ====================
 
     /**

@@ -253,6 +253,94 @@ public class MergeRulesCodecTest
         assertFalse(MergeRulesDocument.isPositionKey("A:B:C")); //$NON-NLS-1$
     }
 
+    // ==================== two separators are the SHAPE, not the proof ====================
+    //
+    // One literal per @Test: JUnit stops a method at its first failed assertion, so pins bundled
+    // into one method only ever load the first of them.
+
+    @Test
+    public void testAnEmptyMiddleComponentIsNotATopObjectKey()
+    {
+        // 'A::A' has exactly two separators, and the middle part is not a name and not NONE - it
+        // is nothing. EDT matches these keys by string equality, so it addresses no node in any
+        // comparison.
+        assertFalse("an empty component names no side", MergeRulesDocument.isTopObjectKey("A::A")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnEmptyFirstComponentIsNotATopObjectKey()
+    {
+        assertFalse(MergeRulesDocument.isTopObjectKey(":B:C")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEmptyLastComponentIsNotATopObjectKey()
+    {
+        assertFalse(MergeRulesDocument.isTopObjectKey("A:B:")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWhitespaceOnlyComponentIsNotATopObjectKeyEither()
+    {
+        assertFalse("a space is not a name: EDT would look for a node called ' '", //$NON-NLS-1$
+            MergeRulesDocument.isTopObjectKey("A: :C")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoneIsALegalComponentBecauseItNamesAnAbsentObject()
+    {
+        // The control that keeps the rule honest: NONE is the platform's own spelling for "the
+        // object does not exist on this side", so it names something and must stay accepted.
+        assertTrue(MergeRulesDocument.isTopObjectKey("Added:NONE:NONE")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedKeyStillHasTheShapeOfATopObjectKey()
+    {
+        // The two questions are different: a caller who wrote 'A::A' meant a top-object key and
+        // has to be told so, rather than have it read as some other kind of key.
+        assertTrue(MergeRulesDocument.hasTopObjectKeyShape("A::A")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.hasTopObjectKeyShape("commonModules")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheEmptySidesOfAMalformedKeyAreNamedInOrder()
+    {
+        assertEquals(List.of("other", "ancestor"), //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesDocument.emptyTopObjectKeySides("A::")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWellFormedKeyHasNoEmptySides()
+    {
+        assertTrue(MergeRulesDocument.emptyTopObjectKeySides("A:NONE:C").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAKeyThatIsNotThatShapeReportsNoSidesAtAll()
+    {
+        // Not "all three are empty": a key with no separators has no sides to report on, and
+        // answering otherwise would make every collection name look like a malformed object key.
+        assertTrue(MergeRulesDocument.emptyTopObjectKeySides("commonModules").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMalformedKeyReadFromAFileIsNotReportedAsThreeNames() throws Exception
+    {
+        // The read side of the same rule: a file that carries 'A::A' must not be reported with
+        // main/other/ancestor columns filled in from a key that addresses nothing.
+        MergeRulesDocument document = MergeRulesCodec.parse("<?xml version=\"1.0\"?>" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\"><MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\"><Node Key=\"A::A\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+            + "</Node></Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        Decision decision = document.decisions().get(0);
+
+        assertEquals("A::A", decision.key()); //$NON-NLS-1$
+        assertTrue("a key that matches no node must not be presented as three names", //$NON-NLS-1$
+            decision.topObjectKey().isEmpty());
+    }
+
     // ==================== addressing ====================
 
     @Test
