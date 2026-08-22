@@ -28,7 +28,11 @@ programmatic metadata names, FQNs, BSL identifiers, query fields, or 1C tokens.
 2. Confirm the intended languages, project support, storage/provider scope, and
    write or external-service authority using current help.
 3. Call `generate_translation_strings` or `translate_configuration` only for
-   the confirmed route and requested operation.
+   the confirmed route and requested operation. Before readback or validation,
+   wait under current help and a bounded caller-approved deadline until
+   `list_projects` reports the exact project as ready; on expiry stop and report
+   the operation as unsettled rather than treating its success status as model
+   readiness.
 4. Re-read representative localized metadata with `get_metadata_details`,
    inspect the repository diff when applicable, and run targeted validation.
 5. Report only identities, counts, status, and affected samples that current

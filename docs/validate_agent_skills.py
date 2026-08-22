@@ -32,6 +32,9 @@ REGISTRAR = (
     / "BuiltInToolRegistrar.java"
 )
 PROXY_TOOLS = {"router_status"}
+# Independent ratchet for tool names that lack the usual underscore signal.
+# Keep historical names until every agent-pack reference is deliberately gone.
+SINGLE_WORD_TOOL_NAMES = {"git", "resume", "step"}
 
 BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 SKILL_NAME = re.compile(r"edt-mcp-project-[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -122,6 +125,10 @@ def strip_java_comments(source: str) -> str:
 
 def mask_java_structure(source: str) -> str:
     return mask_java_regions(source, mask_comments=True, mask_literals=True)
+
+
+def is_tool_like_token(token: str) -> bool:
+    return "_" in token or token in SINGLE_WORD_TOOL_NAMES
 
 
 def find_java_string_assignment(source: str, constant_name: str) -> str | None:
@@ -272,6 +279,15 @@ def main() -> int:
             f"registered-only={sorted(registered_names - documented_names)}",
         )
     tool_names = registered_names | PROXY_TOOLS
+    untracked_single_word_tools = {
+        name for name in tool_names if "_" not in name
+    } - SINGLE_WORD_TOOL_NAMES
+    if untracked_single_word_tools:
+        fail(
+            errors,
+            "single-word tool ratchet is missing "
+            f"{sorted(untracked_single_word_tools)}",
+        )
     agent_text = {path: read_text(path, errors) for path in sorted(AGENT.rglob("*.md"))}
 
     skill_files = sorted(SKILLS.glob("*/SKILL.md"))
@@ -290,7 +306,7 @@ def main() -> int:
     for path, text in agent_text.items():
         validate_links(path, text, errors)
         for token in BACKTICK_TOKEN.findall(text):
-            if "_" in token and token not in tool_names:
+            if is_tool_like_token(token) and token not in tool_names:
                 fail(errors, f"{path.relative_to(ROOT)}: undocumented named tool-like token {token}")
 
     matrix = parse_matrix(errors)

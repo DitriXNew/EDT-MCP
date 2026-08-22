@@ -94,15 +94,22 @@ Short form:
 
 - Normal run: `run_yaxunit_tests` with `projectName` — JUnit XML is parsed; the response is in Markdown.
 - When a test fails and the reason is unclear: `set_breakpoint` in the relevant
-  test, then `run_yaxunit_tests(debug=true)` and continue with `wait_for_break`
-  as in section 7.
+  test, then `run_yaxunit_tests(debug=true)`. If the start is pending, retain
+  its `jobId` and poll that exact job with `get_job_status` until it returns the
+  intended launch handle or a terminal failure; only then continue with
+  `wait_for_break` as in section 7. Stop and report an unsettled run when the
+  caller-approved deadline expires.
 
 ## 10. Profiling
 
 1. An active debug session is required (see section 7); you have the `applicationId`.
-2. `start_profiling` with `applicationId`.
+2. `start_profiling` with `applicationId`. Continue only when the result
+   confirms that this call started a new profiling window; otherwise preserve
+   the already-active measurement and report that an attributable window
+   cannot be established without disrupting its owner.
 3. Execute the scenario in 1C:Enterprise.
-4. `stop_profiling` with the same `applicationId`.
+4. `stop_profiling` with the same `applicationId` only for the profiling window
+   started and therefore owned by this task.
 5. Read `get_profiling_results` while the global profiling surface remains
    quiescent; otherwise treat the result as unattributed unless identity can be
    matched independently.
