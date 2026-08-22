@@ -416,6 +416,43 @@ public class DcsSettingsWriterTest
                 || table.getSelection().getUserSettingID().isEmpty());
     }
 
+    @Test
+    public void testReplaceAtAnItemsCollectionAddressClearsItFirst()
+    {
+        // '#/.../selection/items' is a collection address: the replacement replaces the list, it
+        // does not queue up behind what is already there. The same was true of filter/items and
+        // order/items, which dispatched straight to their append helpers.
+        DataCompositionSettings settings = plan(json("{\"selection\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"Old\"}}]}}")); //$NON-NLS-1$
+        assertEquals(1, settings.getSelection().getItems().size());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("selection", "items"), "replace", "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"New\"}}"), //$NON-NLS-1$
+            LANGUAGES);
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertEquals("a collection-addressed replace must swap the list, not append to it", //$NON-NLS-1$
+            1, replaced.settings().getSelection().getItems().size());
+    }
+
+    @Test
+    public void testReplaceOnAGroupFieldsHolderStartsItEmpty()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"name\":\"G\"," //$NON-NLS-1$
+            + "\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\"," //$NON-NLS-1$
+            + "\"value\":\"Old\"}}]}}]}")); //$NON-NLS-1$
+        DataCompositionGroup group = (DataCompositionGroup)settings.getItems().get(0);
+        assertEquals(1, group.getGroupFields().getItems().size());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "groupFields"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"New\"}}]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        DataCompositionGroup after = (DataCompositionGroup)replaced.settings().getItems().get(0);
+        assertEquals("a replaced groupFields holder must not keep the old fields", //$NON-NLS-1$
+            1, after.getGroupFields().getItems().size());
+    }
+
     private static DataCompositionSettings plan(JsonObject body)
     {
         DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,

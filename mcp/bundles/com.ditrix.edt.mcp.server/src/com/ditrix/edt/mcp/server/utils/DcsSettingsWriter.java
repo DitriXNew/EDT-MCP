@@ -1479,7 +1479,10 @@ public final class DcsSettingsWriter
     private static String applyGroupFieldsPath(DataCompositionGroup group, List<String> path,
         JsonObject body, String action, DcsPresentationParser.LanguageContext languages, String where)
     {
-        DataCompositionGroupFields fields = copy(group.getGroupFields());
+        // A holder addressed directly starts empty on replace, like every other holder: copying it
+        // meant the old group fields stayed and the replacement was appended behind them.
+        DataCompositionGroupFields fields = ACTION_REPLACE.equals(action) && path.isEmpty() ? null
+            : copy(group.getGroupFields());
         if (fields == null)
         {
             if (ACTION_UPDATE.equals(action))
@@ -1672,6 +1675,12 @@ public final class DcsSettingsWriter
         }
         if (path.size() == 1)
         {
+            // The address ends AT the collection, so replace replaces it rather than appending to
+            // it - otherwise every existing item survived and the replacement queued up behind it.
+            if (ACTION_REPLACE.equals(action))
+            {
+                items.clear();
+            }
             return appendSelected(items, body, action, languages, where + "/items"); //$NON-NLS-1$
         }
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
@@ -1997,6 +2006,10 @@ public final class DcsSettingsWriter
         }
         if (path.size() == 1)
         {
+            if (ACTION_REPLACE.equals(action))
+            {
+                items.clear();
+            }
             return appendFilter(items, body, action, languages, where + "/items"); //$NON-NLS-1$
         }
         int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
@@ -2288,6 +2301,10 @@ public final class DcsSettingsWriter
         }
         if (path.size() == 1)
         {
+            if (ACTION_REPLACE.equals(action))
+            {
+                holder.getItems().clear();
+            }
             return appendOrder(holder.getItems(), body, action, where + "/items"); //$NON-NLS-1$
         }
         if (path.size() != 2)
@@ -3994,6 +4011,19 @@ public final class DcsSettingsWriter
         DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(element, languages, path);
         return parsed.isSuccess() ? PresentationResult.success(parsed.plan() == null ? null
             : DcsPresentationParser.build(parsed.plan())) : PresentationResult.failure(parsed.error());
+    }
+
+    /**
+     * The settings segments a concrete type resolves to when the caller addressed a bare root, so
+     * a caller-facing guard can scope itself to the node the planner will actually rewrite instead
+     * of to the whole document. Empty for a type that addresses the settings root itself.
+     *
+     * @param type the settings type token
+     * @return the default segments, possibly empty
+     */
+    public static List<String> defaultSettingsPath(String type)
+    {
+        return defaultPath(type);
     }
 
     private static List<String> defaultPath(String type)

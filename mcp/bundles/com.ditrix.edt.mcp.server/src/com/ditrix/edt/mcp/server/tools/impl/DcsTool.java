@@ -479,7 +479,8 @@ public class DcsTool implements IMcpTool
                     {
                         if (ACTION_REPLACE.equals(action))
                         {
-                            String refusal = DcsMutationGuard.replaceError(content.schema(), address);
+                            String refusal = replaceRefusal(content.schema(),
+                                content.schema().getDefaultSettings(), type, address);
                             if (refusal != null) throw DcsWriteFailure.message(refusal);
                         }
                         JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
@@ -641,7 +642,8 @@ public class DcsTool implements IMcpTool
                 // settings model a report variant uses, so it can hold exactly those subtypes.
                 if (ACTION_REPLACE.equals(action))
                 {
-                    String refusal = DcsMutationGuard.replaceError(extInfo, address);
+                    String refusal = replaceRefusal(extInfo,
+                        extInfo == null ? null : extInfo.getListSettings(), type, address);
                     if (refusal != null)
                     {
                         throw new FormValidationException(ToolResult.error(refusal).toJson());
@@ -770,10 +772,50 @@ public class DcsTool implements IMcpTool
             : expectedHashError(expected, current, address);
     }
 
+    /**
+     * The unmodellable-content refusal for a replace, scoped to the node the planner will actually
+     * rewrite.
+     *
+     * <p>A concrete settings type addressed at a BARE root (action='replace', type='selection')
+     * resolves to that type's default settings path, but the address itself still carries no
+     * pointer - so checking it against the whole document treated every unmodellable node anywhere
+     * as a descendant, and a chart in an unrelated variant or data set blocked a selection-only
+     * replacement it could not have removed. Scope to the settings root and the type's own default
+     * path in that case; an explicitly pointered address already says what it means.</p>
+     *
+     * @param whole the whole schema or ext-info, used when the address carries a pointer
+     * @param settingsRoot the settings the bare-root form resolves into, possibly {@code null}
+     * @param type the requested type token
+     * @param address the caller's address
+     * @return the refusal message, or {@code null} when nothing blocks the replacement
+     */
+    private static String replaceRefusal(EObject whole, EObject settingsRoot, String type,
+        DcsAddress address)
+    {
+        if (!address.hasPointer() && settingsRoot != null)
+        {
+            List<String> scoped = DcsSettingsWriter.defaultSettingsPath(type);
+            if (!scoped.isEmpty())
+            {
+                DcsAddress.ParseResult parsed =
+                    DcsAddress.parse(DcsAddress.render(address.rootFqn(), scoped));
+                if (parsed.isSuccess())
+                {
+                    return DcsMutationGuard.replaceError(settingsRoot, parsed.address());
+                }
+            }
+        }
+        return DcsMutationGuard.replaceError(whole, address);
+    }
+
     private static JsonObject schemaLayerMembers(JsonObject body)
     {
         JsonObject result = new JsonObject();
-        for (String member : List.of("dataSources", "dataSets", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // dataSetLinks belongs here: a schema-root replace CLEARS the links
+        // (DcsSchemaWriter.clearReplaceTarget), and DcsWriter can author them, so omitting the
+        // member from the forwarded body made every accepted root replacement destroy every join
+        // with no way for the caller to restate it.
+        for (String member : List.of("dataSources", "dataSets", "dataSetLinks", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "calculatedFields", "totalFields")) //$NON-NLS-1$ //$NON-NLS-2$
         {
             if (body.has(member)) result.add(member, body.get(member).deepCopy());
@@ -783,8 +825,8 @@ public class DcsTool implements IMcpTool
 
     private static String schemaRootMembersError(JsonObject body)
     {
-        Set<String> allowed = new LinkedHashSet<>(List.of("dataSources", "dataSets", "parameters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "calculatedFields", "totalFields", "defaultSettings", "variants")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Set<String> allowed = new LinkedHashSet<>(List.of("dataSources", "dataSets", "dataSetLinks", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "parameters", "calculatedFields", "totalFields", "defaultSettings", "variants")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         for (String member : body.keySet())
         {
             if (!allowed.contains(member))
