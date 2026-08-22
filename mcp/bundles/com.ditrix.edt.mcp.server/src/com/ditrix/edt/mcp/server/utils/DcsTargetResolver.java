@@ -356,14 +356,18 @@ public final class DcsTargetResolver
         IBmModel bmModel, DcsAddress address, RootClassification classification,
         boolean allowPlainDynamicList)
     {
-        MetadataNodeResolver.MetadataNode formNode = MetadataNodeResolver.resolveExisting(
-            context.scope(), classification.formMemberRef.formPath);
-        if (formNode == null || !(formNode.object instanceof MdObject))
+        // Resolve the FORM through the form-aware resolver, the same one FormElementWriter.resolveForEdit
+        // uses - not the generic MetadataNodeResolver. A managed form is addressed as
+        // 'Type.Object.Form.Name' (or 'CommonForm.Name'), a shape the generic node resolver does not
+        // walk, so using it here made every dynamic-list root report "not found" for a form that
+        // modify_metadata could resolve perfectly well.
+        MdObject mdForm =
+            FormStructureReader.resolveMdForm(context.scope(), classification.formMemberRef.formPath);
+        if (mdForm == null)
         {
             return notFound(classification.normalizedRoot,
                 "Verify the form and attribute programmatic Names with get_metadata_details, then retry."); //$NON-NLS-1$
         }
-        MdObject mdForm = (MdObject)formNode.object;
         if (!(mdForm instanceof IBmObject))
         {
             return bmObjectUnavailable(classification.normalizedRoot, mdForm);
@@ -484,7 +488,12 @@ public final class DcsTargetResolver
                     + "Re-open and save the form in EDT, then retry."); //$NON-NLS-1$
             return result;
         }
-        result.settingsCarrierFqn = settings == null ? null : carrierFqn(settings);
+        // The list settings are an @ExternalProperty sub-resource, NOT a BM top object of their own, so
+        // asking them for an FQN throws ("attached BM objects only"). What actually drains
+        // Attributes/<Name>/ExtInfo/ListSettings.dcss is exporting the content FORM, so fall back to it
+        // rather than losing the export.
+        String carrier = settings == null ? null : carrierFqn(settings);
+        result.settingsCarrierFqn = carrier != null ? carrier : result.formContentFqn;
         return result;
     }
 
@@ -563,20 +572,46 @@ public final class DcsTargetResolver
         return object == null ? null : object.bmIsTop() ? object : object.bmGetTopObject();
     }
 
+    /**
+     * The FQN of an object's BM top object, or {@code null} when it has none. {@code bmGetFqn()} is
+     * legal only on an ATTACHED TOP object and throws otherwise, so both conditions are checked here -
+     * a transient {@code @ExternalProperty} sub-resource (a form's list settings, a template's DCS
+     * content before it is attached) legitimately has no FQN, and that is an answer, not a failure.
+     */
     private static String topFqn(IBmObject object)
     {
-        IBmObject top = topObject(object);
-        return top == null ? null : top.bmGetFqn();
+        return fqnOrNull(topObject(object));
     }
 
     private static String ownTopFqn(Object object)
     {
-        if (!(object instanceof IBmObject))
+        return object instanceof IBmObject ? fqnOrNull((IBmObject)object) : null;
+    }
+
+    /**
+     * The object's BM FQN, or {@code null} when it has none. {@code bmGetFqn()} is legal only on an
+     * ATTACHED TOP object and THROWS otherwise, and {@link IBmObject} exposes no attachment predicate -
+     * {@code bmIsTop()} alone is not enough, because a detached top object still answers {@code true}.
+     * The call is therefore the only reliable test.
+     * <p>
+     * Having no FQN is a legitimate answer here, not a failure: a form's list settings and a template's
+     * DCS content are transient {@code @ExternalProperty} sub-resources that never carry one. Callers
+     * fall back to the owning top object, which is what actually drains them to disk.
+     */
+    private static String fqnOrNull(IBmObject object)
+    {
+        if (object == null || !object.bmIsTop())
         {
             return null;
         }
-        IBmObject bmObject = (IBmObject)object;
-        return bmObject.bmIsTop() ? bmObject.bmGetFqn() : null;
+        try
+        {
+            return object.bmGetFqn();
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
     }
 
     private static String carrierFqn(Object object)

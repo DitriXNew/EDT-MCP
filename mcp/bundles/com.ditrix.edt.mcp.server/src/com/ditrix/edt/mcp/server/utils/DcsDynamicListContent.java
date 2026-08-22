@@ -34,20 +34,19 @@ public final class DcsDynamicListContent
         {
             return Result.success(null);
         }
-        if (settings instanceof IBmObject && ((IBmObject)settings).bmIsTop())
-        {
-            String fqn = ((IBmObject)settings).bmGetFqn();
-            if (fqn == null || fqn.isEmpty())
-            {
-                return Result.failure("The managed dynamic-list listSettings object has no FQN, so " //$NON-NLS-1$
-                    + "ListSettings.dcss cannot be exported. Re-open and save the form in EDT, then retry."); //$NON-NLS-1$
-            }
-            return Result.success(fqn);
-        }
         if (!(settings instanceof IBmObject))
         {
             return Result.failure("Dynamic-list listSettings are not a managed BM object. Re-open " //$NON-NLS-1$
                 + "and save the form in EDT, then retry the dcs write."); //$NON-NLS-1$
+        }
+        // Already attached? Then it already has the FQN to export. bmIsTop() alone does NOT answer
+        // this - a DETACHED top object still reports true, and bmGetFqn() then throws - so the call
+        // itself is the test. A settings object that has never been attached (the usual case for a
+        // list whose settings this write is materializing) falls through to be attached below.
+        String attachedFqn = attachedFqnOrNull((IBmObject)settings);
+        if (attachedFqn != null)
+        {
+            return Result.success(attachedFqn);
         }
         ITopObjectFqnGenerator generator = Activator.getDefault().getTopObjectFqnGenerator();
         if (generator == null)
@@ -64,6 +63,28 @@ public final class DcsDynamicListContent
         }
         transaction.attachTopObject((IBmObject)settings, fqn);
         return Result.success(fqn);
+    }
+
+    /**
+     * The object's BM FQN when it is ATTACHED, or {@code null} when it is not. {@code bmGetFqn()} is
+     * legal only on an attached top object and throws otherwise, and {@link IBmObject} offers no
+     * attachment predicate, so the call is the only reliable test.
+     */
+    private static String attachedFqnOrNull(IBmObject object)
+    {
+        if (!object.bmIsTop())
+        {
+            return null;
+        }
+        try
+        {
+            String fqn = object.bmGetFqn();
+            return fqn == null || fqn.isEmpty() ? null : fqn;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
     }
 
     /** External settings carrier result. */
