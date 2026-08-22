@@ -76,6 +76,18 @@ public enum ToolGroup
         "get_translation_project_info"), //$NON-NLS-1$
 
     /**
+     * Three-way configuration comparison. Its own group rather than a few names appended to an
+     * existing one: the three tools are useless apart (a comparison is started, then expanded,
+     * then its merge rules are read or authored), and EDT runs ONE comparison at a time, so an
+     * operator who wants that slot left alone turns off exactly this group. Nothing here ships
+     * disabled - the family never merges and never writes the project.
+     */
+    COMPARISON("comparison", "Comparison", //$NON-NLS-1$ //$NON-NLS-2$
+        "Three-way configuration comparison: start one against two git revisions, expand a node," //$NON-NLS-1$
+            + " and read or author the merge-rules file", //$NON-NLS-1$
+        "compare_configurations", "get_comparison_node", "merge_rules"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
      * Git tools. The {@code git} command tool ships DISABLED by default, and this tree is the UI its
      * description points at - so it MUST appear here, otherwise there is no way to enable it from the
      * Tools tab. The branch tools - including {@code set_branch_infobase}, which MUTATES the

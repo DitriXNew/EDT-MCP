@@ -54,6 +54,8 @@ public final class Toolsets
     public static final String TRANSLATION = "translation"; //$NON-NLS-1$
     /** Project operations: build/validate/update DB, export/import, problems. */
     public static final String PROJECT = "project"; //$NON-NLS-1$
+    /** Reading a three-way configuration comparison and its merge-rules file. */
+    public static final String COMPARISON = "comparison"; //$NON-NLS-1$
 
     /** Raw git command tool (its own group; disabled by default via PreferenceConstants). */
     public static final String GIT = "git"; //$NON-NLS-1$
@@ -117,6 +119,11 @@ public final class Toolsets
             "Configuration translation via LanguageTool: extract, translate, project info."); //$NON-NLS-1$
         define(PROJECT, "Project",
             "Project operations: clean/revalidate, update DB, export/import XML, problems and markers, docs."); //$NON-NLS-1$
+        define(COMPARISON, "Comparison",
+            "Read a three-way configuration comparison: start one against two git revisions, " //$NON-NLS-1$
+                + "expand a node's differences, and read or author the merge-rules file EDT " //$NON-NLS-1$
+                + "re-applies. Nothing is ever merged - running a merge stays a human action " //$NON-NLS-1$
+                + "in EDT's comparison window."); //$NON-NLS-1$
         define(GIT, "Git",
             "Run raw git commands (status/diff/commit/push/pull/...) in a project's repository via the " //$NON-NLS-1$
             + "'git' tool. Powerful (it can push, checkout, stash); DISABLED by default - check it in the " //$NON-NLS-1$
@@ -172,6 +179,9 @@ public final class Toolsets
             "get_mcp_history", //$NON-NLS-1$
             "list_git_branches", "switch_git_branch", "set_branch_infobase", "create_git_branch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "get_check_description", "apply_quick_fix", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assign(COMPARISON,
+            "compare_configurations", "get_comparison_node", "merge_rules"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assign(GIT,
             "git"); //$NON-NLS-1$

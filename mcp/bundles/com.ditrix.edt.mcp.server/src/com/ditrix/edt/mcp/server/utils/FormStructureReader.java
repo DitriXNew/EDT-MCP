@@ -250,15 +250,63 @@ public final class FormStructureReader
      */
     public static String render(String formPath, EObject formModel, String language)
     {
+        return render(formPath, formModel, language, MAX_NODES);
+    }
+
+    /**
+     * The same document, with every table and the item outline capped at {@code rowLimit} rows and
+     * every cap SAID where it bites.
+     *
+     * <p>This overload exists because a caller can own a row budget of its own. The comparison
+     * report does: {@code get_comparison_node} promises "maximum rows per table" and prints a form
+     * node's structure inside its own document, so without a cap here that promise held for the
+     * report's own tables and quietly failed for the six this reader writes - a {@code limit} of 1
+     * would still have produced every attribute, command, parameter and handler the form has, plus
+     * an item outline of up to {@link #MAX_NODES} lines.</p>
+     *
+     * <p>{@link #MAX_NODES} stays the ceiling: it is the guard against a pathological form, not a
+     * caller preference, so a larger {@code rowLimit} does not raise it. The three-argument entry
+     * point passes exactly that ceiling, which is what the reader already applied, so the document
+     * it produces is unchanged.</p>
+     *
+     * @param formPath the (normalized) form FQN path, for the heading
+     * @param formModel the editable form model EObject (must still be inside the read transaction)
+     * @param language the resolved title/event language CODE (may be {@code null})
+     * @param rowLimit the maximum number of rows per table and lines in the item outline; values
+     *            below 1 are read as 1, values above {@link #MAX_NODES} as {@link #MAX_NODES}
+     * @return the enriched Markdown document
+     */
+    public static String render(String formPath, EObject formModel, String language, int rowLimit)
+    {
+        int limit = Math.min(Math.max(1, rowLimit), MAX_NODES);
         StringBuilder sb = new StringBuilder();
         sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        renderItems(sb, formModel, language);
-        renderAttributes(sb, formModel, language);
-        renderAttributeColumns(sb, formModel, language);
-        renderCommands(sb, formModel, language);
-        renderParameters(sb, formModel);
-        renderEventHandlers(sb, formModel, language);
+        renderItems(sb, formModel, language, limit);
+        renderAttributes(sb, formModel, language, limit);
+        renderAttributeColumns(sb, formModel, language, limit);
+        renderCommands(sb, formModel, language, limit);
+        renderParameters(sb, formModel, limit);
+        renderEventHandlers(sb, formModel, language, limit);
         return sb.toString();
+    }
+
+    /**
+     * The ONE line this document prints when a cap dropped rows, so a short table is never read as
+     * a complete one.
+     *
+     * <p>It states the cap and nothing else. It deliberately does NOT tell the reader to raise a
+     * {@code limit}: this reader is called both from a tool that has such a parameter and from one
+     * whose only cap is the internal {@link #MAX_NODES} guard, and a remedy that exists in only one
+     * of the two callers would be wrong wherever it is not offered.</p>
+     *
+     * @param sb the output buffer
+     * @param what what was capped, as the sentence's subject
+     * @param limit the cap that was reached
+     */
+    private static void appendCapNote(StringBuilder sb, String what, int limit)
+    {
+        sb.append("\n_(").append(what).append(" truncated: only the first ").append(limit) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" are shown)_\n"); //$NON-NLS-1$
     }
 
     /**
@@ -266,7 +314,7 @@ public final class FormStructureReader
      * form root's items), capped at {@link #MAX_NODES} nodes with a truncation note. Falls back to
      * {@code _(no items)_} when the form carries neither items nor an auto command bar.
      */
-    private static void renderItems(StringBuilder sb, EObject formModel, String language)
+    private static void renderItems(StringBuilder sb, EObject formModel, String language, int limit)
     {
         sb.append("## Items\n\n"); //$NON-NLS-1$
         List<EObject> items = getReferenceList(formModel, FEATURE_ITEMS);
@@ -276,7 +324,7 @@ public final class FormStructureReader
             sb.append("_(no items)_\n\n"); //$NON-NLS-1$
             return;
         }
-        int[] budget = {MAX_NODES};
+        int[] budget = {limit};
         boolean[] truncated = {false};
         if (autoCommandBar != null)
         {
@@ -292,7 +340,7 @@ public final class FormStructureReader
         if (truncated[0])
         {
             sb.append("- _(item outline truncated: more than ") //$NON-NLS-1$
-                .append(MAX_NODES).append(" nodes)_\n"); //$NON-NLS-1$
+                .append(limit).append(" nodes)_\n"); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -301,7 +349,8 @@ public final class FormStructureReader
      * Renders the {@code ## Attributes} table (Name / Synonym / Type / Main / SavedData), or
      * {@code _(no attributes)_} when the form has no attributes.
      */
-    private static void renderAttributes(StringBuilder sb, EObject formModel, String language)
+    private static void renderAttributes(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         sb.append("## Attributes\n\n"); //$NON-NLS-1$
         List<EObject> attributes = getReferenceList(formModel, FEATURE_ATTRIBUTES);
@@ -312,11 +361,17 @@ public final class FormStructureReader
         }
         sb.append(MarkdownUtils.tableHeader(
             "Name", "Synonym", "Type", "Main", "SavedData")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-        for (EObject attribute : attributes)
+        int shown = Math.min(limit, attributes.size());
+        for (int i = 0; i < shown; i++)
         {
+            EObject attribute = attributes.get(i);
             sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
                 valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
                 Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
+        }
+        if (shown < attributes.size())
+        {
+            appendCapNote(sb, "attributes", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -330,7 +385,7 @@ public final class FormStructureReader
      * paid for on every form read. No language argument - a parameter has no title, only a
      * comment (issue #396).</p>
      */
-    private static void renderParameters(StringBuilder sb, EObject formModel)
+    private static void renderParameters(StringBuilder sb, EObject formModel, int limit)
     {
         List<EObject> parameters = getReferenceList(formModel, FEATURE_PARAMETERS);
         if (parameters.isEmpty())
@@ -339,12 +394,18 @@ public final class FormStructureReader
         }
         sb.append("## Parameters\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Name", "Type", "Key", "Comment")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        for (EObject parameter : parameters)
+        int shown = Math.min(limit, parameters.size());
+        for (int i = 0; i < shown; i++)
         {
+            EObject parameter = parameters.get(i);
             Object comment = getValue(parameter, FEATURE_COMMENT);
             sb.append(MarkdownUtils.tableRow(nameOf(parameter), valueTypeOf(parameter),
                 Boolean.toString(booleanFeature(parameter, FEATURE_KEY_PARAMETER)),
                 comment instanceof String ? (String)comment : "")); //$NON-NLS-1$
+        }
+        if (shown < parameters.size())
+        {
+            appendCapNote(sb, "parameters", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -359,7 +420,8 @@ public final class FormStructureReader
      * @param formModel the form content model
      * @param language the language code for the title column
      */
-    private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language)
+    private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         List<EObject> owners = new ArrayList<>();
         for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
@@ -375,13 +437,25 @@ public final class FormStructureReader
         }
         sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        int shown = 0;
+        boolean capped = false;
         for (EObject owner : owners)
         {
             for (EObject column : getReferenceList(owner, FEATURE_COLUMNS))
             {
+                if (shown >= limit)
+                {
+                    capped = true;
+                    break;
+                }
                 sb.append(MarkdownUtils.tableRow(nameOf(owner), nameOf(column),
                     titleOf(column, language), valueTypeOf(column)));
+                shown++;
             }
+        }
+        if (capped)
+        {
+            appendCapNote(sb, "attribute columns", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -390,7 +464,8 @@ public final class FormStructureReader
      * Renders the {@code ## Commands} table (Name / Title / Action handler), or {@code _(no commands)_}
      * when the form has no commands.
      */
-    private static void renderCommands(StringBuilder sb, EObject formModel, String language)
+    private static void renderCommands(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         sb.append("## Commands\n\n"); //$NON-NLS-1$
         List<EObject> commands = getReferenceList(formModel, FEATURE_FORM_COMMANDS);
@@ -400,10 +475,16 @@ public final class FormStructureReader
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Name", "Title", "Action handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        for (EObject command : commands)
+        int shown = Math.min(limit, commands.size());
+        for (int i = 0; i < shown; i++)
         {
+            EObject command = commands.get(i);
             sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language),
                 actionHandlerOf(command)));
+        }
+        if (shown < commands.size())
+        {
+            appendCapNote(sb, "commands", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -412,7 +493,8 @@ public final class FormStructureReader
      * Renders the {@code ## Event handlers} table (Element / Event / Handler) for the BSL handler bound
      * to each event of the form root and every element, or {@code _(no event handlers)_} when none.
      */
-    private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language)
+    private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         sb.append("## Event handlers\n\n"); //$NON-NLS-1$
         List<String[]> handlers = new ArrayList<>();
@@ -427,9 +509,18 @@ public final class FormStructureReader
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        for (String[] row : handlers)
+        // The walk keeps its OWN budget: that one guards the recursion against a pathological form
+        // and is not a caller preference, so the rows are capped here, where the caller's limit is
+        // what decides how much of the document it asked for.
+        int shown = Math.min(limit, handlers.size());
+        for (int i = 0; i < shown; i++)
         {
+            String[] row = handlers.get(i);
             sb.append(MarkdownUtils.tableRow(row[0], row[1], row[2]));
+        }
+        if (shown < handlers.size())
+        {
+            appendCapNote(sb, "event handlers", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }

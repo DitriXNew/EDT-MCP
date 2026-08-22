@@ -14,6 +14,7 @@ import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.util.tracker.ServiceTracker;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
+import com._1c.g5.v8.dt.compare.core.IComparisonManager;
 import com._1c.g5.v8.dt.core.event.IEventBroker;
 import com._1c.g5.v8.dt.core.model.IModelObjectCollectionRuntimeOrderSorter;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
@@ -42,6 +43,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.e1c.g5.v8.dt.check.qfix.IFixManager;
 import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.google.inject.Injector;
 
@@ -82,6 +84,19 @@ public class EdtServices
     private ServiceTracker<IRightInfosService, IRightInfosService> rightInfosServiceTracker;
     private ServiceTracker<IEventBroker, IEventBroker> eventBrokerTracker;
     private ServiceTracker<IModelObjectCollectionRuntimeOrderSorter, IModelObjectCollectionRuntimeOrderSorter> collectionOrderSorterTracker;
+
+    /**
+     * EDT's configuration-comparison manager. Unlike every other tracker in this class it has NO
+     * public getter, and that asymmetry is the point: {@code IComparisonManager} can both compare
+     * and merge, and a getter would put the merging entry points one call away from any tool.
+     * <p>
+     * Java has no visibility that means "readable by one class in another package", so the
+     * confinement is achieved by never declaring an accessor at all. The service leaves this class
+     * only as the private {@link #trackedComparisonManager()} supplier handed to
+     * {@link ComparisonEngine#install}, and that facade exposes the reading half. See the class
+     * javadoc of {@code ComparisonEngine} for the three layers that make merging unreachable.
+     */
+    private ServiceTracker<IComparisonManager, IComparisonManager> comparisonManagerTracker;
 
     /**
      * The FORM-model {@link IModelObjectFactory}, tracked with an LDAP filter on the EDT wiring
@@ -249,6 +264,12 @@ public class EdtServices
         runtimeDebugClientTargetManagerTracker = new ServiceTracker<>(
             context, "com._1c.g5.v8.dt.debug.core.model.IRuntimeDebugClientTargetManager", null); //$NON-NLS-1$
         runtimeDebugClientTargetManagerTracker.open();
+
+        comparisonManagerTracker = new ServiceTracker<>(context, IComparisonManager.class, null);
+        comparisonManagerTracker.open();
+        // The supplier - not the service - is what leaves this class, so the facade can answer
+        // "not available" instead of holding a stale reference across an unregister/register cycle.
+        ComparisonEngine.install(this::trackedComparisonManager);
     }
 
     /**
@@ -258,6 +279,11 @@ public class EdtServices
      */
     public void dispose()
     {
+        // BEFORE the trackers close: a live comparison holds a virtual project and a private BM
+        // store that only cancel/stop give back, and cancelling needs the very service that is
+        // about to go away. Closing first would strand those resources for the life of EDT.
+        ComparisonEngine.uninstall();
+
         // Close service trackers (each closeTracker() closes when non-null and returns null,
         // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block). // NOSONAR explanatory comment, not commented-out code
         v8ProjectManagerTracker = closeTracker(v8ProjectManagerTracker);
@@ -293,6 +319,25 @@ public class EdtServices
         synchronizeProjectApiTracker = closeTracker(synchronizeProjectApiTracker);
         projectInformationApiTracker = closeTracker(projectInformationApiTracker);
         runtimeDebugClientTargetManagerTracker = closeTracker(runtimeDebugClientTargetManagerTracker);
+        comparisonManagerTracker = closeTracker(comparisonManagerTracker);
+    }
+
+    /**
+     * The comparison manager, for {@link ComparisonEngine} only.
+     * <p>
+     * Private, and handed out only as a method reference at install time. It returns {@code null}
+     * before {@link #init} has opened the tracker and after {@link #dispose} has closed it, which
+     * is what lets the facade report "not available" rather than throw.
+     *
+     * @return the tracked service, or {@code null} when it is not (yet) there
+     */
+    private IComparisonManager trackedComparisonManager()
+    {
+        if (comparisonManagerTracker == null)
+        {
+            return null;
+        }
+        return comparisonManagerTracker.getService();
     }
 
     /**
