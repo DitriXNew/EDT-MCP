@@ -57,6 +57,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.ComparisonSession;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.ditrix.edt.mcp.server.utils.compare.SlotClaim;
 import com.ditrix.edt.mcp.server.utils.compare.SlotHandback;
@@ -604,6 +605,18 @@ public class CompareConfigurationsTool implements IMcpTool
      * Checks a merge-rules path before anything is started, so a typo is a plain error rather
      * than a comparison that occupies the single slot and then fails.
      *
+     * <h2>Readable is not the same as usable</h2>
+     * {@code Files.isReadable} answers one question - may this process open it - and two things
+     * that are not merge-rules files answer it with "yes". A DIRECTORY is readable, and so is a
+     * file with any extension at all. Both used to pass and be handed to the platform, whose own
+     * {@code deserializeMergeSettings} accepts a name ending in {@code .xml} or {@code .zip} and
+     * nothing else: the comparison then failed deep inside the launch, holding EDT's single
+     * comparison slot, with a message about a file the caller believed had been checked.
+     * <p>
+     * The extension question is asked of {@link MergeRulesCodec#hasReadableExtension}, not
+     * answered again here: the rule belongs to the platform's reader, {@code merge_rules} already
+     * lives next to it, and a second copy of somebody else's rule is the copy that goes stale.
+     *
      * @param mergeRulesFile the caller's path, or {@code null}
      * @return an error result, or {@code null} when the path is usable
      */
@@ -641,6 +654,30 @@ public class CompareConfigurationsTool implements IMcpTool
             return ToolResult.error("mergeRulesFile does not exist or cannot be read: '" //$NON-NLS-1$
                 + mergeRulesFile + "'. Pass an absolute path to a merge-rules file, or omit " //$NON-NLS-1$
                 + "the parameter to compare without pre-set rules.").toJson(); //$NON-NLS-1$
+        }
+        // AFTER readability, because a path that is not there has to be reported as not there:
+        // isRegularFile answers "no" for a missing file just as it does for a directory, so
+        // reaching this check first would tell a caller who mistyped a name that it names a
+        // directory.
+        if (!Files.isRegularFile(path))
+        {
+            return ToolResult.error(KEY_MERGE_RULES_FILE + " is readable but is not a file: '" //$NON-NLS-1$
+                + mergeRulesFile + "'. A merge-rules file is the single '.xml' or '.zip' a " //$NON-NLS-1$
+                + "comparison saves ('Save merge settings'), so name that file rather than the " //$NON-NLS-1$
+                + "directory holding it - or omit the parameter to compare without pre-set " //$NON-NLS-1$
+                + "rules.").toJson(); //$NON-NLS-1$
+        }
+        if (!MergeRulesCodec.hasReadableExtension(path))
+        {
+            return ToolResult.error(KEY_MERGE_RULES_FILE + " must end in '" //$NON-NLS-1$
+                + MergeRulesCodec.XML_EXTENSION + "' or '" + MergeRulesCodec.ZIP_EXTENSION //$NON-NLS-1$
+                + "', but is '" + mergeRulesFile //$NON-NLS-1$
+                + "'. EDT's own merge-settings reader accepts those two names and refuses " //$NON-NLS-1$
+                + "everything else, so a file with any other extension would fail inside the " //$NON-NLS-1$
+                + "launch after it had taken the single comparison slot. Write one with " //$NON-NLS-1$
+                + "merge_rules (mode 'write' produces '" + MergeRulesCodec.XML_EXTENSION //$NON-NLS-1$
+                + "'), rename the file you have, or omit the parameter to compare without " //$NON-NLS-1$
+                + "pre-set rules.").toJson(); //$NON-NLS-1$
         }
         return null;
     }

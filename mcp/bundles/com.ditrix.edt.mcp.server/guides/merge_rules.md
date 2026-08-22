@@ -54,7 +54,7 @@ Markdown.
 - **Below the object, keys are POSITIONS, not names.** A collection element is keyed by the position it would have after the merge, and that number moves as soon as another rule changes. Such rows are reported (`member`) and preserved on rewrite, but never authored: a rule written there would land on whatever ends up at that position. Set the rule on the object and refine it in the comparison window.
 - **A key is not an address on its own.** Sibling members under different owners share their last segment, so a decision is only ever written with its whole chain. The read table prints the chain for the same reason.
 - **`CustomMerge` and `MergeUsingExternalTool` are refused unconditionally**, even when a node allows them. Both name a merge whose actual content is configured elsewhere - the custom merge carries its own nested settings, the external-tool merge names the tool - so writing the bare literal would record a decision nobody made here.
-- **A rewrite is lossless.** `Properties` maps, `Correspondences`, nested sections and any attribute a future EDT adds are re-emitted verbatim; the file is re-serialized with a fixed layout (UTF-8, LF, two-space indent), which no reader keys on.
+- **A rewrite is lossless.** `Properties` maps, `Correspondences`, nested sections, XML comments and processing instructions (inside the document and in its prolog and epilog alike), and any attribute a future EDT adds are re-emitted verbatim; the file is re-serialized with a fixed layout (UTF-8, LF, two-space indent), which no reader keys on.
 - Only `Format_version="2.0"` is read - the same version EDT's own reader accepts. Another version, or a file that is not merge settings, is refused naming what was found.
 
 ## Examples

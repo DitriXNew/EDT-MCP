@@ -98,6 +98,17 @@ public class MergeRulesToolTest
         + "  </MergeSettings>\n" //$NON-NLS-1$
         + "</Settings>\n"; //$NON-NLS-1$
 
+    /**
+     * One character XML 1.0 cannot carry. U+0001 is not whitespace, so a key holding it is not
+     * blank; it IS below U+0020, so {@code String.trim} deletes it at either end - the two facts
+     * that let it through every other check on the way to the file.
+     */
+    private static final String CONTROL_CHARACTER = "\u0001"; //$NON-NLS-1$
+
+    /** A key whose names hold a code point above U+FFFF, which XML carries and this tool accepts. */
+    private static final String ASTRAL_KEY =
+        "A\ud83d\ude00:A\ud83d\ude00:A\ud83d\ude00"; //$NON-NLS-1$
+
     /** The Russian singular type token for a catalog, in escapes so the build cannot mangle it. */
     private static final String CATALOG_RU =
         "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A"; //$NON-NLS-1$
@@ -1314,6 +1325,109 @@ public class MergeRulesToolTest
 
         assertErrorNaming(result, "key #2", "blank"); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    // ==== A key must hold characters XML can actually carry ====
+    //
+    // A control character is not blank, is a JSON string, is not a position key and is not an
+    // object key, so a segment holding one passed every check on the way and was written into the
+    // file as it stood. Nothing escapes it - XML 1.0 has no spelling for it at all - so what
+    // landed on disk was a file EDT's reader refuses outright: the caller lost the whole rules
+    // file, and this tool had reported it as written.
+
+    @Test
+    public void testAKeyHoldingACharacterXmlCannotCarryIsRefusedByPosition() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"com\\u0001monModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "#1", "key #1", "U+0001", "character 4"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusalNamesTheCharacterByCodeInsteadOfEchoingIt() throws IOException
+    {
+        // The refusal travels back as JSON through the same channel the offending character would
+        // have broken, so echoing it would carry the problem into the answer about it.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"com\\u0001monModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Both halves in one test on purpose: "does not contain the character" is satisfied by
+        // any successful report too, so without the refusal beside it the assertion is vacuous.
+        assertErrorNaming(result, "U+0001"); //$NON-NLS-1$
+        assertFalse("the refusal must not carry the character it is complaining about", //$NON-NLS-1$
+            result.contains(CONTROL_CHARACTER));
+    }
+
+    @Test
+    public void testAKeyThatIsNothingButAControlCharacterIsRefusedRatherThanTrimmedAway()
+        throws IOException
+    {
+        // It is not BLANK - Character.isWhitespace says no to U+0001 - and trim() deletes it all
+        // the same, because trim cuts everything below U+0020. So the key that used to reach the
+        // file was the EMPTY one: never sent by the caller, never matched by EDT.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"\\u0001\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #1", "U+0001"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALoneSurrogateKeyIsRefused() throws IOException
+    {
+        // Half of a pair is not a character at all: XML's Char production excludes the surrogate
+        // block, and a writer handed one produces bytes no reader accepts.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"A\\ud83Db\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #1", "U+D83D", "character 2"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWellFormedSurrogatePairIsStillAccepted() throws IOException
+    {
+        // The control that keeps the rule honest: it is the XML Char production, not "printable
+        // ASCII". A pair is ONE code point above U+FFFF, which XML carries, so a name written
+        // with one has to go through - refusing it would be a rule this tool invented.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"catalogs\",\"A\\ud83d\\ude00:A\\ud83d\\ude00:A\\ud83d\\ude00\"]," //$NON-NLS-1$ //$NON-NLS-2$
+                + "\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue("a code point above U+FFFF is legal XML and must be written: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue("and it must reach the file as itself", //$NON-NLS-1$
+            read(target).contains(ASTRAL_KEY));
+    }
+
+    @Test
+    public void testATabInsideAKeyIsStillAcceptedBecauseXmlCarriesIt() throws IOException
+    {
+        // The second control: tab, newline and carriage return are the three control characters
+        // XML 1.0 does allow, and the writer already has an escape for each. A check that refused
+        // everything below U+0020 would reject them, which is a different rule from the one the
+        // format actually has.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"a\\tb\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a tab is a legal XML character: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue("and the writer escapes it rather than dropping it", //$NON-NLS-1$
+            read(target).contains("Key=\"a&#9;b\"")); //$NON-NLS-1$
     }
 
     private String call(Map<String, String> params)

@@ -63,6 +63,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.ditrix.edt.mcp.server.utils.compare.SlotClaim;
 import com.ditrix.edt.mcp.server.utils.compare.SlotClaims;
@@ -513,6 +514,104 @@ public class CompareConfigurationsToolTest
         finally
         {
             Files.deleteIfExists(rules);
+        }
+    }
+
+    // ============ readable is not the same as usable ============
+    //
+    // Files.isReadable answers one question - may this process open it - and two things that are
+    // not merge-rules files answer it with "yes": a directory, and a file with any extension at
+    // all. Both used to pass and be handed to the platform, whose own deserializeMergeSettings
+    // takes a name ending in '.xml' or '.zip' and nothing else. The comparison then failed deep
+    // inside the launch, holding EDT's single comparison slot, over a file the caller had been
+    // told was checked.
+
+    @Test
+    public void testAReadableDirectoryIsNotAMergeRulesFile() throws Exception
+    {
+        Path directory = Files.createTempDirectory("compare-rules-dir"); //$NON-NLS-1$
+        try
+        {
+            assertTrue("the fixture must really be readable", Files.isReadable(directory)); //$NON-NLS-1$
+
+            String result = tool.execute(request(Map.of("mergeRulesFile", //$NON-NLS-1$
+                directory.toString())));
+
+            assertContains(result, "mergeRulesFile"); //$NON-NLS-1$
+            assertContains(result, "is not a file"); //$NON-NLS-1$
+            assertEquals(0, backend.starts());
+        }
+        finally
+        {
+            Files.deleteIfExists(directory);
+        }
+    }
+
+    @Test
+    public void testAMergeRulesFileWithAnotherExtensionIsRefusedBeforeAnythingIsStarted()
+        throws Exception
+    {
+        Path notRules = Files.createTempFile("compare-rules", ".txt"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            String result = tool.execute(request(Map.of("mergeRulesFile", //$NON-NLS-1$
+                notRules.toString())));
+
+            assertContains(result, "mergeRulesFile"); //$NON-NLS-1$
+            assertContains(result, ".xml"); //$NON-NLS-1$
+            assertContains(result, ".zip"); //$NON-NLS-1$
+            // Refused BEFORE the launch, like every other check here: a file EDT's reader will
+            // not open must not cost the single comparison slot to find out.
+            assertEquals(0, backend.starts());
+        }
+        finally
+        {
+            Files.deleteIfExists(notRules);
+        }
+    }
+
+    @Test
+    public void testAZipMergeRulesFileStillReachesTheBackend() throws Exception
+    {
+        // The control: the accepted set is the platform reader's, which is BOTH containers. A
+        // check narrowed to '.xml' would refuse the very file the comparison editor saves.
+        Path rules = Files.createTempFile("compare-rules", ".zip"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            tool.execute(request(Map.of("mergeRulesFile", rules.toString(), //$NON-NLS-1$
+                "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+            LaunchRequest seen = backend.lastRequest();
+            assertNotNull(seen);
+            assertEquals(rules.toString(), seen.getMergeRulesFile());
+        }
+        finally
+        {
+            Files.deleteIfExists(rules);
+        }
+    }
+
+    @Test
+    public void testTheExtensionRefusalUsesTheCodecsOwnRule() throws Exception
+    {
+        // The rule belongs to the platform's reader and lives in one place. This pins that the
+        // tool's verdict and the codec's predicate cannot drift apart: whatever the codec calls
+        // readable is what the tool lets through.
+        Path notRules = Files.createTempFile("compare-rules", ".rules"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            assertFalse("the fixture must be one the codec refuses", //$NON-NLS-1$
+                MergeRulesCodec.hasReadableExtension(notRules));
+
+            String result = tool.execute(request(Map.of("mergeRulesFile", //$NON-NLS-1$
+                notRules.toString())));
+
+            assertContains(result, "must end in"); //$NON-NLS-1$
+            assertEquals(0, backend.starts());
+        }
+        finally
+        {
+            Files.deleteIfExists(notRules);
         }
     }
 

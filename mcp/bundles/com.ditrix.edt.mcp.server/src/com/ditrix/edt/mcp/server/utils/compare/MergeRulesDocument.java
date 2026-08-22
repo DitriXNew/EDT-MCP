@@ -114,22 +114,48 @@ public final class MergeRulesDocument
 
     private final Element settings;
 
+    private final List<Element> prolog;
+
+    private final List<Element> epilog;
+
     private String sourceLabel;
 
-    private MergeRulesDocument(Element settings)
+    private MergeRulesDocument(Element settings, List<Element> prolog, List<Element> epilog)
     {
         this.settings = settings;
+        this.prolog = prolog;
+        this.epilog = epilog;
     }
 
     /**
-     * Wraps an already-parsed {@code Settings} element.
+     * Wraps an already-parsed {@code Settings} element that stands alone in its document.
      *
      * @param settings the root element, never {@code null}
      * @return the document
      */
     public static MergeRulesDocument of(Element settings)
     {
-        return new MergeRulesDocument(settings);
+        return of(settings, List.of(), List.of());
+    }
+
+    /**
+     * Wraps an already-parsed {@code Settings} element together with what stood BESIDE it in the
+     * document - the comments and processing instructions before and after the root.
+     * <p>
+     * They are held on the document rather than on the root element because that is where they
+     * are: XML puts them outside it, and an element cannot hold a sibling. Dropping them would be
+     * the same silent loss the text node exists to prevent, one level up - a licence header or a
+     * generator's note above the root is exactly the kind of payload a rewrite must carry.
+     *
+     * @param settings the root element, never {@code null}
+     * @param prolog the nodes before the root, in document order
+     * @param epilog the nodes after the root, in document order
+     * @return the document
+     */
+    public static MergeRulesDocument of(Element settings, List<Element> prolog,
+        List<Element> epilog)
+    {
+        return new MergeRulesDocument(settings, List.copyOf(prolog), List.copyOf(epilog));
     }
 
     /**
@@ -147,7 +173,7 @@ public final class MergeRulesDocument
         root.attribute(ATTR_KEY, ROOT_KEY);
         mergeSettings.children().add(root);
         settings.children().add(mergeSettings);
-        return new MergeRulesDocument(settings);
+        return new MergeRulesDocument(settings, List.of(), List.of());
     }
 
     /**
@@ -158,6 +184,26 @@ public final class MergeRulesDocument
     public Element settings()
     {
         return settings;
+    }
+
+    /**
+     * The comments and processing instructions that stood BEFORE the root element.
+     *
+     * @return the nodes, in document order, never {@code null}
+     */
+    public List<Element> prolog()
+    {
+        return prolog;
+    }
+
+    /**
+     * The comments and processing instructions that stood AFTER the root element.
+     *
+     * @return the nodes, in document order, never {@code null}
+     */
+    public List<Element> epilog()
+    {
+        return epilog;
     }
 
     /**
@@ -264,10 +310,12 @@ public final class MergeRulesDocument
         int count = 0;
         for (Element child : settings.children())
         {
-            if (child.isText())
+            if (!child.isElement())
             {
-                // Character data is not a section: it is the text of the element it sits in, and
-                // counting it would report a "preserved block" a reader cannot find in the file.
+                // Character data, a comment and a processing instruction are all preserved, and
+                // none of them is a SECTION: they are the text of the element they sit in, and
+                // counting them would report a "preserved block" a reader cannot find in the
+                // file as a block.
                 continue;
             }
             if (TAG_MERGE_SETTINGS.equals(child.tag()))
@@ -411,8 +459,9 @@ public final class MergeRulesDocument
         int count = 0;
         for (Element child : element.children())
         {
-            if (child.isText())
+            if (!child.isElement())
             {
+                // Same rule as preservedSectionCount: only an element is a block.
                 continue;
             }
             if (TAG_NODE.equals(child.tag()))
@@ -428,9 +477,9 @@ public final class MergeRulesDocument
     }
 
     /**
-     * A generic XML node: either an element (tag, ordered attributes, ordered children) or a run
-     * of character data. Kept deliberately dumb so that anything the plugin does not understand
-     * still round-trips.
+     * A generic XML node: an element (tag, ordered attributes, ordered children), a run of
+     * character data, a comment or a processing instruction. Kept deliberately dumb so that
+     * anything the plugin does not understand still round-trips.
      * <p>
      * <b>Character data is a NODE in the child list, not a field beside it.</b> A single text
      * field per element cannot express mixed content - text before a child element and text after
@@ -438,12 +487,44 @@ public final class MergeRulesDocument
      * dropped and the trailing one re-emitted BEFORE every child. A payload section this plugin
      * does not interpret is exactly where such content can appear, and preserving it verbatim is
      * the codec's whole promise, so text takes its place in {@link #children()} in document order.
+     * <p>
+     * <b>A comment and a processing instruction are nodes for the same reason.</b> They are the
+     * one other thing a document can carry between two elements, they are payload this plugin
+     * does not interpret, and a model that had no place for them dropped them on every rewrite -
+     * the same silent loss the text node exists to prevent, on the content that most often
+     * carries a human's note about WHY a decision was made. They hold their position among the
+     * siblings, in document order, exactly as text does.
      */
     public static final class Element
     {
+        /**
+         * What a node IS. Kept as one field rather than derived from which other fields are set:
+         * a comment and a text run both carry only text, so "no tag" stopped being an answer as
+         * soon as there was more than one kind of non-element node.
+         * <p>
+         * Private, and answered from outside through the four predicates below rather than by
+         * handing the constant out: callers ask "is this an element?", never "which of the four
+         * is it?", and an exposed enum would be surface nothing uses.
+         */
+        private enum Kind
+        {
+            /** An element: a tag, attributes and children. */
+            ELEMENT,
+            /** A run of character data. */
+            TEXT,
+            /** A comment, held without its {@code <!--} / {@code -->} delimiters. */
+            COMMENT,
+            /** A processing instruction: a target and the data after it. */
+            PROCESSING_INSTRUCTION
+        }
+
+        private final Kind kind;
+
         private final String tag;
 
         private final String textValue;
+
+        private final String target;
 
         private final Map<String, String> attributes = new LinkedHashMap<>();
 
@@ -456,13 +537,15 @@ public final class MergeRulesDocument
          */
         public Element(String tag)
         {
-            this(tag, null);
+            this(Kind.ELEMENT, tag, null, null);
         }
 
-        private Element(String tag, String textValue)
+        private Element(Kind kind, String tag, String textValue, String target)
         {
+            this.kind = kind;
             this.tag = tag;
             this.textValue = textValue;
+            this.target = target;
         }
 
         /**
@@ -473,7 +556,41 @@ public final class MergeRulesDocument
          */
         public static Element text(String value)
         {
-            return new Element(null, value == null ? "" : value); //$NON-NLS-1$
+            return new Element(Kind.TEXT, null, value == null ? "" : value, null); //$NON-NLS-1$
+        }
+
+        /**
+         * Creates a comment node.
+         *
+         * @param value the comment body WITHOUT its delimiters, exactly as the parser reported it
+         * @return the node
+         */
+        public static Element comment(String value)
+        {
+            return new Element(Kind.COMMENT, null, value == null ? "" : value, null); //$NON-NLS-1$
+        }
+
+        /**
+         * Creates a processing-instruction node.
+         *
+         * @param target the instruction's target
+         * @param data the data after the target, empty when the instruction carries none
+         * @return the node
+         */
+        public static Element processingInstruction(String target, String data)
+        {
+            return new Element(Kind.PROCESSING_INSTRUCTION, null, data == null ? "" : data, //$NON-NLS-1$
+                target);
+        }
+
+        /**
+         * Whether this node is an element - the only kind that has a tag, attributes and children.
+         *
+         * @return {@code true} for an element
+         */
+        public boolean isElement()
+        {
+            return kind == Kind.ELEMENT;
         }
 
         /**
@@ -484,11 +601,32 @@ public final class MergeRulesDocument
          */
         public boolean isText()
         {
-            return tag == null;
+            return kind == Kind.TEXT;
         }
 
         /**
-         * The character data of a text node.
+         * Whether this node is a comment.
+         *
+         * @return {@code true} for a comment
+         */
+        public boolean isComment()
+        {
+            return kind == Kind.COMMENT;
+        }
+
+        /**
+         * Whether this node is a processing instruction.
+         *
+         * @return {@code true} for a processing instruction
+         */
+        public boolean isProcessingInstruction()
+        {
+            return kind == Kind.PROCESSING_INSTRUCTION;
+        }
+
+        /**
+         * The character data of a text node, the body of a comment, or the data of a processing
+         * instruction.
          *
          * @return the text, or {@code null} when this node is an element
          */
@@ -498,9 +636,19 @@ public final class MergeRulesDocument
         }
 
         /**
+         * The target of a processing instruction.
+         *
+         * @return the target, or {@code null} for any other kind of node
+         */
+        public String target()
+        {
+            return target;
+        }
+
+        /**
          * The tag name.
          *
-         * @return the tag, or {@code null} for a text node
+         * @return the tag, or {@code null} for anything that is not an element
          */
         public String tag()
         {

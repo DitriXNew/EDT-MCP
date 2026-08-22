@@ -64,10 +64,19 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
  * kept byte for byte and written back inline. See
  * {@code separateLayoutFromContent}, which also states the one case the rule cannot tell apart.
  * <p>
- * Two differences are known and stated rather than implied, because both are invisible to any
- * XML reader: an element with empty content is re-emitted self-closing ({@code <A></A>} becomes
- * {@code <A/>} - the same empty content), and a namespace PREFIX is not modelled (this format
- * declares none; local names are what both readers key on).
+ * <b>A comment and a processing instruction are payload too.</b> Both are kept as nodes in
+ * document order, beside the text and the child elements, and re-emitted verbatim - a comment is
+ * where a human writes down WHY a decision was made, and a rewrite that dropped it would delete
+ * exactly the part of the file this codec has no other way to carry. They are kept in the prolog
+ * and the epilog as well, where XML puts them outside the root element.
+ * <p>
+ * Three differences are known and stated rather than implied, because all three are invisible to
+ * any XML reader: an element with empty content is re-emitted self-closing ({@code <A></A>}
+ * becomes {@code <A/>} - the same empty content); the whitespace between a processing
+ * instruction's target and its data is re-emitted as ONE space, because a parser reports the data
+ * with that separator already consumed and how many spaces the file spelled is not knowable from
+ * what was read; and a namespace PREFIX is not modelled (this format declares none; local names
+ * are what both readers key on).
  */
 public final class MergeRulesCodec
 {
@@ -84,17 +93,25 @@ public final class MergeRulesCodec
     private static final String NEW_LINE = "\n"; //$NON-NLS-1$
 
     /**
-     * Largest number of bytes one zip entry may expand to before this codec stops reading it.
+     * Largest number of bytes this codec reads out of ONE source - a file or a zip entry - before
+     * it stops and refuses.
      * <p>
      * The number is a ceiling on damage, not a guess at a real file. A merge-settings file is
      * SPARSE - one {@code Node} line per decision somebody actually made, around a hundred bytes -
      * so even a configuration-wide set of tens of thousands of decisions stays in the low
      * megabytes; the files saved off real comparisons are orders of magnitude under this. What the
-     * bound is for is the other direction: a zip entry is decompressed by the JVM the workbench
-     * itself runs in, so a small archive of highly compressible bytes would otherwise exhaust
-     * EDT's heap on the way to being parsed, and the IDE - not just this call - would go down.
+     * bound is for is the other direction: whatever is read is parsed by the JVM the workbench
+     * itself runs in, into a tree several times the size of its own bytes, so a generated or
+     * accidentally bloated source would otherwise exhaust EDT's heap on the way to being parsed,
+     * and the IDE - not just this call - would go down.
+     * <p>
+     * <b>It applies to the plain file exactly as it applies to a zip entry.</b> A zip is the more
+     * obvious hazard, because a small archive of compressible bytes expands without bound - but
+     * the heap is spent by the PARSE, and a plain {@code .xml} reaches the same parser by the
+     * shorter route. Bounding only the zip left the whole defence resting on the caller having
+     * chosen the container that is checked.
      */
-    private static final int MAX_ZIP_ENTRY_BYTES = 16 * 1024 * 1024;
+    private static final int MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 
     /** Working buffer size for the bounded read. */
     private static final int READ_CHUNK_BYTES = 64 * 1024;
@@ -159,6 +176,12 @@ public final class MergeRulesCodec
 
     /**
      * Parses merge-settings XML from a stream. The stream's own encoding declaration is honoured.
+     * <p>
+     * <b>This entry point is NOT bounded by {@link #MAX_DOCUMENT_BYTES}</b>, and cannot be: a
+     * stream has no length, and reading one to find out is the very thing the bound exists to
+     * avoid. The bound is applied where a source is opened - {@link #read(Path)} for a file or a
+     * zip entry - so a caller who reaches for this method owns the question of how much it is
+     * handing over. Every caller inside this codec passes bytes it has already counted.
      *
      * @param in the stream, closed by the caller
      * @return the parsed document
@@ -194,12 +217,25 @@ public final class MergeRulesCodec
         {
             return readZip(file);
         }
+        byte[] content;
         try (InputStream in = Files.newInputStream(file))
         {
-            MergeRulesDocument document = parse(in);
-            document.setSourceLabel(file.toString());
-            return document;
+            // Read through the same bound as a zip entry, and measured the same way - on the bytes
+            // that actually arrive. Files.size() would answer from the directory entry, which is a
+            // claim about the file rather than a count of what is being handed to the parser: a
+            // file that grows while it is read, a named pipe and a filesystem that reports a size
+            // it does not have all defeat it, and the heap is spent by the bytes either way.
+            content = readAtMost(in, MAX_DOCUMENT_BYTES);
         }
+        if (content == null)
+        {
+            throw new MergeRulesFormatException(tooLarge("The file '" + file + "' runs", //$NON-NLS-1$ //$NON-NLS-2$
+                "Check what it actually holds, and point this at the merge-settings document " //$NON-NLS-1$
+                    + "itself.")); //$NON-NLS-1$
+        }
+        MergeRulesDocument document = parse(new ByteArrayInputStream(content));
+        document.setSourceLabel(file.toString());
+        return document;
     }
 
     /**
@@ -211,7 +247,15 @@ public final class MergeRulesCodec
     public static String serialize(MergeRulesDocument document)
     {
         StringBuilder out = new StringBuilder(XML_DECLARATION).append(NEW_LINE);
+        for (Element node : document.prolog())
+        {
+            writeNode(out, node, 0, false);
+        }
         writeElement(out, document.settings(), 0, false);
+        for (Element node : document.epilog())
+        {
+            writeNode(out, node, 0, false);
+        }
         return out.toString();
     }
 
@@ -601,8 +645,45 @@ public final class MergeRulesCodec
      */
     public static boolean isZip(Path file)
     {
-        return file != null && file.getFileName() != null
-            && file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(ZIP_EXTENSION);
+        String name = fileName(file);
+        return name != null && name.endsWith(ZIP_EXTENSION);
+    }
+
+    /**
+     * Whether a path's NAME carries an extension the platform's own merge-settings reader accepts.
+     * <p>
+     * The rule is the platform's, not ours, and it is a rule about the NAME:
+     * {@code IComparisonManager.deserializeMergeSettings} asserts that the file it is handed ends
+     * in {@code .xml} or {@code .zip} and reads nothing otherwise. That is why the question is
+     * answered here, next to the two extensions and the reader that honours them, instead of
+     * being spelled out again by every tool that hands the platform a path - a second copy of a
+     * rule somebody else owns is a copy that goes out of date silently.
+     * <p>
+     * Says nothing about whether the file exists, is readable, or holds a merge-settings document:
+     * those are separate questions with separate answers, and a caller that means "usable" has to
+     * ask all of them.
+     *
+     * @param file the path
+     * @return {@code true} when the file name ends with {@code .xml} or {@code .zip},
+     *         case-insensitively
+     */
+    public static boolean hasReadableExtension(Path file)
+    {
+        String name = fileName(file);
+        return name != null && (name.endsWith(XML_EXTENSION) || name.endsWith(ZIP_EXTENSION));
+    }
+
+    /**
+     * @param file the path
+     * @return the lower-cased file name, or {@code null} when the path names none
+     */
+    private static String fileName(Path file)
+    {
+        if (file == null || file.getFileName() == null)
+        {
+            return null;
+        }
+        return file.getFileName().toString().toLowerCase(Locale.ROOT);
     }
 
     private static MergeRulesDocument readZip(Path file) throws IOException, MergeRulesFormatException
@@ -642,22 +723,39 @@ public final class MergeRulesCodec
             byte[] content;
             try (InputStream in = zip.getInputStream(entry))
             {
-                content = readAtMost(in, MAX_ZIP_ENTRY_BYTES);
+                content = readAtMost(in, MAX_DOCUMENT_BYTES);
             }
             if (content == null)
             {
-                throw new MergeRulesFormatException("The zip entry '" + entry.getName() //$NON-NLS-1$
-                    + "' expands past " + (MAX_ZIP_ENTRY_BYTES / (1024 * 1024)) //$NON-NLS-1$
-                    + " MB and was not read. A merge-settings file records one line per decision " //$NON-NLS-1$
-                    + "somebody made, so a real one is orders of magnitude smaller; an archive that " //$NON-NLS-1$
-                    + "unpacks to more than this is not one, and unpacking it would spend the " //$NON-NLS-1$
-                    + "workbench's heap on it. Extract the entry, check what it actually holds, and " //$NON-NLS-1$
-                    + "read it as '.xml'."); //$NON-NLS-1$
+                throw new MergeRulesFormatException(
+                    tooLarge("The zip entry '" + entry.getName() + "' expands", //$NON-NLS-1$ //$NON-NLS-2$
+                        "Extract the entry, check what it actually holds, and read it as '.xml'.")); //$NON-NLS-1$
             }
             MergeRulesDocument document = parse(new ByteArrayInputStream(content));
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
             return document;
         }
+    }
+
+    /**
+     * The one refusal for a source that runs past {@link #MAX_DOCUMENT_BYTES}, whichever source it
+     * was.
+     * <p>
+     * One wording rather than one per container: the bound is the same number for the same reason,
+     * and a caller who met it on a zip must not have to learn a second sentence to recognise it on
+     * a file. Only the subject and the way out differ, because those really do.
+     *
+     * @param subject what ran past the bound, as a phrase ending in the verb, e.g.
+     *            {@code "The file 'x' runs"}
+     * @param advice what the caller can do about it
+     * @return the message
+     */
+    private static String tooLarge(String subject, String advice)
+    {
+        return subject + " past " + (MAX_DOCUMENT_BYTES / (1024 * 1024)) //$NON-NLS-1$
+            + " MB and was not read. A merge-settings file records one line per decision somebody " //$NON-NLS-1$
+            + "made, so a real one is orders of magnitude smaller; something this large is not " //$NON-NLS-1$
+            + "one, and parsing it would spend the workbench's heap on it. " + advice; //$NON-NLS-1$
     }
 
     /**
@@ -705,7 +803,8 @@ public final class MergeRulesCodec
     {
         try
         {
-            Element rootElement = readTree(reader);
+            ParsedTree tree = readTree(reader);
+            Element rootElement = tree.root;
             if (rootElement == null || !MergeRulesDocument.TAG_SETTINGS.equals(rootElement.tag()))
             {
                 throw new MergeRulesFormatException("Not a merge-settings file: the root element is " //$NON-NLS-1$
@@ -723,7 +822,7 @@ public final class MergeRulesCodec
                     + ". This tool reads version '" + MergeRulesDocument.SUPPORTED_FORMAT_VERSION //$NON-NLS-1$
                     + "', which is also the only version EDT's own reader accepts."); //$NON-NLS-1$
             }
-            return MergeRulesDocument.of(rootElement);
+            return MergeRulesDocument.of(rootElement, tree.prolog, tree.epilog);
         }
         catch (XMLStreamException e)
         {
@@ -736,8 +835,8 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Reads the whole document into an element tree, keeping character data IN DOCUMENT ORDER
-     * among the child elements and BYTE FOR BYTE.
+     * Reads the whole document into an element tree, keeping character data, comments and
+     * processing instructions IN DOCUMENT ORDER among the child elements and BYTE FOR BYTE.
      * <p>
      * The runs are accumulated in one buffer, but that buffer is FLUSHED INTO THE ELEMENT THAT
      * OWNS IT at every element boundary, which is the difference that matters: a single buffer
@@ -747,19 +846,25 @@ public final class MergeRulesCodec
      * codec's promise is that a payload block it does not interpret survives a rewrite verbatim,
      * and mixed content is precisely where a payload block puts its text.
      * <p>
+     * <b>A comment and a processing instruction are flushed the same way, and BEFORE the node
+     * itself is appended</b>: the run that precedes a comment belongs in front of it, so a buffer
+     * emptied only at an element boundary would move that text past the comment and reorder the
+     * very payload this codec promises to carry through.
+     * <p>
      * Every run is kept exactly as read; which of them are LAYOUT is decided per element, once
      * that element is complete, by {@code separateLayoutFromContent}.
      *
      * @param reader the stream reader positioned before the document
-     * @return the root element, or {@code null} for an empty document
+     * @return the root element together with whatever stood beside it; the root is {@code null}
+     *             for an empty document
      * @throws XMLStreamException when the stream is not well-formed XML
      * @throws MergeRulesFormatException when the document nests deeper than
      *             {@link #MAX_ELEMENT_DEPTH}
      */
-    private static Element readTree(XMLStreamReader reader)
+    private static ParsedTree readTree(XMLStreamReader reader)
         throws XMLStreamException, MergeRulesFormatException
     {
-        Element root = null;
+        ParsedTree tree = new ParsedTree();
         Deque<Element> stack = new ArrayDeque<>();
         StringBuilder pending = new StringBuilder();
         while (reader.hasNext())
@@ -780,7 +885,7 @@ public final class MergeRulesCodec
                 }
                 if (stack.isEmpty())
                 {
-                    root = element;
+                    tree.root = element;
                 }
                 else
                 {
@@ -792,13 +897,64 @@ public final class MergeRulesCodec
             {
                 pending.append(reader.getText());
             }
+            else if (event == XMLStreamConstants.COMMENT)
+            {
+                flushText(stack.peek(), pending);
+                tree.add(stack.peek(), Element.comment(reader.getText()));
+            }
+            else if (event == XMLStreamConstants.PROCESSING_INSTRUCTION)
+            {
+                flushText(stack.peek(), pending);
+                tree.add(stack.peek(),
+                    Element.processingInstruction(reader.getPITarget(), reader.getPIData()));
+            }
             else if (event == XMLStreamConstants.END_ELEMENT)
             {
                 flushText(stack.peek(), pending);
                 separateLayoutFromContent(stack.pop());
             }
         }
-        return root;
+        return tree;
+    }
+
+    /**
+     * What one parse produced: the root element and the nodes that stood BESIDE it.
+     * <p>
+     * The two lists exist because XML puts a comment or a processing instruction outside the root
+     * when it stands before or after it, and an element cannot hold a sibling. Which list a node
+     * belongs to is decided by whether the root has been seen yet, so the order is the document's
+     * own and needs no second pass.
+     */
+    private static final class ParsedTree
+    {
+        private Element root;
+
+        private final List<Element> prolog = new ArrayList<>();
+
+        private final List<Element> epilog = new ArrayList<>();
+
+        /**
+         * Files one node where the document put it.
+         *
+         * @param owner the element still open, or {@code null} when the node stands outside the
+         *            root
+         * @param node the comment or processing instruction
+         */
+        void add(Element owner, Element node)
+        {
+            if (owner != null)
+            {
+                owner.children().add(node);
+            }
+            else if (root == null)
+            {
+                prolog.add(node);
+            }
+            else
+            {
+                epilog.add(node);
+            }
+        }
     }
 
     /**
@@ -852,7 +1008,7 @@ public final class MergeRulesCodec
      */
     private static void separateLayoutFromContent(Element element)
     {
-        boolean hasElementChild = false;
+        boolean hasLaidOutChild = false;
         boolean hasContent = false;
         for (Element child : element.children())
         {
@@ -862,10 +1018,13 @@ public final class MergeRulesCodec
             }
             else
             {
-                hasElementChild = true;
+                // An element, a comment and a processing instruction alike: each of them is a node
+                // the canonical layout puts on a line of its own, so the whitespace beside it is
+                // the indentation that put it there.
+                hasLaidOutChild = true;
             }
         }
-        if (!hasElementChild)
+        if (!hasLaidOutChild)
         {
             if (!hasContent && isStructural(element))
             {
@@ -937,14 +1096,7 @@ public final class MergeRulesCodec
         {
             for (Element child : content)
             {
-                if (child.isText())
-                {
-                    out.append(escapeCharacterData(child.textValue()));
-                }
-                else
-                {
-                    writeElement(out, child, depth + 1, true);
-                }
+                writeNode(out, child, depth + 1, true);
             }
             closeTag(out, element, inline);
             return;
@@ -962,14 +1114,75 @@ public final class MergeRulesCodec
         out.append(NEW_LINE);
         for (Element child : content)
         {
-            writeElement(out, child, depth + 1, false);
+            writeNode(out, child, depth + 1, false);
         }
         indent(out, depth);
         closeTag(out, element, inline);
     }
 
     /**
-     * Whether these children are mixed content - character data AND child elements side by side.
+     * Writes one node of any kind.
+     * <p>
+     * <b>A comment and a processing instruction go back VERBATIM, unescaped.</b> Nothing else
+     * would be correct: XML forbids {@code --} inside a comment and {@code ?>} inside a
+     * processing instruction, so a parser cannot report a body this method would have to escape,
+     * and escaping one anyway would rewrite payload the codec promises to carry through
+     * unchanged. The only nodes this codec ever creates of these two kinds are the ones its own
+     * reader produced, which is where that guarantee comes from - a node built by hand out of
+     * text that spells a delimiter would produce a document no reader accepts, and is not a shape
+     * this codec offers a way to reach.
+     *
+     * @param out the buffer
+     * @param node the node to write
+     * @param depth nesting depth, used for the canonical indentation
+     * @param inline whether the node sits inside another element's character data, and so may
+     *            neither indent itself nor end its own line
+     */
+    private static void writeNode(StringBuilder out, Element node, int depth, boolean inline)
+    {
+        if (node.isText())
+        {
+            out.append(escapeCharacterData(node.textValue()));
+            return;
+        }
+        if (node.isComment())
+        {
+            if (!inline)
+            {
+                indent(out, depth);
+            }
+            out.append("<!--").append(node.textValue()).append("-->"); //$NON-NLS-1$ //$NON-NLS-2$
+            endLine(out, inline);
+            return;
+        }
+        if (node.isProcessingInstruction())
+        {
+            if (!inline)
+            {
+                indent(out, depth);
+            }
+            out.append("<?").append(node.target()); //$NON-NLS-1$
+            String data = node.textValue();
+            if (data != null && !data.isEmpty())
+            {
+                // The separator is a single space, and it is REGENERATED rather than preserved:
+                // the parser reports the data with the separator already consumed, so how many
+                // spaces the file spelled is not knowable from what was read.
+                out.append(' ').append(data);
+            }
+            out.append("?>"); //$NON-NLS-1$
+            endLine(out, inline);
+            return;
+        }
+        writeElement(out, node, depth, inline);
+    }
+
+    /**
+     * Whether these children are mixed content - character data AND a node beside it.
+     * <p>
+     * A comment and a processing instruction count on the same side as a child element: they too
+     * sit INSIDE the character data, so laying them out on lines of their own would insert
+     * newlines and indentation into a value the next reader parses.
      *
      * @param content one element's children
      * @return {@code true} when both kinds are present
@@ -977,13 +1190,13 @@ public final class MergeRulesCodec
     private static boolean isMixed(List<Element> content)
     {
         boolean text = false;
-        boolean elements = false;
+        boolean laidOut = false;
         for (Element child : content)
         {
             text |= child.isText();
-            elements |= !child.isText();
+            laidOut |= !child.isText();
         }
-        return text && elements;
+        return text && laidOut;
     }
 
     private static void closeTag(StringBuilder out, Element element, boolean inline)

@@ -20,6 +20,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
@@ -1081,6 +1082,298 @@ public class MergeRulesCodecTest
             + "truncate a real file", decisions, MergeRulesCodec.read(zip).decisions().size()); //$NON-NLS-1$
     }
 
+
+    // ==== A comment and a processing instruction are payload, not decoration ====
+
+    /**
+     * A file annotated the way a human annotates one: a comment and a processing instruction
+     * standing BEFORE and AFTER a child element, on every level that has children - the prolog,
+     * the root element, and a node inside the tree.
+     * <p>
+     * Both kinds used to be dropped on the floor by the read loop, which handled character data
+     * and element boundaries and silently ignored every other event. A rewrite therefore deleted
+     * the one part of a merge-rules file that says WHY a decision was made, while reporting the
+     * document as carried through verbatim.
+     */
+    private static final String ANNOTATED_FIXTURE = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+        + "<!-- header kept by hand -->\n" //$NON-NLS-1$
+        + "<?edt-mcp origin=\"hand-written\"?>\n" //$NON-NLS-1$
+        + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+        + "  <!-- before the tree -->\n" //$NON-NLS-1$
+        + "  <?edt-mcp before?>\n" //$NON-NLS-1$
+        + "  <MergeSettings>\n" //$NON-NLS-1$
+        + "    <Node Key=\"$$Root$$\">\n" //$NON-NLS-1$
+        + "      <!-- before the payload -->\n" //$NON-NLS-1$
+        + "      <Properties>\n" //$NON-NLS-1$
+        + "        <SkipUnchanged>true</SkipUnchanged>\n" //$NON-NLS-1$
+        + "      </Properties>\n" //$NON-NLS-1$
+        + "      <?edt-mcp after-the-payload?>\n" //$NON-NLS-1$
+        + "      <Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/>\n" //$NON-NLS-1$
+        + "      <!-- after the last node -->\n" //$NON-NLS-1$
+        + "    </Node>\n" //$NON-NLS-1$
+        + "  </MergeSettings>\n" //$NON-NLS-1$
+        + "  <!-- after the tree -->\n" //$NON-NLS-1$
+        + "  <?edt-mcp after?>\n" //$NON-NLS-1$
+        + "</Settings>\n" //$NON-NLS-1$
+        + "<!-- trailing note -->\n" //$NON-NLS-1$
+        + "<?edt-mcp done?>\n"; //$NON-NLS-1$
+
+    @Test
+    public void testAnAnnotatedFileRoundTripsByteIdentically() throws Exception
+    {
+        assertEquals("a comment and a processing instruction are content the rewrite must return, " //$NON-NLS-1$
+            + "in the place the document put them", //$NON-NLS-1$
+            ANNOTATED_FIXTURE, MergeRulesCodec.serialize(MergeRulesCodec.parse(ANNOTATED_FIXTURE)));
+    }
+
+    @Test
+    public void testAnAnnotatedRoundTripIsIdempotent() throws Exception
+    {
+        String once = MergeRulesCodec.serialize(MergeRulesCodec.parse(ANNOTATED_FIXTURE));
+        assertEquals("keeping the annotations may not make the rewrite drift instead", once, //$NON-NLS-1$
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(once)));
+    }
+
+    @Test
+    public void testACommentBeforeAChildElementSurvivesAnEdit() throws Exception
+    {
+        assertTrue("the note standing in front of a payload block is the block's explanation", //$NON-NLS-1$
+            rewriteAnnotatedWithAnExtraDecision().contains("<!-- before the payload -->")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACommentAfterAChildElementSurvivesAnEdit() throws Exception
+    {
+        // The two positions are pinned separately because they fail separately: a loop that
+        // flushed its buffer only at an element boundary kept one of them and lost the other.
+        assertTrue("a note after the last child is as much content as one before the first", //$NON-NLS-1$
+            rewriteAnnotatedWithAnExtraDecision().contains("<!-- after the last node -->")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAProcessingInstructionSurvivesAnEdit() throws Exception
+    {
+        assertTrue("an instruction is addressed to some other reader of this file, and this " //$NON-NLS-1$
+            + "codec is not it", //$NON-NLS-1$
+            rewriteAnnotatedWithAnExtraDecision().contains("<?edt-mcp after-the-payload?>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPrologCommentSurvivesAnEdit() throws Exception
+    {
+        // Outside the root element, where XML puts a licence header - held on the document,
+        // because an element cannot hold a sibling.
+        assertTrue("a header above the root is payload too", //$NON-NLS-1$
+            rewriteAnnotatedWithAnExtraDecision().contains("<!-- header kept by hand -->")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEpilogProcessingInstructionSurvivesAnEdit() throws Exception
+    {
+        assertTrue("and so is an instruction below it", //$NON-NLS-1$
+            rewriteAnnotatedWithAnExtraDecision().contains("<?edt-mcp done?>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheEditItselfStillLands() throws Exception
+    {
+        // The control for the five assertions above: keeping the annotations must not have cost
+        // the write they were carried through.
+        assertTrue("the new decision must be in the rewritten file", //$NON-NLS-1$
+            rewriteAnnotatedWithAnExtraDecision()
+                .contains("<Node Key=\"catalogs\" MergeRule=\"DoNotMerge\"/>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommentsDoNotBecomeDecisions() throws Exception
+    {
+        assertEquals("a comment sits among the Node children and is not one of them", 1, //$NON-NLS-1$
+            MergeRulesCodec.parse(ANNOTATED_FIXTURE).decisions().size());
+    }
+
+    @Test
+    public void testCommentsAreNotCountedAsPreservedSections() throws Exception
+    {
+        // Only the Properties block is a SECTION. Counting the annotations would report blocks a
+        // reader opening the file cannot find as blocks - the same reason character data is not
+        // counted either.
+        assertEquals(1, MergeRulesCodec.parse(ANNOTATED_FIXTURE).preservedSectionCount());
+    }
+
+    /**
+     * A comment INSIDE character data: it sits between two runs of a payload's text, so the
+     * layout may not touch it and the text around it may not be trimmed.
+     */
+    private static final String COMMENTED_MIXED_FIXTURE =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+            + "  <Payload>Hello <!-- note --> world</Payload>\n" //$NON-NLS-1$
+            + "  <MergeSettings>\n" //$NON-NLS-1$
+            + "    <Node Key=\"$$Root$$\">\n" //$NON-NLS-1$
+            + "      <Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/>\n" //$NON-NLS-1$
+            + "    </Node>\n" //$NON-NLS-1$
+            + "  </MergeSettings>\n" //$NON-NLS-1$
+            + "</Settings>\n"; //$NON-NLS-1$
+
+    @Test
+    public void testACommentInsideCharacterDataStaysInlineWithTheTextAroundIt() throws Exception
+    {
+        assertEquals("a comment between two runs of text is inside the value: putting it on a " //$NON-NLS-1$
+            + "line of its own would insert a newline and an indent INTO that value", //$NON-NLS-1$
+            COMMENTED_MIXED_FIXTURE,
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(COMMENTED_MIXED_FIXTURE)));
+    }
+
+    @Test
+    public void testAProcessingInstructionWithNoDataKeepsItsBareForm() throws Exception
+    {
+        // The separator between target and data is consumed by the parser, so an instruction that
+        // carries no data must not be re-emitted with a space it never had.
+        String fixture = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
+            + "  <?edt-mcp?>\n" //$NON-NLS-1$
+            + "  <MergeSettings>\n" //$NON-NLS-1$
+            + "    <Node Key=\"$$Root$$\"/>\n" //$NON-NLS-1$
+            + "  </MergeSettings>\n" //$NON-NLS-1$
+            + "</Settings>\n"; //$NON-NLS-1$
+
+        assertEquals(fixture, MergeRulesCodec.serialize(MergeRulesCodec.parse(fixture)));
+    }
+
+    @Test
+    public void testAnAnnotatedFileSurvivesTheFileRoundTripToo() throws Exception
+    {
+        // Through the disk, not only through the string API: a merge_rules write reads a file and
+        // writes it back, and that is the path on which the annotations were being lost.
+        Path file = workDir.resolve("annotated.xml"); //$NON-NLS-1$
+        Files.write(file, ANNOTATED_FIXTURE.getBytes(StandardCharsets.UTF_8));
+
+        MergeRulesCodec.write(file, MergeRulesCodec.read(file), MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals(ANNOTATED_FIXTURE, new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * @return the annotated fixture rewritten after one decision has been added to it
+     * @throws Exception when the fixture does not parse
+     */
+    private static String rewriteAnnotatedWithAnExtraDecision() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(ANNOTATED_FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        return MergeRulesCodec.serialize(document);
+    }
+
+    // ==== The size bound belongs to the SOURCE, not to the container it arrived in ====
+
+    @Test
+    public void testAPlainXmlFileLargerThanTheBoundIsRefusedInsteadOfParsed() throws Exception
+    {
+        // The zip form was bounded and the plain form was not, so the whole defence rested on the
+        // caller having picked the container that is checked. A generated or accidentally bloated
+        // .xml went straight into an unbounded tree in the workbench's own heap.
+        Path file = workDir.resolve("huge.xml"); //$NON-NLS-1$
+        try (OutputStream out = Files.newOutputStream(file))
+        {
+            writeFiller(out, 20 * 1024 * 1024);
+        }
+        assertTrue("the fixture has to be past the bound to test it", //$NON-NLS-1$
+            Files.size(file) > 16L * 1024 * 1024);
+
+        try
+        {
+            MergeRulesCodec.read(file);
+            fail("a file past the bound must be refused, not parsed"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the file it stopped on: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("huge.xml")); //$NON-NLS-1$
+            assertTrue("and say how much it read past: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("past 16 MB and was not read")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTheOversizedFileRefusalIsWordedLikeTheZipOne() throws Exception
+    {
+        // One bound, one reason, one sentence. A caller who met this on a zip must recognise it
+        // on a file rather than learn a second wording for the same rule.
+        Path file = workDir.resolve("huge-twin.xml"); //$NON-NLS-1$
+        try (OutputStream out = Files.newOutputStream(file))
+        {
+            writeFiller(out, 20 * 1024 * 1024);
+        }
+        Path zip = workDir.resolve("bomb-twin.zip"); //$NON-NLS-1$
+        writeInflatingZip(zip, "Main_Other_Ancestor.xml", 20 * 1024 * 1024); //$NON-NLS-1$
+
+        String shared = "A merge-settings file records one line per decision somebody made"; //$NON-NLS-1$
+        assertTrue("the file refusal must carry the shared sentence", //$NON-NLS-1$
+            refusalFor(file).contains(shared));
+        assertTrue("and so must the zip one", refusalFor(zip).contains(shared)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnOrdinaryPlainXmlFileIsStillReadWhole() throws Exception
+    {
+        // The control: the bound guards the heap, it does not truncate a real file. Thousands of
+        // decisions are an ordinary merge-rules file and must come back complete.
+        Path file = workDir.resolve("large-but-real.xml"); //$NON-NLS-1$
+        int decisions = 8000;
+        StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\">\n  <MergeSettings>\n    <Node Key=\"$$Root$$\">\n"); //$NON-NLS-1$
+        for (int i = 0; i < decisions; i++)
+        {
+            xml.append("      <Node Key=\"catalogs").append(i) //$NON-NLS-1$
+                .append("\" MergeRule=\"GetFromOther\"/>\n"); //$NON-NLS-1$
+        }
+        xml.append("    </Node>\n  </MergeSettings>\n</Settings>\n"); //$NON-NLS-1$
+        Files.write(file, xml.toString().getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(decisions, MergeRulesCodec.read(file).decisions().size());
+    }
+
+    /**
+     * @param file a source the codec must refuse for its size
+     * @return the refusal message
+     * @throws Exception when reading fails for any other reason
+     */
+    private static String refusalFor(Path file) throws Exception
+    {
+        try
+        {
+            MergeRulesCodec.read(file);
+            fail("expected a refusal for " + file); //$NON-NLS-1$
+            return null; // unreachable
+        }
+        catch (MergeRulesFormatException e)
+        {
+            return e.getMessage();
+        }
+    }
+
+    // ==== Which extensions the PLATFORM's reader accepts, answered in one place ====
+
+    @Test
+    public void testTheReaderExtensionRuleAcceptsBothContainers()
+    {
+        assertTrue(MergeRulesCodec.hasReadableExtension(Paths.get("C:", "rules.xml"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MergeRulesCodec.hasReadableExtension(Paths.get("C:", "rules.zip"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheReaderExtensionRuleIsCaseInsensitive()
+    {
+        assertTrue(MergeRulesCodec.hasReadableExtension(Paths.get("C:", "RULES.XML"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheReaderExtensionRuleRefusesAnythingElse()
+    {
+        assertFalse(MergeRulesCodec.hasReadableExtension(Paths.get("C:", "rules.txt"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(MergeRulesCodec.hasReadableExtension(Paths.get("C:", "rules"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(MergeRulesCodec.hasReadableExtension(null));
+    }
 
     // ======== Mixed content: the whitespace beside a child element is part of the value ========
 

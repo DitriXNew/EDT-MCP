@@ -794,7 +794,8 @@ public class MergeRulesTool implements IMcpTool
                         + "['commonModules'] a collection, ['commonModules','A:A:A'] one object.") //$NON-NLS-1$
                         .toJson());
                 }
-                if (segment.getAsString().isBlank())
+                String key = segment.getAsString();
+                if (key.isBlank())
                 {
                     return ParsedDecision.refused(ToolResult.error("Decision #" + position //$NON-NLS-1$
                         + ": key #" + (index + 1) + " in '" + FIELD_PATH //$NON-NLS-1$ //$NON-NLS-2$
@@ -802,7 +803,12 @@ public class MergeRulesTool implements IMcpTool
                         + "configuration, ['commonModules'] a collection, " //$NON-NLS-1$
                         + "['commonModules','A:A:A'] one object.").toJson()); //$NON-NLS-1$
                 }
-                path.add(segment.getAsString().trim());
+                String unwritable = unwritableKeyRefusal(key, position, index + 1);
+                if (unwritable != null)
+                {
+                    return ParsedDecision.refused(unwritable);
+                }
+                path.add(key.trim());
             }
         }
         else
@@ -825,6 +831,110 @@ public class MergeRulesTool implements IMcpTool
             return ParsedDecision.refused(pathRefusal);
         }
         return ParsedDecision.parsed(new RequestedDecision(path, rule));
+    }
+
+    /**
+     * Refuses a key holding a character XML itself cannot carry, naming WHERE it is and WHAT it is
+     * by code point.
+     * <p>
+     * <b>Why this is not caught by any of the checks around it.</b> A control character is not
+     * blank ({@code Character.isWhitespace} says no to {@code U+0001}), it is a JSON string, it is
+     * not a position key and not an object key, so a segment holding one passes every check on the
+     * way and is written into the file as the attribute value it is. Escaping does not save it
+     * either: {@code &}, {@code <}, {@code >} and the quote are markup, and tab, newline and
+     * carriage return are the only control characters XML has an escape FOR - the rest are not
+     * legal characters in an XML 1.0 document at all, in any spelling. What lands on disk is then
+     * a file EDT's reader cannot parse, so the caller loses not the one key but the whole rules
+     * file, and this tool reported it as written.
+     * <p>
+     * <b>The set is the XML {@code Char} production, not "whatever prints".</b> XML 1.0 allows
+     * tab, newline and carriage return, everything from {@code U+0020} to {@code U+D7FF},
+     * {@code U+E000} to {@code U+FFFD}, and every code point above {@code U+FFFF}. A lone
+     * surrogate is therefore refused while a well-formed surrogate PAIR is accepted, because the
+     * pair is one code point in the last range - an emoji in an object name is legal XML and would
+     * be wrong to refuse.
+     * <p>
+     * <b>Asked of the value as SENT, before the trim.</b> A control character below
+     * {@code U+0020} at either end is one {@code String.trim} silently deletes, so checking the
+     * trimmed value would answer for a key the caller did not send: a key that is nothing but
+     * U+0001 would become the EMPTY key, and one that merely starts with U+0001 would be
+     * quietly rewritten into a key the caller never sent - both the "reported as written,
+     * silently something else" shape this tool refuses everywhere else.
+     * <p>
+     * <b>The character is named by CODE, never echoed.</b> The refusal travels back through the
+     * same JSON the offending byte would have broken, so putting it in the message would carry the
+     * problem into the answer about it.
+     *
+     * @param key the key exactly as the caller sent it
+     * @param position the decision's position, for the message
+     * @param keyNumber the key's position within the chain, 1-based
+     * @return the refusal, or {@code null} when every character can be written
+     */
+    private static String unwritableKeyRefusal(String key, int position, int keyNumber)
+    {
+        int offset = firstUnwritableCharacter(key);
+        if (offset < 0)
+        {
+            return null;
+        }
+        return ToolResult.error("Decision #" + position + ": key #" + keyNumber + " in '" //$NON-NLS-1$ //$NON-NLS-2$
+            + FIELD_PATH + "' holds " + codePointName(key.charAt(offset)) //$NON-NLS-1$
+            + " at character " + (offset + 1) //$NON-NLS-1$
+            + ", which XML 1.0 cannot carry in any spelling - not even as an escape. Nothing was " //$NON-NLS-1$
+            + "written: a rules file holding it is one EDT's reader rejects outright, so the " //$NON-NLS-1$
+            + "whole file would be lost and not just this key. Only tab, newline and carriage " //$NON-NLS-1$
+            + "return are legal below U+0020; a character like this usually arrives from a " //$NON-NLS-1$
+            + "mis-decoded copy-paste. Re-send the key without it.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * @param key the key to scan
+     * @return the index of the first character XML 1.0 cannot carry, or {@code -1} when there is
+     *         none
+     */
+    private static int firstUnwritableCharacter(String key)
+    {
+        for (int i = 0; i < key.length(); i++)
+        {
+            char current = key.charAt(i);
+            if (Character.isHighSurrogate(current) && i + 1 < key.length()
+                && Character.isLowSurrogate(key.charAt(i + 1)))
+            {
+                // A well-formed pair is one code point above U+FFFF, and XML carries all of those.
+                i++;
+                continue;
+            }
+            if (!isXmlCharacter(current))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * @param character one UTF-16 unit, already known not to be part of a well-formed surrogate
+     *            pair
+     * @return whether XML 1.0's {@code Char} production allows it
+     */
+    private static boolean isXmlCharacter(char character)
+    {
+        // Written as numbers, not as character escapes: a backslash-u escape in a source
+        // file is translated by the Java lexer before the code is parsed, so the bounds of a
+        // range would stop being readable as bounds.
+        return character == '\t' || character == '\n' || character == '\r'
+            || (character >= 0x20 && character <= 0xD7FF)
+            || (character >= 0xE000 && character <= 0xFFFD);
+    }
+
+    /**
+     * @param character the character to name
+     * @return its code point in the {@code U+XXXX} spelling, so a refusal can point at it without
+     *         carrying it
+     */
+    private static String codePointName(char character)
+    {
+        return String.format(Locale.ROOT, "U+%04X", (int)character); //$NON-NLS-1$
     }
 
     /**
