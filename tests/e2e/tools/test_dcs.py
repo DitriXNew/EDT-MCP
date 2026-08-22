@@ -8,6 +8,7 @@ resources lazily, and a read must still roll that model side effect back.
 
 import os
 import re
+import time
 
 from harness import (
     PROJECT,
@@ -117,6 +118,28 @@ def _find_report_dcs(report_name):
             if filename.lower() == "template.dcs":
                 return os.path.relpath(os.path.join(root, filename), PROJECT_DIR).replace(os.sep, "/")
     return None
+
+
+def _poll_report_dcs(report_name, timeout=30, ctx=""):
+    """The report's Template.dcs path, once EDT has actually written the file.
+
+    A BM write only schedules the export, so the file appears after the call returns. Polling the
+    git diff for the REPORT NAME does not wait for it: seeding the report already put that name in
+    the diff, so the poll returns immediately and the test then reads a file that does not exist
+    yet. It passed locally and failed on CI, which is exactly the shape of a race. Wait for the
+    file itself, which is the thing the assertion actually needs.
+    """
+    deadline = time.time() + timeout
+    while True:
+        found = _find_report_dcs(report_name)
+        if found:
+            return found
+        if time.time() >= deadline:
+            raise AssertionError(
+                "Template.dcs never materialized for %s within %gs [%s] - the write reported "
+                "success, so either the force-export did not run or it targeted another object"
+                % (report_name, timeout, ctx))
+        time.sleep(0.5)
 
 
 def _assert_read_did_not_change(before, ctx):
@@ -283,8 +306,7 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
     assert drill.text.count(root + "#/dataSets/Sales`") == 1, \
         "the same natural key must be updated, never duplicated"
 
-    dcs_rel = _find_report_dcs(report_name)
-    assert dcs_rel is not None, "the first dcs write must materialize the report's Template.dcs"
+    dcs_rel = _poll_report_dcs(report_name, ctx="the first dcs write")
     on_disk = read_disk(dcs_rel)
     assert "E2EDcsWriteSecond" in on_disk, "the committed query must persist in %s" % dcs_rel
     assert "E2EDcsWriteFirst" not in on_disk, "the old query must be replaced in %s" % dcs_rel
@@ -316,8 +338,7 @@ def test_calculated_field_upserts_in_place_and_persists_to_disk():
     poll_diff_contains(first_expression,
                        ctx="the calculated field expression must reach Template.dcs")
 
-    dcs_rel = _find_report_dcs(report_name)
-    assert dcs_rel is not None, "the first calculated-field write must materialize Template.dcs"
+    dcs_rel = _poll_report_dcs(report_name, ctx="the first calculated-field write")
     first_disk = read_disk(dcs_rel)
     assert data_path in first_disk and first_expression in first_disk, \
         "the calculated field and expression must persist in %s" % dcs_rel
@@ -386,10 +407,7 @@ def test_localized_title_uses_the_declared_language_code_spelling():
     assert_ok(result, "accept a declared language code in another case")
     # forceExportToDisk only SCHEDULES the flush, so poll for it instead of reading the tree
     # immediately - the write itself already reported success.
-    poll_diff_contains(report_name,
-                       ctx="the localized parameter write must force-export to disk")
-    dcs_rel = _find_report_dcs(report_name)
-    assert dcs_rel is not None, "the localized parameter write must materialize Template.dcs"
+    dcs_rel = _poll_report_dcs(report_name, ctx="the localized parameter write")
     on_disk = read_disk(dcs_rel)
     assert ">en<" in on_disk, \
         "the title must use the configuration's declared spelling 'en': %s" % on_disk[:700]

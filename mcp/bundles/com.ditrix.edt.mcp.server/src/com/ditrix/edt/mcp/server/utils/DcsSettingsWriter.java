@@ -459,6 +459,17 @@ public final class DcsSettingsWriter
             String error = removeSettingsPath(working, path, type);
             return error == null ? SettingsResult.success(working, true) : SettingsResult.failure(error);
         }
+        // Resolve the default path BEFORE deciding whether to start from a blank settings object.
+        // A concrete type addressed at the bare root (action='replace', type='selection') arrives
+        // with an empty segment list and only then gains 'selection' from defaultPath - so reading
+        // path.isEmpty() first treated it as an authoritative replacement of the WHOLE settings and
+        // silently dropped filter, order, conditional appearance and data parameters. Only a type
+        // whose default path is itself empty addresses the settings root; that one still resets,
+        // which is what replacing a root means.
+        if (path.isEmpty())
+        {
+            path = defaultPath(type);
+        }
         DataCompositionSettings working = ACTION_REPLACE.equals(action) && path.isEmpty()
             ? DcsFactory.eINSTANCE.createDataCompositionSettings() : copy(current);
         if (working == null)
@@ -469,10 +480,6 @@ public final class DcsSettingsWriter
                     + "address. Use action='upsert' to create them first."); //$NON-NLS-1$
             }
             working = DcsFactory.eINSTANCE.createDataCompositionSettings();
-        }
-        if (path.isEmpty())
-        {
-            path = defaultPath(type);
         }
         String error = path.isEmpty() ? applySettingsBody(working, body, action, languages, version, "body") //$NON-NLS-1$
             : applySettingsPath(working, path, body, action, type, languages, version);
@@ -2812,8 +2819,29 @@ public final class DcsSettingsWriter
         {
             int selected = index(path.get(1), holder.getItems().size(), "userFields/items"); //$NON-NLS-1$
             if (indexError != null) return indexError;
-            error = applyUserField(holder.getItems().get(selected), body, action, languages, version,
-                "userFields/items/" + path.get(1)); //$NON-NLS-1$
+            String at = "userFields/items/" + path.get(1); //$NON-NLS-1$
+            if (ACTION_REPLACE.equals(action))
+            {
+                // Authoritative replacement, so the field is REBUILT from the body: applying over
+                // the existing one let an omitted title, use flag, detailExpression or
+                // totalExpression survive a replace that never mentioned them, which is an update
+                // wearing a replace label. Same reasoning as the indexed selection item.
+                UserField fresh = newUserField(body, at);
+                if (fresh == null)
+                {
+                    return userFieldKindError;
+                }
+                error = applyUserField(fresh, body, action, languages, version, at);
+                if (error == null)
+                {
+                    holder.getItems().set(selected, fresh);
+                }
+            }
+            else
+            {
+                error = applyUserField(holder.getItems().get(selected), body, action, languages,
+                    version, at);
+            }
         }
         else
         {
@@ -2863,6 +2891,33 @@ public final class DcsSettingsWriter
             if (error != null) return error;
             holder.getItems().add(item);
         }
+        return null;
+    }
+
+    /**
+     * A fresh user field of the kind the body names, or {@code null} with {@link #userFieldKindError}
+     * set. Shared by append and by an authoritative replace so both build the same shapes from the
+     * same kind vocabulary.
+     */
+    private static UserField newUserField(JsonObject body, String path)
+    {
+        userFieldKindError = null;
+        String kind = requiredString(body, KEY_KIND, path);
+        if (stringError != null)
+        {
+            userFieldKindError = stringError;
+            return null;
+        }
+        if ("expression".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionUserFieldExpression();
+        }
+        if ("case".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionUserFieldCase();
+        }
+        userFieldKindError = "User-field kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "' is invalid. Use kind='expression' or kind='case'."; //$NON-NLS-1$
         return null;
     }
 
@@ -3673,6 +3728,7 @@ public final class DcsSettingsWriter
     private static String arrayError;
     private static String arrayObjectError;
     private static String selectedKindError;
+    private static String userFieldKindError;
     private static String stringError;
     private static String booleanError;
     private static String indexError;

@@ -12,10 +12,13 @@ import java.security.NoSuchAlgorithmException;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.InternalEObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 /**
  * Computes a compact structural fingerprint for a resolved DCS or dynamic-list root.
@@ -150,6 +153,17 @@ public final class DcsHash
             return canonicalValue(value);
         }
         EObject target = (EObject)value;
+        // An unresolved proxy already carries the URI the model persists for this reference. That
+        // is the most precise identity available, and the only one that does not require loading
+        // the target just to fingerprint a pointer to it.
+        if (target.eIsProxy() && target instanceof InternalEObject)
+        {
+            URI proxy = ((InternalEObject)target).eProxyURI();
+            if (proxy != null)
+            {
+                return "proxy:" + proxy; //$NON-NLS-1$
+            }
+        }
         EStructuralFeature name = target.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
         if (name instanceof EAttribute && target.eIsSet(name))
         {
@@ -158,6 +172,15 @@ public final class DcsHash
             {
                 return target.eClass().getName() + ':' + raw;
             }
+        }
+        // Nothing named to go on. Fall back to the object's identity within its resource so that
+        // repointing between two unnamed targets of the same class still moves the hash. Only when
+        // the target IS in a resource: outside one the URI degrades to a bare class fragment that
+        // is identical for every instance, and a fabricated distinction would be worse than an
+        // admitted one.
+        if (target.eResource() != null)
+        {
+            return target.eClass().getName() + '@' + EcoreUtil.getURI(target);
         }
         return target.eClass().getName();
     }

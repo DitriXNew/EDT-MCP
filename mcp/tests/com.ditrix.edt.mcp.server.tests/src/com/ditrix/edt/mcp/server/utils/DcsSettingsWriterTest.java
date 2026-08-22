@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
+import com._1c.g5.v8.dt.dcs.model.settings.UserField;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
@@ -283,6 +284,53 @@ public class DcsSettingsWriterTest
 
         DataCompositionSelectedField after =
             (DataCompositionSelectedField)replaced.settings().getSelection().getItems().get(0);
+        assertTrue("a replace that omitted title must not keep the old one", //$NON-NLS-1$
+            after.getTitle() == null || after.getTitle().getLocalValue() == null
+                || after.getTitle().getLocalValue().getContent().isEmpty());
+    }
+
+    @Test
+    public void testTypedReplaceAtTheBareRootKeepsSiblingSettings()
+    {
+        // The bare root plus a CONCRETE type is a documented convenience: the type's default path
+        // is filled in for you. But the blank-settings decision was made while the path was still
+        // empty, so action='replace' with type='selection' read as "replace the WHOLE settings" and
+        // took filter, order, conditional appearance and data parameters with it. Only a type whose
+        // default path is itself empty addresses the root.
+        DataCompositionSettings current = plan(json("{" //$NON-NLS-1$
+            + "\"selection\":{\"items\":[]}," //$NON-NLS-1$
+            + "\"filter\":{\"items\":[],\"userSettingID\":\"keepme\"}," //$NON-NLS-1$
+            + "\"order\":{\"items\":[]}}")); //$NON-NLS-1$
+        assertNotNull("the fixture must carry a sibling to lose", current.getFilter()); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(current,
+            java.util.Collections.emptyList(), "replace", "selection", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertNotNull("a typed replace at the bare root must not discard sibling settings", //$NON-NLS-1$
+            replaced.settings().getFilter());
+        assertEquals("keepme", replaced.settings().getFilter().getUserSettingID()); //$NON-NLS-1$
+        assertNotNull("order must survive a selection-only replace", //$NON-NLS-1$
+            replaced.settings().getOrder());
+    }
+
+    @Test
+    public void testReplaceOnAnIndexedUserFieldResetsOmittedProperties()
+    {
+        // Same defect as the indexed selection item, one collection over: the body was applied
+        // OVER the existing user field, so a title the replace never mentioned survived it.
+        DataCompositionSettings settings = plan(json("{\"userFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"expression\",\"dataPath\":\"Margin\"," //$NON-NLS-1$
+            + "\"title\":{\"EN\":\"Gross margin\"},\"use\":true}]}}")); //$NON-NLS-1$
+        UserField before = settings.getUserFields().getItems().get(0);
+        assertNotNull("the fixture must start with a title to lose", before.getTitle()); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("userFields", "items", "0"), "replace", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"kind\":\"expression\",\"dataPath\":\"Margin\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+
+        UserField after = replaced.settings().getUserFields().getItems().get(0);
         assertTrue("a replace that omitted title must not keep the old one", //$NON-NLS-1$
             after.getTitle() == null || after.getTitle().getLocalValue() == null
                 || after.getTitle().getLocalValue().getContent().isEmpty());
