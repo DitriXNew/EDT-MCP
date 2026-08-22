@@ -903,6 +903,39 @@ public class MergeRulesToolTest
         assertNull(MergeRulesTool.findNode(root, List.of("catalogs"), node -> "commonModules")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ a node with no choice on it is an ANSWER, not a missing node ============
+    //
+    // The live authority used to return "no answer" for BOTH a key chain that resolved to nothing
+    // and a node that resolved fine but carried no MergeSettings. The caller renders the first as
+    // "Node 'x' is not in comparison 'y'" - which, said of the second, denies a node the caller
+    // can see in get_comparison_node, and sends them looking for a key that is already correct.
+    // The tool has always had the right sentence for it ("offers no merge rule on node 'x'"); it
+    // was unreachable from a live comparison because both facts arrived as the same empty answer.
+
+    @Test
+    public void testANodeThatOffersNoRuleIsAnAnswerRatherThanAMissingNode()
+    {
+        assertEquals("a node the tree HAS, offering nothing, is an empty ALLOWED SET - the fact " //$NON-NLS-1$
+            + "the caller renders as 'offers no merge rule on node'", List.of(), //$NON-NLS-1$
+            MergeRulesTool.allowedRulesOf(plainNode(), List.of()));
+    }
+
+    @Test
+    public void testOnlyAKeyChainThatResolvesToNothingIsAMissingAnswer()
+    {
+        assertNull("no node is the ONE fact that renders as 'is not in comparison'", //$NON-NLS-1$
+            MergeRulesTool.allowedRulesOf(null, List.of()));
+    }
+
+    @Test
+    public void testTheRulesANodeOffersAreCarriedThroughAsPlatformLiterals()
+    {
+        assertEquals(List.of(MergeRule.GET_FROM_OTHER.getLiteral(),
+            MergeRule.DO_NOT_MERGE.getLiteral()),
+            MergeRulesTool.allowedRulesOf(plainNode(),
+                List.of(MergeRule.GET_FROM_OTHER, MergeRule.DO_NOT_MERGE)));
+    }
+
     // ==================== the collection key is the model feature name ====================
 
     @Test

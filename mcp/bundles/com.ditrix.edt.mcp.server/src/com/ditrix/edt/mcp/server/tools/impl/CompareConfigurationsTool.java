@@ -551,6 +551,18 @@ public class CompareConfigurationsTool implements IMcpTool
                 + "'. Pass an absolute path to a merge-rules file, or omit the parameter.") //$NON-NLS-1$
                 .toJson();
         }
+        // BEFORE readability, and that order is the whole point: a relative path IS readable
+        // whenever it happens to name a file under the working directory of the EDT process, so
+        // asking the filesystem first accepts it and hands the platform a spelling that resolves
+        // somewhere nobody named. An MCP client resolves the same text against ITS OWN directory,
+        // so the comparison would silently apply a different file's rules and the report would
+        // name the caller's spelling as the one that was used.
+        ToolResult relative = ComparisonFailures.relativePath(KEY_MERGE_RULES_FILE, mergeRulesFile,
+            path);
+        if (relative != null)
+        {
+            return relative.toJson();
+        }
         if (!Files.isReadable(path))
         {
             return ToolResult.error("mergeRulesFile does not exist or cannot be read: '" //$NON-NLS-1$

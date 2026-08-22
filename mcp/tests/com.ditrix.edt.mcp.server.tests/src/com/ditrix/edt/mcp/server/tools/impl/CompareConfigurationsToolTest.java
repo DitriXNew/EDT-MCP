@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -52,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
@@ -404,14 +406,86 @@ public class CompareConfigurationsToolTest
     @Test
     public void testAnUnreadableMergeRulesFileIsRefusedBeforeAnythingIsStarted()
     {
-        String result = tool.execute(request(Map.of("mergeRulesFile", //$NON-NLS-1$
-            "no-such-directory-cc-test/rules.xml"))); //$NON-NLS-1$
+        // ABSOLUTE on purpose: a relative path is refused one check earlier, for being relative,
+        // so a relative spelling here would pin the wrong refusal and leave this branch uncovered.
+        String missing = Paths.get("no-such-directory-cc-test", "rules.xml") //$NON-NLS-1$ //$NON-NLS-2$
+            .toAbsolutePath().toString();
+
+        String result = tool.execute(request(Map.of("mergeRulesFile", missing))); //$NON-NLS-1$
 
         assertContains(result, "mergeRulesFile"); //$NON-NLS-1$
         assertContains(result, "no-such-directory-cc-test"); //$NON-NLS-1$
+        assertContains(result, "does not exist or cannot be read"); //$NON-NLS-1$
         // Refused BEFORE the launch on purpose: EDT runs one comparison at a time, so a typo
         // that took the slot and then failed would block the next honest attempt too.
         assertEquals(0, backend.starts());
+    }
+
+    // ============ mergeRulesFile is ABSOLUTE, like the two path parameters of merge_rules ============
+    //
+    // Paths.get(value) never fails on a relative path and Files.isReadable answers for whatever it
+    // happens to name under the working directory of the EDT PROCESS - the install directory, or
+    // wherever a launcher started it. So a relative path that IS readable there passed the check
+    // and was handed on in the caller's own spelling; the MCP client that wrote it means its OWN
+    // directory, so the comparison silently applies a different file's decisions.
+
+    /**
+     * The readable case is the one that mattered: an unreadable relative path was already refused
+     * (for the wrong reason), while a readable one was ACCEPTED and started a comparison against
+     * rules nobody named. The file is created in the process's working directory precisely so
+     * that the relative spelling resolves to something real.
+     */
+    @Test
+    public void testARelativeMergeRulesFileIsRefusedEvenWhenItNamesAReadableFile() throws Exception
+    {
+        Path workingDirectory = Paths.get("").toAbsolutePath(); //$NON-NLS-1$
+        Path readable = Files.createTempFile(workingDirectory, "cc-relative-rules", ".xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            String relative = workingDirectory.relativize(readable).toString();
+            assertFalse("the fixture must be a RELATIVE spelling of a readable file", //$NON-NLS-1$
+                Paths.get(relative).isAbsolute());
+            assertTrue("and it must really be readable from the working directory", //$NON-NLS-1$
+                Files.isReadable(Paths.get(relative)));
+
+            String result = tool.execute(request(Map.of("mergeRulesFile", relative))); //$NON-NLS-1$
+
+            assertContains(result, "mergeRulesFile"); //$NON-NLS-1$
+            assertContains(result, "ABSOLUTE"); //$NON-NLS-1$
+            assertContains(result, relative);
+            assertEquals(0, backend.starts());
+        }
+        finally
+        {
+            Files.deleteIfExists(readable);
+        }
+    }
+
+    /**
+     * The refusal has to say WHY a relative path is not merely inconvenient, or the caller reads
+     * it as a style rule and passes one again.
+     */
+    @Test
+    public void testTheRelativeMergeRulesRefusalNamesWhatItWouldHaveResolvedAgainst()
+    {
+        String result = tool.execute(request(Map.of("mergeRulesFile", "rules.xml"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(result, "working directory of the EDT process"); //$NON-NLS-1$
+        assertEquals(0, backend.starts());
+    }
+
+    /**
+     * The same refusal text as {@code merge_rules} gives its own path parameters, because it is
+     * the same rule: a caller taught it once must not meet a second wording for it.
+     */
+    @Test
+    public void testTheRelativeRefusalIsTheOneMergeRulesGivesForItsOwnPaths()
+    {
+        String fromCompare = tool.execute(request(Map.of("mergeRulesFile", "rules.xml"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(ComparisonFailures
+            .relativePath("mergeRulesFile", "rules.xml", Paths.get("rules.xml")).toJson(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fromCompare);
     }
 
     @Test

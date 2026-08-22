@@ -43,7 +43,9 @@ A finished comparison is given back with `compare_configurations(releaseComparis
 `_finish()` below does both, which is why no test here calls `_cancel` on its own.
 """
 
+import os
 import re
+import tempfile
 import time
 
 from harness import (
@@ -383,9 +385,32 @@ def test_releasing_a_comparison_nobody_holds_is_actionable():
 @e2e_test(tool="compare_configurations", kind="action")
 def test_unreadable_merge_rules_file_is_refused_before_anything_starts():
     """Checked before the launch on purpose: a typo that took EDT's single comparison
-    slot and only then failed would block the next honest attempt as well."""
-    missing = "no-such-directory-cmpcfg-zzz/rules.xml"
+    slot and only then failed would block the next honest attempt as well.
+
+    ABSOLUTE on purpose: a relative path is refused one check earlier, for being
+    relative, so a relative spelling here would pin the wrong refusal.
+    """
+    missing = os.path.join(tempfile.gettempdir(), "no-such-directory-cmpcfg-zzz",
+                           "rules.xml")
     result = _start(mergeRulesFile=missing, waitSeconds=10)
     error = assert_error(result, "unreadable merge-rules file")
     assert_error_quality(error, names=["mergeRulesFile"], suggests=["omit"])
+    assert_no_diff()
+
+
+@e2e_test(tool="compare_configurations", kind="action")
+def test_a_relative_merge_rules_file_is_refused_instead_of_resolved_against_edts_directory():
+    """A relative path is resolved against the working directory of the EDT PROCESS,
+    while the MCP client that wrote it means its OWN directory. That resolution never
+    fails: whenever the relative spelling happens to name a readable file beside EDT,
+    the comparison silently applies THAT file's decisions and the report names the
+    caller's spelling as the one it used.
+
+    Run on the wire because that is where the promise lives - the same rule merge_rules
+    keeps for filePath and basedOn, kept here for the third path parameter of the family.
+    """
+    result = _start(mergeRulesFile="rules.xml", waitSeconds=10)
+    error = assert_error(result, "a relative mergeRulesFile")
+    assert_error_quality(error, names=["rules.xml", "mergeRulesFile"],
+                         suggests=["ABSOLUTE"], ctx="relative mergeRulesFile")
     assert_no_diff()

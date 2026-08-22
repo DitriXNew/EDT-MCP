@@ -272,8 +272,11 @@ public final class MergeRulesCodec
      * target. What {@link Target#MUST_NOT_EXIST} adds is a RESERVATION taken before a single byte
      * is written - {@code Files.createFile}, the create-if-absent the filesystem performs as one
      * indivisible operation - so the file the move then replaces is this call's own reservation
-     * and never somebody else's rules. A reservation that is not consumed is removed again, so a
-     * failed write leaves the path as free as it found it.
+     * and never somebody else's rules. A reservation that is not consumed is removed again - on
+     * EVERY failure that can follow it, including the one that creates the scratch file - so a
+     * failed write leaves the path as free as it found it. An empty file left there would be
+     * worse than the failure it followed: the write reports an I/O error, and every later write
+     * to that path then refuses it as occupied while it holds no rules at all.
      *
      * @param file the target file
      * @param document the document
@@ -302,16 +305,23 @@ public final class MergeRulesCodec
             Files.createFile(resolved);
             reserved = true;
         }
-        // Created in the TARGET's directory, never in the system temp area: the move over the
-        // target has to stay within one filesystem to be atomic. The name carries the target's
-        // own name so a leftover is traceable to the write that left it.
-        Path temporary = Files.createTempFile(parent, resolved.getFileName().toString() + '.',
-            ".tmp"); //$NON-NLS-1$
+        // EVERY step that can fail after the reservation is inside this block, and that is the
+        // point of the shape rather than a matter of taste: the reservation is an empty file on
+        // the caller's path, so any exit that leaves it behind makes the NEXT write refuse a path
+        // holding no rules. Creating the temporary is one of those steps - a filesystem out of
+        // inodes, over quota, or a directory whose permissions changed between the two calls
+        // fails it - so it is created here and not before.
         // The temporary lives in the CALLER's directory, so a failure that leaves it behind leaves
         // litter in a place the caller owns. Every failing exit removes it; the successful one does
         // not need to, because the move consumed it.
+        Path temporary = null;
         try
         {
+            // Created in the TARGET's directory, never in the system temp area: the move over the
+            // target has to stay within one filesystem to be atomic. The name carries the target's
+            // own name so a leftover is traceable to the write that left it.
+            temporary = Files.createTempFile(parent, resolved.getFileName().toString() + '.',
+                ".tmp"); //$NON-NLS-1$
             Files.write(temporary, serialize(document).getBytes(StandardCharsets.UTF_8));
             try
             {
@@ -325,7 +335,10 @@ public final class MergeRulesCodec
         }
         catch (IOException | RuntimeException e)
         {
-            cleanUp(temporary, e);
+            if (temporary != null)
+            {
+                cleanUp(temporary, e);
+            }
             if (reserved)
             {
                 // The empty reservation is this call's own litter: the path was free when the call

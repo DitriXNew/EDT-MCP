@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
@@ -1108,14 +1109,12 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
-     * Refuses a path that is not absolute, or {@code null} when it is.
+     * Refuses a path that is not absolute, or {@code null} when it is. The schema has always said
+     * "absolute path"; this is what makes that a contract rather than a hope.
      * <p>
-     * Asked of the value the caller PASSED, before {@code toAbsolutePath} has had a chance to
-     * make one up. That resolution is against the working directory of the EDT PROCESS - the
-     * install directory, or wherever a launcher happened to start it - and it never fails, so a
-     * relative path does not produce an error: it produces a file somewhere nobody named, which
-     * the report then names as a success. The schema has always said "absolute path"; this is
-     * what makes that a contract rather than a hope.
+     * The refusal itself is {@link ComparisonFailures#relativePath}, shared with the other tool
+     * that takes a merge-rules path: the reasoning and the wording belong to the situation, not
+     * to whichever tool observed it.
      *
      * @param parameter the parameter name, for the message
      * @param value the value exactly as the caller passed it
@@ -1124,15 +1123,8 @@ public class MergeRulesTool implements IMcpTool
      */
     private static String relativePathRefusal(String parameter, String value, Path path)
     {
-        if (path.isAbsolute())
-        {
-            return null;
-        }
-        return ToolResult.error(parameter + " must be an ABSOLUTE path, but was '" + value //$NON-NLS-1$ //$NON-NLS-2$
-            + "'. A relative path is resolved against the working directory of the EDT process, " //$NON-NLS-1$
-            + "not against your project, so the file would be read from - or written to - " //$NON-NLS-1$
-            + "wherever EDT happens to have been started. Pass the full path, for example " //$NON-NLS-1$
-            + "'C:\\work\\rules.xml' or '/home/user/rules.xml'.").toJson(); //$NON-NLS-1$
+        ToolResult refusal = ComparisonFailures.relativePath(parameter, value, path);
+        return refusal == null ? null : refusal.toJson();
     }
 
     private static String invalidPath(String parameter, String value, InvalidPathException e)
@@ -1417,21 +1409,8 @@ public class MergeRulesTool implements IMcpTool
         private List<String> rulesAt(List<String> relativePath)
         {
             ComparisonNode node = findNode(view.rootNode(), relativePath, this::featureNameOf);
-            if (node == null || view.mergeSettings(node) == null)
-            {
-                // No settings on the node means no rule can be chosen there, which is not the
-                // same fact as "the node allows nothing" - so it is reported as no answer.
-                return null;
-            }
-            List<String> literals = new ArrayList<>();
-            for (MergeRule rule : view.availableMergeRules(node))
-            {
-                if (rule != null)
-                {
-                    literals.add(rule.getLiteral());
-                }
-            }
-            return literals;
+            return allowedRulesOf(node,
+                node == null ? List.of() : view.availableMergeRules(node));
         }
 
         private String featureNameOf(ComparisonNode node)
@@ -1439,6 +1418,44 @@ public class MergeRulesTool implements IMcpTool
             EStructuralFeature feature = view.relatedFeature(node);
             return feature == null ? null : feature.getName();
         }
+    }
+
+    /**
+     * Turns what the tree answered about ONE node into the answer the authority contract is
+     * written in: {@code null} means "the comparison has no such node", and a list - EMPTY
+     * included - means "the comparison has this node, and this is what it offers".
+     * <p>
+     * <b>The two used to be one.</b> A node that was FOUND but carried no {@code MergeSettings}
+     * returned {@code null} as well, which the caller renders as "Node 'x' is not in comparison
+     * 'y'" - a statement about the tree that is simply untrue, and one that sends the caller to
+     * {@code get_comparison_node} to look for a node it will find sitting right there. The tool
+     * already has the right sentence for the observed fact ("offers no merge rule on node 'x':
+     * the platform offers a choice only where a node may be merged"), and it was unreachable
+     * from the live comparison because both facts arrived as the same missing answer.
+     * <p>
+     * No settings and settings with an empty rule list are deliberately NOT split further: both
+     * are the platform saying this node carries no choice, and
+     * {@code ComparisonView#availableMergeRules} already answers an empty list for either.
+     *
+     * @param node the node the key chain resolved to, or {@code null} when it resolved to none
+     * @param available what the platform offers on that node (empty when it offers nothing)
+     * @return the literals, or {@code null} only when there is no such node
+     */
+    static List<String> allowedRulesOf(ComparisonNode node, List<MergeRule> available)
+    {
+        if (node == null)
+        {
+            return null;
+        }
+        List<String> literals = new ArrayList<>();
+        for (MergeRule rule : available)
+        {
+            if (rule != null)
+            {
+                literals.add(rule.getLiteral());
+            }
+        }
+        return literals;
     }
 
     // ==================== key chain -> node ====================

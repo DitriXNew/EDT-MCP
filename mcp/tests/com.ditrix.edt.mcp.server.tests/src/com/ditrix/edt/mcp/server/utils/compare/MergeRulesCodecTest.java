@@ -763,6 +763,77 @@ public class MergeRulesCodecTest
         }
     }
 
+    /**
+     * The gap the round before this one named and could not close: the temporary was created
+     * BETWEEN the reservation and the block that removes it, so a failure THERE - a filesystem out
+     * of inodes, over quota, or a directory whose permissions changed between the two calls - left
+     * the reservation behind. An empty file on the caller's path is worse than the failure it
+     * followed: the write reports an I/O error, and every later write to that path then refuses it
+     * as occupied while it holds no rules at all.
+     * <p>
+     * The failure is produced by the filesystem's own limit on one path component. A target name
+     * just under it can be created, while the temporary - that same name plus a dot, a random
+     * number and {@code .tmp} - cannot, so the failure lands exactly between the reservation and
+     * the first byte, which is the window this test exists for. The precondition is PROBED rather
+     * than assumed: a filesystem with a different limit skips this test instead of failing it.
+     */
+    @Test
+    public void testAReservationIsRemovedWhenTheTemporaryCannotBeCreated() throws Exception
+    {
+        String name = "n".repeat(250); //$NON-NLS-1$
+        Assume.assumeTrue("this filesystem accepts a temporary named after a 250-character " //$NON-NLS-1$
+            + "target, so it cannot model a failure between the reservation and the bytes", //$NON-NLS-1$
+            temporaryCannotBeCreatedBeside(name));
+        Path target = workDir.resolve(name);
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST);
+            fail("a write whose scratch file cannot be created must fail"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            // The refusal is expected; what is left on disk afterwards is the point.
+        }
+
+        assertFalse("the reservation must not outlive the write that took it: nothing was ever " //$NON-NLS-1$
+            + "written onto it, so leaving it there makes the next write refuse a path that " //$NON-NLS-1$
+            + "holds no rules", Files.exists(target)); //$NON-NLS-1$
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("and the failed write must leave the directory as it found it", //$NON-NLS-1$
+                List.of(), list.toList());
+        }
+    }
+
+    /**
+     * @param name the file name a write would aim at
+     * @return whether this filesystem refuses the temporary such a write would create beside it -
+     *         the precondition the reservation test above is built on
+     * @throws IOException when the probe cannot be cleaned up again
+     */
+    private boolean temporaryCannotBeCreatedBeside(String name) throws IOException
+    {
+        Path probe = null;
+        try
+        {
+            probe = Files.createTempFile(workDir, name + '.', ".tmp"); //$NON-NLS-1$
+            return false;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return true;
+        }
+        finally
+        {
+            if (probe != null)
+            {
+                Files.deleteIfExists(probe);
+            }
+        }
+    }
+
     @Test
     public void testWriteStillReplacesAPlainExistingFile() throws Exception
     {

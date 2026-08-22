@@ -465,7 +465,8 @@ public final class ComparisonTreeReport
      *
      * @param out the report being assembled
      * @param scope the comparison's scope (may be {@code null})
-     * @param limit largest number of qualified names to list per side
+     * @param limit largest number of qualified names to list per side - in the table cells AND in
+     *     the reasons below them, which describe the same names
      */
     private static void appendScope(StringBuilder out, ComparisonScope scope, int limit)
     {
@@ -487,7 +488,15 @@ public final class ComparisonTreeReport
                 describeAdded(added, limit)));
         }
 
+        // Bounded by the SAME limit as the cell above, and by the same count per side, so the
+        // bullets explain exactly the names the table listed. Unbounded, this loop printed one
+        // line per addition per side while the cell beside it was already truncated: a comparison
+        // with plentiful dependencies answers with thousands of lines to a report that was asked
+        // for one, which defeats the report's own limit. The truncation is NAMED rather than
+        // silent - a list that simply stops reads as the whole of what the engine did.
         StringBuilder reasons = new StringBuilder();
+        int shown = 0;
+        int total = 0;
         for (ComparisonSide side : ComparisonSide.values())
         {
             Map<String, List<String>> added = scope.getExtendedScope(side);
@@ -495,10 +504,18 @@ public final class ComparisonTreeReport
             {
                 continue;
             }
+            total += added.size();
+            int shownForSide = 0;
             // Sorted, because the platform hands this back as a HashMap: an unordered report
             // would change between two runs of the same comparison for no reason.
             for (Map.Entry<String, List<String>> entry : new TreeMap<>(added).entrySet())
             {
+                if (shownForSide >= limit)
+                {
+                    break;
+                }
+                shownForSide++;
+                shown++;
                 reasons.append("- `").append(sideName(side)).append("` / `") //$NON-NLS-1$ //$NON-NLS-2$
                     .append(entry.getKey()).append("` — ") //$NON-NLS-1$
                     .append(String.join("; ", entry.getValue() == null //$NON-NLS-1$
@@ -508,7 +525,9 @@ public final class ComparisonTreeReport
         }
         if (reasons.length() > 0)
         {
-            out.append("\nWhy the engine added a qualified name of its own:\n\n") //$NON-NLS-1$
+            out.append("\nWhy the engine added a qualified name of its own") //$NON-NLS-1$
+                .append(Pagination.truncationNotice(shown, total))
+                .append(":\n\n") //$NON-NLS-1$
                 .append(reasons);
         }
     }

@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils.compare;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -286,6 +287,38 @@ public final class ComparisonFailures
             return sessionGone(comparisonId);
         }
         return null;
+    }
+
+    /**
+     * A path parameter that is not absolute, refused instead of resolved.
+     * <p>
+     * Asked of the value the caller PASSED, before {@code toAbsolutePath} has had a chance to make
+     * one up. That resolution is against the working directory of the EDT PROCESS - the install
+     * directory, or wherever a launcher happened to start it - and it never fails, so a relative
+     * path does not produce an error: it produces a file somewhere nobody named. An MCP client
+     * resolves a relative path against ITS OWN directory, so the two disagree silently, and the
+     * report then names the wrong file as the one that was used.
+     * <p>
+     * Shared rather than written per tool because both comparison tools take a merge-rules path -
+     * {@code merge_rules} takes two - and a refusal that differs between them would teach the
+     * caller that the rule differs too.
+     *
+     * @param parameter the parameter name, for the message
+     * @param value the value exactly as the caller passed it
+     * @param path that value parsed
+     * @return the refusal, or {@code null} when the path is absolute
+     */
+    public static ToolResult relativePath(String parameter, String value, Path path)
+    {
+        if (path.isAbsolute())
+        {
+            return null;
+        }
+        return ToolResult.error(parameter + " must be an ABSOLUTE path, but was '" + value //$NON-NLS-1$ //$NON-NLS-2$
+            + "'. A relative path is resolved against the working directory of the EDT process, " //$NON-NLS-1$
+            + "not against your project, so the file would be read from - or written to - " //$NON-NLS-1$
+            + "wherever EDT happens to have been started. Pass the full path, for example " //$NON-NLS-1$
+            + "'C:\\work\\rules.xml' or '/home/user/rules.xml'."); //$NON-NLS-1$
     }
 
     /**

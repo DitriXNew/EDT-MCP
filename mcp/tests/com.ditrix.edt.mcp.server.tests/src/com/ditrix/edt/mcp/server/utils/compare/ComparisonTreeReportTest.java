@@ -193,6 +193,109 @@ public class ComparisonTreeReportTest
         assertContains(report, "(showing 2 of 5)"); //$NON-NLS-1$
     }
 
+    // ============ the reasons the engine gives are bounded by the report's own limit ============
+    //
+    // The table CELL beside them was truncated at the limit from the start; the bullet list under
+    // it was not, and it prints one line per addition PER SIDE. A comparison of an object with
+    // plentiful dependencies extends the scope by hundreds of names on each of three sides, so a
+    // report asked for one row answered with thousands of lines - the report's own limit undone
+    // by the section that explains it.
+
+    @Test
+    public void testTheReasonsTheEngineGivesAreCutAtTheLimitLikeTheCellTheyExplain()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        for (int i = 0; i < 5; i++)
+        {
+            scope.extendScope("Catalog.Pulled" + i, "referenced by " + CATALOG_GOODS, //$NON-NLS-1$ //$NON-NLS-2$
+                ComparisonSide.MAIN);
+        }
+
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(2, true);
+        collector.accept(conflicting(91L, CATALOG_GOODS));
+        String report = render(collector, scope);
+
+        assertEquals("the limit bounds the bullets, so five additions may print two lines", 2, //$NON-NLS-1$
+            countLinesStartingWith(report, "- `main` /")); //$NON-NLS-1$
+    }
+
+    /**
+     * A list that simply stops reads as the whole of what the engine did, which is the same class
+     * of untruth the truncated cell beside it avoids by naming its own count.
+     */
+    @Test
+    public void testACutReasonListSaysThatItWasCut()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        for (int i = 0; i < 5; i++)
+        {
+            scope.extendScope("Catalog.Pulled" + i, "referenced by " + CATALOG_GOODS, //$NON-NLS-1$ //$NON-NLS-2$
+                ComparisonSide.MAIN);
+        }
+
+        String report = render(new ComparisonTreeReport.Collector(2, true), scope);
+
+        assertContains(report, "Why the engine added a qualified name of its own (showing 2 of 5)"); //$NON-NLS-1$
+    }
+
+    /**
+     * The count is over every side, because the bullets are: a per-side count would say "showing
+     * 2 of 2" of a list that left four names out.
+     */
+    @Test
+    public void testTheReasonCountCoversEverySideTheEngineExtended()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        scope.extendScope("Catalog.PulledA", "referenced by " + CATALOG_GOODS, //$NON-NLS-1$ //$NON-NLS-2$
+            ComparisonSide.MAIN);
+        scope.extendScope("Catalog.PulledB", "referenced by " + CATALOG_GOODS, //$NON-NLS-1$ //$NON-NLS-2$
+            ComparisonSide.MAIN);
+        scope.extendScope("Catalog.PulledC", "referenced by " + CATALOG_GOODS, //$NON-NLS-1$ //$NON-NLS-2$
+            ComparisonSide.OTHER);
+
+        String report = render(new ComparisonTreeReport.Collector(1, true), scope);
+
+        assertContains(report, "(showing 2 of 3)"); //$NON-NLS-1$
+    }
+
+    /**
+     * A list that fits is not a truncated one, and saying "showing 2 of 2" of a whole list teaches
+     * the caller to raise a limit that is not binding.
+     */
+    @Test
+    public void testAReasonListThatFitsCarriesNoTruncationNotice()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        scope.extendScope(CATALOG_WAREHOUSES, "referenced by " + CATALOG_GOODS, //$NON-NLS-1$
+            ComparisonSide.MAIN);
+
+        String report = render(new ComparisonTreeReport.Collector(50, true), scope);
+
+        assertContains(report, "Why the engine added a qualified name of its own:"); //$NON-NLS-1$
+    }
+
+    /**
+     * @param report the rendered report
+     * @param prefix the line prefix to count
+     * @return how many lines start with it
+     */
+    private static int countLinesStartingWith(String report, String prefix)
+    {
+        int found = 0;
+        for (String line : report.split("\n")) //$NON-NLS-1$
+        {
+            if (line.startsWith(prefix))
+            {
+                found++;
+            }
+        }
+        return found;
+    }
+
     @Test
     public void testAnAbsentSideIsRenderedAsAMissingCellNotAnEmptyName()
     {
