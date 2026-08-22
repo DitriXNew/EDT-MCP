@@ -1396,11 +1396,6 @@ public final class DcsWriter
             return ParseResult.failed("A 'dcs' payload is required, e.g. {dataSets:[{name:'DataSet1'," //$NON-NLS-1$
                 + "type:'query',query:'SELECT ...'}]}."); //$NON-NLS-1$
         }
-        String presentationError = DcsPresentationParser.validateRecursively(spec, languages);
-        if (presentationError != null)
-        {
-            return ParseResult.failed(presentationError);
-        }
         String unknown = unknownMembers(spec, "body", KEY_DATA_SOURCES, KEY_DATA_SETS, //$NON-NLS-1$
             KEY_PARAMETERS, KEY_CALCULATED_FIELDS, KEY_TOTAL_FIELDS, KEY_DATA_SET_LINKS);
         if (unknown != null)
@@ -1443,6 +1438,14 @@ public final class DcsWriter
                 + "'parameters', 'dataSources', 'dataSetLinks', 'calculatedFields' or 'totalFields', e.g. " //$NON-NLS-1$
                 + "{dataSets:[{name:'DataSet1'," //$NON-NLS-1$
                 + "type:'query',query:'SELECT ...'}]}."); //$NON-NLS-1$
+        }
+        // Locale validation runs LAST, after every member has been shape-checked. Reporting an
+        // undeclared language inside a member the payload is not even allowed to carry would name the
+        // wrong problem: the member itself is the error.
+        String presentationError = DcsPresentationParser.validateRecursively(spec, languages);
+        if (presentationError != null)
+        {
+            return ParseResult.failed(presentationError);
         }
         return ParseResult.ok(plan);
     }

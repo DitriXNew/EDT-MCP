@@ -86,12 +86,6 @@ public final class DcsSchemaWriter
                 + "totalField. Use the shared settings writer or dynamic-list writer for their " //$NON-NLS-1$
                 + "respective target roots."); //$NON-NLS-1$
         }
-        String presentationError = body == null ? null
-            : DcsPresentationParser.validateRecursively(body, languages);
-        if (presentationError != null)
-        {
-            return PrepareResult.failure(presentationError);
-        }
         if (ACTION_UPDATE.equals(action) && !isExactNode(type, address.segments()))
         {
             return PrepareResult.failure("action='update' requires one existing " + type + " node; '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

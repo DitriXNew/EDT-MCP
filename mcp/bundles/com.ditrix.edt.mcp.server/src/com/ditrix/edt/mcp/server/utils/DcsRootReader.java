@@ -7,12 +7,14 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.BmRole;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.Target;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
@@ -76,6 +78,15 @@ public final class DcsRootReader
                 + "' disappeared before it could be read. Re-run dcs action='get'."); //$NON-NLS-1$
         }
         EObject content = ((BasicTemplate)object).getTemplate();
+        // A template DECLARED as a DCS whose content resource has not been materialized yet answers
+        // with an unresolved placeholder (eClass degrades to the bare EObject), not null. That is an
+        // EMPTY schema - render it as such rather than refusing to read it.
+        if (content != null && !(content instanceof DataCompositionSchema)
+            && ((BasicTemplate)object).getTemplateType() == TemplateType.DATA_COMPOSITION_SCHEMA
+            && (content.eIsProxy() || content.eClass() == EcorePackage.Literals.EOBJECT))
+        {
+            content = null;
+        }
         if (content != null && !(content instanceof DataCompositionSchema))
         {
             return Result.failure("DCS root '" + target.normalizedRootFqn() + "' now contains '" //$NON-NLS-1$ //$NON-NLS-2$

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.core.IBmObject;
@@ -446,13 +447,25 @@ public final class DcsTargetResolver
     private static DcsInspection inspectTemplate(BasicTemplate template, String fqn)
     {
         EObject content = template.getTemplate();
+        final boolean declaresDcs =
+            template.getTemplateType() == TemplateType.DATA_COMPOSITION_SCHEMA;
+        // A template DECLARED as a DCS whose .dcs resource has not been materialized yet does NOT
+        // answer getTemplate() with null - it answers with an unresolved placeholder whose eClass
+        // degrades to the bare EObject. That is an EMPTY schema awaiting its first write, not wrong
+        // content, so it is normalized to "absent" here; the declared type is what makes this safe,
+        // so a SpreadsheetDocument print form still reports its real content type below.
+        if (content != null && !(content instanceof DataCompositionSchema) && declaresDcs
+            && (content.eIsProxy() || content.eClass() == EcorePackage.Literals.EOBJECT))
+        {
+            content = null;
+        }
         if (content != null && !(content instanceof DataCompositionSchema))
         {
             String actual = typeName(content);
             return DcsInspection.failure(new Failure(FailureCode.WRONG_TARGET_TYPE, fqn, actual,
                 nonDcsTemplateMessage(fqn, actual)));
         }
-        if (content == null && template.getTemplateType() != TemplateType.DATA_COMPOSITION_SCHEMA)
+        if (content == null && !declaresDcs)
         {
             String declared = template.getTemplateType() == null
                 ? "no content; declared template type is unset" //$NON-NLS-1$

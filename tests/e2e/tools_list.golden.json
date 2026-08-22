@@ -801,6 +801,83 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "upsert",
+            "update",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "description": "Mutation body; forbidden for get/remove and required by the other mutations.",
+          "type": "object"
+        },
+        "expectedHash": {
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "schema",
+            "dynamicList",
+            "dataSource",
+            "dataSet",
+            "field",
+            "parameter",
+            "calculatedField",
+            "totalField",
+            "variant",
+            "grouping",
+            "selection",
+            "filter",
+            "dataParameter",
+            "order",
+            "conditionalAppearance",
+            "table",
+            "userField",
+            "outputParameter",
+            "userSettings"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn",
+        "action",
+        "type"
+      ],
+      "type": "object"
+    },
+    "name": "dcs",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
@@ -950,83 +1027,6 @@
       ],
       "type": "object"
     }
-  },
-  {
-    "annotations": {
-      "destructiveHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": false
-    },
-    "description": "Read and author 1C DCS schemas, their settings variants, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
-    "inputSchema": {
-      "properties": {
-        "action": {
-          "enum": [
-            "get",
-            "upsert",
-            "update",
-            "replace",
-            "remove"
-          ],
-          "type": "string"
-        },
-        "body": {
-          "description": "Mutation body; forbidden for get/remove and required by the other mutations.",
-          "type": "object"
-        },
-        "expectedHash": {
-          "type": "string"
-        },
-        "fqn": {
-          "type": "string"
-        },
-        "language": {
-          "type": "string"
-        },
-        "limit": {
-          "type": "integer"
-        },
-        "offset": {
-          "type": "integer"
-        },
-        "projectName": {
-          "type": "string"
-        },
-        "type": {
-          "enum": [
-            "schema",
-            "dynamicList",
-            "dataSource",
-            "dataSet",
-            "field",
-            "parameter",
-            "calculatedField",
-            "totalField",
-            "variant",
-            "grouping",
-            "selection",
-            "filter",
-            "dataParameter",
-            "order",
-            "conditionalAppearance",
-            "table",
-            "userField",
-            "outputParameter",
-            "userSettings"
-          ],
-          "type": "string"
-        }
-      },
-      "required": [
-        "projectName",
-        "fqn",
-        "action",
-        "type"
-      ],
-      "type": "object"
-    },
-    "name": "dcs",
-    "outputSchema": null
   },
   {
     "annotations": {
@@ -3216,10 +3216,6 @@
           },
           "type": "array"
         },
-        "dcs": {
-          "description": "REPORT FQN only ('Report.<Name>'): the Data Composition Schema (СКД) content to author, instead of 'properties'. Authors the report's main DCS (creating it if the report has none yet). An object with: 'dataSources' [{name, type?}] (a data source, default type a local query source); 'dataSets' [{name, type:'query', query (the 1C query text, bilingual keywords), dataSource?, autoFillFields? (default true - EDT derives the fields from the query), fields? [{name?, dataPath, title?, role?}]}] a query data set; 'parameters' [{name, valueType?, title?, use?}] schema parameters. Valid only for a Report FQN; cannot be combined with 'properties' / 'content' / 'template' / a Role payload.",
-          "type": "object"
-        },
         "fqn": {
           "type": "string"
         },
@@ -3279,9 +3275,6 @@
           "type": "array"
         },
         "content": {
-          "type": "object"
-        },
-        "dcs": {
           "type": "object"
         },
         "destination": {

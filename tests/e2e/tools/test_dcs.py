@@ -384,6 +384,10 @@ def test_localized_title_uses_the_declared_language_code_spelling():
         "title": {"EN": "Period"},
     })
     assert_ok(result, "accept a declared language code in another case")
+    # forceExportToDisk only SCHEDULES the flush, so poll for it instead of reading the tree
+    # immediately - the write itself already reported success.
+    poll_diff_contains(report_name,
+                       ctx="the localized parameter write must force-export to disk")
     dcs_rel = _find_report_dcs(report_name)
     assert dcs_rel is not None, "the localized parameter write must materialize Template.dcs"
     on_disk = read_disk(dcs_rel)

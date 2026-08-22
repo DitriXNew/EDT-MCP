@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.UUID;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
@@ -130,11 +131,24 @@ public final class DcsSchemaContent
         ITopObjectFqnGenerator generator, String fqn)
     {
         EObject content = template.getTemplate();
-        if (content instanceof DataCompositionSchema && content instanceof IBmObject
-            && ((IBmObject)content).bmIsTop())
+        if (content instanceof DataCompositionSchema && content instanceof IBmObject)
         {
-            return ResolveResult.success((DataCompositionSchema)content,
-                ((IBmObject)content).bmGetFqn());
+            // bmIsTop() does NOT mean attached - a detached top object still answers true and
+            // bmGetFqn() then throws - so the call is the test. A schema that is not attached yet
+            // falls through to be created/attached below.
+            String attached = attachedFqnOrNull((IBmObject)content);
+            if (attached != null)
+            {
+                return ResolveResult.success((DataCompositionSchema)content, attached);
+            }
+        }
+        // A template DECLARED as a DCS whose content resource does not exist yet answers with an
+        // unresolved placeholder (eClass degrades to the bare EObject), not null - that is an empty
+        // schema to materialize below, not foreign content.
+        if (content != null && !(content instanceof DataCompositionSchema)
+            && (content.eIsProxy() || content.eClass() == EcorePackage.Literals.EOBJECT))
+        {
+            content = null;
         }
         if (content != null && !(content instanceof DataCompositionSchema))
         {
@@ -248,6 +262,28 @@ public final class DcsSchemaContent
         public String error()
         {
             return error;
+        }
+    }
+
+    /**
+     * The object's BM FQN when it is ATTACHED, or {@code null} when it is not. {@code bmGetFqn()} is
+     * legal only on an attached top object and throws otherwise, and {@link IBmObject} offers no
+     * attachment predicate, so the call itself is the only reliable test.
+     */
+    private static String attachedFqnOrNull(IBmObject object)
+    {
+        if (!object.bmIsTop())
+        {
+            return null;
+        }
+        try
+        {
+            String fqn = object.bmGetFqn();
+            return fqn == null || fqn.isEmpty() ? null : fqn;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
         }
     }
 }
