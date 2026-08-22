@@ -146,7 +146,7 @@ def _collect_our_errors(workspace):
     return found
 
 
-@e2e_test(tool="_edt_log_ratchet", kind="read")
+@e2e_test(tool="_edt_log_ratchet", kind="read", last=True)
 def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
     workspace = _workspace_dir()
     if workspace is None:

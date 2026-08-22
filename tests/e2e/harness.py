@@ -1504,16 +1504,8 @@ def assert_no_substantive_diff(ctx=""):
             _fail("new/deleted/renamed file under %s [%s]:\n%s" % (PROJECT_REL, ctx, status[:500]))
 
 
-def tree_snapshot():
-    """Capture the BASE fixture's full on-disk state for a later 'changed NOTHING'
-    comparison: porcelain status (every untracked file listed individually), the
-    tracked content diff vs HEAD (staged + unstaged), and a content hash of each
-    untracked file (so an in-place rewrite of a brand-new file is caught too).
-
-    For tests whose SETUP legitimately dirties the tree (e.g. seeding a referenced
-    catalog before probing a blocked delete): plain assert_no_diff would flag the
-    seeding itself. Snapshot AFTER the seeding, run the operation under test, then
-    assert_tree_unchanged(snapshot) — asserting the operation added nothing on top."""
+def _tree_sample():
+    """One instantaneous read of the fixture's on-disk state. See tree_snapshot()."""
     status = _git("status", "--porcelain", "--untracked-files=all", "--", PROJECT_REL).stdout
     diff_head = _git("diff", "HEAD", "--", PROJECT_REL).stdout
     hashes = {}
@@ -1528,6 +1520,44 @@ def tree_snapshot():
                 except OSError:
                     hashes[path] = "<unreadable>"
     return {"status": status, "diff": diff_head, "untracked": hashes}
+
+
+def tree_snapshot(stable_for=0.75, timeout=8):
+    """Capture the BASE fixture's full on-disk state for a later 'changed NOTHING'
+    comparison: porcelain status (every untracked file listed individually), the
+    tracked content diff vs HEAD (staged + unstaged), and a content hash of each
+    untracked file (so an in-place rewrite of a brand-new file is caught too).
+
+    For tests whose SETUP legitimately dirties the tree (e.g. seeding a referenced
+    catalog before probing a blocked delete): plain assert_no_diff would flag the
+    seeding itself. Snapshot AFTER the seeding, run the operation under test, then
+    assert_tree_unchanged(snapshot) — asserting the operation added nothing on top.
+
+    SETTLED, not instantaneous. EDT exports asynchronously, so a snapshot taken the moment
+    a test finishes seeding can capture a tree the exporter is still writing — and then the
+    exporter catching up, NOT the operation under test, is what assert_tree_unchanged
+    reports. That is a real flake, and it reads as an accusation: "a rejected call must
+    change nothing" failing with `tracked diff changed (before 713 chars, after 677 chars)`
+    — the diff SHRANK while the call under test was busy being refused.
+
+    So sample until two consecutive reads agree. Both sides of the comparison are then
+    states the exporter has finished with, which is what makes the difference between them
+    attributable to the operation. Settling the AFTER side does not hide a late write the
+    operation caused — it waits for it, so it is caught rather than raced against.
+
+    A tree that never settles within the timeout returns its last sample: the assertion is
+    then no worse off than before this settling existed, and failing here would blame the
+    test for a stand that is busy for reasons of its own.
+    """
+    previous = _tree_sample()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(stable_for)
+        current = _tree_sample()
+        if current == previous:
+            return current
+        previous = current
+    return previous
 
 
 def assert_tree_unchanged(before, ctx=""):
@@ -1901,9 +1931,17 @@ def wait_until_no_running_launch(config_name=None, timeout=60):
 REGISTRY = []
 
 
-def e2e_test(tool, kind="read"):
-    """Register a test function. kind: 'read' | 'write' | 'action'."""
+def e2e_test(tool, kind="read", last=False):
+    """Register a test function. kind: 'read' | 'write' | 'action'.
+
+    last=True defers the test to the END of the run. Use it only when the SUBJECT of the test
+    is the run itself rather than one tool's behaviour - the EDT-log ratchet, which can only
+    judge what the suite logged once the suite has logged it. Registry order is import order,
+    so without this such a test lands wherever its filename sorts and certifies a window that
+    has barely opened.
+    """
     def deco(fn):
-        REGISTRY.append({"func": fn, "tool": tool, "kind": kind, "name": fn.__name__})
+        REGISTRY.append({"func": fn, "tool": tool, "kind": kind, "name": fn.__name__,
+                         "last": last})
         return fn
     return deco

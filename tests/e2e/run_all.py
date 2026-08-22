@@ -340,7 +340,10 @@ def main():
     shard_note = ""
     if shard_total > 1:
         shard_note = " [shard %d/%d of %d selected]" % (shard_index, shard_total, len(tests))
-    tests = selected
+    # Deferred tests go to the END, stable so everything else keeps registry order. Applied
+    # AFTER sharding on purpose: a deferred test exists once in the registry and therefore lands
+    # in exactly one shard, and the window it is responsible for is that shard's own.
+    tests = [t for t in selected if not t.get("last")] + [t for t in selected if t.get("last")]
 
     print("EDT-MCP e2e: %d test(s)%s against %s, project=%s"
           % (len(tests), shard_note, harness.MCP_URL, harness.PROJECT))
@@ -441,9 +444,17 @@ def main():
         status, msg, timed_out = _run_with_timeout(harness, t, args.test_timeout)
         dur = time.time() - start
         results.append((t, status, msg, dur))
-        head = msg.splitlines()[0] if msg else ""
+        lines = msg.splitlines() if msg else []
+        head = lines[0] if lines else ""
         print("[%-7s] %s::%s (%.2fs)%s" % (status.upper(), t["tool"], t["name"], dur,
                                            " - " + head if head else ""))
+        # A failure's DETAIL (the on-disk delta, the offending payload) lives on the lines
+        # after the first. Printing only the head loses it unless --junit-xml was passed,
+        # which turns every red test into a second full run just to see why. Failures are
+        # worth the vertical space; passes and skips stay one line.
+        if status not in ("pass", "skip"):
+            for extra in lines[1:]:
+                print("            " + extra)
         # A per-CALL timeout aborts the run for the same reason a per-TEST one does: the server
         # is still busy with work we cannot cancel, and every later test would be reading a
         # model it is still writing.
