@@ -857,6 +857,92 @@ public class CompareConfigurationsToolTest
         assertEquals(1, collector.getTotal());
     }
 
+    // ======== The report names the COMMIT, not only the expression that named it ========
+
+    /** A full commit id, the shape {@code GitRevisionResolver} hands back. */
+    private static final String OTHER_COMMIT = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"; //$NON-NLS-1$
+
+    /** A DIFFERENT one, so a report that used one side's id for both could not pass. */
+    private static final String ANCESTOR_COMMIT = "9876543210fedcba9876543210fedcba98765432"; //$NON-NLS-1$
+
+    @Test
+    public void testAMovingRevisionIsLabelledWithTheCommitItResolvedTo()
+    {
+        // 'vendor/2.5.14' names a different commit next week, and the comparison did not run
+        // against the tag - it ran against the commit the tag resolved to at launch, which is
+        // what the git data source descriptors were handed. A report that echoed the expression
+        // alone can be neither reproduced nor checked against the state it was taken from.
+        LaunchRequest request = movingRequest();
+        request.recordResolvedRevisions(OTHER_COMMIT, ANCESTOR_COMMIT);
+
+        assertEquals("vendor/2.5.14 (" + OTHER_COMMIT + ")", request.otherRevisionLabel()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("v1.0 (" + ANCESTOR_COMMIT + ")", request.ancestorRevisionLabel()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testEachSideKeepsItsOwnCommit()
+    {
+        // Two distinct ids on purpose: a wiring that carried one side's id into both labels would
+        // render a perfectly plausible report of a comparison that never happened.
+        LaunchRequest request = movingRequest();
+        request.recordResolvedRevisions(OTHER_COMMIT, ANCESTOR_COMMIT);
+
+        assertFalse("the other side must not carry the ancestor's commit", //$NON-NLS-1$
+            request.otherRevisionLabel().contains(ANCESTOR_COMMIT));
+        assertFalse("nor the ancestor the other side's", //$NON-NLS-1$
+            request.ancestorRevisionLabel().contains(OTHER_COMMIT));
+    }
+
+    @Test
+    public void testARevisionNothingResolvedIsReportedExactlyAsAsked()
+    {
+        // Nothing was recorded, so nothing may be invented. The label degrades to what the caller
+        // actually wrote rather than to an id nobody observed.
+        assertEquals("vendor/2.5.14", movingRequest().otherRevisionLabel()); //$NON-NLS-1$
+        assertEquals("v1.0", movingRequest().ancestorRevisionLabel()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACallerWhoNamedTheCommitItselfIsNotToldItTwice()
+    {
+        // A fixed revision resolves to itself, and 'a1b2… (a1b2…)' states nothing the first
+        // printing did not. The upper-cased side proves the comparison is on the id and not on
+        // its spelling, and that the canonical form is the one printed.
+        LaunchRequest request = new LaunchRequest("TestConfiguration", OTHER_COMMIT, //$NON-NLS-1$
+            "9876543210FEDCBA9876543210FEDCBA98765432", null, null, 100, false); //$NON-NLS-1$
+        request.recordResolvedRevisions(OTHER_COMMIT, ANCESTOR_COMMIT);
+
+        assertEquals(OTHER_COMMIT, request.otherRevisionLabel());
+        assertEquals("the resolved id is the canonical spelling of what was asked for", //$NON-NLS-1$
+            ANCESTOR_COMMIT, request.ancestorRevisionLabel());
+    }
+
+    @Test
+    public void testTheRenderedReportCarriesTheResolvedCommits()
+    {
+        // Out of the request and into the text a caller reads, through the one place a header is
+        // built. A label that existed on the request but never reached the report would fix
+        // nothing.
+        LaunchRequest request = movingRequest();
+        request.recordResolvedRevisions(OTHER_COMMIT, ANCESTOR_COMMIT);
+
+        String report = ComparisonTreeReport.render(
+            CompareConfigurationsTool.headerFor("cmp-1", request, "finished"), //$NON-NLS-1$ //$NON-NLS-2$
+            new ComparisonScope(Collections.emptyList(), Collections.emptyList(),
+                Collections.emptyList()),
+            new ComparisonTreeReport.Collector(100, false));
+
+        assertContains(report, "vendor/2.5.14 (" + OTHER_COMMIT + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(report, "v1.0 (" + ANCESTOR_COMMIT + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** @return a request whose two revisions are both MOVING expressions */
+    private static LaunchRequest movingRequest()
+    {
+        return new LaunchRequest("TestConfiguration", "vendor/2.5.14", "v1.0", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false);
+    }
+
     // ==================== The production backend with no EDT ====================
 
     /**

@@ -390,8 +390,7 @@ public final class ComparisonTreeReport
                 shown++;
                 reasons.append("- `").append(sideName(side)).append("` / `") //$NON-NLS-1$ //$NON-NLS-2$
                     .append(entry.getKey()).append("` — ") //$NON-NLS-1$
-                    .append(String.join("; ", entry.getValue() == null //$NON-NLS-1$
-                        ? Collections.<String> emptyList() : entry.getValue()))
+                    .append(joinReasons(entry.getValue(), limit))
                     .append('\n');
             }
         }
@@ -402,6 +401,33 @@ public final class ComparisonTreeReport
                 .append(":\n\n") //$NON-NLS-1$
                 .append(reasons);
         }
+    }
+
+    /**
+     * The reasons ONE added qualified name carries, bounded by the same limit as the bullet list
+     * around it and named when it is cut, for the same reason that list is.
+     * <p>
+     * The outer limit does not bound this one, and the two are not the same quantity. The engine
+     * reports an addition once, with a reason PER requested object that pulled it in, so a common
+     * dependency of a large request - one module referenced by a thousand requested objects - is a
+     * SINGLE bullet carrying a thousand reasons. The list around it was already cut to the limit
+     * while that one line ran past every other section of the report: the report's own limit
+     * undone one level further in.
+     *
+     * @param reasons why the engine added the name, as the platform reported it (may be
+     *     {@code null}, which is how the platform spells no reasons at all)
+     * @param limit largest number of reasons to list
+     * @return the reasons, semicolon separated, carrying the whole count when it was cut
+     */
+    private static String joinReasons(List<String> reasons, int limit)
+    {
+        if (reasons == null || reasons.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        int shown = Math.min(reasons.size(), limit);
+        return String.join("; ", reasons.subList(0, shown)) //$NON-NLS-1$
+            + Pagination.truncationNotice(shown, reasons.size());
     }
 
     /**

@@ -6,12 +6,15 @@
 
 package com.ditrix.edt.mcp.server.utils.compare;
 
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
@@ -90,6 +93,13 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * gives the platform a bounded moment to begin before it decides, so an ordinary cancellation of a
  * fresh launch still cancels.
  * <p>
+ * {@link #releaseAll()} gives it that moment too, and then departs from the rule above in the one
+ * way the rule cannot cover: it is the LAST call, so "kept, and retried by the next one" is not
+ * true of it. It drops the record like every other session and writes what it could not give back
+ * to the plug-in log instead, naming the comparison and its project. It still does not force an
+ * unbegun launch to end - that costs EDT its comparison support for the rest of ITS life, which
+ * outlives this server. The reasoning is on {@link #releaseAll()}.
+ * <p>
  * A session that EDT has already forgotten is dropped WITHOUT being ended: asking the platform to
  * end a handle it no longer knows is not a no-op everywhere, and there is nothing left to give
  * back. That is the {@link SlotHandback.Verdict#ALREADY_FREE} answer: this comparison holds
@@ -161,19 +171,46 @@ public final class ComparisonSessionRegistry
     private static final long CLAIM_BUDGET_MILLIS = 5L * 60L * 1000L;
 
     /**
-     * Hands every registry instance a token no other instance in this JVM will use, seeded from
-     * the wall clock so that a LATER JVM does not reissue an earlier one's tokens.
+     * Draws the per-registry token in {@link #instanceToken}, so that no id this server issues
+     * rests on the wall clock.
      * <p>
      * An id leaves this server and comes back on a later request, and it outlives the registry
      * that issued it: a client keeps the {@code comparisonId} from a finished job, the bundle is
-     * reinstalled or EDT is restarted, and the id is quoted at a registry that started counting
-     * from one again. With a plain counter that id addressed a DIFFERENT comparison - the caller
-     * released, or read the tree of, something it had never heard of. The token makes the collision
-     * unrepresentable within a JVM, because the counter only ever moves forward; across JVMs it
-     * rests on the clock having advanced further than the number of registries the previous one
-     * created, which for an OSGi bundle that installs one registry per start it always has.
+     * reinstalled or EDT is restarted, and the id is quoted at a registry whose counter started at
+     * one again. With a plain counter that id addressed a DIFFERENT comparison - the caller
+     * released, or read the tree of, something it had never heard of. The token is what makes that
+     * unrepresentable.
+     * <p>
+     * <b>Why it is drawn and not derived.</b> The token used to be a counter seeded from
+     * {@code System.currentTimeMillis()}, and that seeding held only while the clock moved
+     * FORWARD. It was an assumption about the machine, and two ordinary events break it: a clock
+     * corrected backwards, by NTP or by hand, and a virtual machine resumed from a snapshot.
+     * Either one hands the next JVM a seed an earlier JVM already used, so the collision the token
+     * exists to rule out becomes reachable again - and the client that quotes an id from a
+     * finished job is the one that pays, by addressing somebody else's comparison with it. A drawn
+     * token rests on nothing a machine can wind back. The strong source is used rather than the
+     * cheap one because the cheap one is itself seeded from the clock.
      */
-    private static final AtomicLong INSTANCE_TOKENS = new AtomicLong(System.currentTimeMillis());
+    private static final SecureRandom TOKEN_SOURCE = new SecureRandom();
+
+    /**
+     * The tokens already handed out in this JVM, so the in-JVM half of the guarantee stays
+     * ABSOLUTE rather than merely overwhelming.
+     * <p>
+     * Two live registries sharing a token would issue the same ids from their two counters. "One
+     * chance in {@link #TOKEN_SPAN}" is not a statement this class has to make when it can simply
+     * look, and the counter it replaces was absolute here - a replacement that is better across
+     * JVMs may not be worse within one. One entry is added per registry instance, and a registry
+     * is created once per bundle start, so the set is bounded by how often this bundle is started
+     * and by nothing a caller can drive.
+     */
+    private static final Set<String> ISSUED_TOKENS = ConcurrentHashMap.newKeySet();
+
+    /** The smallest value that renders as eight base-36 characters: 36^7. */
+    private static final long TOKEN_FLOOR = 78_364_164_096L;
+
+    /** How many values render as exactly eight base-36 characters: 36^8 - 36^7. */
+    private static final long TOKEN_SPAN = 2_821_109_907_456L - TOKEN_FLOOR;
 
     /** Ends one comparison on the platform, giving its virtual project and BM store back. */
     @FunctionalInterface
@@ -445,7 +482,7 @@ public final class ComparisonSessionRegistry
 
     private final Map<String, ComparisonSession> sessions = new LinkedHashMap<>();
     private final AtomicLong idGenerator = new AtomicLong(1);
-    private final String instanceToken = Long.toString(INSTANCE_TOKENS.getAndIncrement(), Character.MAX_RADIX);
+    private final String instanceToken = mintInstanceToken();
     private final LongSupplier clock;
     private final long idleTtlMillis;
     private final Releaser releaser;
@@ -703,9 +740,36 @@ public final class ComparisonSessionRegistry
     private String nextComparisonId()
     {
         // Instance token FIRST, so the varying part a human tracks across a report stays at the
-        // end and the ids of one session share a prefix. See INSTANCE_TOKENS for what the token
+        // end and the ids of one session share a prefix. See TOKEN_SOURCE for what the token
         // rules out.
         return "cmp-" + instanceToken + '-' + idGenerator.getAndIncrement(); //$NON-NLS-1$
+    }
+
+    /**
+     * Draws the token this registry's ids carry, and records it so that no other registry in this
+     * JVM can draw the same one.
+     * <p>
+     * The value is confined to the range that renders as EXACTLY eight base-36 characters, which
+     * is what keeps {@code cmp-<token>-<n>} one shape. An id is read out of a report by a human
+     * and quoted into the next call, and a token whose length wandered between one and eight
+     * characters would make two ids of the same registry look like ids of two.
+     *
+     * @return the token: eight characters, digits and lower-case letters only
+     */
+    private static String mintInstanceToken()
+    {
+        while (true)
+        {
+            // floorMod, not %: nextLong() is signed, the remainder of a negative value is
+            // negative, and a negative value renders with a leading '-' - a character the id's own
+            // grammar does not allow.
+            String token = Long.toString(
+                TOKEN_FLOOR + Math.floorMod(TOKEN_SOURCE.nextLong(), TOKEN_SPAN), Character.MAX_RADIX);
+            if (ISSUED_TOKENS.add(token))
+            {
+                return token;
+            }
+        }
     }
 
     /**
@@ -981,7 +1045,18 @@ public final class ComparisonSessionRegistry
      */
     private void awaitPlatformStart(String comparisonId)
     {
-        long deadline = clock.getAsLong() + PLATFORM_START_BUDGET_MILLIS;
+        awaitPlatformStart(comparisonId, clock.getAsLong() + PLATFORM_START_BUDGET_MILLIS);
+    }
+
+    /**
+     * The same wait against a deadline the CALLER owns, so that a caller with several comparisons
+     * to wait for spends one budget over all of them rather than one budget each.
+     *
+     * @param comparisonId the id the caller quoted
+     * @param deadline when to stop waiting, on {@link #clock}'s scale
+     */
+    private void awaitPlatformStart(String comparisonId, long deadline)
+    {
         while (true)
         {
             ComparisonSession session = sessionFor(comparisonId);
@@ -1117,7 +1192,20 @@ public final class ComparisonSessionRegistry
      *
      * @return how many sessions were confirmed free
      */
-    public synchronized int closeAndReleaseAll()
+    public int closeAndReleaseAll()
+    {
+        closeToRegistration();
+        return releaseAll();
+    }
+
+    /**
+     * Shuts the door and lets go of a standing claim, with the monitor taken.
+     * <p>
+     * Split out so that {@link #closeAndReleaseAll()} itself does not hold the monitor: the
+     * release it delegates to WAITS, and this class's one rule about the monitor is that a wait
+     * never holds it.
+     */
+    private synchronized void closeToRegistration()
     {
         closed = true;
         // A standing claim goes with them. It names no handle, so there is nothing to end - but
@@ -1125,7 +1213,6 @@ public final class ComparisonSessionRegistry
         // again, which is the very thing the closed flag exists to refuse.
         claimedComparisonId = null;
         claimedProjectName = null;
-        return releaseAll();
     }
 
     /**
@@ -1139,20 +1226,142 @@ public final class ComparisonSessionRegistry
      * {@link SlotHandback.Verdict#UNREACHABLE} and the virtual projects go away with the JVM. That
      * boundary is stated on {@link SlotHandback}.
      *
+     * <h2>This path is LAST, so it does not behave like the others</h2>
+     * Everywhere else, a comparison EDT has accepted but not begun answers
+     * {@link SlotHandback.Verdict#NOT_STARTED_YET} and the record is KEPT, because a later call
+     * retries it. Here there is no later call, and two consequences follow that the ordinary
+     * answer does not cover.
+     * <p>
+     * <b>The launch is given the same moment to begin that an asked-for hand-back gives it.</b>
+     * The gap between EDT accepting a launch and beginning it is an Eclipse job waiting for a
+     * worker - ordinarily milliseconds - so a bundle stopped just after a launch would otherwise
+     * abandon a comparison that was about to become perfectly endable. {@link #awaitQueuedLaunches}
+     * spends ONE budget over every registered session rather than one each, so stopping the bundle
+     * cannot be multiplied by the number of records it finds, and it costs nothing at all in the
+     * ordinary case: a comparison EDT is already running, and a comparison EDT cannot be asked
+     * about, both settle on the first question.
+     * <p>
+     * <b>What still could not be given back is REPORTED, not silently forgotten.</b> The record is
+     * dropped either way - nothing here can retry it - so a session that stays unended leaves no
+     * trace at all unless one is written: EDT goes on holding its virtual project and its single
+     * comparison slot under an id that no longer answers to anything. {@link #reportStranded}
+     * writes that to the plug-in log, naming the comparison, its project and what an operator can
+     * do about it.
+     * <p>
+     * <b>Nothing is force-ended.</b> Ending a launch EDT has only scheduled deletes the Eclipse
+     * job whose run contains the method that gives EDT's own slot back, so EDT reports a
+     * comparison as active for the rest of ITS life - and a bundle stopping is very often a bundle
+     * being reinstalled, with the same EDT carrying on afterwards. That damage outlives this
+     * server and cannot be undone without restarting EDT, while a virtual project left behind
+     * costs memory until then. The guard is not weakened here; it is the reason the report exists.
+     *
      * @return how many sessions were confirmed free
      */
-    public synchronized int releaseAll()
+    public int releaseAll()
+    {
+        awaitQueuedLaunches();
+        return releaseAllNow();
+    }
+
+    /**
+     * Gives every registered launch one shared, bounded chance to BEGIN before the shutdown asks
+     * to end it.
+     * <p>
+     * One deadline for the whole map, not one per session: the gap being waited on is the same
+     * Eclipse queue for all of them, and a shutdown may not take longer because more records
+     * happen to be lying about. The wait is outside this object's monitor for the reason stated on
+     * the class - a wait that held it would stall the poll of the very launch it waits for.
+     */
+    private void awaitQueuedLaunches()
+    {
+        long deadline = clock.getAsLong() + PLATFORM_START_BUDGET_MILLIS;
+        for (String comparisonId : registeredIds())
+        {
+            awaitPlatformStart(comparisonId, deadline);
+        }
+    }
+
+    /**
+     * @return the ids registered right now, read under the monitor because the wait around it
+     *     deliberately does not hold it
+     */
+    private synchronized List<String> registeredIds()
+    {
+        return new ArrayList<>(sessions.keySet());
+    }
+
+    /**
+     * The release itself, with the monitor taken.
+     *
+     * @return how many sessions were confirmed free
+     */
+    private synchronized int releaseAllNow()
     {
         int freed = 0;
         for (ComparisonSession session : new ArrayList<>(sessions.values()))
         {
-            if (handBackNow(session, SlotHandback.Ending.CLOSED).slotIsFree())
+            SlotHandback handback = handBackNow(session, SlotHandback.Ending.CLOSED);
+            if (handback.slotIsFree())
             {
                 freed++;
+            }
+            else
+            {
+                reportStranded(session, handback);
             }
         }
         sessions.clear();
         return freed;
+    }
+
+    /**
+     * Writes down one comparison this server is dropping without having given it back.
+     * <p>
+     * Only reached from the shutdown path, and only there does it have anything to say: every
+     * other path KEEPS such a record, so the next call retries the hand-back and the caller is
+     * told in the answer it is already reading. Here the record goes, nothing will retry, and no
+     * id names the comparison any more - so the log is the only place the fact can survive, and a
+     * line an operator can act on is worth more than a leak nobody can see.
+     *
+     * @param session the session being dropped
+     * @param handback what its hand-back observed
+     */
+    private static void reportStranded(ComparisonSession session, SlotHandback handback)
+    {
+        Activator.logWarning(strandedNotice(session, handback));
+    }
+
+    /**
+     * The sentence {@link #reportStranded} writes.
+     * <p>
+     * Deliberately NOT {@link SlotHandback#sentence()}: that sentence is written for a caller who
+     * can retry, and for {@link SlotHandback.Verdict#NOT_STARTED_YET} it says the record is kept
+     * and the request may be repeated. On this path both halves are false, and a message that
+     * tells an operator to repeat a call into a bundle that has stopped is worse than no message.
+     *
+     * @param session the session being dropped
+     * @param handback what its hand-back observed
+     * @return the notice, in one line
+     */
+    private static String strandedNotice(ComparisonSession session, SlotHandback handback)
+    {
+        StringBuilder notice = new StringBuilder("Comparison ") //$NON-NLS-1$
+            .append(session.comparisonId())
+            .append(" on project ") //$NON-NLS-1$
+            .append(session.projectName() == null ? "<unknown>" : session.projectName()) //$NON-NLS-1$
+            .append(" was NOT handed back while this server's comparison support shut down (") //$NON-NLS-1$
+            .append(handback.verdict())
+            .append("). "); //$NON-NLS-1$
+        if (handback.verdict() == SlotHandback.Verdict.NOT_STARTED_YET)
+        {
+            notice.append("EDT had accepted the launch but had not begun it, and ending a launch " //$NON-NLS-1$
+                + "EDT has only scheduled leaves EDT unable to run ANY comparison until it is " //$NON-NLS-1$
+                + "restarted - so nothing was asked of the platform. "); //$NON-NLS-1$
+        }
+        return notice.append("Its record here is dropped because nothing will retry it, so EDT " //$NON-NLS-1$
+            + "may still hold this comparison's virtual project and its single comparison slot " //$NON-NLS-1$
+            + "under an id nothing can name any more. End it from EDT's own comparison view, or " //$NON-NLS-1$
+            + "restart EDT.").toString(); //$NON-NLS-1$
     }
 
     /**

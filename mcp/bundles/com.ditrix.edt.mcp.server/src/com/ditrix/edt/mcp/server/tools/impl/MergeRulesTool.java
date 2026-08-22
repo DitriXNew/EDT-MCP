@@ -611,12 +611,21 @@ public class MergeRulesTool implements IMcpTool
             // failure is named: writing anyway would report an unchecked file as a checked one,
             // and refusing the rule would attribute a verdict to a comparison that gave none.
             Activator.logError("Could not validate merge rules against a live comparison", e); //$NON-NLS-1$
+            // The way out is stated WITHOUT sending the caller to drop comparisonId. That advice
+            // used to end this sentence, and it is a no-op for the caller who never named one -
+            // the branch this refusal now also reaches, since the production supplier stopped
+            // swallowing its own failures. Worse, it is misleading for the caller who did: while a
+            // comparison is running and failing, dropping the id lands on the SAME comparison and
+            // fails the same way. Authoring from names is what happens when nothing answers at
+            // all, and that is not a mode a parameter can be dropped to enter.
             return ToolResult.error("Could not check the decisions against " //$NON-NLS-1$
                 + (idGiven ? "comparison '" + comparisonId + "'" : "the running comparison") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ": " + describe(e) + ". Nothing was written - the rules were neither checked nor " //$NON-NLS-1$ //$NON-NLS-2$
-                + "found illegal. Retry once the comparison answers, or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
-                + " to author the file from names alone - the report then says the rules were NOT " //$NON-NLS-1$
-                + "validated.").toJson(); //$NON-NLS-1$
+                + "found illegal, so nothing about the file has to be undone. Retry once the " //$NON-NLS-1$
+                + "comparison answers; get_comparison_node says whether its tree can be read. " //$NON-NLS-1$
+                + "Dropping " + KEY_COMPARISON_ID + " does not author the file from names " //$NON-NLS-1$ //$NON-NLS-2$
+                + "instead: a running comparison is checked against either way, and the NOT " //$NON-NLS-1$
+                + "VALIDATED report is what happens when no comparison answers at all.").toJson(); //$NON-NLS-1$
         }
         finally
         {
@@ -1132,6 +1141,11 @@ public class MergeRulesTool implements IMcpTool
             {
                 return emptySide;
             }
+            String absentEverywhere = absentOnEverySideRefusal(key, position);
+            if (absentEverywhere != null)
+            {
+                return absentEverywhere;
+            }
             boolean topObjectLevel = i == MergeRulesDocument.MAX_AUTHORABLE_DEPTH - 1;
             if (topObjectLevel && !MergeRulesDocument.isTopObjectKey(key))
             {
@@ -1186,6 +1200,43 @@ public class MergeRulesTool implements IMcpTool
             + "never applied. Send 'A:A:A' when the name is the same everywhere, 'A:" //$NON-NLS-1$
             + MergeRulesDocument.SIDE_ABSENT + ":" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$ //$NON-NLS-2$
             + "' when only the main side has it.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Refuses a key that spells the platform's {@code NONE} on all three sides.
+     * <p>
+     * The mirror image of {@link #emptyTopObjectSideRefusal(String, int)}, and the last hole its
+     * fix left. There the components were not names; here every component IS a name - {@code NONE}
+     * is how the platform spells "this side has no such object" - and the key still describes
+     * nothing, because an object absent on the main side, the other side AND the common ancestor
+     * exists in no comparison at all. A node is what one of the three sides contributed, so a key
+     * that contributes none matches no node by string equality: the decision would be reported as
+     * recorded and could never be applied. Without a live comparison to consult, this is the only
+     * place it can be caught.
+     * <p>
+     * Asked of EVERY level, like the empty-side check and for the same reason: at the collection
+     * level the key is equally meaningless, and naming what is actually wrong with it beats
+     * refusing it as "an object key at the collection level".
+     *
+     * @param key one key of the chain, already trimmed
+     * @param position the decision's position, for the message
+     * @return the refusal, or {@code null} when the key names at least one present side
+     */
+    private static String absentOnEverySideRefusal(String key, int position)
+    {
+        if (!MergeRulesDocument.absentOnEveryTopObjectKeySide(key))
+        {
+            return null;
+        }
+        return ToolResult.error("Decision #" + position + ": '" + key + "' says the object is " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + MergeRulesDocument.SIDE_ABSENT + " on all three sides, so it names no object at " //$NON-NLS-1$
+            + "all. Nothing was written. A comparison node exists because one of the three sides " //$NON-NLS-1$
+            + "has the object, and the key is matched verbatim, so this one matches no node in " //$NON-NLS-1$
+            + "any comparison - the decision would be recorded and never applied. At least one " //$NON-NLS-1$
+            + "side must carry the object's name: 'A:A:A' when the name is the same everywhere, " //$NON-NLS-1$
+            + "'A:" + MergeRulesDocument.SIDE_ABSENT + ":" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$ //$NON-NLS-2$
+            + "' when only the main side has it. Read an existing rules file with mode '" //$NON-NLS-1$
+            + MODE_READ + "' to see the exact keys.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1494,14 +1545,22 @@ public class MergeRulesTool implements IMcpTool
         /**
          * Finds the authority to validate against.
          * <p>
-         * Empty means "no validation is possible for this call" and deliberately does not say
+         * Empty means "there is nothing to validate against" and deliberately does not say
          * WHY - the comparison may not be running, or this deployment may have no comparison
          * facade wired at all. Callers must therefore report the absence of validation, never a
          * cause they did not observe.
+         * <p>
+         * <b>A failed attempt is THROWN, never collapsed into empty.</b> "Nothing answered" and
+         * "something was asked and broke" are different facts, and only the first entitles a
+         * caller to write the file and report it NOT VALIDATED. An implementation that swallowed
+         * its own failure would hand the caller a file described as unchecked when the check had
+         * in fact started and failed - which is a report of work that did not happen. Any
+         * unchecked exception out of this method therefore means the check could not be carried
+         * out, and the caller reports THAT.
          *
          * @param comparisonId the comparison the caller named, or {@code null} to use whichever
          *            comparison is running
-         * @return the authority, or empty when the rules cannot be validated
+         * @return the authority, or empty when there is no comparison to validate against
          */
         Optional<MergeRuleAuthority> authority(String comparisonId);
     }
@@ -1522,24 +1581,76 @@ public class MergeRulesTool implements IMcpTool
      * compared yet" into the refusal "that node is not in this comparison", which is a statement
      * the tool would not have observed. While the tree is still building this supplier therefore
      * answers NOTHING, and the write degrades to the honest NOT VALIDATED report.</p>
+     *
+     * <p><b>Answering nothing is reserved for what it OBSERVED.</b> Every empty answer below is a
+     * reading: no facade installed, no comparison named, no session under that id, no view, a tree
+     * that is not finished. A failure to obtain any of those readings is not one of them, and is
+     * not caught - see {@link #authority(String)}.</p>
      */
     static final class EngineRuleAuthority
         implements MergeRuleAuthoritySupplier
     {
+        /**
+         * The resolution step, named so a test can drive both of its outcomes headlessly.
+         * <p>
+         * A seam and not a fake of the platform: what has to be exercised is which outcomes this
+         * class collapses into "no validation" and which it lets through, and that is a property
+         * of this class alone. Without EDT installed the real resolution answers empty on its
+         * first line, so no behavioural test could otherwise tell "answered nothing" from
+         * "could not be asked".
+         */
+        @FunctionalInterface
+        interface Resolution
+        {
+            /**
+             * @param comparisonId the comparison the caller named, or {@code null} for whichever
+             *            comparison is running
+             * @return the authority, or empty when there is no comparison to validate against
+             */
+            Optional<MergeRuleAuthority> resolve(String comparisonId);
+        }
+
+        private final Resolution resolution;
+
+        /** Creates the shipped supplier, which resolves against the installed comparison facade. */
+        EngineRuleAuthority()
+        {
+            this(EngineRuleAuthority::resolve);
+        }
+
+        /**
+         * @param resolution the resolution step, never {@code null}
+         */
+        EngineRuleAuthority(Resolution resolution)
+        {
+            this.resolution = resolution;
+        }
+
+        /**
+         * {@inheritDoc}
+         * <p>
+         * <b>A failure is NOT caught here, and that is the fix for a report that lied.</b> This
+         * method used to wrap the resolution in {@code catch (RuntimeException)} and answer empty,
+         * which put two different facts through one door: "there is no comparison to check these
+         * rules against" and "there is one, the check was attempted, and the attempt failed". The
+         * caller can only read empty as the first, so a write made while the tree-readiness read
+         * threw was written anyway and stamped NOT VALIDATED - a file the caller was told nobody
+         * had checked, when in truth the check had started and broken. The caller asked to write
+         * under conditions where validation was possible, and it is entitled to hear that it was
+         * not carried out.
+         * <p>
+         * Naming an id already behaved this way: with {@code comparisonId} given, an empty answer
+         * is refused rather than degraded, so the same failure reached the caller through that
+         * branch and vanished through this one. The two branches now agree.
+         * <p>
+         * The ABSENCE of a comparison still answers empty and still degrades to NOT VALIDATED -
+         * that is the honest report, not a refusal - so the split is between "nothing answered"
+         * and "the attempt failed", not between "validated" and "refused".
+         */
         @Override
         public Optional<MergeRuleAuthority> authority(String comparisonId)
         {
-            try
-            {
-                return resolve(comparisonId);
-            }
-            catch (RuntimeException e)
-            {
-                // "Could not ask" is not "no such node": it degrades to no validation, which the
-                // report states, rather than to a refusal naming a cause nobody observed.
-                Activator.logError("Could not reach a comparison to validate merge rules", e); //$NON-NLS-1$
-                return Optional.empty();
-            }
+            return resolution.resolve(comparisonId);
         }
 
         private static Optional<MergeRuleAuthority> resolve(String comparisonId)

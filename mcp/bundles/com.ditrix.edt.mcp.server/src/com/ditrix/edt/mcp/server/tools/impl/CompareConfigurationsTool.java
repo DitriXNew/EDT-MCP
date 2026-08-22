@@ -1768,6 +1768,18 @@ public class CompareConfigurationsTool implements IMcpTool
         private final boolean changedOnly;
 
         /**
+         * The commit the other side actually resolved to, recorded by the launch.
+         * <p>
+         * Volatile because it is written on the worker that starts the comparison and read on
+         * whichever thread renders the report; the two are the same worker today, and a field
+         * whose safety depends on that staying true is a field that breaks silently when it stops.
+         */
+        private volatile String resolvedOtherCommitId;
+
+        /** The commit the common-ancestor side actually resolved to. See above. */
+        private volatile String resolvedAncestorCommitId;
+
+        /**
          * @param projectName the project whose working tree is the main side
          * @param otherRevision the revision compared against
          * @param ancestorRevision the revision used as the common ancestor
@@ -1795,16 +1807,41 @@ public class CompareConfigurationsTool implements IMcpTool
             return projectName;
         }
 
-        /** @return the revision compared against */
+        /** @return the revision compared against, exactly as the caller wrote it */
         String getOtherRevision()
         {
             return otherRevision;
         }
 
-        /** @return the revision used as the common ancestor */
+        /** @return the revision used as the common ancestor, exactly as the caller wrote it */
         String getAncestorRevision()
         {
             return ancestorRevision;
+        }
+
+        /**
+         * Records what the two revision expressions resolved to, so the report can name it.
+         *
+         * @param otherCommitId the full commit id of the other side, or {@code null} when none
+         *            was resolved
+         * @param ancestorCommitId the full commit id of the common-ancestor side, or {@code null}
+         */
+        void recordResolvedRevisions(String otherCommitId, String ancestorCommitId)
+        {
+            this.resolvedOtherCommitId = otherCommitId;
+            this.resolvedAncestorCommitId = ancestorCommitId;
+        }
+
+        /** @return the other side as the report must name it - see {@link #revisionLabel} */
+        String otherRevisionLabel()
+        {
+            return revisionLabel(otherRevision, resolvedOtherCommitId);
+        }
+
+        /** @return the common-ancestor side as the report must name it */
+        String ancestorRevisionLabel()
+        {
+            return revisionLabel(ancestorRevision, resolvedAncestorCommitId);
         }
 
         /** @return qualified names to compare; empty means the whole configuration */
@@ -1830,6 +1867,63 @@ public class CompareConfigurationsTool implements IMcpTool
         {
             return changedOnly;
         }
+    }
+
+    /**
+     * Names a revision the way a report has to: what the caller asked for, and what it resolved
+     * to.
+     *
+     * <h2>Why the resolved id is not optional</h2>
+     * A revision may be written as a MOVING expression - a branch, a tag, {@code HEAD},
+     * {@code @{u}} - and the comparison is not run against the expression. It is run against the
+     * commit the expression named at the instant it was resolved, which is what the git data
+     * source descriptors are handed. A report that echoed only the expression described a
+     * comparison of {@code vendor/2.5.14} against a working tree, and a day later the same words
+     * name a different commit: the report cannot be reproduced, and it cannot be checked against
+     * the state it was actually taken from. Naming the commit beside the expression is what makes
+     * it an account of a run rather than of a request.
+     *
+     * <h2>The FULL id, not an abbreviation</h2>
+     * The whole point is that the report stays checkable, and an abbreviation is a second
+     * identifier that can turn ambiguous as the repository grows - the same class of failure as
+     * the branch name it exists to pin down. It costs one table cell, so it is written out.
+     *
+     * @param requested the revision exactly as the caller wrote it
+     * @param commitId the full commit id it resolved to, or {@code null} when nothing was resolved
+     * @return {@code "<requested> (<commitId>)"}; the bare {@code requested} when nothing was
+     *         resolved, and the bare id when the caller already named the commit itself, because
+     *         printing it twice states nothing the first printing did not
+     */
+    static String revisionLabel(String requested, String commitId)
+    {
+        if (commitId == null || commitId.isBlank())
+        {
+            return requested;
+        }
+        if (commitId.equalsIgnoreCase(requested))
+        {
+            return commitId;
+        }
+        return requested + " (" + commitId + ')'; //$NON-NLS-1$
+    }
+
+    /**
+     * Builds the report header from the request, naming both revisions as
+     * {@link #revisionLabel} does.
+     * <p>
+     * The one place a header is built, so the resolved commits cannot reach the report through one
+     * caller and be dropped by another.
+     *
+     * @param comparisonId this plugin's id for the comparison
+     * @param request the request, carrying both the expressions and what they resolved to
+     * @param state the comparison's own reported state
+     * @return the header
+     */
+    static ComparisonTreeReport.Header headerFor(String comparisonId, LaunchRequest request,
+        String state)
+    {
+        return new ComparisonTreeReport.Header(comparisonId, request.getProjectName(),
+            request.otherRevisionLabel(), request.ancestorRevisionLabel(), state);
     }
 
     /** One poll tick's answer: what the comparison is doing, and why it stopped. */
@@ -2205,6 +2299,11 @@ public class CompareConfigurationsTool implements IMcpTool
             {
                 throw new ComparisonException(messageOf(ancestor.errorJson()));
             }
+            // Recorded HERE, where the expressions were turned into commits, because this is the
+            // only moment the two are known together. The descriptors below are handed the commit
+            // ids; a report that named the expressions alone would describe a comparison of names
+            // that point somewhere else by the time anybody re-reads it.
+            request.recordResolvedRevisions(other.commitId(), ancestor.commitId());
 
             ComparisonScopeBuilder.Scoping scoping =
                 ComparisonScopeBuilder.build(request.getScope());
@@ -2466,10 +2565,8 @@ public class CompareConfigurationsTool implements IMcpTool
                 throw new ComparisonException(
                     messageOf(ComparisonFailures.failed("reading the comparison tree", e)), e); //$NON-NLS-1$
             }
-            ComparisonTreeReport.Header header = new ComparisonTreeReport.Header(comparisonId,
-                request.getProjectName(), request.getOtherRevision(),
-                request.getAncestorRevision(), "finished"); //$NON-NLS-1$
-            return ComparisonTreeReport.render(header, handle.getFullScope(), collector);
+            return ComparisonTreeReport.render(headerFor(comparisonId, request, "finished"), //$NON-NLS-1$
+                handle.getFullScope(), collector);
         }
 
         /**

@@ -397,6 +397,14 @@ public final class MergeRulesDocument
      * how the platform spells "the object does not exist on this side" - while an empty or
      * whitespace-only component is not.
      *
+     * <p>
+     * <b>It does NOT ask whether the object exists on any side</b> - see
+     * {@link #absentOnEveryTopObjectKeySide(String)}. The two questions have different right
+     * answers: reading a file must decode {@code NONE:NONE:NONE} into three absent sides and
+     * report it faithfully, because the key is already in somebody's file and hiding it would be
+     * a worse report; authoring one must refuse it. Folding the second question in here would make
+     * the read report LESS truthful in order to fix the write.
+     *
      * @param key a node key
      * @return {@code true} when the key has exactly two separators AND all three components name
      *         something
@@ -404,6 +412,38 @@ public final class MergeRulesDocument
     public static boolean isTopObjectKey(String key)
     {
         return hasTopObjectKeyShape(key) && emptyTopObjectKeySides(key).isEmpty();
+    }
+
+    /**
+     * Whether a top-object-shaped key spells {@link #SIDE_ABSENT} on ALL THREE sides.
+     * <p>
+     * {@code NONE:NONE:NONE} passes {@link #isTopObjectKey(String)}: it has two separators and
+     * every component names something, {@code NONE} being the platform's own name for "this side
+     * has no such object". What it describes, though, is an object that exists on NO side - and
+     * a comparison has no such node, because a node is what one of its three sides contributed.
+     * EDT keys its nodes by string equality, so a decision recorded under this key matches nothing
+     * in any comparison: reported as written, and never applicable. That is the same failure the
+     * empty-component check refuses, arrived at from the other direction - there the component was
+     * not a name, here every component is a name and the object still is not there.
+     *
+     * @param key a node key
+     * @return {@code true} when the key has the top-object shape and each of its three components
+     *         is exactly {@link #SIDE_ABSENT}
+     */
+    public static boolean absentOnEveryTopObjectKeySide(String key)
+    {
+        if (!hasTopObjectKeyShape(key))
+        {
+            return false;
+        }
+        int first = key.indexOf(KEY_SEPARATOR);
+        int second = key.indexOf(KEY_SEPARATOR, first + 1);
+        // Exact equality, as TopObjectKey.parse reads the same literal: the platform writes NONE
+        // and matches it verbatim, so an object genuinely named "none" is a name like any other
+        // and must not be mistaken for an absence.
+        return SIDE_ABSENT.equals(key.substring(0, first))
+            && SIDE_ABSENT.equals(key.substring(first + 1, second))
+            && SIDE_ABSENT.equals(key.substring(second + 1));
     }
 
     /**

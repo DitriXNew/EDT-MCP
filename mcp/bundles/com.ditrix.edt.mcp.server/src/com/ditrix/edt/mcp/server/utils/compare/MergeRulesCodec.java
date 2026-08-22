@@ -18,8 +18,9 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
-import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -160,6 +161,45 @@ public final class MergeRulesCodec
      * POSIX), so a chain this codec refuses is one the operating system would refuse too.
      */
     private static final int MAX_SYMLINK_HOPS = 40;
+
+    /**
+     * Largest number of entries {@link #readZip(Path)} walks before it refuses the archive.
+     * <p>
+     * The third member of one family, and it is bounded for the same reason as the other two:
+     * {@link #MAX_DOCUMENT_BYTES} bounds what one entry EXPANDS to and {@link #MAX_ELEMENT_DEPTH}
+     * bounds what the parse builds out of it, but both of those are spent only once an entry has
+     * been CHOSEN - and choosing one walks the whole directory first. So an archive with a huge
+     * directory exhausts the workbench's heap in that walk, before a single byte is decompressed
+     * and before either existing bound is consulted. A bound that starts after the enumeration is
+     * no bound on the enumeration.
+     * <p>
+     * <b>What this bound saves, stated exactly.</b> {@code ZipFile} has already read the central
+     * directory into memory by the time this loop starts, so the CEN itself is not what is being
+     * prevented - the JDK charged for that on open, and nothing here can give it back. What the
+     * loop adds on top is a materialised {@code ZipEntry} plus a retained name {@code String} per
+     * entry, which is a multiple of the CEN rather than a fraction of it, and it is that multiple
+     * this bound refuses to pay.
+     * <p>
+     * The number is far past any real archive. EDT's comparison window saves ONE entry per
+     * comparison - {@code '<mainProject>_<otherProject>_<ancestorProject>.xml'} - and this codec
+     * already refuses anything that does not resolve to exactly one candidate, so a legitimate
+     * source is a single-entry zip. A thousand is three orders of magnitude past that, and the
+     * names kept for it are tens of kilobytes rather than the gigabytes an unbounded walk allows.
+     */
+    private static final int MAX_ZIP_ENTRIES = 1024;
+
+    /**
+     * Largest number of entry names the "not exactly one entry" refusal lists.
+     * <p>
+     * The refusal exists so the caller can see WHAT the archive holds instead of what was
+     * expected, and a handful of names does that. Listing all of them does not: the message is
+     * built by joining every name, so an archive at {@link #MAX_ZIP_ENTRIES} would answer a
+     * one-line question with a message tens of kilobytes long - the same unbounded accumulation
+     * the bound above exists to prevent, moved from the walk into the answer. What is left out is
+     * COUNTED rather than dropped silently, because a list that simply stops reads as the whole of
+     * what is in there.
+     */
+    private static final int MAX_LISTED_ZIP_ENTRIES = 20;
 
     private MergeRulesCodec()
     {
@@ -427,28 +467,47 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Carries the POSIX mode of whatever is on {@code target} onto the {@code replacement} that is
-     * about to take its place.
+     * Carries the POSIX mode AND the owning group of whatever is on {@code target} onto the
+     * {@code replacement} that is about to take its place.
      * <p>
      * A move replaces an inode, so without this the replacement arrives wearing
-     * {@code Files.createTempFile}'s own mode - owner-only - and a merge-rules file a team shares
-     * becomes unreadable to everyone but the account that last wrote it. Nothing about that is
-     * visible in the answer the caller gets: the write succeeds and reports the rules as written.
+     * {@code Files.createTempFile}'s own mode - owner-only - and the group of whoever ran the
+     * write, and a merge-rules file a team shares becomes unreachable to everyone but that
+     * account. Nothing about that is visible in the answer the caller gets: the write succeeds and
+     * reports the rules as written.
+     * <p>
+     * <b>The group is carried for the same reason the mode is, and it is not optional in
+     * practice.</b> A file shared through a secondary group - {@code rw-rw-r--} owned by
+     * {@code developers} - keeps its mode across the move and still stops being writable by the
+     * team, because the group those {@code rw-} bits apply to is no longer the team's. Preserving
+     * the mode while dropping the group preserves the half that does nothing on its own.
+     * <p>
+     * <b>The user owner is NOT carried, and that is a different case rather than an inconsistency.</b>
+     * Changing a file's user owner is reserved to root on Linux; a process that is not root cannot
+     * do it even for a file it owns, so attempting it would be attempting something known to fail.
+     * Changing the GROUP is allowed to the owner for any group the owner belongs to, which is
+     * exactly the case this method exists for. And an unchanged user owner does not break sharing
+     * on its own: the write is performed by the account that already had write access.
      * <p>
      * Three things are deliberately NOT done here.
      * <ul>
      * <li><b>Nothing is invented for a path that is empty.</b> A target that does not exist has no
-     * mode to inherit, and Java cannot read the process umask, so guessing one would be this
-     * method asserting a permission set nobody chose. Such a file keeps the temporary's own, which
-     * is the restrictive direction. Note that a {@link Target#MUST_NOT_EXIST} write does NOT reach
-     * this case: its reservation is already on the path, created with the process default, and
-     * that is what gets carried.</li>
-     * <li><b>A filesystem without POSIX permissions is not a failure.</b> Windows has no mode to
-     * carry, and the view is simply absent there; treating that as an error would make every write
-     * on Windows fail over a concept that does not exist on it.</li>
-     * <li><b>Ownership is not copied.</b> Only the mode is. Changing a file's owner or group needs
-     * privileges this process usually does not have, and attempting it would turn a successful
-     * write into a failure on exactly the shared file this is meant to protect.</li>
+     * mode or group to inherit, and Java cannot read the process umask, so guessing one would be
+     * this method asserting a permission set nobody chose. Such a file keeps the temporary's own,
+     * which is the restrictive direction. Note that a {@link Target#MUST_NOT_EXIST} write does NOT
+     * reach this case: its reservation is already on the path, created with the process default,
+     * and that is what gets carried.</li>
+     * <li><b>A filesystem without POSIX permissions is not a failure.</b> Windows has no mode or
+     * group to carry, and the view is simply absent there; treating that as an error would make
+     * every write on Windows fail over a concept that does not exist on it.</li>
+     * <li><b>A group that cannot be set is a SKIP, not a write failure.</b> Changing a group is
+     * refused whenever the account does not belong to the target's group - a file left behind by a
+     * colleague, a shared directory the writer is not a member of - and the filesystem may not
+     * support the operation at all. Refusing the whole write over it would turn a rules file that
+     * saves perfectly well today into one that cannot be saved, over a permission the caller never
+     * asked this tool to manage; the mode is still carried, and the file still lands. That is why
+     * the group is attempted AFTER the mode and its failures are swallowed while the mode's
+     * failure to apply is not.</li>
      * </ul>
      *
      * @param target the file about to be replaced
@@ -464,10 +523,10 @@ public final class MergeRulesCodec
         {
             return;
         }
-        Set<PosixFilePermission> permissions;
+        PosixFileAttributes attributes;
         try
         {
-            permissions = view.readAttributes().permissions();
+            attributes = view.readAttributes();
         }
         catch (NoSuchFileException e) // NOSONAR nothing on the path is a state, not a failure
         {
@@ -482,11 +541,47 @@ public final class MergeRulesCodec
         }
         try
         {
-            Files.setPosixFilePermissions(replacement, permissions);
+            Files.setPosixFilePermissions(replacement, attributes.permissions());
         }
         catch (UnsupportedOperationException e) // NOSONAR as above, on the writing side
         {
             // Nothing to carry onto: the temporary's own mode stands.
+        }
+        inheritGroup(replacement, attributes.group());
+    }
+
+    /**
+     * Carries one group onto the replacement, and gives up quietly when it cannot.
+     * <p>
+     * Every way this can fail is a fact about the account and the filesystem rather than about the
+     * write: the process may not belong to that group, the store may not implement the operation,
+     * a security manager may forbid it. None of them is a reason to refuse to save the caller's
+     * rules, so none of them is allowed to escape - the file lands with its mode carried and its
+     * group left as created, which is the state the whole write had before this existed.
+     *
+     * @param replacement the temporary that will replace the target
+     * @param group the target's group, or {@code null} when the attributes carried none
+     */
+    private static void inheritGroup(Path replacement, GroupPrincipal group)
+    {
+        if (group == null)
+        {
+            return;
+        }
+        PosixFileAttributeView view =
+            Files.getFileAttributeView(replacement, PosixFileAttributeView.class);
+        if (view == null)
+        {
+            return;
+        }
+        try
+        {
+            view.setGroup(group);
+        }
+        catch (IOException | UnsupportedOperationException | SecurityException e) // NOSONAR see above
+        {
+            // Not this write's business to fail over. See the javadoc above for why each of these
+            // is an ordinary state of a shared filesystem rather than an error.
         }
     }
 
@@ -705,9 +800,18 @@ public final class MergeRulesCodec
             List<ZipEntry> candidates = new ArrayList<>();
             List<String> names = new ArrayList<>();
             Enumeration<? extends ZipEntry> entries = zip.entries();
+            int walked = 0;
             while (entries.hasMoreElements())
             {
                 ZipEntry entry = entries.nextElement();
+                // Counted BEFORE the directory test, and every entry counts. What has to be
+                // bounded is the WALK: an archive of nothing but directory entries would skip the
+                // accumulation below and still spin this loop once per entry, so a bound that
+                // only counted what is kept would not bound the loop it lives in.
+                if (++walked > MAX_ZIP_ENTRIES)
+                {
+                    throw new MergeRulesFormatException(tooManyEntries());
+                }
                 if (entry.isDirectory())
                 {
                     continue;
@@ -726,7 +830,7 @@ public final class MergeRulesCodec
             if (candidates.size() != 1)
             {
                 throw new MergeRulesFormatException("The zip does not hold exactly one merge-settings entry: " //$NON-NLS-1$
-                    + (names.isEmpty() ? "it is empty" : String.join(", ", names)) //$NON-NLS-1$ //$NON-NLS-2$
+                    + (names.isEmpty() ? "it is empty" : listEntries(names)) //$NON-NLS-1$
                     + ". A comparison saves one entry per comparison, named " //$NON-NLS-1$
                     + "'<mainProject>_<otherProject>_<ancestorProject>.xml'; extract the entry you " //$NON-NLS-1$
                     + "mean and read it as .xml."); //$NON-NLS-1$
@@ -747,6 +851,41 @@ public final class MergeRulesCodec
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
             return document;
         }
+    }
+
+    /**
+     * The refusal for an archive with more entries than {@link #MAX_ZIP_ENTRIES}.
+     * <p>
+     * It names no entry at all, and that is the point: the names are exactly what was refused to
+     * be accumulated, so quoting them here would spend the memory the refusal exists to save.
+     *
+     * @return the message
+     */
+    private static String tooManyEntries()
+    {
+        return "The zip lists more than " + MAX_ZIP_ENTRIES //$NON-NLS-1$
+            + " entries and was not read. A merge-settings archive holds ONE entry - the settings " //$NON-NLS-1$
+            + "a comparison saved - so an archive this large is not one, and finding an entry in " //$NON-NLS-1$
+            + "it means materialising every entry it lists, which would spend the workbench's " //$NON-NLS-1$
+            + "heap before anything was even decompressed. Check what the archive actually " //$NON-NLS-1$
+            + "holds, extract the entry you mean, and read it as '.xml'."; //$NON-NLS-1$
+    }
+
+    /**
+     * Lists entry names for the "not exactly one entry" refusal, keeping at most
+     * {@link #MAX_LISTED_ZIP_ENTRIES} of them and COUNTING the rest.
+     *
+     * @param names every non-directory entry name, in the order the archive lists them
+     * @return the names to print
+     */
+    private static String listEntries(List<String> names)
+    {
+        if (names.size() <= MAX_LISTED_ZIP_ENTRIES)
+        {
+            return String.join(", ", names); //$NON-NLS-1$
+        }
+        return String.join(", ", names.subList(0, MAX_LISTED_ZIP_ENTRIES)) //$NON-NLS-1$
+            + " and " + (names.size() - MAX_LISTED_ZIP_ENTRIES) + " more"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

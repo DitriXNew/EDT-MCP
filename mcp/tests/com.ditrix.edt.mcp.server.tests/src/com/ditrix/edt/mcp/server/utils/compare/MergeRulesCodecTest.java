@@ -21,8 +21,12 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -322,6 +326,67 @@ public class MergeRulesCodecTest
         // Not "all three are empty": a key with no separators has no sides to report on, and
         // answering otherwise would make every collection name look like a malformed object key.
         assertTrue(MergeRulesDocument.emptyTopObjectKeySides("commonModules").isEmpty()); //$NON-NLS-1$
+    }
+
+    // ============ A key has to name at least one side that HAS the object ============
+
+    @Test
+    public void testAKeyAbsentOnEverySideIsRecognisedAsSuch()
+    {
+        // Every earlier gate passes it - two separators, and NONE names something - yet an object
+        // absent on the main side, the other side AND the ancestor exists in no comparison, so
+        // the key matches no node by string equality.
+        assertTrue(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:NONE:NONE")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOnePresentSideIsEnoughToNameSomething()
+    {
+        assertFalse("one present side is exactly how a deletion is addressed", //$NON-NLS-1$
+            MergeRulesDocument.absentOnEveryTopObjectKeySide("Added:NONE:NONE")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:Renamed:NONE")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:NONE:Gone")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnObjectGenuinelyNamedNoneIsNotAnAbsence()
+    {
+        // The literal is matched exactly, as TopObjectKey.parse matches it. A 1C object may be
+        // called 'none', and reading that as an absence would refuse a real object.
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("none:none:none")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("None:NONE:NONE")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAKeyThatIsNotTopObjectShapedIsNeverAbsentEverywhere()
+    {
+        // Same rule as the empty-sides question: a key with no separators has no sides at all,
+        // so it cannot be absent on them.
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("commonModules")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:NONE")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide(null));
+    }
+
+    @Test
+    public void testReadingStillDecodesAKeyAbsentOnEverySide() throws Exception
+    {
+        // The deliberate NON-change, pinned so a later tidy-up does not fold the new question
+        // into isTopObjectKey. Writing such a key is refused by the tool; READING one has to
+        // report it faithfully - it is already in somebody's file, and "absent on all three
+        // sides" is the truth about it. Folding the check in here would make the report worse in
+        // order to fix the write.
+        MergeRulesDocument document = MergeRulesCodec.parse("<?xml version=\"1.0\"?>" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\"><MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\"><Node Key=\"NONE:NONE:NONE\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+            + "</Node></Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        Decision decision = document.decisions().get(0);
+
+        assertTrue(MergeRulesDocument.isTopObjectKey("NONE:NONE:NONE")); //$NON-NLS-1$
+        TopObjectKey key = decision.topObjectKey().orElseThrow();
+        assertNull(key.main());
+        assertNull(key.other());
+        assertNull(key.ancestor());
     }
 
     @Test
@@ -918,6 +983,188 @@ public class MergeRulesCodecTest
             .contains("DoNotMerge")); //$NON-NLS-1$
     }
 
+    /**
+     * The mode is only half of what makes a file shared: the OTHER half is the group those group
+     * bits apply to. A move replaces the inode, so the replacement arrives owned by the group of
+     * whoever ran the write, and a rules file the team reached through {@code rw-rw-r--} on
+     * {@code developers} keeps its mode and stops being the team's - the preserved half doing
+     * nothing on its own.
+     * <p>
+     * Skipped where it cannot be observed: on Windows there is no group, and on a POSIX account
+     * that belongs to no group other than the one a new file already gets, a dropped group and a
+     * carried one produce the same file.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testReplacingAFileKeepsTheGroupItIsSharedThrough() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("group-shared.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        GroupPrincipal shared = groupOtherThanTheOneANewFileGets(file);
+        Assume.assumeTrue("this account belongs to no group other than the one a new file gets, " //$NON-NLS-1$
+            + "so a dropped group would be indistinguishable from a kept one here", shared != null); //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals("a rules file shared through a secondary group must still be the team's " //$NON-NLS-1$
+            + "after this tool rewrites it", shared.getName(), //$NON-NLS-1$
+            Files.readAttributes(file, PosixFileAttributes.class).group().getName());
+    }
+
+    /**
+     * The control for the case above: the bytes really were replaced. Without it, a write that
+     * wrote nothing at all would keep the group and pass.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testTheFileWhoseGroupSurvivedIsTheOneThatWasRewritten() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("group-shared.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        GroupPrincipal shared = groupOtherThanTheOneANewFileGets(file);
+        Assume.assumeTrue("this account belongs to no second group", shared != null); //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertTrue("the decision must be on disk, or the group was kept by doing nothing", //$NON-NLS-1$
+            new String(Files.readAllBytes(file), StandardCharsets.UTF_8)
+                .contains("DoNotMerge")); //$NON-NLS-1$
+    }
+
+    /**
+     * Carrying the group may not cost the mode. They are two calls on the same replacement and the
+     * group is set AFTER the mode, so an implementation that let the group failure abort the
+     * inheritance - or that reordered them - would show up here.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testTheGroupAndTheModeAreBothCarried() throws Exception
+    {
+        assumePosix();
+        Path file = workDir.resolve("group-and-mode.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        GroupPrincipal shared = groupOtherThanTheOneANewFileGets(file);
+        Assume.assumeTrue("this account belongs to no second group", shared != null); //$NON-NLS-1$
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw-r--")); //$NON-NLS-1$
+
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals(shared.getName(),
+            Files.readAttributes(file, PosixFileAttributes.class).group().getName());
+        assertEquals("rw-rw-r--", //$NON-NLS-1$
+            PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    }
+
+    /**
+     * A path with nothing on it has no group to inherit, exactly as it has no mode. Pinned so that
+     * "carry the target's group" is never quietly turned into "set some group": the new file keeps
+     * the one the filesystem gave it.
+     *
+     * @throws Exception when the write fails
+     */
+    @Test
+    public void testAPathWithNothingOnItGetsNoInventedGroup() throws Exception
+    {
+        assumePosix();
+        Path probe = Files.createFile(workDir.resolve("group-probe.xml")); //$NON-NLS-1$
+        String fromCreateFile = Files.readAttributes(probe, PosixFileAttributes.class).group().getName();
+        Path file = workDir.resolve("brand-new-group.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals("a file created out of nothing keeps the group the filesystem gave it", //$NON-NLS-1$
+            fromCreateFile,
+            Files.readAttributes(file, PosixFileAttributes.class).group().getName());
+    }
+
+    /**
+     * Sets {@code file} to some group other than the one a newly created file in the same
+     * directory would already have, so that carrying the group and dropping it produce DIFFERENT
+     * results.
+     * <p>
+     * Every candidate is tried by actually setting it: an account may only change a file's group
+     * to a group it belongs to, and Java has no way to ask which those are. A group that cannot be
+     * set is simply not the one this fixture uses - it is not a failure, and it is the same
+     * refusal the production path swallows.
+     *
+     * @param file the fixture file, which is left owned by the returned group
+     * @return the group, or {@code null} when this account has no second group to use
+     * @throws IOException when the file's own attributes cannot be read
+     */
+    private static GroupPrincipal groupOtherThanTheOneANewFileGets(Path file) throws IOException
+    {
+        String current = Files.readAttributes(file, PosixFileAttributes.class).group().getName();
+        UserPrincipalLookupService lookup = file.getFileSystem().getUserPrincipalLookupService();
+        PosixFileAttributeView view = Files.getFileAttributeView(file, PosixFileAttributeView.class);
+        for (String name : groupNamesOnThisMachine())
+        {
+            if (name.equals(current))
+            {
+                continue;
+            }
+            GroupPrincipal candidate;
+            try
+            {
+                candidate = lookup.lookupPrincipalByGroupName(name);
+            }
+            catch (IOException | RuntimeException e)
+            {
+                continue;
+            }
+            try
+            {
+                view.setGroup(candidate);
+            }
+            catch (IOException | RuntimeException e)
+            {
+                continue;
+            }
+            return candidate;
+        }
+        return null;
+    }
+
+    /**
+     * @return every group name this machine lists, or an empty list when it lists them somewhere
+     *     this test cannot read
+     */
+    private static List<String> groupNamesOnThisMachine()
+    {
+        Path groups = Paths.get("/etc/group"); //$NON-NLS-1$
+        if (!Files.isReadable(groups))
+        {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        try
+        {
+            for (String line : Files.readAllLines(groups, StandardCharsets.UTF_8))
+            {
+                int colon = line.indexOf(':');
+                if (colon > 0)
+                {
+                    names.add(line.substring(0, colon));
+                }
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return List.of();
+        }
+        return names;
+    }
+
     /** Skips a test that has nothing to assert on a filesystem with no POSIX mode. */
     private static void assumePosix()
     {
@@ -1168,6 +1415,89 @@ public class MergeRulesCodecTest
 
         assertEquals("every decision must come back - the bound guards the heap, it does not " //$NON-NLS-1$
             + "truncate a real file", decisions, MergeRulesCodec.read(zip).decisions().size()); //$NON-NLS-1$
+    }
+
+    // ============ Nor may the WALK that chooses an entry run without a bound ============
+
+    @Test
+    public void testAZipWithMoreEntriesThanTheBoundIsRefusedWithoutListingThem() throws Exception
+    {
+        // The third member of the family. The size bound and the depth bound are both spent only
+        // AFTER an entry has been chosen, and choosing one walks the whole directory keeping a
+        // name per entry - so an archive of millions of tiny entries exhausts the heap in that
+        // loop, before a byte is decompressed and before either existing bound is consulted.
+        Path zip = workDir.resolve("swarm.zip"); //$NON-NLS-1$
+        writeZip(zip, entryNames(1025, ".txt")); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.read(zip);
+            fail("an archive past the entry bound must be refused, not walked"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the bound it stopped on: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("more than 1024 entries")); //$NON-NLS-1$
+            assertFalse("and must NOT quote the names - they are exactly what it refused to " //$NON-NLS-1$
+                + "accumulate: " + e.getMessage(), e.getMessage().contains("entry-0000.txt")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testAZipExactlyAtTheEntryBoundIsStillRead() throws Exception
+    {
+        // The control that keeps the bound from being off by one: an archive AT the bound is
+        // inside it, and a real single-settings archive that happens to carry siblings must not
+        // start being refused.
+        Path zip = workDir.resolve("at-the-bound.zip"); //$NON-NLS-1$
+        List<String> names = new ArrayList<>(entryNames(1023, ".txt")); //$NON-NLS-1$
+        names.add("Main_Other_Ancestor.xml"); //$NON-NLS-1$
+        writeZip(zip, names);
+
+        assertEquals(4, MergeRulesCodec.read(zip).decisions().size());
+    }
+
+    @Test
+    public void testTheAmbiguousZipRefusalCountsWhatItDoesNotList() throws Exception
+    {
+        // The same unbounded accumulation moved into the answer: the refusal used to join EVERY
+        // name, so an archive just under the walk bound replied to a one-line question with a
+        // message tens of kilobytes long. What is left out is counted, not dropped in silence.
+        Path zip = workDir.resolve("many-settings.zip"); //$NON-NLS-1$
+        writeZip(zip, entryNames(30, ".xml")); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.read(zip);
+            fail("thirty candidate entries are still ambiguous"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the first names must still be there: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("entry-0000.xml")); //$NON-NLS-1$
+            assertFalse("the twenty-first must not: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("entry-0020.xml")); //$NON-NLS-1$
+            assertTrue("and the remainder must be COUNTED, not silently dropped: " //$NON-NLS-1$
+                + e.getMessage(), e.getMessage().contains("and 10 more")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Names for a synthetic archive, zero-padded so they sort and read the way the refusal prints
+     * them.
+     *
+     * @param count how many
+     * @param extension the extension every name carries
+     * @return the names
+     */
+    private static List<String> entryNames(int count, String extension)
+    {
+        List<String> names = new ArrayList<>(count);
+        for (int i = 0; i < count; i++)
+        {
+            names.add(String.format("entry-%04d%s", Integer.valueOf(i), extension)); //$NON-NLS-1$
+        }
+        return names;
     }
 
 

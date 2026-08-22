@@ -18,10 +18,18 @@ import static org.junit.Assert.fail;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Platform;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
@@ -42,6 +50,14 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry.Compari
 public class ComparisonSessionRegistryTest
 {
     private static final long TTL = 10_000L;
+
+    /**
+     * How many polls the platform-start budget is worth, mirroring the registry's own
+     * {@code PLATFORM_START_BUDGET_MILLIS / PLATFORM_START_POLL_MILLIS}. Only ever used as an
+     * ORDER of magnitude here - the point being pinned is one budget against three, not the
+     * budget's value.
+     */
+    private static final int PLATFORM_START_BUDGET_POLLS = 200;
 
     /** The whole of {@code IComparisonDataSourceDescriptor} is one method, so a fake is honest. */
     private static final class FakeDescriptor
@@ -2042,6 +2058,349 @@ public class ComparisonSessionRegistryTest
         assertTrue(releaser.released.isEmpty());
         assertEquals(0, registry.size());
         assertNull(registry.activeComparisonId());
+    }
+
+    // ==================== The bundle stopping is the LAST call, so it is not an ordinary one ====================
+    //
+    // Everywhere else a launch EDT has accepted but not begun answers NOT_STARTED_YET, the record
+    // is KEPT and the next call retries it. On the way out of the bundle there is no next call, so
+    // that answer stops being a deferral and becomes a silent loss: the record went with the map
+    // and EDT kept the virtual project under an id nothing can name. These pin what replaces it,
+    // and - just as load-bearing - what must NOT replace it.
+
+    /**
+     * The gap between EDT accepting a launch and beginning it is an Eclipse job waiting for a
+     * worker, so a bundle stopped moments after a launch is looking at a comparison that is about
+     * to become perfectly endable. The shutdown gives it the same bounded moment an asked-for
+     * hand-back gives it, and then ends it for real.
+     */
+    @Test
+    public void testTheBundleStoppingGivesAQueuedLaunchTheMomentItNeedsToBegin()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        launchProgress.beginsAfterAsks = 3;
+        String id = registry.register(handle, batch());
+
+        int freed = registry.closeAndReleaseAll();
+
+        assertEquals("a launch that got under way during the wait must be ENDED, not abandoned " //$NON-NLS-1$
+            + "with its virtual project still on EDT", 1, freed); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(id), releaser.released);
+    }
+
+    /** The same run, pinning that the wait happened at all rather than that the answer flipped. */
+    @Test
+    public void testTheBundleStoppingReallyWaitsForALaunchEdtHasNotBegun()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        launchProgress.beginsAfterAsks = 3;
+        registry.register(handle, batch());
+
+        registry.closeAndReleaseAll();
+
+        assertTrue("the shutdown must poll the platform rather than decide on one reading", //$NON-NLS-1$
+            pause.paused > 0);
+    }
+
+    /**
+     * ONE budget over the whole map, not one per session. A shutdown that multiplied its wait by
+     * the number of records it happened to find would hold the workbench up for as long as the
+     * registry is untidy, and the gap being waited on is the same Eclipse queue for all of them.
+     */
+    @Test
+    public void testTheShutdownWaitIsNotMultipliedByTheNumberOfRecords()
+    {
+        ComparisonSessionRegistry registry = registry();
+        launchProgress.begun = Boolean.FALSE;
+        registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+        registry.register(handle("Erp"), batch()); //$NON-NLS-1$
+        registry.register(handle("Retail"), batch()); //$NON-NLS-1$
+
+        registry.closeAndReleaseAll();
+
+        // Three sessions against one budget: a per-session wait would spend three of them, and the
+        // fake pause advances the fake clock so the count IS the budget in poll-sized steps.
+        assertTrue("three records may not cost three waits: " + pause.paused + " pauses", //$NON-NLS-1$ //$NON-NLS-2$
+            pause.paused < 3 * (PLATFORM_START_BUDGET_POLLS - 1));
+    }
+
+    /**
+     * The guard the whole {@code NOT_STARTED_YET} verdict exists for, restated on the one path
+     * that has an excuse to break it. Ending a launch EDT has only scheduled deletes the Eclipse
+     * job whose run gives EDT's own slot back, so EDT reports a comparison as active for the rest
+     * of ITS life - and a bundle stopping is very often a bundle being reinstalled with the same
+     * EDT carrying on. "It is our last chance" is not a reason to do damage that outlives us.
+     */
+    @Test
+    public void testTheBundleStoppingStillRefusesToEndALaunchEdtNeverBegan()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        registry.register(handle, batch());
+
+        int freed = registry.closeAndReleaseAll();
+
+        assertEquals("nothing could be given back", 0, freed); //$NON-NLS-1$
+        assertTrue("and the bundle stopping is not a reason to brick EDT's comparison support", //$NON-NLS-1$
+            releaser.released.isEmpty());
+    }
+
+    /**
+     * What could not be given back is WRITTEN DOWN, because the record goes either way and nothing
+     * will retry it: without a line in the log a leaked virtual project leaves no trace at all.
+     * <p>
+     * Read back out of the plug-in's own {@code ILog} rather than from a message builder, so that
+     * building the sentence and never logging it cannot pass.
+     */
+    @Test
+    public void testAComparisonTheShutdownCouldNotEndIsNamedInTheEdtLog()
+    {
+        Bundle bundle = FrameworkUtil.getBundle(ComparisonSessionRegistry.class);
+        assertNotNull("this case can only observe the log from inside OSGi; without the bundle it " //$NON-NLS-1$
+            + "would 'pass' by seeing nothing at all", bundle); //$NON-NLS-1$
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        List<IStatus> recorded = record(bundle, registry::closeAndReleaseAll);
+
+        assertNotNull("the comparison EDT kept must be named, or it is lost silently: " //$NON-NLS-1$
+            + recorded, noticeAbout(recorded, id));
+    }
+
+    /** By its project, because that is what an operator looks a comparison up by in EDT. */
+    @Test
+    public void testTheStrandedNoticeNamesTheProject()
+    {
+        Bundle bundle = FrameworkUtil.getBundle(ComparisonSessionRegistry.class);
+        assertNotNull(bundle);
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        IStatus about = noticeAbout(record(bundle, registry::closeAndReleaseAll), id);
+
+        assertNotNull(about);
+        assertTrue("the project must be in the line: " + about.getMessage(), //$NON-NLS-1$
+            about.getMessage().contains("Main")); //$NON-NLS-1$
+    }
+
+    /** The consequence is spelled out, not left as a verdict name nobody outside this code knows. */
+    @Test
+    public void testTheStrandedNoticeSaysWhatEdtIsStillHolding()
+    {
+        Bundle bundle = FrameworkUtil.getBundle(ComparisonSessionRegistry.class);
+        assertNotNull(bundle);
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        IStatus about = noticeAbout(record(bundle, registry::closeAndReleaseAll), id);
+
+        assertNotNull(about);
+        assertTrue("the operator must be told what is still allocated: " + about.getMessage(), //$NON-NLS-1$
+            about.getMessage().contains("virtual project")); //$NON-NLS-1$
+    }
+
+    /**
+     * SlotHandback.sentence() is written for a caller that can retry, and for this verdict it says
+     * the record is kept and the request may be repeated. Publishing it here would send an
+     * operator back into a bundle that has stopped, so the shutdown says its own thing.
+     */
+    @Test
+    public void testTheStrandedNoticeDoesNotTellAnybodyToRepeatTheRequest()
+    {
+        Bundle bundle = FrameworkUtil.getBundle(ComparisonSessionRegistry.class);
+        assertNotNull(bundle);
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Main"); //$NON-NLS-1$
+        liveHandles.live = new ArrayList<>(Arrays.asList(handle));
+        launchProgress.begun = Boolean.FALSE;
+        String id = registry.register(handle, batch());
+
+        IStatus about = noticeAbout(record(bundle, registry::closeAndReleaseAll), id);
+
+        assertNotNull(about);
+        assertFalse("there is nothing left to repeat the request into: " + about.getMessage(), //$NON-NLS-1$
+            about.getMessage().contains("repeat the request")); //$NON-NLS-1$
+    }
+
+    /**
+     * Not only the unbegun launch: a hand-back the platform REFUSED strands the comparison just as
+     * completely once the record is cleared, and the shutdown is the one path that clears it
+     * without a retry behind it.
+     */
+    @Test
+    public void testAHandBackThatFailedAtShutdownIsNamedInTheEdtLogToo()
+    {
+        Bundle bundle = FrameworkUtil.getBundle(ComparisonSessionRegistry.class);
+        assertNotNull(bundle);
+        ComparisonSessionRegistry registry = registry();
+        releaser.explode = true;
+        String id = registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+
+        List<IStatus> recorded = record(bundle, registry::closeAndReleaseAll);
+
+        assertTrue("the shutdown's own notice must be there, and not merely the release failure " //$NON-NLS-1$
+            + "the releaser already logs: " + recorded, //$NON-NLS-1$
+            recorded.stream().anyMatch(status -> status.getMessage().contains(id)
+                && status.getMessage().contains("was NOT handed back"))); //$NON-NLS-1$
+    }
+
+    /** A shutdown with nothing to strand says nothing, so the notice stays a signal. */
+    @Test
+    public void testAShutdownThatGaveEverythingBackWritesNoNotice()
+    {
+        Bundle bundle = FrameworkUtil.getBundle(ComparisonSessionRegistry.class);
+        assertNotNull(bundle);
+        ComparisonSessionRegistry registry = registry();
+        String id = registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+
+        List<IStatus> recorded = record(bundle, registry::closeAndReleaseAll);
+
+        assertNull("a comparison that WAS given back may not be reported as stranded: " + recorded, //$NON-NLS-1$
+            noticeAbout(recorded, id));
+    }
+
+    /**
+     * Runs something while the plug-in's own log is listened to.
+     *
+     * @param bundle the plug-in bundle
+     * @param work what to run
+     * @return every status logged while it ran
+     */
+    private static List<IStatus> record(Bundle bundle, Runnable work)
+    {
+        ILog log = Platform.getLog(bundle);
+        List<IStatus> recorded = new ArrayList<>();
+        ILogListener listener = (status, plugin) -> recorded.add(status);
+        log.addLogListener(listener);
+        try
+        {
+            work.run();
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+        return recorded;
+    }
+
+    /**
+     * Matched on the comparison id ALONE, deliberately. Filtering on the notice's own wording as
+     * well would make every one of these cases pass whenever the wording changed - including the
+     * case that exists to reject one particular wording - by finding nothing to assert about.
+     *
+     * @param recorded what was logged
+     * @param comparisonId the id the notice must name
+     * @return the first status naming that comparison, or {@code null} when none does
+     */
+    private static IStatus noticeAbout(List<IStatus> recorded, String comparisonId)
+    {
+        for (IStatus status : recorded)
+        {
+            if (status.getMessage() != null && status.getMessage().contains(comparisonId))
+            {
+                return status;
+            }
+        }
+        return null;
+    }
+
+    // ==================== The id token rests on nothing a machine can wind back ====================
+    //
+    // The token used to be a counter seeded from System.currentTimeMillis(), which held only while
+    // the clock moved forward. A clock corrected backwards - NTP, or by hand - and a virtual
+    // machine resumed from a snapshot both hand the next JVM a seed an earlier one already used,
+    // and then an id kept from a finished job addresses SOMEBODY ELSE'S comparison.
+
+    @Test
+    public void testTwoRegistriesDoNotGetTokensOneApart()
+    {
+        long first = tokenValue(registry().register(handle("Trade"), batch())); //$NON-NLS-1$
+        long second = tokenValue(registry().register(handle("Erp"), batch())); //$NON-NLS-1$
+
+        assertNotEquals("a token one greater than the last one is a counter, and a counter is " //$NON-NLS-1$
+            + "exactly what the wall-clock seed was there to carry across JVMs", 1L, //$NON-NLS-1$
+            second - first);
+    }
+
+    @Test
+    public void testTheIdTokenIsNotDrawnFromTheWallClock()
+    {
+        long before = System.currentTimeMillis();
+        long token = tokenValue(registry().register(handle("Trade"), batch())); //$NON-NLS-1$
+        long after = System.currentTimeMillis();
+
+        // An hour either way, because the seed was taken when this class was LOADED rather than
+        // when the registry was built. A drawn token falls in that window with a probability of
+        // about three in a million, which is a smaller risk than the defect it pins.
+        assertFalse("a token that is the wall clock is a token a clock correction reissues: " //$NON-NLS-1$
+            + token, token >= before - 3_600_000L && token <= after + 3_600_000L);
+    }
+
+    /**
+     * The shape the wire and the guides rely on: {@code tests/e2e/tools/test_compare_configurations.py}
+     * matches ids against {@code cmp-[0-9a-z]+-\d+}, and the examples in the tool guides are
+     * eight-character tokens. A token that rendered signed, or whose length wandered, would break
+     * both while every other test here stayed green.
+     */
+    @Test
+    public void testTheIdKeepsTheShapeTheWireExpects()
+    {
+        String id = registry().register(handle("Trade"), batch()); //$NON-NLS-1$
+
+        assertTrue("the id must stay cmp-<eight base-36 characters>-<counter>: " + id, //$NON-NLS-1$
+            id.matches("cmp-[0-9a-z]{8}-\\d+")); //$NON-NLS-1$
+    }
+
+    /** Within one JVM the tokens are not merely unlikely to repeat - they do not repeat. */
+    @Test
+    public void testNoTwoRegistriesInThisJvmShareAToken()
+    {
+        Set<String> tokens = new HashSet<>();
+        for (int i = 0; i < 64; i++)
+        {
+            tokens.add(tokenOf(registry().register(handle("Trade"), batch()))); //$NON-NLS-1$
+        }
+
+        assertEquals("two registries sharing a token would issue the same ids from their two " //$NON-NLS-1$
+            + "counters", 64, tokens.size()); //$NON-NLS-1$
+    }
+
+    /**
+     * @param comparisonId an id this registry issued
+     * @return its instance token
+     */
+    private static String tokenOf(String comparisonId)
+    {
+        String[] parts = comparisonId.split("-"); //$NON-NLS-1$
+        assertEquals("cmp-<token>-<counter>, or this helper is reading the wrong field: " //$NON-NLS-1$
+            + comparisonId, 3, parts.length);
+        return parts[1];
+    }
+
+    /**
+     * @param comparisonId an id this registry issued
+     * @return its instance token as the number it renders
+     */
+    private static long tokenValue(String comparisonId)
+    {
+        return Long.parseLong(tokenOf(comparisonId), Character.MAX_RADIX);
     }
 
     // ============ "Not yet started" is visible to a poll loop ============

@@ -278,6 +278,74 @@ public class ComparisonTreeReportTest
         assertContains(report, "Why the engine added a qualified name of its own:"); //$NON-NLS-1$
     }
 
+    // The outer limit bounds how many ADDED NAMES are explained; it says nothing about how many
+    // reasons ONE of them carries. The engine records an addition once with a reason per requested
+    // object that pulled it in, so a common dependency of a large request - one module referenced
+    // by a thousand requested objects - is a single bullet a thousand reasons long, and the
+    // report's own limit is undone one level further in than the loop that was fixed above.
+
+    @Test
+    public void testTheReasonsForOneAddedNameAreCutAtTheLimitToo()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        for (int i = 0; i < 5; i++)
+        {
+            scope.extendScope(CATALOG_WAREHOUSES, "referenced by Catalog.Asking" + i, //$NON-NLS-1$
+                ComparisonSide.MAIN);
+        }
+
+        String report = render(new ComparisonTreeReport.Collector(2, true), scope);
+
+        assertContains(report, "referenced by Catalog.Asking0; referenced by Catalog.Asking1"); //$NON-NLS-1$
+        assertFalse("the third reason is past the limit and may not be printed: " + report, //$NON-NLS-1$
+            report.contains("Catalog.Asking2")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the cut is NAMED, for the same reason the list around it names its own: a line that
+     * simply stops reads as the whole of why the engine pulled the name in.
+     */
+    @Test
+    public void testACutListOfReasonsSaysThatItWasCut()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        for (int i = 0; i < 5; i++)
+        {
+            scope.extendScope(CATALOG_WAREHOUSES, "referenced by Catalog.Asking" + i, //$NON-NLS-1$
+                ComparisonSide.MAIN);
+        }
+
+        String report = render(new ComparisonTreeReport.Collector(2, true), scope);
+
+        // One added name, so the notice on the heading above would read "showing 1 of 1" and is
+        // therefore absent: this count can only be the reasons'.
+        assertContains(report, "(showing 2 of 5)"); //$NON-NLS-1$
+    }
+
+    /**
+     * A list of reasons that fits is not a truncated one. Without this, "cut it" could be
+     * satisfied by a notice printed unconditionally, which teaches the caller to raise a limit
+     * that is not binding.
+     */
+    @Test
+    public void testAListOfReasonsThatFitsCarriesNoTruncationNotice()
+    {
+        ComparisonScope scope = new ComparisonScope(Collections.singletonList(CATALOG_GOODS),
+            Collections.singletonList(CATALOG_GOODS), Collections.singletonList(CATALOG_GOODS));
+        scope.extendScope(CATALOG_WAREHOUSES, "referenced by Catalog.AskingA", //$NON-NLS-1$
+            ComparisonSide.MAIN);
+        scope.extendScope(CATALOG_WAREHOUSES, "referenced by Catalog.AskingB", //$NON-NLS-1$
+            ComparisonSide.MAIN);
+
+        String report = render(new ComparisonTreeReport.Collector(50, true), scope);
+
+        assertContains(report, "referenced by Catalog.AskingA; referenced by Catalog.AskingB"); //$NON-NLS-1$
+        assertFalse("nothing was left out, so nothing may claim it was: " + report, //$NON-NLS-1$
+            report.contains("(showing")); //$NON-NLS-1$
+    }
+
     /**
      * @param report the rendered report
      * @param prefix the line prefix to count

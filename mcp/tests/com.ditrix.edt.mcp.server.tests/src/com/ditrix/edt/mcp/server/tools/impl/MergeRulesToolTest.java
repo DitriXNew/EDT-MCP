@@ -873,6 +873,116 @@ public class MergeRulesToolTest
         assertTrue(new EngineRuleAuthority().authority("cmp-1").isEmpty()); //$NON-NLS-1$
     }
 
+    @Test
+    public void testTheFacadeAuthorityStillAnswersNothingWhenTheResolutionAnswersNothing()
+    {
+        // The half that must NOT become a refusal. An absent comparison is a READING, and the
+        // honest write-up of it is NOT VALIDATED - not an error.
+        assertTrue(new EngineRuleAuthority(id -> Optional.empty()).authority(null).isEmpty());
+        assertTrue(new EngineRuleAuthority(id -> Optional.empty()).authority("cmp-1").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheFacadeAuthorityLetsAFailedResolutionReachTheCaller()
+    {
+        // "Nothing answered" and "something was asked and broke" are different facts. This
+        // supplier used to catch RuntimeException and answer empty, which put both through the
+        // one door the caller reads as "there was nothing to check against".
+        EngineRuleAuthority supplier = new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        });
+
+        try
+        {
+            supplier.authority(null);
+            fail("a failed resolution must reach the caller, not degrade to 'no comparison'"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertEquals("the comparison tree could not be polled", e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTheFacadeAuthorityLetsAFailedResolutionReachTheCallerWithAnIdNamedToo()
+    {
+        // Named or not named, the same failure has to arrive the same way: the whole defect was
+        // that the two branches disagreed about it.
+        EngineRuleAuthority supplier = new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        });
+
+        try
+        {
+            supplier.authority("cmp-1"); //$NON-NLS-1$
+            fail("a failed resolution must reach the caller for a named comparison too"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertEquals("the comparison tree could not be polled", e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAResolutionThatFailsWithNoComparisonNamedRefusesAndWritesNothing()
+    {
+        // End to end through the shipped supplier's own class: the caller named no comparison,
+        // one was there to check against, the check broke - and the file must NOT be written up
+        // as NOT VALIDATED, which is a report that nobody had checked it. Nothing was checked and
+        // nothing may be left behind.
+        Path target = file("r.xml"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        }));
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "the running comparison", //$NON-NLS-1$
+            "the comparison tree could not be polled", "neither checked nor"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a check that failed must leave no file behind, least of all one stamped " //$NON-NLS-1$
+            + "NOT VALIDATED", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResolutionThatAnswersNothingStillWritesTheNotValidatedFile()
+    {
+        // The other side of the same split, proved through the same class: an ABSENT comparison
+        // still degrades honestly. A fix that turned every empty answer into a refusal would have
+        // taken the tool's whole no-comparison mode away.
+        Path target = file("degraded.xml"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(new EngineRuleAuthority(id -> Optional.empty()));
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an absent comparison must still author the file: " + result, //$NON-NLS-1$
+            result.contains("NOT VALIDATED")); //$NON-NLS-1$
+        assertTrue("and the file must actually be there", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailedCheckDoesNotTellTheCallerToDropAParameterTheyNeverSent()
+    {
+        // The advice used to end "or omit comparisonId to author the file from names alone". For
+        // the caller who never named one - the branch this refusal only started reaching once the
+        // production supplier stopped swallowing its failures - that is a no-op dressed as a way
+        // out. It is also wrong for the caller who did name one: dropping the id lands on the
+        // same running comparison and fails identically.
+        MergeRulesTool tool = new MergeRulesTool(new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        }));
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Retry once the comparison answers", //$NON-NLS-1$
+            "get_comparison_node", "no comparison answers at all"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The literal, not the constant: what is pinned is the sentence that reaches the caller.
+        assertFalse("the refusal must not offer dropping the parameter as the way out: " + result, //$NON-NLS-1$
+            result.contains("omit comparisonId")); //$NON-NLS-1$
+    }
+
     // ==================== a key chain addresses the node the platform keys the same way ====================
 
     @Test
@@ -1552,6 +1662,66 @@ public class MergeRulesToolTest
 
         assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
         assertTrue(read(target).contains("Key=\"A:NONE:NONE\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnObjectKeyAbsentOnEverySideIsRefused() throws IOException
+    {
+        // 'NONE:NONE:NONE' clears every earlier gate: two separators, and each component names
+        // something - NONE being the platform's own name for "absent here". What it describes is
+        // an object that exists on NO side, and a comparison has no such node, because a node is
+        // what one of the three sides contributed. Recorded, it would match nothing forever.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"path\":[\"commonModules\",\"NONE:NONE:NONE\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "#1", "NONE:NONE:NONE", "all three sides", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "names no object at all"); //$NON-NLS-1$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAKeyAbsentOnEverySideIsRefusedAtTheCollectionLevelToo()
+    {
+        // Asked of EVERY level, like the empty-side check: at the collection level the key is
+        // equally meaningless, and naming what is actually wrong with it beats refusing it as
+        // "an object key where a collection name belongs".
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[\"NONE:NONE:NONE\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "NONE:NONE:NONE", "names no object at all"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAKeyWithOnePresentSideIsStillWritten() throws IOException
+    {
+        // The control that keeps the new rule from swallowing the legitimate case: ONE present
+        // side is all it takes - this is how a deletion on the other two sides is addressed.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"path\":[\"commonModules\",\"NONE:NONE:Gone\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue(read(target).contains("Key=\"NONE:NONE:Gone\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnObjectGenuinelyNamedNoneInLowerCaseIsNotAnAbsence() throws IOException
+    {
+        // The literal is matched exactly, as TopObjectKey.parse matches it. A 1C object may be
+        // called 'none', and refusing that key would refuse a real object over its spelling.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", //$NON-NLS-1$
+            "[{\"path\":[\"commonModules\",\"none:none:none\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue(result, result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue(read(target).contains("Key=\"none:none:none\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
     }
 
     @Test
