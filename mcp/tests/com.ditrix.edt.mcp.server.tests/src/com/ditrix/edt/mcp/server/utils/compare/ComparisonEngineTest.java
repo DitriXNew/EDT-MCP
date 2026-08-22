@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -519,6 +520,40 @@ public class ComparisonEngineTest
 
         ComparisonEngine.uninstall();
         assertFalse(ComparisonEngine.get().isPresent());
+    }
+
+    /**
+     * Taking the facade down does not merely stop NEW work from finding it: the registry it owned
+     * refuses to own anything else from that moment.
+     * <p>
+     * Clearing the singleton is not enough. {@code BackgroundJobs.close()} waits two seconds and
+     * interrupts, and a launch worker stuck in a git revision resolution goes on running with the
+     * OLD engine in hand - so it reaches {@code sessions().register(...)} after the shutdown has
+     * walked the map. That session would sit in a registry nobody sweeps again, and the comparison
+     * it is about to start would hold EDT's single slot until the JVM exits under an id nothing
+     * can name. The refusal belongs to the registry so it cannot be lost to timing.
+     */
+    @Test
+    public void aWorkerThatArrivesAfterUninstallCannotRegisterAComparison()
+    {
+        ComparisonEngine.install(() -> null);
+        ComparisonSessionRegistry sessions = ComparisonEngine.installedSessions();
+        assertNotNull("the installed facade must expose its registry", sessions); //$NON-NLS-1$
+
+        ComparisonEngine.uninstall();
+
+        try
+        {
+            sessions.register(handle("Trade", "Trade-other"), //$NON-NLS-1$ //$NON-NLS-2$
+                new CompareMergeProcessBatch(Collections.emptyList()));
+            fail("a registry whose facade is gone must refuse to own a comparison"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue("the refusal must say nothing was started: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("Nothing was started")); //$NON-NLS-1$
+        }
+        assertEquals(0, sessions.size());
     }
 
     /**

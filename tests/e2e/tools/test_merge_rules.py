@@ -348,6 +348,24 @@ def test_unknown_mode_is_refused_naming_both_modes():
 
 
 @e2e_test(tool="merge_rules", kind="action")
+def test_a_relative_file_path_is_refused_instead_of_landing_in_edts_own_directory():
+    """A relative path is not a smaller absolute one: the server resolves it against the
+    working directory of the EDT PROCESS, which is wherever EDT was started from. That
+    resolution never fails, so the old behaviour was not an error - it was a file created
+    somewhere nobody named, reported as a success.
+
+    Run on the wire because that is where the promise lives: the schema says "Absolute
+    path", and only a live call can show the server keeping it.
+    """
+    r = call("merge_rules", {"mode": "write", "filePath": "rules.xml",
+                             "decisions": [{"path": [], "rule": "DoNotMerge"}]})
+    err = assert_error(r, "a relative filePath")
+    assert_error_quality(err, names=["rules.xml", "filePath"],
+                         suggests=["ABSOLUTE"], ctx="relative filePath")
+    assert_no_diff("a refused write must not touch the project")
+
+
+@e2e_test(tool="merge_rules", kind="action")
 def test_write_needs_decisions():
     target = os.path.join(_workdir(), "rules.xml")
 

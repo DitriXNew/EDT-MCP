@@ -75,6 +75,8 @@ def _job_id(result):
     return match.group(1).strip()
 
 
+
+
 def _cancel(job_id):
     """Stop a launched comparison; tolerate a job that already ended by itself."""
     if not job_id:
@@ -100,14 +102,30 @@ def _finish(job_id):
 
     cancel_job covers the RUNNING case and nothing else: a comparison that finished has
     published its result, so its job is terminal and the owning tool's handler is never
-    invoked. The report the job carries names the comparisonId, and releasing that is what
-    hands the slot back.
+    invoked. Releasing the comparison by id is what hands the slot back then.
+
+    The id is taken from the report row when there is one and from the job's own PROGRESS
+    otherwise, and the second source is the one that matters here: a job that was cancelled
+    publishes no report, so a cleanup that looked only at the report row released NOTHING
+    for exactly the runs where the slot was still taken - and every later comparison test in
+    the shard was then refused by a comparison nobody was using.
     """
     if not job_id:
         return
     _cancel(job_id)
     status = call("get_job_status", {"jobId": job_id, "waitSeconds": 0})
-    _release(_comparison_id(status))
+    _release(_comparison_id(status) or _started_comparison_id(status))
+
+
+def _started_comparison_id(result):
+    """The comparisonId out of a job's progress log, or None.
+
+    The launch publishes "Comparison cmp-N started." the moment the platform has accepted
+    the batch, so this names a comparison that reached EDT even when the job ended without
+    a report.
+    """
+    match = STARTED_LINE.search(getattr(result, "text", "") or "")
+    return match.group(1) if match else None
 
 
 def _await_slot_taken(job_id, rounds=20, seconds=0.5):
@@ -232,6 +250,24 @@ def test_cancel_job_stops_the_comparison_and_frees_the_slot():
     cancelled = _cancel(job_id)
     assert_ok(cancelled, "cancel the comparison")
     assert_contains(cancelled.text, "cancellation:", "cancel_job must report an outcome")
+    if "alreadyTerminal" in (cancelled.text or ""):
+        # The comparison had already FINISHED when the cancellation arrived, so the registry
+        # answered without ever invoking this tool's cancellation handler - documented
+        # behaviour, and the one state in which cancel_job does not apply at all. Read from
+        # cancel_job's OWN answer, so this is an established state and not a guess made out
+        # of a later refusal: a cancel_job that claims to have terminated the work is still
+        # held to the assertion below, which is what makes this branch safe.
+        #
+        # Skipped rather than failed, and the slot is handed back on the way out: leaving it
+        # taken is what turns one unlucky race into every later comparison test refused.
+        status = call("get_job_status", {"jobId": job_id, "waitSeconds": 0})
+        live = _comparison_id(status) or _started_comparison_id(status)
+        _release(live)
+        raise E2ESkip(
+            "the comparison finished before the cancellation reached it, so cancel_job "
+            "answered alreadyTerminal without stopping anything - released %s instead. "
+            "What cancel_job does to a RUNNING comparison is not observable on this run."
+            % live)
 
     second_job = None
     try:

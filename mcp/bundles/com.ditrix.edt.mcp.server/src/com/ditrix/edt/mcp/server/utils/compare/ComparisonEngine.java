@@ -377,12 +377,23 @@ public final class ComparisonEngine
      * {@code EdtServices.dispose()}, and it must run BEFORE the service tracker is closed —
      * releasing a session needs the very service that is about to go away.
      *
+     * <h2>Why the registry is CLOSED and not merely emptied</h2>
+     * Clearing the singleton stops NEW work from finding the facade; it does nothing about work
+     * already in flight. {@code BackgroundJobs.close()} waits two seconds and interrupts, and a
+     * launch worker stuck in a git revision resolution or a project lookup goes on running with
+     * the OLD engine in hand — so it can reach {@code sessions().register(...)} after this method
+     * has walked the map. Emptying alone would leave that session in a registry nobody will sweep
+     * again, and the comparison it is about to start would hold EDT's single slot until the JVM
+     * exits under an id nothing can name. The registry therefore refuses registration from this
+     * point on, and the refusal reaches the worker as a failed launch that started nothing —
+     * an answer rather than a race.
+     *
      * @return how many comparisons were released
      */
     public static int uninstall()
     {
         ComparisonEngine engine = INSTANCE.getAndSet(null);
-        return engine == null ? 0 : engine.sessions.releaseAll();
+        return engine == null ? 0 : engine.sessions.closeAndReleaseAll();
     }
 
     /**

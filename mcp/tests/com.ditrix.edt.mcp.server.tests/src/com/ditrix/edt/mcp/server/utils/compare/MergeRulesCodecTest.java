@@ -16,6 +16,7 @@ import static org.junit.Assert.fail;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -197,7 +198,7 @@ public class MergeRulesCodecTest
         MergeRulesDocument document = MergeRulesDocument.empty();
         document.setMergeRule(List.of("catalogs", TopObjectKey.format(name, name, name)), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
         Path file = workDir.resolve("rules.xml"); //$NON-NLS-1$
-        MergeRulesCodec.write(file, document);
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
 
         List<Decision> decisions = MergeRulesCodec.read(file).decisions();
         assertEquals(1, decisions.size());
@@ -396,7 +397,7 @@ public class MergeRulesCodecTest
     public void testWriteThenReadRoundTripsThroughTheFilesystem() throws Exception
     {
         Path file = workDir.resolve("out.xml"); //$NON-NLS-1$
-        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
         assertEquals(FIXTURE, new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
         assertEquals(4, MergeRulesCodec.read(file).decisions().size());
         assertEquals(file.toString(), MergeRulesCodec.read(file).sourceLabel());
@@ -406,8 +407,8 @@ public class MergeRulesCodecTest
     public void testWriteLeavesNoTemporaryFileBehind() throws Exception
     {
         Path file = workDir.resolve("out.xml"); //$NON-NLS-1$
-        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
-        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
         try (Stream<Path> list = Files.list(workDir))
         {
             assertEquals("the write goes through a temporary that must be moved, not left", //$NON-NLS-1$
@@ -459,7 +460,7 @@ public class MergeRulesCodecTest
 
         try
         {
-            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE));
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
             fail("writing over a non-empty directory must fail"); //$NON-NLS-1$
         }
         catch (IOException expected)
@@ -510,7 +511,7 @@ public class MergeRulesCodecTest
         Files.write(fixedName, "another writer's half-written bytes".getBytes( //$NON-NLS-1$
             StandardCharsets.UTF_8));
 
-        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
 
         assertEquals("the write must still land its own document", FIXTURE, //$NON-NLS-1$
             new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
@@ -568,7 +569,7 @@ public class MergeRulesCodecTest
                     {
                         try
                         {
-                            MergeRulesCodec.write(file, MergeRulesCodec.parse(text));
+                            MergeRulesCodec.write(file, MergeRulesCodec.parse(text), MergeRulesCodec.Target.MAY_BE_REPLACED);
                             landed.incrementAndGet();
                             String onDisk = new String(Files.readAllBytes(file),
                                 StandardCharsets.UTF_8);
@@ -698,7 +699,7 @@ public class MergeRulesCodecTest
 
         MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
         document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
-        MergeRulesCodec.write(link, document);
+        MergeRulesCodec.write(link, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
 
         assertTrue("moving over a link replaces the ENTRY, deleting the link and leaving the file " //$NON-NLS-1$
             + "it named untouched - while the report says the rules were written", //$NON-NLS-1$
@@ -708,13 +709,67 @@ public class MergeRulesCodecTest
                 .contains("Key=\"catalogs\"")); //$NON-NLS-1$
     }
 
+    // ============ MUST_NOT_EXIST reserves the name, it does not merely check it ============
+
+    /**
+     * The whole point of {@link MergeRulesCodec.Target#MUST_NOT_EXIST}: a caller that established
+     * "there is nothing on this path" and then handed the write an unconditional replacing move
+     * established it in one step and acted on it in another, so a second write that arrived in
+     * between had its decisions destroyed by a call whose contract was to refuse exactly that.
+     * <p>
+     * The file that got there first is left EXACTLY as it was - the assertion on the content is
+     * the half that matters, because a refusal that had already replaced the bytes would be no
+     * refusal at all.
+     */
+    @Test
+    public void testAWriteThatMustNotExistRefusesAFileThatGotThereFirst() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, "the other write's decisions".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST);
+            fail("a write that must not replace anything must refuse an occupied path"); //$NON-NLS-1$
+        }
+        catch (FileAlreadyExistsException expected)
+        {
+            // The refusal is the point; what is on disk afterwards is the proof.
+        }
+
+        assertEquals("the file that was there must be untouched", //$NON-NLS-1$
+            "the other write's decisions", //$NON-NLS-1$
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The reservation is consumed by the move, not left beside it: a successful MUST_NOT_EXIST
+     * write leaves the document and nothing else.
+     */
+    @Test
+    public void testAWriteThatMustNotExistLeavesTheDocumentAndNoLitter() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST);
+
+        assertEquals(FIXTURE, new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("the reservation must be consumed by the move, not left behind", //$NON-NLS-1$
+                List.of(target), list.toList());
+        }
+    }
+
     @Test
     public void testWriteStillReplacesAPlainExistingFile() throws Exception
     {
         // The control for the link handling above: an ordinary target must still be replaced.
         Path file = workDir.resolve("plain.xml"); //$NON-NLS-1$
         Files.write(file, "stale".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
-        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE));
+        MergeRulesCodec.write(file, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
         assertEquals(FIXTURE, new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
     }
 
@@ -1060,7 +1115,7 @@ public class MergeRulesCodecTest
             Assume.assumeNoException("this filesystem or account cannot create symbolic links", e); //$NON-NLS-1$
         }
 
-        MergeRulesCodec.write(first, MergeRulesCodec.parse(FIXTURE));
+        MergeRulesCodec.write(first, MergeRulesCodec.parse(FIXTURE), MergeRulesCodec.Target.MAY_BE_REPLACED);
 
         assertTrue("the file the chain names must be the one created", Files.isRegularFile(end)); //$NON-NLS-1$
         assertTrue("the intermediate link may not be replaced by the written file", //$NON-NLS-1$

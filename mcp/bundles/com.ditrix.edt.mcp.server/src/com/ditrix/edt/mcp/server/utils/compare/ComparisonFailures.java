@@ -77,18 +77,46 @@ public final class ComparisonFailures
      * {@code compare_configurations} with {@code releaseComparisonId}. Naming only the first
      * would send the caller of the commoner case at the one action proven not to work.
      *
-     * @param liveComparisonId the id of the comparison holding the slot, or {@code null} when this
-     *     server did not start it (it can be started from the EDT user interface, and then we know
-     *     only that the slot is taken)
+     * <h2>The nameless case names TWO causes, because only one of them has an editor</h2>
+     * When this server has nothing registered and EDT still reports its slot occupied, the
+     * refusal used to assert a cause: a comparison started from EDT's own interface, to be ended
+     * by closing its comparison editor. That is one of two states, and the advice is useless in
+     * the other.
+     * <p>
+     * The other is a STALE FLAG, and it is reachable through this server's own tools. Measured
+     * from {@code ComparisonManager} bytecode (EDT 2026.2, {@code com._1c.g5.v8.dt.compare}
+     * 29.0.0): {@code activeComparisonBatch} - the field {@code hasActiveComparison()} reads - is
+     * cleared in exactly one place, {@code comparisonFinished(batch)}, and the only caller of that
+     * is {@code ComparisonProcessJob.run()}. Ending a comparison cancels that Eclipse job; cancel
+     * it before Eclipse has started it and {@code run()} never executes, so the flag is never
+     * cleared. The session IS discarded, so {@code getHandles} answers empty and nothing here can
+     * name a comparison - and {@code comparisonFinished} is not on {@code IComparisonManager}, so
+     * no code in this bundle can withdraw the flag either. Only restarting EDT clears it.
+     * <p>
+     * So the refusal states what was OBSERVED - EDT reports the slot taken, this server has
+     * nothing registered - and gives the way out for each cause, rather than sending every caller
+     * at a comparison editor that may not exist.
+     *
+     * @param liveComparisonId the id of the comparison holding the slot, or {@code null}/empty
+     *     when this server has none registered - which is TWO states and not one, so the refusal
+     *     names both instead of choosing: a comparison started from EDT's own interface, or a slot
+     *     EDT still flags as taken after a comparison whose background job was cancelled before it
+     *     began
      * @return the refusal
      */
     public static ToolResult alreadyRunning(String liveComparisonId)
     {
         if (liveComparisonId == null || liveComparisonId.isEmpty())
         {
-            return ToolResult.error("EDT is already running a comparison that this server did not " //$NON-NLS-1$
-                + "start - it allows one at a time and a second one is refused rather than queued. " //$NON-NLS-1$
-                + "End the running comparison in EDT (close its comparison editor) and try again."); //$NON-NLS-1$
+            return ToolResult.error("EDT reports its single comparison slot occupied, but no " //$NON-NLS-1$
+                + "comparison started through this server is registered - it allows one at a " //$NON-NLS-1$
+                + "time and a second one is refused rather than queued. That is the whole of " //$NON-NLS-1$
+                + "what was observed, and it has two causes. Either a comparison was started " //$NON-NLS-1$
+                + "from EDT's own interface, in which case closing its comparison editor ends " //$NON-NLS-1$
+                + "it; or EDT is left holding the flag for a comparison whose background job was " //$NON-NLS-1$
+                + "cancelled before it began, in which case there is no comparison and no editor " //$NON-NLS-1$
+                + "to close - EDT's comparison manager offers no way to withdraw the flag, and " //$NON-NLS-1$
+                + "only restarting EDT clears it. Check EDT for an open comparison editor first."); //$NON-NLS-1$
         }
         return ToolResult.error("EDT is already running comparison '" + liveComparisonId //$NON-NLS-1$
             + "' - it allows one at a time and a second one is refused rather than queued. End " //$NON-NLS-1$
@@ -226,6 +254,38 @@ public final class ComparisonFailures
             + "starting and read it again with get_comparison_node; release it with " //$NON-NLS-1$
             + "compare_configurations releaseComparisonId='" + comparisonId //$NON-NLS-1$
             + "' when you no longer want it."); //$NON-NLS-1$
+    }
+
+    /**
+     * Which refusal a comparison-tree read has earned, or {@code null} when the platform's answer
+     * carries a readable tree.
+     *
+     * <h2>Three answers, not two, decided ONCE</h2>
+     * "could not ask", "asked and got nothing" and "asked and got something" send the caller to
+     * three different places, and only the third is a tree. Both tools that read a tree faced the
+     * same fork and one of them still collapsed it with {@code orElse(null)} - so the decision
+     * lives here, with the sentences it selects between, rather than being made twice.
+     * <p>
+     * Generic in what the platform answered with, because the payload is not what it decides on.
+     *
+     * @param <T> what the platform answers with
+     * @param answer what the facade said when asked for the view
+     * @param comparisonId the comparison the caller quoted
+     * @return the refusal, or {@code null} when {@code answer} carries a usable value
+     */
+    public static <T> ToolResult unreadableTree(PlatformAnswer<T> answer, String comparisonId)
+    {
+        if (answer == null || answer.isUnavailable())
+        {
+            // Retryable, and the comparison is untouched: nothing about it was established.
+            return readUnavailable(comparisonId);
+        }
+        if (answer.orElse(null) == null)
+        {
+            // EDT ANSWERED, and its answer was that it no longer knows the handle.
+            return sessionGone(comparisonId);
+        }
+        return null;
     }
 
     /**

@@ -752,16 +752,64 @@ public class CompareConfigurationsToolTest
     public void testASlotTakenByAComparisonThisServerCannotNameIsStillARefusal()
     {
         // The other half of the same question, and the ONLY thing EDT's flag is still asked:
-        // a comparison started from the workbench holds the slot under no id of ours. An empty
-        // id, not null - collapsing it into null would report an occupied workbench as an idle
-        // one and the launch would then fail on the platform's assertion instead of a sentence.
+        // the slot is taken under no id of ours. An empty id, not null - collapsing it into null
+        // would report an occupied workbench as an idle one and the launch would then fail on the
+        // platform's assertion instead of a sentence.
         assertEquals("", CompareConfigurationsTool.resolveActiveComparisonId(null, true)); //$NON-NLS-1$
 
         backend.setActiveComparisonId(""); //$NON-NLS-1$
         String error = errorMessage(tool.execute(request(Map.of())));
 
-        assertContains(error, "did not start"); //$NON-NLS-1$
+        assertContains(error, "refused rather than queued"); //$NON-NLS-1$
         assertEquals(0, backend.starts());
+    }
+
+    /**
+     * The nameless refusal states an OBSERVATION and not a cause.
+     * <p>
+     * It used to say the comparison had been started from EDT's own interface and to send the
+     * caller at its comparison editor. That is one of two states. The other is EDT holding the
+     * flag for a comparison whose background job was cancelled before it began - measured, see
+     * {@code ComparisonFailures.alreadyRunning} - and in that one there is no comparison, no
+     * editor, and nothing this bundle can call to withdraw the flag. A caller who followed the old
+     * advice went looking for a window that does not exist and then retried into the same wall.
+     */
+    @Test
+    public void testTheNamelessRefusalDoesNotAssertACauseItDidNotObserve()
+    {
+        backend.setActiveComparisonId(""); //$NON-NLS-1$
+
+        String error = errorMessage(tool.execute(request(Map.of())));
+
+        assertContains(error, "no comparison started through this server is registered"); //$NON-NLS-1$
+        assertContains(error, "two causes"); //$NON-NLS-1$
+    }
+
+    /** Both ways out are named, because neither one covers the other state. */
+    @Test
+    public void testTheNamelessRefusalNamesTheWayOutOfBothStates()
+    {
+        backend.setActiveComparisonId(""); //$NON-NLS-1$
+
+        String error = errorMessage(tool.execute(request(Map.of())));
+
+        assertContains(error, "closing its comparison editor"); //$NON-NLS-1$
+        assertContains(error, "restarting EDT"); //$NON-NLS-1$
+    }
+
+    /**
+     * And it says why the second way out is the only one there: a caller told merely to restart
+     * EDT reads it as a workaround and looks for a better one. There is none - the flag is not
+     * reachable through the comparison manager's public surface.
+     */
+    @Test
+    public void testTheNamelessRefusalSaysTheFlagCannotBeWithdrawnFromHere()
+    {
+        backend.setActiveComparisonId(""); //$NON-NLS-1$
+
+        String error = errorMessage(tool.execute(request(Map.of())));
+
+        assertContains(error, "no way to withdraw the flag"); //$NON-NLS-1$
     }
 
     @Test

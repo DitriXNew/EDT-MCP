@@ -283,6 +283,49 @@ public class MergeRulesToolTest
         assertErrorNaming(new MergeRulesTool().execute(new HashMap<>()), "mode"); //$NON-NLS-1$
     }
 
+    // ============ filePath / basedOn are ABSOLUTE, as the schema has always said ============
+    //
+    // Paths.get(value).toAbsolutePath() never fails: it resolves against the working directory of
+    // the EDT PROCESS - the install directory, or wherever a launcher started it. So a relative
+    // path produced no error at all. It produced a file somewhere nobody named, and the report
+    // named that as a success.
+
+    @Test
+    public void testAReadOfARelativeFilePathIsRefusedRatherThanResolvedAgainstEdtsOwnDirectory()
+    {
+        String result = call(params("mode", "read", "filePath", "rules.xml")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertErrorNaming(result, "filePath", "ABSOLUTE", "rules.xml"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAWriteToARelativeFilePathIsRefusedBeforeAnythingIsWritten()
+    {
+        String result = call(params("mode", "write", "filePath", "rules.xml", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorNaming(result, "filePath", "ABSOLUTE", "rules.xml"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** The same trap on the other path parameter, and the same fix. */
+    @Test
+    public void testARelativeBasedOnIsRefused()
+    {
+        String result = call(params("mode", "write", "filePath", file("out.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "basedOn", "starting-point.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorNaming(result, "basedOn", "ABSOLUTE", "starting-point.xml"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The refusal has to say WHY a relative path is not merely inconvenient, or the caller reads
+     * it as a style rule and passes one again.
+     */
+    @Test
+    public void testTheRelativePathRefusalNamesWhatItWouldHaveResolvedAgainst()
+    {
+        String result = call(params("mode", "read", "filePath", "rules.xml")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertErrorNaming(result, "working directory of the EDT process"); //$NON-NLS-1$
+    }
+
     @Test
     public void testUnknownModeIsRefusedNamingBothModes()
     {

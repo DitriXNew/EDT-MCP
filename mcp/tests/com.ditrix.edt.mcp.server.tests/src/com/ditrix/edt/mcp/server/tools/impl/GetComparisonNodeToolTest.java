@@ -32,6 +32,7 @@ import com._1c.g5.v8.dt.compare.model.ComparisonSide;
 import com._1c.g5.v8.dt.compare.model.IComparedObjects;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
@@ -508,6 +509,84 @@ public class GetComparisonNodeToolTest
         assertError(result);
         assertTrue("the platform's own words must survive: " + result, //$NON-NLS-1$
             errorMessage(result).contains("comparison store was closed")); //$NON-NLS-1$
+    }
+
+    // ============ "could not ask EDT" is not "EDT no longer knows this comparison" ============
+
+    /**
+     * The two readings have opposite remedies - wait and read the SAME comparison again, or start
+     * a new one - and the port used to fold them together with an {@code orElse(null)} on the
+     * view. The caller was then told their comparison had been ended outside this server because
+     * EDT's comparison service happened to be unregistered for an instant, while the lease was
+     * still held, the nodeIds still resolved and it still held EDT's single slot.
+     */
+    @Test
+    public void testAServiceGapIsReportedAsRetryableAndNotAsALostComparison()
+    {
+        StubSource source = knownSource();
+        source.readFailure = new GetComparisonNodeTool.ComparisonUnreadableException(
+            ComparisonFailures.readUnavailable("cmp-1")); //$NON-NLS-1$
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "42")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertError(result);
+        String message = errorMessage(result);
+        assertTrue("the refusal must say the comparison is still registered: " + message, //$NON-NLS-1$
+            message.contains("still registered")); //$NON-NLS-1$
+        assertFalse("and must NOT claim it was ended outside this server: " + message, //$NON-NLS-1$
+            message.contains("ended outside this server")); //$NON-NLS-1$
+    }
+
+    /** The control: EDT's own answer that it no longer knows the handle keeps saying so. */
+    @Test
+    public void testEdtSayingItNoLongerHoldsTheComparisonIsReportedAsThat()
+    {
+        StubSource source = knownSource();
+        source.readFailure = new GetComparisonNodeTool.ComparisonUnreadableException(
+            ComparisonFailures.sessionGone("cmp-1")); //$NON-NLS-1$
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "42")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertError(result);
+        String message = errorMessage(result);
+        assertTrue("EDT's own answer must be reported as itself: " + message, //$NON-NLS-1$
+            message.contains("ended outside this server")); //$NON-NLS-1$
+    }
+
+    /**
+     * A worded refusal is published as it is. The generic failure branch appends "Check the
+     * comparison is still alive ... or start a new one", which is exactly the wrong advice for the
+     * retryable reading, so it must not be reached.
+     */
+    @Test
+    public void testAWordedRefusalIsNotWrappedInTheGenericFailureSentence()
+    {
+        StubSource source = knownSource();
+        source.readFailure = new GetComparisonNodeTool.ComparisonUnreadableException(
+            ComparisonFailures.readUnavailable("cmp-1")); //$NON-NLS-1$
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "42")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertFalse("the generic wrapper must not be applied: " + result, //$NON-NLS-1$
+            errorMessage(result).contains("Could not expand the comparison node")); //$NON-NLS-1$
+    }
+
+    /**
+     * The decision itself, over the three answers the platform can give. Pinned on the shared
+     * function rather than on either tool: both tools that read a tree now ask it, and it is the
+     * place where "could not ask" stopped being rendered as "no longer there".
+     */
+    @Test
+    public void testTheUnreadableTreeDecisionKeepsTheThreeAnswersApart()
+    {
+        assertNull("an answered, non-null view is a readable tree", //$NON-NLS-1$
+            ComparisonFailures.unreadableTree(PlatformAnswer.of("a tree"), "cmp-1")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an unavailable answer is the retryable refusal", //$NON-NLS-1$
+            ComparisonFailures.unreadableTree(PlatformAnswer.unavailable(), "cmp-1") //$NON-NLS-1$
+                .toJson().contains("still registered")); //$NON-NLS-1$
+        assertTrue("an answered null is EDT saying it no longer holds it", //$NON-NLS-1$
+            ComparisonFailures.unreadableTree(PlatformAnswer.of(null), "cmp-1") //$NON-NLS-1$
+                .toJson().contains("ended outside this server")); //$NON-NLS-1$
     }
 
     @Test

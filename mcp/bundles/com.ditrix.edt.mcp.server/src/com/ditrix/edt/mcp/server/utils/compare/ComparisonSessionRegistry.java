@@ -346,6 +346,8 @@ public final class ComparisonSessionRegistry
     private final Releaser releaser;
     private final LiveHandles liveHandles;
     private final boolean attached;
+    /** Set once by {@link #closeAndReleaseAll()}; from then on nothing may be registered. */
+    private boolean closed;
 
     /**
      * @param clock the millisecond clock (injected so the TTL is testable without sleeping)
@@ -405,6 +407,18 @@ public final class ComparisonSessionRegistry
             throw new IllegalStateException("No comparison facade is installed, so a comparison " //$NON-NLS-1$
                 + "cannot be registered - it would be owned by nobody and would leak its virtual " //$NON-NLS-1$
                 + "project. Check ComparisonEngine.get() before starting one."); //$NON-NLS-1$
+        }
+        if (closed)
+        {
+            // Refused by the registry itself rather than prevented by timing. The bundle's
+            // shutdown releases the sessions it can SEE, and a worker still holding the old
+            // facade - stuck resolving a revision while the executor's two-second grace ran out -
+            // reaches this line afterwards. Its session would be registered in a registry nobody
+            // will sweep again, so the comparison it is about to start would hold EDT's single
+            // slot until the JVM exits with no id able to name it.
+            throw new IllegalStateException("This server's comparison support has been shut " //$NON-NLS-1$
+                + "down, so a comparison cannot be registered - nothing would own it and its " //$NON-NLS-1$
+                + "virtual project would outlive the server. Nothing was started."); //$NON-NLS-1$
         }
         long now = clock.getAsLong();
         String comparisonId = "cmp-" + idGenerator.getAndIncrement(); //$NON-NLS-1$
@@ -609,6 +623,23 @@ public final class ComparisonSessionRegistry
             }
         }
         return reclaimed;
+    }
+
+    /**
+     * Ends everything and refuses to register anything again. Called when the bundle stops, so
+     * that a comparison left open does not outlive the server that started it, and so that a
+     * worker still in flight cannot register one into a registry nobody will sweep again.
+     * <p>
+     * The order is load-bearing: the registry is CLOSED first and emptied afterwards. Emptying
+     * first would leave a window in which a late worker registers a session that this call has
+     * already walked past.
+     *
+     * @return how many sessions were confirmed free
+     */
+    public synchronized int closeAndReleaseAll()
+    {
+        closed = true;
+        return releaseAll();
     }
 
     /**

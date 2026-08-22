@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -274,15 +275,21 @@ public class MergeRulesTool implements IMcpTool
 
     private String read(String filePath, int limit)
     {
-        Path file;
+        Path given;
         try
         {
-            file = Paths.get(filePath).toAbsolutePath().normalize();
+            given = Paths.get(filePath);
         }
         catch (InvalidPathException e)
         {
             return invalidPath(KEY_FILE_PATH, filePath, e);
         }
+        String relative = relativePathRefusal(KEY_FILE_PATH, filePath, given);
+        if (relative != null)
+        {
+            return relative;
+        }
+        Path file = given.toAbsolutePath().normalize();
         if (!Files.isRegularFile(file))
         {
             return ToolResult.error("Merge-rules file not found: " + file //$NON-NLS-1$
@@ -377,15 +384,21 @@ public class MergeRulesTool implements IMcpTool
     private String write(String filePath, String basedOn, String comparisonId, List<JsonObject> rawDecisions,
         int limit)
     {
-        Path file;
+        Path given;
         try
         {
-            file = Paths.get(filePath).toAbsolutePath().normalize();
+            given = Paths.get(filePath);
         }
         catch (InvalidPathException e)
         {
             return invalidPath(KEY_FILE_PATH, filePath, e);
         }
+        String relative = relativePathRefusal(KEY_FILE_PATH, filePath, given);
+        if (relative != null)
+        {
+            return relative;
+        }
+        Path file = given.toAbsolutePath().normalize();
         Path fileName = file.getFileName();
         if (fileName == null)
         {
@@ -411,14 +424,21 @@ public class MergeRulesTool implements IMcpTool
         Path base = null;
         if (isSet(basedOn))
         {
+            Path givenBase;
             try
             {
-                base = Paths.get(basedOn).toAbsolutePath().normalize();
+                givenBase = Paths.get(basedOn);
             }
             catch (InvalidPathException e)
             {
                 return invalidPath(KEY_BASED_ON, basedOn, e);
             }
+            String relativeBase = relativePathRefusal(KEY_BASED_ON, basedOn, givenBase);
+            if (relativeBase != null)
+            {
+                return relativeBase;
+            }
+            base = givenBase.toAbsolutePath().normalize();
             if (!Files.isRegularFile(base))
             {
                 return ToolResult.error(KEY_BASED_ON + " file not found: " + base //$NON-NLS-1$
@@ -429,6 +449,13 @@ public class MergeRulesTool implements IMcpTool
         // named: 'basedOn' one file and writing over ANOTHER discards the target's decisions just
         // as completely as writing over it with a fresh document, and the report would then name
         // only the decisions that were carried in.
+        // Decided HERE, where the guard is, and carried to the write as the write's own
+        // instruction rather than re-derived there. The guard answers WHETHER a replacement is
+        // allowed; the codec is what makes that answer take effect in ONE filesystem step. Split
+        // the two - an exists() check here, an unconditional replacing move there - and two
+        // concurrent writes to a path that started out free both pass this guard and both perform
+        // that move, so the second silently destroys the decisions the first had just recorded.
+        MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -446,6 +473,7 @@ public class MergeRulesTool implements IMcpTool
             {
                 return detached;
             }
+            targetPolicy = MergeRulesCodec.Target.MAY_BE_REPLACED;
         }
 
         MergeRulesDocument document;
@@ -553,7 +581,28 @@ public class MergeRulesTool implements IMcpTool
 
         try
         {
-            MergeRulesCodec.write(file, document);
+            MergeRulesCodec.write(file, document, targetPolicy);
+        }
+        catch (FileAlreadyExistsException e)
+        {
+            if (targetPolicy != MergeRulesCodec.Target.MUST_NOT_EXIST)
+            {
+                // Not the reservation, then, but some other name the write collided with - the
+                // temporary, say. Only the reservation entitles this call to say a rules file
+                // got there first, and describing an unrelated collision that way would name a
+                // cause nobody observed.
+                return ToolResult.error("Could not write the merge-rules file " + file + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                    + describe(e)).toJson();
+            }
+            // The path was free when this call checked it and is not free any more: another write
+            // claimed it in between. Reported as its own refusal rather than as a generic I/O
+            // failure, because it means the same thing the guard above means - a file with
+            // decisions in it would be replaced - and the way out is the same one.
+            return ToolResult.error("Nothing was written: a file appeared at " + file //$NON-NLS-1$
+                + " while this call was preparing its decisions, so writing now would discard " //$NON-NLS-1$
+                + "the decisions it holds. Read it with mode '" + MODE_READ //$NON-NLS-1$
+                + "' and, if you still want to update it, re-send this write with " + KEY_BASED_ON //$NON-NLS-1$
+                + "='" + file + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         catch (IOException e)
         {
@@ -1056,6 +1105,34 @@ public class MergeRulesTool implements IMcpTool
             // write rather than replacing a file whose identity was never established.
             return false;
         }
+    }
+
+    /**
+     * Refuses a path that is not absolute, or {@code null} when it is.
+     * <p>
+     * Asked of the value the caller PASSED, before {@code toAbsolutePath} has had a chance to
+     * make one up. That resolution is against the working directory of the EDT PROCESS - the
+     * install directory, or wherever a launcher happened to start it - and it never fails, so a
+     * relative path does not produce an error: it produces a file somewhere nobody named, which
+     * the report then names as a success. The schema has always said "absolute path"; this is
+     * what makes that a contract rather than a hope.
+     *
+     * @param parameter the parameter name, for the message
+     * @param value the value exactly as the caller passed it
+     * @param path that value parsed
+     * @return the refusal, or {@code null} when the path is absolute
+     */
+    private static String relativePathRefusal(String parameter, String value, Path path)
+    {
+        if (path.isAbsolute())
+        {
+            return null;
+        }
+        return ToolResult.error(parameter + " must be an ABSOLUTE path, but was '" + value //$NON-NLS-1$ //$NON-NLS-2$
+            + "'. A relative path is resolved against the working directory of the EDT process, " //$NON-NLS-1$
+            + "not against your project, so the file would be read from - or written to - " //$NON-NLS-1$
+            + "wherever EDT happens to have been started. Pass the full path, for example " //$NON-NLS-1$
+            + "'C:\\work\\rules.xml' or '/home/user/rules.xml'.").toJson(); //$NON-NLS-1$
     }
 
     private static String invalidPath(String parameter, String value, InvalidPathException e)

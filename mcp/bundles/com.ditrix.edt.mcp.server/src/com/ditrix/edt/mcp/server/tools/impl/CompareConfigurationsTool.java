@@ -1022,20 +1022,11 @@ public class CompareConfigurationsTool implements IMcpTool
      */
     static <T> String unreadableTreeMessage(PlatformAnswer<T> answer, String comparisonId)
     {
-        if (answer.isUnavailable())
-        {
-            // Retryable, and the comparison is untouched: nothing about it was established.
-            return messageOf(ComparisonFailures.readUnavailable(comparisonId));
-        }
-        if (answer.orElse(null) == null)
-        {
-            // EDT ANSWERED, and its answer was that it no longer knows the handle - the comparison
-            // was ended outside this server. Named as itself, because reading on through the null
-            // throws a NullPointerException, and "NullPointerException" is not a fact the caller
-            // can act on while "it was ended outside this server" is.
-            return messageOf(ComparisonFailures.sessionGone(comparisonId));
-        }
-        return null;
+        // The fork itself belongs to the shared vocabulary, not to this tool: get_comparison_node
+        // reads a tree too and reached the same three answers, and the one place the decision was
+        // written twice is the one place it was made wrongly once.
+        ToolResult refusal = ComparisonFailures.unreadableTree(answer, comparisonId);
+        return refusal == null ? null : messageOf(refusal);
     }
 
     /**
@@ -2034,7 +2025,21 @@ public class CompareConfigurationsTool implements IMcpTool
 
             CompareMergeProcessBatch batch = new CompareMergeProcessBatch(
                 new CompareMergeProcessDescriptor(handle, settings));
-            String id = engine.sessions().register(handle, batch);
+            String id;
+            try
+            {
+                id = engine.sessions().register(handle, batch);
+            }
+            catch (IllegalStateException e)
+            {
+                // The bundle was taken down between the facade lookup at the top of start() and
+                // this line, so nothing here can own a comparison any more. Reported as a launch
+                // that did not happen - which it is, because registration comes BEFORE the batch
+                // reaches EDT and nothing has reached it yet.
+                throw new ComparisonException("The comparison was not started: this server's " //$NON-NLS-1$
+                    + "comparison support is shutting down, so nothing here could own it. " //$NON-NLS-1$
+                    + "Nothing reached EDT.", e); //$NON-NLS-1$
+            }
             try
             {
                 engine.start(batch);

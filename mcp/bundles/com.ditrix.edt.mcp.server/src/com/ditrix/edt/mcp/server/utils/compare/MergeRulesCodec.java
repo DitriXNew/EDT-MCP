@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -212,8 +213,39 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Writes a document as UTF-8 xml, creating the parent directories when needed and REPLACING
-     * an existing file.
+     * What the caller has already decided about a file that may be sitting on the target path.
+     *
+     * <h2>Why the decision is an argument and not a check here</h2>
+     * Whether an existing rules file may be replaced is a question about the CALLER'S intent -
+     * {@code merge_rules} allows a replacement only when {@code basedOn} names that same file - and
+     * this codec cannot answer it. What it can do, and what this enum exists for, is make the
+     * decision take effect ATOMICALLY. A caller that answered "there is nothing there" with
+     * {@code Files.exists} and then handed the write a move with {@code REPLACE_EXISTING} answered
+     * it in two steps, and two concurrent writes both passed the first step and both performed the
+     * second: the loser's decisions were destroyed by a call that had promised to refuse exactly
+     * that.
+     *
+     * @see #write(Path, MergeRulesDocument, Target)
+     */
+    public enum Target
+    {
+        /**
+         * The path must be free, and the write CLAIMS it in the same step that tests it - the
+         * create-if-absent the filesystem performs as one indivisible operation. A second writer
+         * that gets there first makes this one fail with {@link FileAlreadyExistsException}
+         * instead of overwriting it.
+         */
+        MUST_NOT_EXIST,
+        /**
+         * The caller has established that whatever is on the path may be replaced - for
+         * {@code merge_rules}, that {@code basedOn} names the very file being written, so the
+         * document being written already carries the decisions that file holds.
+         */
+        MAY_BE_REPLACED
+    }
+
+    /**
+     * Writes a document as UTF-8 xml, creating the parent directories when needed.
      * <p>
      * The bytes land in a sibling temporary file that is then moved over the target, so an
      * update-in-place (reading a file and writing it back) cannot leave a half-written file
@@ -235,24 +267,45 @@ public final class MergeRulesCodec
      * target is therefore resolved first and the bytes land on the file the link names, which is
      * the same file identity the caller's own guard accepted.
      *
+     * <p>
+     * <b>The move itself always replaces</b>, and it has to: it moves the temporary onto the
+     * target. What {@link Target#MUST_NOT_EXIST} adds is a RESERVATION taken before a single byte
+     * is written - {@code Files.createFile}, the create-if-absent the filesystem performs as one
+     * indivisible operation - so the file the move then replaces is this call's own reservation
+     * and never somebody else's rules. A reservation that is not consumed is removed again, so a
+     * failed write leaves the path as free as it found it.
+     *
      * @param file the target file
      * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @throws FileAlreadyExistsException when {@code target} is {@link Target#MUST_NOT_EXIST} and
+     *     something is already on the path
      * @throws IOException when the file cannot be written
      */
-    public static void write(Path file, MergeRulesDocument document) throws IOException
+    public static void write(Path file, MergeRulesDocument document, Target target)
+        throws IOException
     {
-        Path target = followSymbolicLink(file.toAbsolutePath());
-        Path parent = target.getParent();
+        Path resolved = followSymbolicLink(file.toAbsolutePath());
+        Path parent = resolved.getParent();
         if (parent == null)
         {
             throw new IOException("Cannot write merge rules to '" + file //$NON-NLS-1$
                 + "': it names a filesystem root, not a file."); //$NON-NLS-1$
         }
         Files.createDirectories(parent);
+        // Taken BEFORE the bytes are produced, so there is no window between "the path is free"
+        // and "the path is mine". Files.createFile either claims the name or fails; it cannot
+        // report a claim it did not make, which is the whole difference from an exists() check.
+        boolean reserved = false;
+        if (target == Target.MUST_NOT_EXIST)
+        {
+            Files.createFile(resolved);
+            reserved = true;
+        }
         // Created in the TARGET's directory, never in the system temp area: the move over the
         // target has to stay within one filesystem to be atomic. The name carries the target's
         // own name so a leftover is traceable to the write that left it.
-        Path temporary = Files.createTempFile(parent, target.getFileName().toString() + '.',
+        Path temporary = Files.createTempFile(parent, resolved.getFileName().toString() + '.',
             ".tmp"); //$NON-NLS-1$
         // The temporary lives in the CALLER's directory, so a failure that leaves it behind leaves
         // litter in a place the caller owns. Every failing exit removes it; the successful one does
@@ -262,25 +315,44 @@ public final class MergeRulesCodec
             Files.write(temporary, serialize(document).getBytes(StandardCharsets.UTF_8));
             try
             {
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING,
+                Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
             }
             catch (AtomicMoveNotSupportedException e)
             {
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING);
             }
         }
         catch (IOException | RuntimeException e)
         {
-            try
+            cleanUp(temporary, e);
+            if (reserved)
             {
-                Files.deleteIfExists(temporary);
-            }
-            catch (IOException suppressed)
-            {
-                e.addSuppressed(suppressed);
+                // The empty reservation is this call's own litter: the path was free when the call
+                // started and nothing was written onto it, so leaving a zero-byte file behind
+                // would make the next attempt refuse a path nobody is using.
+                cleanUp(resolved, e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Removes one file this write created, attaching a removal failure to the failure on its way
+     * out rather than replacing it.
+     *
+     * @param file the file to remove
+     * @param failure the failure being reported
+     */
+    private static void cleanUp(Path file, Exception failure)
+    {
+        try
+        {
+            Files.deleteIfExists(file);
+        }
+        catch (IOException suppressed)
+        {
+            failure.addSuppressed(suppressed);
         }
     }
 

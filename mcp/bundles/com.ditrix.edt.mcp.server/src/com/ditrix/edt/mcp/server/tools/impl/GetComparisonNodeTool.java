@@ -350,6 +350,13 @@ public class GetComparisonNodeTool implements IMcpTool
                 + (objectFqn != null ? objectFqn : String.valueOf(explicitNodeId))
                 + "' to finish comparing.").toJson(); //$NON-NLS-1$
         }
+        catch (ComparisonUnreadableException e)
+        {
+            // Already worded, and returned as it is: this is the platform's own answer about the
+            // comparison, not a failure of this tool, so it is neither logged as one nor given
+            // the generic branch's advice.
+            return e.errorJson();
+        }
         catch (RuntimeException e)
         {
             Activator.logError("get_comparison_node failed", e); //$NON-NLS-1$
@@ -852,7 +859,11 @@ public class GetComparisonNodeTool implements IMcpTool
             try (ComparisonSessionRegistry.Lease lease =
                 ComparisonSessionRegistry.shared().lease(comparisonId))
             {
-                ComparisonView view = viewOf(engine, lease);
+                // A prioritisation is a HINT and its absence costs the caller nothing but a
+                // slower expansion, so the two answers are collapsed here on purpose: neither
+                // one is reported and no verdict is drawn from the difference. The read below
+                // is where the difference matters and where it is kept.
+                ComparisonView view = viewOf(engine, lease).orElse(null);
                 if (engine != null && view != null)
                 {
                     engine.prioritize(view, nodeIds);
@@ -874,12 +885,30 @@ public class GetComparisonNodeTool implements IMcpTool
             try (ComparisonSessionRegistry.Lease lease =
                 ComparisonSessionRegistry.shared().lease(comparisonId))
             {
-                ComparisonView view = viewOf(engine, lease);
-                if (view == null)
+                if (!lease.held())
                 {
-                    throw new IllegalStateException(
-                        "comparison '" + comparisonId + "' is no longer registered"); //$NON-NLS-1$ //$NON-NLS-2$
+                    // THIS server no longer holds the comparison - released, or reclaimed by the
+                    // idle sweep between isKnown() and this lease. Said as itself, because it is
+                    // not a statement about EDT at all: nothing was asked of the platform, so
+                    // neither "the service could not be asked" nor "EDT ended it outside this
+                    // server" is a fact this branch is entitled to.
+                    throw new ComparisonUnreadableException(ToolResult.error("Comparison '" //$NON-NLS-1$
+                        + comparisonId + "' is no longer registered here - it was released, or " //$NON-NLS-1$
+                        + "reclaimed after sitting idle. Start a new one with " //$NON-NLS-1$
+                        + "compare_configurations."));  //$NON-NLS-1$
                 }
+                PlatformAnswer<ComparisonView> answer = viewOf(engine, lease);
+                // Three answers and one decision, shared with the other tool that reads a tree:
+                // "could not ask" is a fact about this server's reach and is RETRYABLE with the
+                // lease still held and the nodeIds still resolving, while "EDT no longer knows
+                // this handle" is a fact about the comparison. This site used to report the
+                // second when the first happened.
+                ToolResult refusal = ComparisonFailures.unreadableTree(answer, comparisonId);
+                if (refusal != null)
+                {
+                    throw new ComparisonUnreadableException(refusal);
+                }
+                ComparisonView view = answer.orElse(null);
                 // The comparison's OWN read boundary - the tree is in its private BM store.
                 return engine.read(view, "Read comparison node", (transaction, monitor) -> { //$NON-NLS-1$
                     // The boundary's own transaction is NOT handed to the context: the factory
@@ -892,26 +921,71 @@ public class GetComparisonNodeTool implements IMcpTool
         }
 
         /**
-         * The read view for a leased comparison, or {@code null}.
+         * The read view for a leased comparison, as the platform's own answer.
          *
          * <p>The handle comes from the LEASE rather than from a second lookup: the registry is
          * reached through its own {@code shared()} entry point - {@code ComparisonEngine.get()}
          * also reports "unavailable" while EDT's service is momentarily unregistered, and
          * answering "no such comparison" during such a gap would name the wrong fact - and asking
          * the liveness question twice can produce two answers that disagree.</p>
+         *
+         * <p>It answers a {@link PlatformAnswer} and not a nullable view because the caller has
+         * to tell the platform's two answers apart. An {@code orElse(null)} here folded "EDT's
+         * comparison service could not be asked just now" into "EDT no longer knows this
+         * comparison", and the caller then told somebody their comparison had been ended outside
+         * this server while the lease on it was still open, its nodeIds still resolved and it
+         * still held EDT's single slot.</p>
          */
-        private static ComparisonView viewOf(ComparisonEngine engine,
+        private static PlatformAnswer<ComparisonView> viewOf(ComparisonEngine engine,
             ComparisonSessionRegistry.Lease lease)
         {
             ComparisonProcessHandle handle = lease.handle();
             if (engine == null || handle == null)
             {
-                return null;
+                // An ANSWERED absence, and answered by THIS server rather than by EDT: the lease
+                // holds nothing, so there is no handle to ask EDT about and no question was put
+                // to it. Not "unavailable" - that would claim the platform was out of reach.
+                return PlatformAnswer.of(null);
             }
-            // orElse(null) folds "EDT could not be asked" into "no view", and that is safe HERE
-            // only because the caller's next step is an IllegalStateException naming the
-            // comparison, not a claim about EDT: no verdict is drawn from the difference.
-            return engine.view(handle).orElse(null);
+            return engine.view(handle);
+        }
+    }
+
+    /**
+     * A refusal about the comparison itself, worded where the platform answered and published
+     * verbatim by {@link #execute(Map)}.
+     *
+     * <h2>Why the port throws a worded refusal rather than a bare failure</h2>
+     * "EDT could not be asked for this comparison" and "EDT no longer knows this comparison" are
+     * two facts with opposite remedies - wait and read the same comparison again, or start a new
+     * one - and the port is the only place that can still tell them apart, because only there is
+     * the platform's answer still an answer rather than a {@code null}. Carrying the refusal out
+     * ready-made is what stops the difference being lost on the way to the caller, and it also
+     * keeps these two out of the generic failure branch, whose advice ("start a new one") is
+     * wrong for the retryable one.
+     */
+    static final class ComparisonUnreadableException
+        extends IllegalStateException
+    {
+        private static final long serialVersionUID = 1L;
+
+        private final String errorJson;
+
+        /**
+         * @param refusal the shared refusal for what the platform said
+         */
+        ComparisonUnreadableException(ToolResult refusal)
+        {
+            super(refusal.toJson());
+            this.errorJson = getMessage();
+        }
+
+        /**
+         * @return the refusal as the error JSON the caller receives
+         */
+        String errorJson()
+        {
+            return errorJson;
         }
     }
 

@@ -150,6 +150,18 @@ A cancellation that arrives while the launch is still being handed to EDT is hon
 too: it waits for the comparison to exist and then stops it, rather than reporting a stop
 that did not happen.
 
+**A cancellation in the first moments after a launch can leave EDT's slot marked taken,
+and nothing here can clear it.** EDT ends a comparison by cancelling the background job
+that runs it, and that job is the only thing that reports the comparison finished. Cancel
+before Eclipse has started the job and it never runs, so EDT goes on believing a
+comparison is active while holding no session for one. The comparison really is gone —
+the temporary workspace is released and the `nodeId`s stop resolving — but every later
+launch in that workbench is refused, and the refusal says so: this server has nothing
+registered, EDT reports its slot occupied, and only restarting EDT clears it. The
+comparison manager has no public way to withdraw the flag. Leave a moment between the
+launch and the cancellation and the job runs, reports itself finished, and the slot goes
+back normally.
+
 ## Examples
 
 Compare the working tree against a branch, using their merge base as the ancestor:

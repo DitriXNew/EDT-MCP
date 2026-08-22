@@ -275,6 +275,48 @@ public class ComparisonSessionRegistryTest
         assertTrue(registry.find(second).isPresent());
     }
 
+    // ============ A shut-down registry owns nothing and may not be given anything ============
+
+    /**
+     * Shutting the bundle down releases the sessions it can SEE; a launch worker still in flight -
+     * stuck resolving a revision while the executor's grace ran out - reaches register() after
+     * that walk. Its session would land in a registry nobody sweeps again, so the comparison it is
+     * about to start would hold EDT's single slot until the JVM exits under an id nothing can
+     * name. The refusal is the registry's own, so it cannot be lost to timing.
+     */
+    @Test
+    public void registeringIsRefusedOnceTheRegistryHasBeenShutDown()
+    {
+        ComparisonSessionRegistry registry = registry();
+        registry.closeAndReleaseAll();
+
+        try
+        {
+            registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+            fail("a shut-down registry must refuse to own a comparison"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue("the refusal must say nothing was started", //$NON-NLS-1$
+                expected.getMessage().contains("Nothing was started")); //$NON-NLS-1$
+        }
+        assertEquals(0, registry.size());
+    }
+
+    /** Shutting down still releases what was there: closing is added to releaseAll, not instead. */
+    @Test
+    public void shuttingDownReleasesEverySessionItHolds()
+    {
+        ComparisonSessionRegistry registry = registry();
+        String first = registry.register(handle("Trade"), batch()); //$NON-NLS-1$
+        String second = registry.register(handle("Erp"), batch()); //$NON-NLS-1$
+
+        assertEquals(2, registry.closeAndReleaseAll());
+
+        assertEquals(Arrays.asList(first, second), releaser.released);
+        assertEquals(0, registry.size());
+    }
+
     @Test
     public void releasingAnUnknownIdReleasesNothing()
     {
