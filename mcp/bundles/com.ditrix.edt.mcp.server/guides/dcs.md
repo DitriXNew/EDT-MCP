@@ -130,8 +130,12 @@ same kind inside a named variant, address that variant's `settings` subtree expl
 | `get` | Read a root summary, collection page, or full node | Must be absent | Must be absent; the current `hash` is returned | Implemented |
 | `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target; omitted members stay unchanged | Required | Required for every index-addressed target | Schema, settings, and dynamic lists |
 | `update` | Modify an existing node only; never create | Required | Required for every index-addressed target | Schema, settings, and dynamic lists |
-| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required | Always required | Schema, settings, and dynamic lists |
-| `remove` | Remove exactly one fragment-addressed node | Must be absent | Always required | Schema, settings, and dynamic lists |
+| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required | Always required | Schema and settings, a dynamic list below `#/listSettings` |
+| `remove` | Remove exactly one fragment-addressed node | Must be absent | Always required | Schema and settings, a dynamic list below `#/listSettings` |
+
+`replace` and `remove` act on the settings layer. On a dynamic list that means an address below
+`#/listSettings`; the list's own scalars, fields, calculated fields and parameters take `upsert` or
+`update`, and asking them for `replace` is refused rather than quietly treated as an update.
 
 An empty array is a no-op in `upsert` and clears that collection in `replace`. `update`
 rejects schema-layer root/collection targets where no single existing node is selected;

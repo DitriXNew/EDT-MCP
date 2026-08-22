@@ -58,12 +58,29 @@ public final class DcsDynamicListWriter
     /** Pure/model-read planning; the returned plan is the only mutating object. */
     public static synchronized Result plan(DynamicListExtInfo current, String action, String type,
         DcsAddress address, JsonObject body, DcsWriter.TypeResolver typeResolver,
-        DcsPresentationParser.LanguageContext languages)
+        DcsPresentationParser.LanguageContext languages, Version version)
     {
-        if (!ACTION_UPSERT.equals(action) && !ACTION_UPDATE.equals(action))
+        // replace and remove are implemented by the SHARED settings writer, which a dynamic list's
+        // listSettings uses unchanged - so they belong on the settings types addressed below
+        // '#/listSettings', exactly as the tool guide advertises. Refusing them wholesale here made
+        // the guide a promise the tool did not keep, and nothing caught it.
+        //
+        // The dynamic-list-specific types stay on upsert/update: the ext-info scalars and the list's
+        // own fields / calculated fields / parameters have no authoritative-replacement semantics of
+        // their own, and accepting action='replace' there would silently behave like an update.
+        boolean settingsType = DcsSettingsWriter.supports(type);
+        if (!ACTION_UPSERT.equals(action) && !ACTION_UPDATE.equals(action) && !settingsType)
         {
-            return Result.failure("Dynamic-list authoring supports action='upsert' or 'update'; got '" //$NON-NLS-1$
-                + action + "'. Use one of those actions."); //$NON-NLS-1$
+            return Result.failure("Dynamic-list type '" + type + "' supports action='upsert' or " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'update'; got '" + action + "'. action='replace' and action='remove' are " //$NON-NLS-1$ //$NON-NLS-2$
+                + "available on the settings types addressed below '#/listSettings'."); //$NON-NLS-1$
+        }
+        if (current == null && settingsType
+            && !ACTION_UPSERT.equals(action) && !ACTION_UPDATE.equals(action))
+        {
+            return Result.failure("action='" + action + "' needs an existing dynamic list, but this " //$NON-NLS-1$ //$NON-NLS-2$
+                + "form attribute is still a plain attribute. Create the list first with " //$NON-NLS-1$
+                + "action='upsert' and type='dynamicList'."); //$NON-NLS-1$
         }
         if (current == null)
         {
@@ -109,8 +126,11 @@ public final class DcsDynamicListWriter
         }
         else if (DcsSettingsWriter.supports(type))
         {
+            // The project's REAL platform version, not Version.LATEST: conditional-appearance
+            // parameter keys are validated against the version's parameter list, so defaulting
+            // would accept a key the project's platform does not have.
             DcsSettingsWriter.SettingsResult settings = DcsSettingsWriter.planDynamicList(
-                current.getListSettings(), action, type, address, body, languages);
+                current.getListSettings(), action, type, address, body, languages, version);
             return settings.isSuccess()
                 ? Result.success(Plan.settingsOnly(settings.settings(), settings.touched()))
                 : Result.failure(settings.error());

@@ -1662,7 +1662,27 @@ public final class DcsSettingsWriter
         SelectedItem item = items.get(selected);
         if (path.size() == 2)
         {
-            return applySelectedItem(item, body, languages, where + "/items/" + path.get(1)); //$NON-NLS-1$
+            String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+            if (ACTION_REPLACE.equals(action))
+            {
+                // Authoritative replacement resets omitted values and clears omitted collections,
+                // so the item is REBUILT from the body instead of being patched over the existing
+                // one. Patching let a title, a use flag or a nested group's items survive a
+                // replace that never mentioned them - an update wearing a replace label.
+                SelectedItem fresh = newSelectedItem(body, at);
+                if (fresh == null)
+                {
+                    return selectedKindError;
+                }
+                String rebuilt = applySelectedItem(fresh, body, languages, at);
+                if (rebuilt != null)
+                {
+                    return rebuilt;
+                }
+                items.set(selected, fresh);
+                return null;
+            }
+            return applySelectedItem(item, body, languages, at);
         }
         if (!(item instanceof DataCompositionSelectedFieldGroup))
         {
@@ -1719,28 +1739,10 @@ public final class DcsSettingsWriter
             return "action='update' needs an exact selection item index at '" + path //$NON-NLS-1$
                 + "'. Copy the item address from get; use upsert to append a new item."; //$NON-NLS-1$
         }
-        String kind = optionalString(body, KEY_KIND, path);
-        if (stringError != null)
+        SelectedItem item = newSelectedItem(body, path);
+        if (item == null)
         {
-            return stringError;
-        }
-        SelectedItem item;
-        if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
-        {
-            item = DcsFactory.eINSTANCE.createDataCompositionSelectedFieldGroup();
-        }
-        else if ("auto".equalsIgnoreCase(kind)) //$NON-NLS-1$
-        {
-            item = DcsFactory.eINSTANCE.createDataCompositionAutoSelectedField();
-        }
-        else if (kind == null || "field".equalsIgnoreCase(kind)) //$NON-NLS-1$
-        {
-            item = DcsFactory.eINSTANCE.createDataCompositionSelectedField();
-        }
-        else
-        {
-            return "Selection kind '" + kind //$NON-NLS-1$
-                + "' is invalid. Use one of: field, group, auto."; //$NON-NLS-1$
+            return selectedKindError;
         }
         String error = applySelectedItem(item, body, languages, path);
         if (error == null)
@@ -1748,6 +1750,37 @@ public final class DcsSettingsWriter
             items.add(item);
         }
         return error;
+    }
+
+    /**
+     * A fresh selection item of the kind the body names, or {@code null} with
+     * {@link #selectedKindError} set. Shared by append and by an authoritative replace so both
+     * build the same shapes from the same kind vocabulary.
+     */
+    private static SelectedItem newSelectedItem(JsonObject body, String path)
+    {
+        selectedKindError = null;
+        String kind = optionalString(body, KEY_KIND, path);
+        if (stringError != null)
+        {
+            selectedKindError = stringError;
+            return null;
+        }
+        if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionSelectedFieldGroup();
+        }
+        if ("auto".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionAutoSelectedField();
+        }
+        if (kind == null || "field".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionSelectedField();
+        }
+        selectedKindError = "Selection kind '" + kind //$NON-NLS-1$
+            + "' is invalid. Use one of: field, group, auto."; //$NON-NLS-1$
+        return null;
     }
 
     private static String applySelectedItem(SelectedItem item, JsonObject body,
@@ -3639,6 +3672,7 @@ public final class DcsSettingsWriter
     private static String objectError;
     private static String arrayError;
     private static String arrayObjectError;
+    private static String selectedKindError;
     private static String stringError;
     private static String booleanError;
     private static String indexError;

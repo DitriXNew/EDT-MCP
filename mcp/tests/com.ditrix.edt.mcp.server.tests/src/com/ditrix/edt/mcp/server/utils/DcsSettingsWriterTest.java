@@ -32,6 +32,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -59,7 +60,7 @@ public class DcsSettingsWriterTest
         dynamicBody.add("listSettings", settingsBody.deepCopy()); //$NON-NLS-1$
         DcsDynamicListWriter.Result dynamic = DcsDynamicListWriter.plan(null, "upsert", //$NON-NLS-1$
             "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
-            dynamicBody, null, LANGUAGES);
+            dynamicBody, null, LANGUAGES, Version.LATEST);
         assertTrue(dynamic.error(), dynamic.isSuccess());
 
         assertEquals("both owner adapters must produce the same typed settings tree", //$NON-NLS-1$
@@ -190,14 +191,14 @@ public class DcsSettingsWriterTest
         DynamicListExtInfo current = FormFactory.eINSTANCE.createDynamicListExtInfo();
         DcsDynamicListWriter.Result missing = DcsDynamicListWriter.plan(current, "update", //$NON-NLS-1$
             "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
-            json("{\"fields\":[{\"dataPath\":\"NewField\"}]}"), null, LANGUAGES); //$NON-NLS-1$
+            json("{\"fields\":[{\"dataPath\":\"NewField\"}]}"), null, LANGUAGES, Version.LATEST); //$NON-NLS-1$
         assertFalse(missing.isSuccess());
         assertTrue(missing.error().contains("NewField")); //$NON-NLS-1$
         assertTrue(missing.error().contains("action='upsert'")); //$NON-NLS-1$
 
         DcsDynamicListWriter.Result clear = DcsDynamicListWriter.plan(current, "update", //$NON-NLS-1$
             "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
-            json("{\"queryText\":\"\"}"), null, LANGUAGES); //$NON-NLS-1$
+            json("{\"queryText\":\"\"}"), null, LANGUAGES, Version.LATEST); //$NON-NLS-1$
         assertTrue(clear.error(), clear.isSuccess());
         assertEquals("", clear.plan().queryText()); //$NON-NLS-1$
     }
@@ -230,6 +231,61 @@ public class DcsSettingsWriterTest
         assertTrue(result.error(), result.isSuccess());
         result.plan().commit(schema);
         return schema;
+    }
+
+    @Test
+    public void testDynamicListReplaceReachesTheSettingsLayerButNotTheListsOwnTypes()
+    {
+        // The tool guide advertises replace/remove for dynamic lists, and the SHARED settings
+        // writer implements them - but the dynamic-list planner used to refuse every action except
+        // upsert/update, so the guide promised what the tool rejected and no test noticed. Settings
+        // types below '#/listSettings' now go through; the list's OWN types stay on upsert/update,
+        // because they have no authoritative-replacement semantics and accepting 'replace' there
+        // would just be an update wearing the wrong label.
+        DynamicListExtInfo current = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        current.setListSettings(plan(settingsBody()));
+
+        DcsDynamicListWriter.Result settings = DcsDynamicListWriter.plan(current, "replace", //$NON-NLS-1$
+            "selection", //$NON-NLS-1$
+            address("Catalog.Products.Form.ListForm.Attribute.List#/listSettings/selection"), //$NON-NLS-1$
+            json("{\"items\":[]}"), null, LANGUAGES, Version.LATEST); //$NON-NLS-1$
+        assertTrue(settings.error(), settings.isSuccess());
+
+        DcsDynamicListWriter.Result own = DcsDynamicListWriter.plan(current, "replace", //$NON-NLS-1$
+            "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"queryText\":\"SELECT 1\"}"), null, LANGUAGES, Version.LATEST); //$NON-NLS-1$
+        assertFalse(own.isSuccess());
+        assertTrue(own.error(), own.error().contains("#/listSettings")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplaceOnAnIndexedSelectionItemResetsOmittedProperties()
+    {
+        // replace is documented as authoritative - omitted values reset, omitted collections clear.
+        // The indexed path applied the body OVER the existing item instead of rebuilding it, so a
+        // title the replace never mentioned survived it. That is an update, not a replacement.
+        DataCompositionSettings settings = plan(json("{\"selection\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}," //$NON-NLS-1$
+            + "\"title\":{\"EN\":\"Buyer\"},\"use\":true}]}}")); //$NON-NLS-1$
+        DataCompositionSelectedField before =
+            (DataCompositionSelectedField)settings.getSelection().getItems().get(0);
+        assertTrue("the fixture must start with a title to lose", //$NON-NLS-1$
+            before.getTitle() != null && before.getTitle().getLocalValue() != null
+                && !before.getTitle().getLocalValue().getContent().isEmpty());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planDynamicList(settings,
+            "replace", "selection", //$NON-NLS-1$ //$NON-NLS-2$
+            address("Catalog.Products.Form.ListForm.Attribute.List" //$NON-NLS-1$
+                + "#/listSettings/selection/items/0"), //$NON-NLS-1$
+            json("{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}"), //$NON-NLS-1$
+            LANGUAGES, Version.LATEST);
+        assertTrue(replaced.error(), replaced.isSuccess());
+
+        DataCompositionSelectedField after =
+            (DataCompositionSelectedField)replaced.settings().getSelection().getItems().get(0);
+        assertTrue("a replace that omitted title must not keep the old one", //$NON-NLS-1$
+            after.getTitle() == null || after.getTitle().getLocalValue() == null
+                || after.getTitle().getLocalValue().getContent().isEmpty());
     }
 
     private static DataCompositionSettings plan(JsonObject body)

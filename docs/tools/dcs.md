@@ -59,8 +59,8 @@ FQN explicitly points inside a variant.
 | `get` | Read a summary, collection page, or full node | absent | absent; returns current hash | implemented |
 | `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target | required | required for index-addressed targets | schema, settings, dynamic lists |
 | `update` | Update an existing node only | required | required for index-addressed targets | schema, settings, dynamic lists |
-| `replace` | Authoritative replacement | required | always required | not implemented |
-| `remove` | Remove one fragment-addressed node | absent | always required | not implemented |
+| `replace` | Authoritative replacement; omitted values reset and omitted collections clear | required | always required | schema and settings, a dynamic list below `#/listSettings` |
+| `remove` | Remove one fragment-addressed node | absent | always required | schema and settings, a dynamic list below `#/listSettings` |
 
 The complete per-type mutation body shapes are returned by `get_tool_guide('dcs')`.
 The schema layer authors data sources, query data sets and their fields, parameters,
@@ -68,9 +68,18 @@ calculated fields, and total fields. The shared settings layer authors variants,
 groupings, selection, filter groups/items, order, data parameters, output parameters, and
 holder scaffolding for both schemas and dynamic lists. Dynamic lists also author ext-info
 scalars and reuse the schema item writers for fields, calculated fields, and parameters.
-Conditional-appearance rules remain read-only, while an empty holder may carry the same
-view-mode and user-setting scaffolding.
-`replace` and `remove` are rejected without changing the model.
+Conditional-appearance rules are authorable too: their `appearance` keys are validated
+against the platform parameter list for the project version, and an unknown key is refused
+with the valid keys listed. An empty holder may carry the same view-mode and user-setting
+scaffolding.
+
+`replace` and `remove` are implemented on the settings layer, which on a dynamic list means
+an address below `#/listSettings`; the list's own scalars, fields, calculated fields and
+parameters take `upsert` or `update`. Both refuse rather than cascade. `replace` refuses a
+target that still holds content this writer cannot reproduce - a chart, a nested schema, an
+area template - naming the node instead of dropping it on write-back. `remove` and
+identity-changing updates refuse while other nodes still refer to the target, listing the
+exact referring addresses.
 
 ## Get-edit-verify protocol
 

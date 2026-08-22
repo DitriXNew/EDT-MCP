@@ -727,6 +727,61 @@ def test_dynamic_list_write_persists_form_and_external_list_settings_files():
     assert root + "#/listSettings/conditionalAppearance" in settings.text
 
 
+@e2e_test(tool="dcs", kind="write")
+def test_dynamic_list_settings_accept_replace_and_remove_but_its_own_types_do_not():
+    """replace/remove reach a dynamic list's SETTINGS; the list's own types refuse them.
+
+    The tool guide advertised replace and remove for dynamic lists while the planner refused
+    every action except upsert/update - a promise the tool did not keep, and nothing caught it
+    because no test addressed a dynamic list with either action. The settings layer is shared
+    with report variants and already implements both, so they belong below '#/listSettings'.
+    The list's OWN types keep upsert/update: accepting replace there would be an update
+    wearing the wrong label.
+    """
+    catalog_name = "E2EDcsListReplace"
+    catalog = "Catalog." + catalog_name
+    form = catalog + ".Form.ListForm"
+    root = form + ".Attribute.List"
+    for fqn, why in ((catalog, "catalog"), (form, "form"), (root, "attribute")):
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed the %s" % why)
+        wait_for_project_ready()
+
+    seeded = _write(root, "upsert", "dynamicList", {
+        "queryText": "SELECT Ref FROM " + catalog,
+        "customQuery": True,
+        "mainTable": catalog,
+        "fields": [{"dataPath": "Ref"}],
+        "listSettings": {
+            "selection": {
+                "items": [{"kind": "field", "field": {"kind": "field", "value": "Ref"},
+                           "title": {"EN": "Reference"}}],
+            },
+        },
+    }, language="en")
+    assert_ok(seeded, "seed a dynamic list carrying one titled selection item")
+
+    # A titled item is the thing an authoritative replace must NOT preserve.
+    before = _get(root + "#/listSettings/selection", "selection")
+    assert_ok(before, "read the seeded selection")
+    assert "Reference" in before.text, "the fixture must start with a title to lose"
+
+    replaced = _write(root + "#/listSettings/selection", "replace", "selection",
+                      {"items": []}, expectedHash=_hash(before), language="en")
+    assert_ok(replaced, "replace a dynamic list's selection through the shared settings layer")
+
+    after = _get(root + "#/listSettings/selection", "selection")
+    assert_ok(after, "read the replaced selection")
+    assert "Reference" not in after.text,         "an authoritative replace must clear the item it never mentioned"
+
+    # The list's own types are a different contract, and the refusal must say where to go.
+    refused = _write(root, "replace", "dynamicList", {"queryText": "SELECT 1"},
+                     expectedHash=_hash(_get(root, "dynamicList")), language="en")
+    error = assert_error(refused, "replace on a dynamic list's own type")
+    assert_error_quality(error, names=["#/listSettings"],
+                         ctx="the refusal must point at the settings layer that does accept it")
+
+
 @e2e_test(tool="dcs", kind="read")
 def test_unknown_action_is_a_clean_non_mutating_error():
     result = call("dcs", {

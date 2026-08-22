@@ -22,8 +22,9 @@ import org.eclipse.emf.ecore.EStructuralFeature;
  *
  * <p>The fingerprint is deliberately a within-session stale-address guard, not a serialized format
  * or a promise of stability across EDT/model versions. It records containment order, each node's
- * EClass, and every explicitly set attribute. A caller must compute it while the root is still inside
- * the same BM transaction boundary used to read it.</p>
+ * EClass, every explicitly set attribute, and the identity of every set non-containment reference.
+ * A caller must compute it while the root is still inside the same BM transaction boundary used to
+ * read it.</p>
  */
 public final class DcsHash
 {
@@ -75,6 +76,38 @@ public final class DcsHash
             appendAttributeValue(digest, object.eGet(attribute));
         }
 
+        // Non-containment references count too. They are modelled, rendered by the reader and
+        // writable (DynamicListExtInfo.mainTable is one), so leaving them out let a concurrent
+        // writer repoint one WITHOUT moving the hash - and the get-edit-verify loop would then
+        // certify a node that had changed under it. Identity only, never a localized
+        // presentation: the fingerprint must not depend on the caller's language.
+        for (EReference reference : object.eClass().getEAllReferences())
+        {
+            if (reference.isContainment() || reference.isDerived() || reference.isTransient()
+                || !object.eIsSet(reference))
+            {
+                continue;
+            }
+            token(digest, "reference"); //$NON-NLS-1$
+            token(digest, reference.getName());
+            Object value = object.eGet(reference);
+            if (value instanceof List<?>)
+            {
+                List<?> targets = (List<?>)value;
+                token(digest, "list-size"); //$NON-NLS-1$
+                token(digest, Integer.toString(targets.size()));
+                for (int i = 0; i < targets.size(); i++)
+                {
+                    token(digest, Integer.toString(i));
+                    token(digest, referenceIdentity(targets.get(i)));
+                }
+            }
+            else
+            {
+                token(digest, referenceIdentity(value));
+            }
+        }
+
         for (EReference reference : object.eClass().getEAllContainments())
         {
             if (!object.eIsSet(reference))
@@ -102,6 +135,31 @@ public final class DcsHash
                 visit(digest, (EObject)value, reference.getName(), 0);
             }
         }
+    }
+
+    /**
+     * A stable, language-independent identity for a referenced object: its programmatic
+     * {@code name} when it has one - which is what the reader displays for these features - and
+     * its EClass otherwise. Deliberately not a synonym: synonyms are localized, and a fingerprint
+     * that moved with the caller's language would fail the very comparison it exists for.
+     */
+    private static String referenceIdentity(Object value)
+    {
+        if (!(value instanceof EObject))
+        {
+            return canonicalValue(value);
+        }
+        EObject target = (EObject)value;
+        EStructuralFeature name = target.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+        if (name instanceof EAttribute && target.eIsSet(name))
+        {
+            Object raw = target.eGet(name);
+            if (raw != null)
+            {
+                return target.eClass().getName() + ':' + raw;
+            }
+        }
+        return target.eClass().getName();
     }
 
     private static void appendAttributeValue(MessageDigest digest, Object value)

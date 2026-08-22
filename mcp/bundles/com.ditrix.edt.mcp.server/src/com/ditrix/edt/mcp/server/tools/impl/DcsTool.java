@@ -579,7 +579,7 @@ public class DcsTool implements IMcpTool
                 }
                 DynamicListExtInfo extInfo = dynamicListExtInfo(member);
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
-                    type, address, body, typeResolver, languages);
+                    type, address, body, typeResolver, languages, version);
                 if (!planned.isSuccess())
                 {
                     return dynamicPlanError(planned);
@@ -634,8 +634,21 @@ public class DcsTool implements IMcpTool
                 {
                     throw new FormValidationException(ToolResult.error(hashError).toJson());
                 }
+                // The same refusal the schema path applies, now that replace actually reaches the
+                // settings writer here: an authoritative replacement must not silently discard
+                // content this writer cannot reproduce (a chart, a nested schema, an area template)
+                // that still lives under the target. A dynamic list's listSettings is the same
+                // settings model a report variant uses, so it can hold exactly those subtypes.
+                if (ACTION_REPLACE.equals(action))
+                {
+                    String refusal = DcsMutationGuard.replaceError(extInfo, address);
+                    if (refusal != null)
+                    {
+                        throw new FormValidationException(ToolResult.error(refusal).toJson());
+                    }
+                }
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
-                    type, address, body, typeResolver, languages);
+                    type, address, body, typeResolver, languages, version);
                 if (!planned.isSuccess())
                 {
                     throw new FormValidationException(dynamicPlanError(planned));
