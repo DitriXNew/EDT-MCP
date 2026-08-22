@@ -16,6 +16,7 @@ import com.ditrix.edt.mcp.server.tools.impl.AskWorkmateTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CancelJobTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.CodeReviewTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateGitBranchTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
@@ -150,6 +151,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new GetProblemSummaryTool());
         catalogue.add(new ApplyQuickFixTool());
         catalogue.add(new GetProjectErrorsTool());
+        catalogue.add(new CodeReviewTool());
         catalogue.add(new GetMarkersTool());
         catalogue.add(new GetEventLogTool());
         catalogue.add(new GetMcpHistoryTool());

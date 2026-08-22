@@ -263,6 +263,50 @@
   {
     "annotations": {
       "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Review BSL code quality with the BSL Language Server engine: its FULL diagnostic catalog (magic number, cyclomatic/cognitive complexity, method/line length, nesting, naming, unused code, …) — this overlaps with EDT's own v8-code-style checks (get_project_errors), it is not a strict delta over them; use excludeRule to drop rule ids you already get elsewhere. Each finding is a defect to FIX: it carries the rule, severity, Module path and Line, ready for read_module_source / write_module_source — fix each, then re-run code_review to verify. Scope the whole project or one module; filter by severity, rule or excludeRule. Needs the engine jar (see the guide). Full parameters and examples: call get_tool_guide('code_review').",
+    "inputSchema": {
+      "properties": {
+        "excludeRule": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "modulePath": {
+          "description": "Optional: narrow the review to a single module, path from src/ (e.g. 'CommonModules/Calc/Module.bsl'); must be a .bsl module. Omit to review the whole configuration - a scoped run cannot see cross-module context, so rules like unused-export are only reliable without it.",
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "information",
+            "hint"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "code_review",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
     },
