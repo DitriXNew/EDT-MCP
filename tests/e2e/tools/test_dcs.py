@@ -22,6 +22,7 @@ from harness import (
     e2e_test,
     poll_diff_contains,
     poll_disk_contains,
+    poll_disk_lacks,
     read_disk,
     wait_for_project_ready,
 )
@@ -791,6 +792,16 @@ def test_dynamic_list_settings_accept_replace_and_remove_but_its_own_types_do_no
     after = _get(root + "#/listSettings/selection", "selection")
     assert_ok(after, "read the replaced selection")
     assert "Reference" not in after.text,         "an authoritative replace must clear the item it never mentioned"
+
+    # ON DISK, not just in the read-back: a settings write that only ever lived in memory would
+    # satisfy every assertion above and still be lost on the next refresh. A dynamic list's
+    # settings are exported to their OWN file, so that is the one to read.
+    settings_rel = ("src/Catalogs/%s/Forms/ListForm/Attributes/List/ExtInfo/ListSettings.dcss"
+                    % catalog_name)
+    poll_disk_lacks(settings_rel, "Reference",
+                    ctx="the replaced-away title must disappear from ListSettings.dcss")
+    on_disk = read_disk(settings_rel)
+    assert "Reference" not in on_disk,         "the title the replace never mentioned must not survive on disk: %s" % on_disk[:600]
 
     # The list's own types are a different contract, and the refusal must say where to go.
     refused = _write(root, "replace", "dynamicList", {"queryText": "SELECT 1"},

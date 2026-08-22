@@ -830,6 +830,13 @@ public final class DcsSettingsWriter
     {
         if (path.isEmpty())
         {
+            // The address ends AT this collection, so an authoritative replace replaces the
+            // collection - it does not append to it. Missing this made replace with type='grouping'
+            // at a bare root add a second copy of every grouping instead of swapping them.
+            if (ACTION_REPLACE.equals(action))
+            {
+                items.clear();
+            }
             if (body.has(KEY_ITEMS))
             {
                 String members = checkMembers(body, where, KEY_ITEMS);
@@ -1994,7 +2001,30 @@ public final class DcsSettingsWriter
         FilterItem item = items.get(selected);
         if (path.size() == 2)
         {
-            return applyFilterItem(item, body, languages, where + "/items/" + path.get(1)); //$NON-NLS-1$
+            String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+            if (ACTION_REPLACE.equals(action))
+            {
+                // Rebuilt, not patched: otherwise comparisonType, right, use and a group's nested
+                // items survive a replace that never mentioned them.
+                String kind = optionalString(body, KEY_KIND, at);
+                if (stringError != null)
+                {
+                    return stringError;
+                }
+                FilterItem fresh = newFilterItem(kind, at);
+                if (fresh == null)
+                {
+                    return filterKindError;
+                }
+                String rebuilt = applyFilterItem(fresh, body, languages, at);
+                if (rebuilt != null)
+                {
+                    return rebuilt;
+                }
+                items.set(selected, fresh);
+                return null;
+            }
+            return applyFilterItem(item, body, languages, at);
         }
         if (!(item instanceof DataCompositionFilterItemGroup))
         {
@@ -2056,18 +2086,10 @@ public final class DcsSettingsWriter
         {
             return stringError;
         }
-        FilterItem item;
-        if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        FilterItem item = newFilterItem(kind, path);
+        if (item == null)
         {
-            item = DcsFactory.eINSTANCE.createDataCompositionFilterItemGroup();
-        }
-        else if (kind == null || "item".equalsIgnoreCase(kind)) //$NON-NLS-1$
-        {
-            item = DcsFactory.eINSTANCE.createDataCompositionFilterItem();
-        }
-        else
-        {
-            return "Filter kind '" + kind + "' is invalid. Use one of: item, group."; //$NON-NLS-1$ //$NON-NLS-2$
+            return filterKindError;
         }
         String error = applyFilterItem(item, body, languages, path);
         if (error == null)
@@ -2075,6 +2097,26 @@ public final class DcsSettingsWriter
             items.add(item);
         }
         return error;
+    }
+
+    /**
+     * A fresh filter item of the named kind, or {@code null} with {@link #filterKindError} set.
+     * Shared by append and by an authoritative replace so both build the same shapes.
+     */
+    private static FilterItem newFilterItem(String kind, String path)
+    {
+        filterKindError = null;
+        if ("group".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionFilterItemGroup();
+        }
+        if (kind == null || "item".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionFilterItem();
+        }
+        filterKindError = "Filter kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "' is invalid. Use one of: item, group."; //$NON-NLS-1$
+        return null;
     }
 
     private static String applyFilterItem(FilterItem item, JsonObject body,
@@ -2251,7 +2293,31 @@ public final class DcsSettingsWriter
         {
             return indexError;
         }
-        return applyOrderItem(holder.getItems().get(selected), body, where + "/items/" + path.get(1)); //$NON-NLS-1$
+        String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+        if (ACTION_REPLACE.equals(action))
+        {
+            // Rebuilt, not patched: field, orderType, use and viewMode must not survive a replace
+            // that never named them, and replacing an auto item with a normal one must actually
+            // change the item's CLASS rather than patch the old instance.
+            String kind = optionalString(body, KEY_KIND, at);
+            if (stringError != null)
+            {
+                return stringError;
+            }
+            OrderItem fresh = newOrderItem(kind, at);
+            if (fresh == null)
+            {
+                return orderKindError;
+            }
+            String rebuilt = applyOrderItem(fresh, body, at);
+            if (rebuilt != null)
+            {
+                return rebuilt;
+            }
+            holder.getItems().set(selected, fresh);
+            return null;
+        }
+        return applyOrderItem(holder.getItems().get(selected), body, at);
     }
 
     private static String applyOrder(DataCompositionOrder order, JsonObject body, String action,
@@ -2303,18 +2369,10 @@ public final class DcsSettingsWriter
         {
             return stringError;
         }
-        OrderItem item;
-        if ("auto".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        OrderItem item = newOrderItem(kind, path);
+        if (item == null)
         {
-            item = DcsFactory.eINSTANCE.createDataCompositionAutoOrderItem();
-        }
-        else if (kind == null || "item".equalsIgnoreCase(kind)) //$NON-NLS-1$
-        {
-            item = DcsFactory.eINSTANCE.createDataCompositionOrderItem();
-        }
-        else
-        {
-            return "Order kind '" + kind + "' is invalid. Use one of: item, auto."; //$NON-NLS-1$ //$NON-NLS-2$
+            return orderKindError;
         }
         String error = applyOrderItem(item, body, path);
         if (error == null)
@@ -2322,6 +2380,26 @@ public final class DcsSettingsWriter
             items.add(item);
         }
         return error;
+    }
+
+    /**
+     * A fresh order item of the named kind, or {@code null} with {@link #orderKindError} set.
+     * Shared by append and by an authoritative replace so both build the same shapes.
+     */
+    private static OrderItem newOrderItem(String kind, String path)
+    {
+        orderKindError = null;
+        if ("auto".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionAutoOrderItem();
+        }
+        if (kind == null || "item".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        {
+            return DcsFactory.eINSTANCE.createDataCompositionOrderItem();
+        }
+        orderKindError = "Order kind '" + kind + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "' is invalid. Use one of: item, auto."; //$NON-NLS-1$
+        return null;
     }
 
     private static String applyOrderItem(OrderItem item, JsonObject body, String path)
@@ -2732,8 +2810,23 @@ public final class DcsSettingsWriter
                 return "Parameter item index '" + path.get(1) + "' is " //$NON-NLS-1$ //$NON-NLS-2$
                     + item.eClass().getName() + ", not SettingsParameterValue. Choose an address from get."; //$NON-NLS-1$
             }
-            error = applyParameterItem((SettingsParameterValue)item, body, languages,
-                where + "/items/" + path.get(1)); //$NON-NLS-1$
+            String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+            if (ACTION_REPLACE.equals(action))
+            {
+                // Rebuilt, not patched: value, use, viewMode and the user-setting scaffolding must
+                // not survive a replace that never named them. There is only one shape here, so
+                // the rebuild is the factory call itself.
+                SettingsParameterValue fresh = DcsFactory.eINSTANCE.createSettingsParameterValue();
+                error = applyParameterItem(fresh, body, languages, at);
+                if (error == null)
+                {
+                    holder.getItems().set(selected, fresh);
+                }
+            }
+            else
+            {
+                error = applyParameterItem((SettingsParameterValue)item, body, languages, at);
+            }
         }
         else
         {
@@ -2830,6 +2923,15 @@ public final class DcsSettingsWriter
                 if (fresh == null)
                 {
                     return userFieldKindError;
+                }
+                // A rebuilt field starts empty, so an omitted dataPath would silently produce a
+                // user field with no data path at all rather than keeping the old one. Replace is
+                // authoritative, which makes the identity the caller's responsibility to restate.
+                if (!body.has("dataPath")) //$NON-NLS-1$
+                {
+                    return "action='replace' at '" + at + "' must restate 'dataPath': a replacement " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "is built from the body alone, so an omitted identity would clear it. " //$NON-NLS-1$
+                        + "Use action='update' to change properties without restating it."; //$NON-NLS-1$
                 }
                 error = applyUserField(fresh, body, action, languages, version, at);
                 if (error == null)
@@ -3729,6 +3831,8 @@ public final class DcsSettingsWriter
     private static String arrayObjectError;
     private static String selectedKindError;
     private static String userFieldKindError;
+    private static String filterKindError;
+    private static String orderKindError;
     private static String stringError;
     private static String booleanError;
     private static String indexError;

@@ -336,6 +336,63 @@ public class DcsSettingsWriterTest
                 || after.getTitle().getLocalValue().getContent().isEmpty());
     }
 
+    @Test
+    public void testReplaceAtACollectionAddressClearsItInsteadOfAppending()
+    {
+        // Resolving defaultPath before the blank-settings decision fixed sibling loss, but it also
+        // meant a collection-addressed replace now starts from a COPY - and the structure applier
+        // appended without clearing, so replacing the groupings added a second copy of each. The
+        // address ends AT the collection, so replacing it must replace it.
+        DataCompositionSettings current = plan(json("{\"items\":[" //$NON-NLS-1$
+            + "{\"name\":\"Old\",\"use\":true}]}")); //$NON-NLS-1$
+        assertEquals(1, current.getItems().size());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(current,
+            java.util.Collections.emptyList(), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"items\":[{\"name\":\"New\",\"use\":true}]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertEquals("a replace at the collection address must swap, not append", //$NON-NLS-1$
+            1, replaced.settings().getItems().size());
+    }
+
+    @Test
+    public void testReplaceOnAnIndexedFilterItemResetsOmittedProperties()
+    {
+        DataCompositionSettings settings = plan(json("{\"filter\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"item\",\"left\":{\"kind\":\"field\",\"value\":\"Amount\"}," //$NON-NLS-1$
+            + "\"comparisonType\":\"Greater\"," //$NON-NLS-1$
+            + "\"right\":[{\"kind\":\"number\",\"value\":10}],\"use\":true}]}}")); //$NON-NLS-1$
+        DataCompositionFilterItem before =
+            (DataCompositionFilterItem)settings.getFilter().getItems().get(0);
+        assertFalse("the fixture must start with a right operand to lose", //$NON-NLS-1$
+            before.getRight().isEmpty());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("filter", "items", "0"), "replace", "filter", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"kind\":\"item\",\"left\":{\"kind\":\"field\",\"value\":\"Amount\"}}"), //$NON-NLS-1$
+            LANGUAGES);
+        assertTrue(replaced.error(), replaced.isSuccess());
+        DataCompositionFilterItem after =
+            (DataCompositionFilterItem)replaced.settings().getFilter().getItems().get(0);
+        assertTrue("a replace that omitted the right operand must not keep the old one", //$NON-NLS-1$
+            after.getRight().isEmpty());
+    }
+
+    @Test
+    public void testReplaceOnAnIndexedUserFieldMustRestateItsDataPath()
+    {
+        // A rebuilt field starts empty, so an omitted dataPath would clear the identity rather
+        // than keep it. Refused by name instead.
+        DataCompositionSettings settings = plan(json("{\"userFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"expression\",\"dataPath\":\"Margin\"}]}}")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult refused = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("userFields", "items", "0"), "replace", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"kind\":\"expression\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(refused.isSuccess());
+        assertTrue(refused.error(), refused.error().contains("dataPath")); //$NON-NLS-1$
+        assertTrue(refused.error(), refused.error().contains("action='update'")); //$NON-NLS-1$
+    }
+
     private static DataCompositionSettings plan(JsonObject body)
     {
         DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,
