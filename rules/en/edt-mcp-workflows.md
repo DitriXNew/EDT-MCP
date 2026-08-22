@@ -97,8 +97,11 @@ Short form:
   test, then `run_yaxunit_tests(debug=true)`. If the start is pending, retain
   its `jobId` and poll that exact job with `get_job_status` until it returns the
   intended launch handle or a terminal failure; only then continue with
-  `wait_for_break` as in section 7. Stop and report an unsettled run when the
-  caller-approved deadline expires.
+  `wait_for_break` as in section 7. If the caller-approved deadline expires,
+  do not abandon ownership: either cancel with authorization and confirm
+  terminal cleanup, or obtain an explicit accepted handoff of the retained
+  `jobId` and task-owned breakpoint obligations. Without cancellation or
+  handoff, the run remains unsettled and reconciliation must continue.
 
 ## 10. Profiling
 
