@@ -315,3 +315,8 @@ tree guard, not a cross-EDT-version content identifier.
   list. Omit `language` to use the project's default code.
 - Query text and DCS expressions are preserved exactly. They are not synonym-resolved,
   normalized, or translated; both 1C query-language dialects remain valid data.
+- A write into a language the configuration DECLARES but does not itself use reports
+  `localeUnusedInConfiguration: true (<codes>)` in the result. It is not an error -
+  the text will display - but the configuration's own synonym has no text in that
+  language, so it may be a single-language build or one that is not supported yet. **Ask the
+  user before translating further** rather than continuing to write into it.
