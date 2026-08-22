@@ -113,8 +113,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
 
     /**
      * The frozen set of destructive tool NAMEs the gate protects: the five
-     * always-destructive tools plus {@code modify_metadata} (gated only for a
-     * type/composite-type change — the tool decides when to call, the gate does not).
+     * always-destructive tools plus {@code modify_metadata} and {@code dcs} (gated only for a
+     * destructive retype — each tool decides when to call, the gate does not).
      *
      * <p>Related to but deliberately NOT equal to
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
@@ -130,6 +130,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "delete_infobase", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
+        "dcs", //$NON-NLS-1$
         // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
         // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since
         // whether one destroys work depends on git's per-subcommand option grammar - see

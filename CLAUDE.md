@@ -73,6 +73,10 @@ Each tier proves a different layer. A green lower tier does NOT prove the higher
 - **Tier 3 — automated black-box e2e (`tests/e2e/`).** Real MCP client → live server → asserts the real effect. The formatter/synonym and error-shape contracts are **e2e-only** — they stay "verify in EDT". Mechanics: `edt-mcp-e2e-testing`.
 - **Tier 4 — protocol conformance.** Validates the SERVER against the MCP wire spec; `tests/conformance/baseline.yml` pins the intentional gaps, so a new failure = a protocol regression. Mechanics: `edt-mcp-build-test`.
 
+> **A green suite is NOT the whole verdict — read the EDT log afterwards.** `<workspace>/.metadata/.log` (plus the rotated `.bak_*.log`; the file rotates at ~1 MB, so a run spans several). Aggregate by severity and by exception type rather than skimming, e.g.
+> `cat .bak_*.log .log | grep -A1 "^!ENTRY .* 4 " | grep "^!MESSAGE" | sort | uniq -c | sort -rn`.
+> A tool can return a perfectly good answer while logging a stack trace, so failures hide here that no assertion catches: a `catch (Exception)` around reflection that swallows a platform API change and degrades to an empty result, an unattached-BM-object throw, a silent fallback. That is exactly how `TextSearcher`'s constructor change went unnoticed while every rename test stayed green. Triage each entry into: OURS-real (fix), OURS-noise (a validation refusal must not be logged at ERROR — demote it), or PLATFORM (record it and move on).
+
 **Mandatory test minimum for a change:**
 - Changed metadata/code resolution → a test for **both** languages (English `Name`, Russian `Name`, synonym). Reference: `WriteModuleSourceToolTest.testResolveRussianObjectName`.
 - New/changed tool → an `XxxToolTest` (+ the `test_<tool>.py` e2e file).

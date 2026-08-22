@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -208,7 +209,15 @@ public class GetMetadataObjectsTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error getting metadata objects", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
+                // NOT e.getMessage(): the failure actually seen here was a NullPointerException,
+                // whose message is null, so the caller was handed "Unknown error" - a dead end for
+                // anyone, and worse for an agent that cannot read the EDT log. PlatformFailures
+                // walks the cause chain and any IStatus children for something that names the
+                // failure, and falls back to the exception's own type when nothing else does.
+                resultRef.set(ToolResult.error(
+                    "Could not list metadata objects: " + PlatformFailures.describe(e) //$NON-NLS-1$
+                    + ". If this followed a clean_project or a project reload, EDT may still be " //$NON-NLS-1$
+                    + "restarting the project context - retry once it reports ready.").toJson()); //$NON-NLS-1$
             }
         });
         

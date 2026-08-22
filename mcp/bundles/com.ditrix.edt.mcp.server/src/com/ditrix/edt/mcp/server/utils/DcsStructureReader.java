@@ -11,8 +11,6 @@ import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.Enumerator;
-import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.dcs.model.common.DataCompositionDataSetFieldRole;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
@@ -32,6 +30,20 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAutoOrderItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAutoSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilter;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrder;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrderItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFieldGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.FilterItem;
+import com._1c.g5.v8.dt.dcs.model.settings.OrderItem;
+import com._1c.g5.v8.dt.dcs.model.settings.SelectedItem;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
 import com._1c.g5.v8.dt.mcore.DateValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
@@ -45,23 +57,16 @@ import com._1c.g5.v8.dt.mcore.TypeValue;
 import com._1c.g5.v8.dt.mcore.Value;
 
 /**
- * Shared READER that renders a 1C Data Composition Schema (СКД / a {@code .dcs} resource) - the model
+ * Shared READER that renders a 1C Data Composition Schema (\u0421\u041a\u0414 / a {@code .dcs} resource) - the model
  * behind a Report's / CommonTemplate's / object-owned Template's {@link DataCompositionSchema} content -
  * to a full Markdown document: data sources, data sets (with the FULL query text in a fenced block and
  * their fields), calculated fields, total fields, parameters, and the DEFAULT settings variant's
  * structure (selection / filter / order), as far as the typed model allows. An empty section (an empty
  * list, or no default settings) is skipped entirely rather than rendered with a placeholder - issue #267.
  *
- * <p>Like {@link DcsWriter} (the DCS WRITER), this reader uses the TYPED DCS API directly for the
- * {@code schema} / {@code core} / {@code common} packages and {@code com._1c.g5.v8.dt.mcore} - the
- * {@link DataCompositionSchema} itself, its data sources / data sets / fields / calculated fields / total
- * fields / parameters, {@link Presentation} / {@link LocalString} titles, and every {@code mcore}
- * {@code Value} subtype. The {@code com._1c.g5.v8.dt.dcs.model.settings} package (the DEFAULT SETTINGS
- * variant: {@code DataCompositionSettings} / selection / filter / order and their enums) is a Tycho
- * ACCESS-RESTRICTED (non-API) package on this target platform - a compile-time reference to any of its
- * types fails the build - so that one subtree is read via EMF REFLECTION instead (mirroring
- * {@link FormStructureReader}'s reflective form-model access, for the same class of reason: a forbidden
- * compile-time dependency), starting from the schema's {@code defaultSettings} feature.</p>
+ * <p>Like {@link DcsWriter} (the DCS WRITER), this reader uses the typed DCS API directly for schema,
+ * settings, core and common model objects, plus the typed {@code mcore} value hierarchy. Default
+ * selection, filter and order settings are traversed through their generated settings interfaces.</p>
  *
  * <p>Pure aside from reading the supplied {@link DataCompositionSchema}, which the caller must still hold
  * inside its BM transaction when {@link #render} runs (the schema is a transient
@@ -309,45 +314,18 @@ public final class DcsStructureReader
         sb.append('\n');
     }
 
-    // ==================== Default settings variant (reflective - access-restricted "settings" package) ====================
-    //
-    // com._1c.g5.v8.dt.dcs.model.settings (DataCompositionSettings / selection / filter / order and their
-    // enums) is Tycho ACCESS-RESTRICTED on this target platform (proven at build time - a compile-time
-    // reference fails), so this whole subtree is read through EMF reflection from the schema's
-    // 'defaultSettings' feature onward, exactly like FormStructureReader reads the form-model package. A
-    // feature value that resolves to an ACCESSIBLE typed instance (an mcore Value / a core Presentation)
-    // is cast back to its typed interface and rendered by the existing typed helpers below.
-
-    private static final String FEATURE_DEFAULT_SETTINGS = "defaultSettings"; //$NON-NLS-1$
-    private static final String FEATURE_SELECTION = "selection"; //$NON-NLS-1$
-    private static final String FEATURE_FILTER = "filter"; //$NON-NLS-1$
-    private static final String FEATURE_ORDER = "order"; //$NON-NLS-1$
-    private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
-    private static final String FEATURE_FIELD = "field"; //$NON-NLS-1$
-    private static final String FEATURE_LEFT = "left"; //$NON-NLS-1$
-    private static final String FEATURE_RIGHT = "right"; //$NON-NLS-1$
-    private static final String FEATURE_COMPARISON_TYPE = "comparisonType"; //$NON-NLS-1$
-    private static final String FEATURE_GROUP_TYPE = "groupType"; //$NON-NLS-1$
-    private static final String FEATURE_ORDER_TYPE = "orderType"; //$NON-NLS-1$
-    private static final String FEATURE_TITLE = "title"; //$NON-NLS-1$
-    private static final String FEATURE_USE = "use"; //$NON-NLS-1$
-
-    private static final String ECLASS_SELECTED_FIELD = "DataCompositionSelectedField"; //$NON-NLS-1$
-    private static final String ECLASS_SELECTED_FIELD_GROUP = "DataCompositionSelectedFieldGroup"; //$NON-NLS-1$
-    private static final String ECLASS_FILTER_ITEM = "DataCompositionFilterItem"; //$NON-NLS-1$
-    private static final String ECLASS_FILTER_ITEM_GROUP = "DataCompositionFilterItemGroup"; //$NON-NLS-1$
-    private static final String ECLASS_ORDER_ITEM = "DataCompositionOrderItem"; //$NON-NLS-1$
+    // ==================== Default settings variant (typed settings API) ====================
 
     private static void renderDefaultSettings(StringBuilder sb, DataCompositionSchema schema, String language)
     {
-        EObject settings = getSingleReference(schema, FEATURE_DEFAULT_SETTINGS);
+        DataCompositionSettings settings = schema.getDefaultSettings();
         if (settings == null)
         {
             return;
         }
-        String selection = renderSelection(getSingleReference(settings, FEATURE_SELECTION), language);
-        String filter = renderFilter(getSingleReference(settings, FEATURE_FILTER));
-        String order = renderOrder(getSingleReference(settings, FEATURE_ORDER));
+        String selection = renderSelection(settings.getSelection(), language);
+        String filter = renderFilter(settings.getFilter());
+        String order = renderOrder(settings.getOrder());
         if (selection.isEmpty() && filter.isEmpty() && order.isEmpty())
         {
             return;
@@ -356,16 +334,15 @@ public final class DcsStructureReader
         sb.append(selection).append(filter).append(order);
     }
 
-    /** Package-visible (not private) so it is directly unit-testable with a dynamic EObject fixture. */
-    static String renderSelection(EObject selection, String language)
+    /** Package-visible (not private) so the typed settings projection is directly unit-testable. */
+    static String renderSelection(DataCompositionSelectedFields selection, String language)
     {
-        List<EObject> items = getReferenceList(selection, FEATURE_ITEMS);
-        if (items.isEmpty())
+        if (selection == null || selection.getItems().isEmpty())
         {
             return ""; //$NON-NLS-1$
         }
         StringBuilder sb = new StringBuilder("### Selection\n\n"); //$NON-NLS-1$
-        for (EObject item : items)
+        for (SelectedItem item : selection.getItems())
         {
             appendSelectedItem(sb, item, 0, language);
         }
@@ -373,55 +350,57 @@ public final class DcsStructureReader
         return sb.toString();
     }
 
-    private static void appendSelectedItem(StringBuilder sb, EObject item, int depth, String language)
+    private static void appendSelectedItem(StringBuilder sb, SelectedItem item, int depth, String language)
     {
         indent(sb, depth);
-        String eClassName = item.eClass().getName();
-        if (ECLASS_SELECTED_FIELD.equals(eClassName) || ECLASS_SELECTED_FIELD_GROUP.equals(eClassName))
+        if (item instanceof DataCompositionSelectedField)
         {
-            sb.append("- ").append(escapeOutline(describeValue(valueFeature(item, FEATURE_FIELD)))); //$NON-NLS-1$
-            if (ECLASS_SELECTED_FIELD_GROUP.equals(eClassName))
+            DataCompositionSelectedField field = (DataCompositionSelectedField)item;
+            sb.append("- ").append(escapeOutline(describeValue(field.getField()))); //$NON-NLS-1$
+            String title = presentationText(field.getTitle(), language);
+            if (!title.isEmpty())
             {
-                sb.append(" (group)"); //$NON-NLS-1$
+                sb.append(" (title: ").append(escapeOutline(title)).append(')'); //$NON-NLS-1$
             }
-            else
-            {
-                String title = presentationText(presentationFeature(item, FEATURE_TITLE), language);
-                if (!title.isEmpty())
-                {
-                    sb.append(" (title: ").append(escapeOutline(title)).append(')'); //$NON-NLS-1$
-                }
-            }
-            if (!isUsed(item))
+            if (!field.isUse())
             {
                 sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
-            for (EObject child : getReferenceList(item, FEATURE_ITEMS))
+        }
+        else if (item instanceof DataCompositionSelectedFieldGroup)
+        {
+            DataCompositionSelectedFieldGroup group = (DataCompositionSelectedFieldGroup)item;
+            sb.append("- ").append(escapeOutline(describeValue(group.getField()))).append(" (group)"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!group.isUse())
+            {
+                sb.append(SUFFIX_NOT_USED);
+            }
+            sb.append('\n');
+            for (SelectedItem child : group.getItems())
             {
                 appendSelectedItem(sb, child, depth + 1, language);
             }
         }
-        else if (isAutoItem(eClassName))
+        else if (item instanceof DataCompositionAutoSelectedField)
         {
             sb.append("- _(auto fields)_\n"); //$NON-NLS-1$
         }
         else
         {
-            sb.append("- ").append(eClassName).append('\n'); //$NON-NLS-1$
+            sb.append("- ").append(item.eClass().getName()).append('\n'); //$NON-NLS-1$
         }
     }
 
-    /** Package-visible (not private) so it is directly unit-testable with a dynamic EObject fixture. */
-    static String renderFilter(EObject filter)
+    /** Package-visible (not private) so the typed settings projection is directly unit-testable. */
+    static String renderFilter(DataCompositionFilter filter)
     {
-        List<EObject> items = getReferenceList(filter, FEATURE_ITEMS);
-        if (items.isEmpty())
+        if (filter == null || filter.getItems().isEmpty())
         {
             return ""; //$NON-NLS-1$
         }
         StringBuilder sb = new StringBuilder("### Filter\n\n"); //$NON-NLS-1$
-        for (EObject item : items)
+        for (FilterItem item : filter.getItems())
         {
             appendFilterItem(sb, item, 0);
         }
@@ -429,59 +408,59 @@ public final class DcsStructureReader
         return sb.toString();
     }
 
-    private static void appendFilterItem(StringBuilder sb, EObject item, int depth)
+    private static void appendFilterItem(StringBuilder sb, FilterItem item, int depth)
     {
         indent(sb, depth);
-        String eClassName = item.eClass().getName();
-        if (ECLASS_FILTER_ITEM.equals(eClassName))
+        if (item instanceof DataCompositionFilterItem)
         {
-            sb.append("- ").append(escapeOutline(describeValue(valueFeature(item, FEATURE_LEFT)))); //$NON-NLS-1$
-            String comparison = enumFeature(item, FEATURE_COMPARISON_TYPE);
+            DataCompositionFilterItem condition = (DataCompositionFilterItem)item;
+            sb.append("- ").append(escapeOutline(describeValue(condition.getLeft()))); //$NON-NLS-1$
+            String comparison = settingsEnumLiteral(condition.getComparisonType());
             if (!comparison.isEmpty())
             {
                 sb.append(' ').append(comparison);
             }
-            String right = joinValues(valueListFeature(item, FEATURE_RIGHT));
+            String right = joinValues(condition.getRight());
             if (!right.isEmpty())
             {
                 sb.append(' ').append(escapeOutline(right));
             }
-            if (!isUsed(item))
+            if (!condition.isUse())
             {
                 sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
         }
-        else if (ECLASS_FILTER_ITEM_GROUP.equals(eClassName))
+        else if (item instanceof DataCompositionFilterItemGroup)
         {
-            String groupType = enumFeature(item, FEATURE_GROUP_TYPE);
+            DataCompositionFilterItemGroup group = (DataCompositionFilterItemGroup)item;
+            String groupType = settingsEnumLiteral(group.getGroupType());
             sb.append("- ").append(groupType.isEmpty() ? "group" : groupType + " group"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            if (!isUsed(item))
+            if (!group.isUse())
             {
                 sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
-            for (EObject child : getReferenceList(item, FEATURE_ITEMS))
+            for (FilterItem child : group.getItems())
             {
                 appendFilterItem(sb, child, depth + 1);
             }
         }
         else
         {
-            sb.append("- ").append(eClassName).append('\n'); //$NON-NLS-1$
+            sb.append("- ").append(item.eClass().getName()).append('\n'); //$NON-NLS-1$
         }
     }
 
-    /** Package-visible (not private) so it is directly unit-testable with a dynamic EObject fixture. */
-    static String renderOrder(EObject order)
+    /** Package-visible (not private) so the typed settings projection is directly unit-testable. */
+    static String renderOrder(DataCompositionOrder order)
     {
-        List<EObject> items = getReferenceList(order, FEATURE_ITEMS);
-        if (items.isEmpty())
+        if (order == null || order.getItems().isEmpty())
         {
             return ""; //$NON-NLS-1$
         }
         StringBuilder sb = new StringBuilder("### Order\n\n"); //$NON-NLS-1$
-        for (EObject item : items)
+        for (OrderItem item : order.getItems())
         {
             appendOrderItem(sb, item);
         }
@@ -489,144 +468,31 @@ public final class DcsStructureReader
         return sb.toString();
     }
 
-    private static void appendOrderItem(StringBuilder sb, EObject item)
+    private static void appendOrderItem(StringBuilder sb, OrderItem item)
     {
-        String eClassName = item.eClass().getName();
-        if (ECLASS_ORDER_ITEM.equals(eClassName))
+        if (item instanceof DataCompositionOrderItem)
         {
-            sb.append("- ").append(escapeOutline(describeValue(valueFeature(item, FEATURE_FIELD)))); //$NON-NLS-1$
-            String direction = enumFeature(item, FEATURE_ORDER_TYPE);
+            DataCompositionOrderItem orderItem = (DataCompositionOrderItem)item;
+            sb.append("- ").append(escapeOutline(describeValue(orderItem.getField()))); //$NON-NLS-1$
+            String direction = settingsEnumLiteral(orderItem.getOrderType());
             if (!direction.isEmpty())
             {
                 sb.append(' ').append(direction);
             }
-            if (!isUsed(item))
+            if (!orderItem.isUse())
             {
                 sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
         }
-        else if (isAutoItem(eClassName))
+        else if (item instanceof DataCompositionAutoOrderItem)
         {
             sb.append("- _(auto order)_\n"); //$NON-NLS-1$
         }
         else
         {
-            sb.append("- ").append(eClassName).append('\n'); //$NON-NLS-1$
+            sb.append("- ").append(item.eClass().getName()).append('\n'); //$NON-NLS-1$
         }
-    }
-
-    /** {@code true} for the "auto" marker item kinds (auto-filled selected field / auto order item). */
-    private static boolean isAutoItem(String eClassName)
-    {
-        return eClassName.startsWith("DataCompositionAuto"); //$NON-NLS-1$
-    }
-
-    // ==================== EMF reflection helpers (the "settings" subtree only) ====================
-
-    /** The value of a single-valued reference feature, or {@code null} when absent/unset/not-a-reference. */
-    private static EObject getSingleReference(EObject object, String featureName)
-    {
-        if (object == null)
-        {
-            return null;
-        }
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature == null || feature.isMany())
-        {
-            return null;
-        }
-        Object value = object.eGet(feature);
-        return value instanceof EObject ? (EObject)value : null;
-    }
-
-    /** A many-valued reference feature's contained {@link EObject}s, or an empty list when absent. */
-    private static List<EObject> getReferenceList(EObject object, String featureName)
-    {
-        List<EObject> result = new ArrayList<>();
-        if (object == null)
-        {
-            return result;
-        }
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature == null || !feature.isMany())
-        {
-            return result;
-        }
-        Object value = object.eGet(feature);
-        if (value instanceof List<?>)
-        {
-            for (Object element : (List<?>)value)
-            {
-                if (element instanceof EObject)
-                {
-                    result.add((EObject)element);
-                }
-            }
-        }
-        return result;
-    }
-
-    private static Object getValue(EObject object, String featureName)
-    {
-        if (object == null)
-        {
-            return null;
-        }
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        return feature != null ? object.eGet(feature) : null;
-    }
-
-    /** A reference feature's value cast back to the ACCESSIBLE {@code mcore} {@link Value} type. */
-    private static Value valueFeature(EObject object, String featureName)
-    {
-        Object value = getValue(object, featureName);
-        return value instanceof Value ? (Value)value : null;
-    }
-
-    /** A many-valued reference feature's elements cast back to the ACCESSIBLE {@code mcore} {@link Value} type. */
-    private static List<Value> valueListFeature(EObject object, String featureName)
-    {
-        List<Value> result = new ArrayList<>();
-        for (EObject element : getReferenceList(object, featureName))
-        {
-            if (element instanceof Value)
-            {
-                result.add((Value)element);
-            }
-        }
-        return result;
-    }
-
-    /** A reference feature's value cast back to the ACCESSIBLE {@code core} {@link Presentation} type. */
-    private static Presentation presentationFeature(EObject object, String featureName)
-    {
-        Object value = getValue(object, featureName);
-        return value instanceof Presentation ? (Presentation)value : null;
-    }
-
-    /**
-     * Reads a restricted-package enum feature via the common (accessible)
-     * {@link org.eclipse.emf.common.util.Enumerator} interface, never naming the concrete (restricted)
-     * enum type - the same trick {@link #describeValue} uses for an {@code EnumValue}.
-     *
-     * @return the enum literal, or {@code ""} when the feature is absent/unset/not an enum value
-     */
-    private static String enumFeature(EObject object, String featureName)
-    {
-        Object value = getValue(object, featureName);
-        return value instanceof Enumerator ? enumLiteral((Enumerator)value) : ""; //$NON-NLS-1$
-    }
-
-    /**
-     * @return the item's {@code use} flag; an absent feature or a non-Boolean value is treated as used
-     *         ({@code true}), so the render only ever calls out a DISABLED item (mirrors
-     *         {@code FormStructureReader.visibilityOf}'s defaulting philosophy for the same reason)
-     */
-    private static boolean isUsed(EObject item)
-    {
-        Object value = getValue(item, FEATURE_USE);
-        return !(value instanceof Boolean) || ((Boolean)value).booleanValue();
     }
 
     // ==================== Shared value / type / presentation helpers ====================
@@ -862,6 +728,12 @@ public final class DcsStructureReader
     private static String enumLiteral(Enumerator value)
     {
         return value != null ? value.getName() : ""; //$NON-NLS-1$
+    }
+
+    /** Settings outlines use the generated enum constant token ({@code GREATER}, {@code ASC}). */
+    private static String settingsEnumLiteral(Enumerator value)
+    {
+        return value instanceof Enum<?> ? ((Enum<?>)value).name() : enumLiteral(value);
     }
 
     private static String nameOrUnnamed(String name)

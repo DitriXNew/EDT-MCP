@@ -427,17 +427,17 @@ def test_assignable_reaches_a_designer_child_by_its_inherited_kind_only():
 # TEMPLATE Data Composition Schema (СКД) structure — a template FQN whose content is a
 # DataCompositionSchema renders the schema's STRUCTURE (issue #267): data sources, data sets
 # (with the FULL query text in a fenced block + a fields table), calculated fields, parameters,
-# and (skipped here — the write side has no way to author them yet) the default settings variant.
+# and (not needed by this scenario) the default settings variant.
 # A template whose content is NOT a DataCompositionSchema (a SpreadsheetDocument print form) is
 # UNCHANGED: it still renders the generic object's basic info, never the DCS structure.
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="get_metadata_details", kind="write-metadata")
 def test_dcs_template_fqn_renders_schema_structure():
-    # Seed a fresh Report (the fixture ships none) and author its Data Composition Schema via
-    # modify_metadata's `dcs` payload (#241/#267) — a query data set with an explicit query text +
-    # field, a calculated field, and an untyped parameter. The FIRST `dcs` write find-or-creates the
-    # report's main DCS template under the platform-default name (ОсновнаяСхемаКомпоновкиДанных).
+    # Seed a fresh Report (the fixture ships none) and author its Data Composition Schema via the
+    # dedicated `dcs` tool — a query data set with an explicit query text + field, a calculated
+    # field, and an untyped parameter. The first write find-or-creates the report's main DCS
+    # template under the platform-default name (ОсновнаяСхемаКомпоновкиДанных).
     report = "GMDDcsReport"
     fqn = "Report." + report
     r0 = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
@@ -451,9 +451,12 @@ def test_dcs_template_fqn_renders_schema_structure():
     calc_expr = "GMDDcsRevenue - GMDDcsCost"           # calculated field expression
     parameter = "GMDDcsParam"                          # schema parameter name
 
-    r1 = call("modify_metadata", {
-        "projectName": PROJECT, "fqn": fqn,
-        "dcs": {
+    r1 = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "action": "upsert",
+        "type": "schema",
+        "body": {
             "dataSets": [{
                 "name": "DataSet1",
                 "type": "query",
@@ -469,7 +472,7 @@ def test_dcs_template_fqn_renders_schema_structure():
     wait_for_project_ready()
 
     # The Cyrillic default DCS template name the platform pre-fills for a report's main schema
-    # (matches ModifyMetadataTool.DEFAULT_DCS_TEMPLATE_NAME / EDT's own designer).
+    # (matches EDT's own designer default).
     template_name = "ОсновнаяСхема" \
         "КомпоновкиДанных"
     template_fqn = fqn + ".Template." + template_name
