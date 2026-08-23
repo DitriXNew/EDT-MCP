@@ -122,6 +122,31 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testExpressionSuffixAndLinkConditionAttributesReportTheirOwningLinks()
+    {
+        DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(query("Archive", "SELECT 2")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetLink sourceExpression =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetLink();
+        sourceExpression.setSourceDataSet("Sales"); //$NON-NLS-1$
+        sourceExpression.setDestinationDataSet("Archive"); //$NON-NLS-1$
+        sourceExpression.setSourceExpression("Amount"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(sourceExpression);
+        DataCompositionSchemaDataSetLink linkCondition =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetLink();
+        linkCondition.setSourceDataSet("Sales"); //$NON-NLS-1$
+        linkCondition.setDestinationDataSet("Archive"); //$NON-NLS-1$
+        linkCondition.setLinkConditionExpression("Amount > 0"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(linkCondition);
+
+        assertEquals(java.util.Arrays.asList("Report.Sales#/dataSetLinks/0", //$NON-NLS-1$
+            "Report.Sales#/dataSetLinks/1"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, "Report.Sales", "field", "Amount")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
     public void testBareCollectionUsesSharedPaginationAndCanonicalAddresses()
     {
         DataCompositionSchema schema = schemaWithDataSet("First", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$

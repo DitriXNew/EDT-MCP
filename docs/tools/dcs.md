@@ -248,6 +248,13 @@ its body, which renames that node in place. The rename is refused while anything
 refers to the old identity, and refused when the new key is already taken. Every other
 action still requires the body key to match the pointer.
 
+A rename and a `remove` are also refused when the address is AMBIGUOUS - the natural key
+matches more than one existing node - and when a schema expression still names the identity.
+Expression dependencies are matched as whole, case-insensitive tokens outside string literals,
+and a token immediately followed by `(` is read as a function call rather than a field, so
+`Сумма(Оборот)` does not pin a field named `Сумма`. Update the expression the refusal names,
+re-run get, and retry.
+
 An empty array is a no-op in `upsert` and clears that collection in `replace`. `update`
 rejects schema-layer root/collection targets where no single existing node is selected;
 settings holders and dynamic-list roots can be updated when they already exist. `remove`

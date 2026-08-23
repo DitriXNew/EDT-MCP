@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -272,6 +273,13 @@ public final class DcsReadProjection
             {
                 result.add(address);
             }
+        }
+        // A schema expression names a field by its data path and a parameter as '&Name', and both
+        // tokenize the same way, so one scan covers every identity an expression can strand.
+        if ("field".equals(kind) || "calculatedField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
+            || "totalField".equals(kind) || "parameter".equals(kind)) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            collectExpressionReferences(object, address, identity, result);
         }
         for (EReference reference : object.eClass().getEAllContainments())
         {
@@ -547,6 +555,87 @@ public final class DcsReadProjection
                     child(itemsAddress, selector(FEATURE_ITEMS, dataSet, member, i)), result);
             }
         }
+    }
+
+    private static void collectExpressionReferences(EObject object, String address,
+        String identity, Set<String> result)
+    {
+        for (EAttribute attribute : object.eClass().getEAllAttributes())
+        {
+            String name = attribute.getName();
+            String normalized = name == null ? "" : name.toLowerCase(Locale.ROOT); //$NON-NLS-1$
+            if (!normalized.endsWith("expression") && !"linkcondition".equals(normalized)) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                continue;
+            }
+            Object value = object.eGet(attribute);
+            if (value instanceof String && expressionReferences((String)value, identity))
+            {
+                result.add(address);
+            }
+        }
+    }
+
+    private static boolean expressionReferences(String expression, String identity)
+    {
+        String normalizedIdentity = identity.toLowerCase(Locale.ROOT);
+        int current = 0;
+        while (current < expression.length())
+        {
+            if (expression.charAt(current) == '"')
+            {
+                current = afterStringLiteral(expression, current);
+                continue;
+            }
+            if (!isExpressionTokenCharacter(expression.charAt(current)))
+            {
+                current++;
+                continue;
+            }
+            int start = current;
+            while (current < expression.length()
+                && isExpressionTokenCharacter(expression.charAt(current)))
+            {
+                current++;
+            }
+            if (current >= expression.length() || expression.charAt(current) != '(')
+            {
+                String token = expression.substring(start, current).toLowerCase(Locale.ROOT);
+                int separator = token.indexOf('.');
+                if (token.equals(normalizedIdentity) || separator > 0
+                    && token.substring(0, separator).equals(normalizedIdentity))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static int afterStringLiteral(String expression, int openingQuote)
+    {
+        int current = openingQuote + 1;
+        while (current < expression.length())
+        {
+            if (expression.charAt(current) != '"')
+            {
+                current++;
+            }
+            else if (current + 1 < expression.length() && expression.charAt(current + 1) == '"')
+            {
+                current += 2;
+            }
+            else
+            {
+                return current + 1;
+            }
+        }
+        return current;
+    }
+
+    private static boolean isExpressionTokenCharacter(char value)
+    {
+        return Character.isLetterOrDigit(value) || value == '_' || value == '.';
     }
 
     private static CollectionRef settingsCollection(String rootFqn, TargetKind kind, EObject root,

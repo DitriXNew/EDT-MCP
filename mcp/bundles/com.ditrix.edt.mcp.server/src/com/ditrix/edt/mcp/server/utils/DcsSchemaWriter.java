@@ -221,34 +221,38 @@ public final class DcsSchemaWriter
         EObject target;
         if (field)
         {
-            DataSetField addressed = findDataSetField(fieldTarget.dataSet, oldKey);
-            if (addressed == null)
-            {
-                return missing(request, oldKey, existing);
-            }
-            if (!(addressed instanceof DataCompositionSchemaDataSetField))
-            {
-                return "Field '" + oldKey + "' at '" + request.address //$NON-NLS-1$ //$NON-NLS-2$
-                    + "' has unsupported subtype '" + addressed.eClass().getName() //$NON-NLS-1$
-                    + "'. Field folders are not authorable; edit or remove the folder in the DCS " //$NON-NLS-1$
-                    + "designer, re-run get, and retry."; //$NON-NLS-1$
-            }
-            List<DataCompositionSchemaDataSetField> matches = regularFields(fieldTarget.dataSet,
-                oldKey);
+            List<DataSetField> matches = dataSetFields(fieldTarget.dataSet, oldKey);
             if (matches.size() != 1)
             {
-                return ambiguousRename(request, oldKey, matches.size());
+                return ambiguousIdentity(request, "rename", oldKey, matches.size()); //$NON-NLS-1$
             }
-            target = matches.get(0);
+            DataSetField addressed = matches.get(0);
+            if (!(addressed instanceof DataCompositionSchemaDataSetField))
+            {
+                return unsupportedField(request, oldKey, addressed);
+            }
+            target = addressed;
         }
         else
         {
             List<EObject> matches = identityMatches(schema, request.type, oldKey);
             if (matches.size() != 1)
             {
-                return ambiguousRename(request, oldKey, matches.size());
+                return ambiguousIdentity(request, "rename", oldKey, matches.size()); //$NON-NLS-1$
             }
             target = matches.get(0);
+        }
+        if (TYPE_DATA_SET.equals(request.type) && !existing.contains(newKey))
+        {
+            String collisionAddress = dataSetAddress(schema.getDataSets(), request.address.rootFqn(),
+                Arrays.asList("dataSets"), newKey); //$NON-NLS-1$
+            if (collisionAddress != null)
+            {
+                return "Cannot rename dataSet '" + oldKey + "' to '" + newKey //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' at '" + request.address + "' because data set '" + newKey //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' already exists at '" + collisionAddress //$NON-NLS-1$
+                    + "'. Choose an unused 'name' and retry."; //$NON-NLS-1$
+            }
         }
         if (existing.contains(newKey))
         {
@@ -290,12 +294,46 @@ public final class DcsSchemaWriter
             || TYPE_PARAMETER.equals(type) ? KEY_NAME : KEY_DATA_PATH;
     }
 
-    private static String ambiguousRename(Request request, String key, int count)
+    private static String ambiguousIdentity(Request request, String operation, String key,
+        int count)
     {
-        return "Cannot rename " + request.type + " '" + key + "' at '" + request.address //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "Cannot " + operation + " " + request.type + " '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + request.address
             + "' because natural key '" + key + "' matches " + count //$NON-NLS-1$ //$NON-NLS-2$
             + " existing nodes. The address is ambiguous; disambiguate the duplicates in the DCS " //$NON-NLS-1$
             + "designer first, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static String unsupportedField(Request request, String key, DataSetField field)
+    {
+        return "Field '" + key + "' at '" + request.address //$NON-NLS-1$ //$NON-NLS-2$
+            + "' has unsupported subtype '" + field.eClass().getName() //$NON-NLS-1$
+            + "'. Field folders are not authorable; edit or remove the folder in the DCS " //$NON-NLS-1$
+            + "designer, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static String dataSetAddress(List<DataSet> dataSets, String rootFqn,
+        List<String> prefix, String key)
+    {
+        for (int i = 0; i < dataSets.size(); i++)
+        {
+            DataSet dataSet = dataSets.get(i);
+            List<String> address = new ArrayList<>(prefix);
+            String name = dataSet.getName();
+            address.add(name == null || name.isEmpty() ? Integer.toString(i) : name);
+            if (key.equals(dataSet.getName()))
+            {
+                return DcsAddress.render(rootFqn, address);
+            }
+            if (dataSet instanceof DataCompositionSchemaDataSetUnion)
+            {
+                address.add(KEY_ITEMS);
+                String nested = dataSetAddress(
+                    ((DataCompositionSchemaDataSetUnion)dataSet).getItems(), rootFqn, address, key);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
     }
 
     private static List<EObject> identityMatches(DataCompositionSchema schema, String type,
@@ -549,9 +587,19 @@ public final class DcsSchemaWriter
             FieldTarget target = resolveFieldTarget(schema, path);
             if (target.error != null) return target.error;
             String fieldKey = path.get(path.size() - 1);
-            DataCompositionSchemaDataSetField field = findField(target.dataSet, fieldKey);
-            if (field == null) return "Field '" + fieldKey + "' was not found in data set '" //$NON-NLS-1$ //$NON-NLS-2$
+            List<DataSetField> matches = dataSetFields(target.dataSet, fieldKey);
+            if (matches.isEmpty()) return "Field '" + fieldKey + "' was not found in data set '" //$NON-NLS-1$ //$NON-NLS-2$
                 + target.dataSet.getName() + "'. Re-run get."; //$NON-NLS-1$
+            if (matches.size() != 1)
+            {
+                return ambiguousIdentity(request, removeOperation(request), fieldKey,
+                    matches.size());
+            }
+            DataSetField field = matches.get(0);
+            if (!(field instanceof DataCompositionSchemaDataSetField))
+            {
+                return unsupportedField(request, fieldKey, field);
+            }
             target.dataSet.getFields().remove(field);
             return null;
         }
@@ -560,18 +608,33 @@ public final class DcsSchemaWriter
             return "action='remove' for type='" + request.type //$NON-NLS-1$
                 + "' needs one exact canonical node address; got '" + request.address + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         String key = path.get(1);
-        boolean removed;
-        switch (collection)
+        List<EObject> matches = identityMatches(schema, request.type, key);
+        if (matches.isEmpty())
         {
-            case "dataSources": removed = schema.getDataSources().removeIf(item -> key.equals(item.getName())); break; //$NON-NLS-1$
-            case "dataSets": removed = schema.getDataSets().removeIf(item -> key.equals(item.getName())); break; //$NON-NLS-1$
-            case "parameters": removed = schema.getParameters().removeIf(item -> key.equals(item.getName())); break; //$NON-NLS-1$
-            case "calculatedFields": removed = schema.getCalculatedFields().removeIf(item -> key.equals(item.getDataPath())); break; //$NON-NLS-1$
-            case "totalFields": removed = schema.getTotalFields().removeIf(item -> key.equals(item.getDataPath())); break; //$NON-NLS-1$
-            default: removed = false; break;
+            return "No " + request.type + " named '" + key //$NON-NLS-1$ //$NON-NLS-2$
+                + "' exists at '" + request.address //$NON-NLS-1$
+                + "'. Re-run get and copy an existing address."; //$NON-NLS-1$
         }
-        return removed ? null : "No " + request.type + " named '" + key //$NON-NLS-1$ //$NON-NLS-2$
-            + "' exists at '" + request.address + "'. Re-run get and copy an existing address."; //$NON-NLS-1$ //$NON-NLS-2$
+        if (matches.size() != 1)
+        {
+            return ambiguousIdentity(request, removeOperation(request), key, matches.size());
+        }
+        EObject target = matches.get(0);
+        if (target instanceof DataCompositionSchemaDataSource)
+            schema.getDataSources().remove(target);
+        else if (target instanceof DataSet) schema.getDataSets().remove(target);
+        else if (target instanceof DataCompositionSchemaParameter)
+            schema.getParameters().remove(target);
+        else if (target instanceof DataCompositionSchemaCalculatedField)
+            schema.getCalculatedFields().remove(target);
+        else if (target instanceof DataCompositionSchemaTotalField)
+            schema.getTotalFields().remove(target);
+        return null;
+    }
+
+    private static String removeOperation(Request request)
+    {
+        return ACTION_REPLACE.equals(request.action) ? "replace" : "remove"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static void clearCollection(DataCompositionSchema schema, String collection)
@@ -1112,28 +1175,14 @@ public final class DcsSchemaWriter
         return result;
     }
 
-    private static DataSetField findDataSetField(DataSet dataSet, String path)
+    private static List<DataSetField> dataSetFields(DataSet dataSet, String path)
     {
+        List<DataSetField> result = new ArrayList<>();
         for (DataSetField field : dataSet.getFields())
         {
             if (path.equals(fieldKey(field)))
             {
-                return field;
-            }
-        }
-        return null;
-    }
-
-    private static List<DataCompositionSchemaDataSetField> regularFields(DataSet dataSet,
-        String path)
-    {
-        List<DataCompositionSchemaDataSetField> result = new ArrayList<>();
-        for (DataSetField field : dataSet.getFields())
-        {
-            if (field instanceof DataCompositionSchemaDataSetField
-                && path.equals(((DataCompositionSchemaDataSetField)field).getDataPath()))
-            {
-                result.add((DataCompositionSchemaDataSetField)field);
+                result.add(field);
             }
         }
         return result;

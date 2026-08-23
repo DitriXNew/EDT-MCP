@@ -393,6 +393,229 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testRegularFieldAndFolderWithSameKeyMakeRenameAmbiguous()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        dataSet.getFields().add(field("Amount")); //$NON-NLS-1$
+        DataCompositionSchemaDataSetFieldFolder folder = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetFieldFolder();
+        folder.setDataPath("Amount"); //$NON-NLS-1$
+        dataSet.getFields().add(folder);
+        schema.getDataSets().add(dataSet);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Amount", //$NON-NLS-1$
+            "{\"dataPath\":\"RenamedAmount\"}"); //$NON-NLS-1$
+
+        assertAmbiguousRename(result, "field"); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testDataSetRenameRefusesNameUsedByNestedUnionMember()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("Old", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetUnion union = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetUnion();
+        union.setName("AllSales"); //$NON-NLS-1$
+        union.getItems().add(dataSet("Retail", "SELECT 2")); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(union);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Old", "{\"name\":\"Retail\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("data set 'Retail' already exists")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains(
+            "Report.Sales#/dataSets/AllSales/items/Retail")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testRemoveRefusesAmbiguousNaturalKeysAndUniqueRemoveDeletesOneNode()
+    {
+        DataCompositionSchema schema = newSchema();
+        for (int i = 0; i < 2; i++)
+        {
+            DataCompositionSchemaParameter duplicate = DcsFactory.eINSTANCE
+                .createDataCompositionSchemaParameter();
+            duplicate.setName("Duplicate"); //$NON-NLS-1$
+            schema.getParameters().add(duplicate);
+        }
+        DataCompositionSchemaParameter unique = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        unique.setName("Unique"); //$NON-NLS-1$
+        schema.getParameters().add(unique);
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        dataSet.getFields().add(field("Amount")); //$NON-NLS-1$
+        dataSet.getFields().add(field("Amount")); //$NON-NLS-1$
+        schema.getDataSets().add(dataSet);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result ambiguousParameter = apply(schema, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Duplicate", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result ambiguousField = apply(schema, "remove", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Amount", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(ambiguousParameter.isSuccess());
+        assertTrue(ambiguousParameter.error(),
+            ambiguousParameter.error().contains("Cannot remove parameter")); //$NON-NLS-1$
+        assertTrue(ambiguousParameter.error(),
+            ambiguousParameter.error().contains("matches 2 existing nodes")); //$NON-NLS-1$
+        assertFalse(ambiguousField.isSuccess());
+        assertTrue(ambiguousField.error(),
+            ambiguousField.error().contains("Cannot remove field")); //$NON-NLS-1$
+        assertTrue(ambiguousField.error(),
+            ambiguousField.error().contains("matches 2 existing nodes")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result removed = apply(schema, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Unique", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(removed.error(), removed.isSuccess());
+        assertEquals(2, schema.getParameters().size());
+        assertTrue(schema.getParameters().stream()
+            .allMatch(parameter -> "Duplicate".equals(parameter.getName()))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExpressionReferenceBlocksFieldRenameAndRemove()
+    {
+        DataCompositionSchema schema = schemaWithFields("Revenue"); //$NON-NLS-1$
+        schema.getCalculatedFields().add(calculatedField("Margin", "Revenue - Cost")); //$NON-NLS-1$ //$NON-NLS-2$
+        String expressionAddress = "Report.Sales#/calculatedFields/Margin"; //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result renamed = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Revenue", //$NON-NLS-1$
+            "{\"dataPath\":\"NetRevenue\"}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result removed = apply(schema, "remove", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Revenue", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(renamed.isSuccess());
+        assertTrue(renamed.error(), renamed.error().contains(expressionAddress));
+        assertFalse(removed.isSuccess());
+        assertTrue(removed.error(), removed.error().contains(expressionAddress));
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testTotalFieldExpressionBlocksFieldRemove()
+    {
+        DataCompositionSchema schema = schemaWithFields("Quantity"); //$NON-NLS-1$
+        DataCompositionSchemaTotalField total = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaTotalField();
+        total.setDataPath("TotalQuantity"); //$NON-NLS-1$
+        total.setExpression("Quantity"); //$NON-NLS-1$
+        schema.getTotalFields().add(total);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "remove", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Quantity", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains(
+            "Report.Sales#/totalFields/TotalQuantity")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testExpressionReferenceUsesWholeTokensWithoutPartialMatches()
+    {
+        DataCompositionSchema schema = schemaWithFields("Revenue", "Cost", "CostPrice", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "LiteralOnly"); //$NON-NLS-1$
+        schema.getCalculatedFields().add(calculatedField("Margin", //$NON-NLS-1$
+            "revenue - Cost + \"prefix \"\"embedded\"\" LiteralOnly\"")); //$NON-NLS-1$
+
+        DcsSchemaWriter.Result revenue = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Revenue", //$NON-NLS-1$
+            "{\"dataPath\":\"NetRevenue\"}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result cost = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Cost", //$NON-NLS-1$
+            "{\"dataPath\":\"DirectCost\"}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result costPrice = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/CostPrice", //$NON-NLS-1$
+            "{\"dataPath\":\"WholesaleCost\"}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result literalOnly = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/LiteralOnly", //$NON-NLS-1$
+            "{\"dataPath\":\"TextToken\"}"); //$NON-NLS-1$
+
+        assertFalse(revenue.isSuccess());
+        assertTrue(revenue.error(), revenue.error().contains(
+            "Report.Sales#/calculatedFields/Margin")); //$NON-NLS-1$
+        assertFalse(cost.isSuccess());
+        assertTrue(cost.error(), cost.error().contains("Report.Sales#/calculatedFields/Margin")); //$NON-NLS-1$
+        assertTrue(costPrice.error(), costPrice.isSuccess());
+        assertEquals("WholesaleCost", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetField)query(schema).getFields().get(2)).getDataPath());
+        assertTrue(literalOnly.error(), literalOnly.isSuccess());
+        assertEquals("TextToken", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetField)query(schema).getFields().get(3)).getDataPath());
+    }
+
+    @Test
+    public void testExpressionParameterReferenceBlocksParameterRename()
+    {
+        DataCompositionSchema schema = schemaWithFields("Amount"); //$NON-NLS-1$
+        DataCompositionSchemaParameter period = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        period.setName("Period"); //$NON-NLS-1$
+        schema.getParameters().add(period);
+        // An expression names a parameter as '&Period'; '&' is not an identifier character, so the
+        // same whole-token scan that guards field renames sees the parameter too.
+        schema.getCalculatedFields().add(calculatedField("Recent", "Amount > &Period")); //$NON-NLS-1$ //$NON-NLS-2$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result blocked = apply(schema, "update", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Period", "{\"name\":\"Interval\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(blocked.isSuccess());
+        assertTrue(blocked.error(), blocked.error().contains("Recent")); //$NON-NLS-1$
+        assertEquals("a refused parameter rename must leave the model unchanged", //$NON-NLS-1$
+            beforeHash, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result allowed = apply(schema, "update", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Period", "{\"name\":\"Period\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(allowed.error(), allowed.isSuccess());
+    }
+
+    @Test
+    public void testExpressionFunctionNameDoesNotBlockFieldRename()
+    {
+        DataCompositionSchema schema = schemaWithFields("Сумма"); //$NON-NLS-1$
+        schema.getCalculatedFields().add(calculatedField("Total", "Сумма(Оборот)")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Сумма", //$NON-NLS-1$
+            "{\"dataPath\":\"Итого\"}"); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        assertEquals("Итого", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetField)query(schema).getFields().get(0)).getDataPath());
+    }
+
+    @Test
+    public void testExpressionDottedPathReferencesItsHeadField()
+    {
+        DataCompositionSchema schema = schemaWithFields("Товар"); //$NON-NLS-1$
+        schema.getCalculatedFields().add(calculatedField("ProductName", //$NON-NLS-1$
+            "Товар.Наименование")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "remove", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Товар", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains(
+            "Report.Sales#/calculatedFields/ProductName")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
     public void testEveryNonFieldRenameRefusesDuplicateOldIdentityWithoutChangingHash()
     {
         DataCompositionSchema schema = newSchema();
@@ -804,6 +1027,36 @@ public class DcsSchemaWriterTest
         result.setName(name);
         result.setQuery(query);
         return result;
+    }
+
+    private static DataCompositionSchemaDataSetField field(String dataPath)
+    {
+        DataCompositionSchemaDataSetField result = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetField();
+        result.setDataPath(dataPath);
+        return result;
+    }
+
+    private static DataCompositionSchemaCalculatedField calculatedField(String dataPath,
+        String expression)
+    {
+        DataCompositionSchemaCalculatedField result = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaCalculatedField();
+        result.setDataPath(dataPath);
+        result.setExpression(expression);
+        return result;
+    }
+
+    private static DataCompositionSchema schemaWithFields(String... dataPaths)
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String dataPath : dataPaths)
+        {
+            dataSet.getFields().add(field(dataPath));
+        }
+        schema.getDataSets().add(dataSet);
+        return schema;
     }
 
     private static DataCompositionSchema schemaWithLinkParameter(String parameterName)
