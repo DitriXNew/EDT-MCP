@@ -108,6 +108,20 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testDataSetLinkParameterIsReportedAsAParameterReference()
+    {
+        DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetLink link = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setParameter("LinkParameter"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+
+        assertEquals(java.util.Arrays.asList("Report.Sales#/dataSetLinks/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, "Report.Sales", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+                "LinkParameter")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testBareCollectionUsesSharedPaginationAndCanonicalAddresses()
     {
         DataCompositionSchema schema = schemaWithDataSet("First", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$

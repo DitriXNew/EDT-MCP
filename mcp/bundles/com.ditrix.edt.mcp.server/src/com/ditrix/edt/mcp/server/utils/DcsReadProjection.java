@@ -249,6 +249,11 @@ public final class DcsReadProjection
         {
             result.add(parentAddress(address));
         }
+        if ("parameter".equals(kind) && object instanceof DataCompositionSchemaDataSetLink //$NON-NLS-1$
+            && identity.equals(((DataCompositionSchemaDataSetLink)object).getParameter()))
+        {
+            result.add(address);
+        }
         if ("dataSet".equals(kind) && object instanceof DataCompositionSchemaDataSetLink) //$NON-NLS-1$
         {
             DataCompositionSchemaDataSetLink link = (DataCompositionSchemaDataSetLink)object;

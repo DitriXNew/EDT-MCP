@@ -1191,17 +1191,21 @@ def test_schema_summary_and_schema_collection_read_expose_data_set_links():
             {"name": "Source", "type": "query", "query": "SELECT 1 AS Key"},
             {"name": "Destination", "type": "query", "query": "SELECT 1 AS Key"},
         ],
+        "parameters": [{"name": "LinkParameter"}],
         "dataSetLinks": [{
             "sourceDataSet": "Source",
             "destinationDataSet": "Destination",
             "sourceExpression": "Key",
             "destinationExpression": "Key",
+            "parameter": "LinkParameter",
         }],
     })
     assert_ok(authored, "author two data sets and their link")
     dcs_rel = _poll_report_dcs(report_name, ctx="the readable data-set-link fixture")
     poll_disk_contains(dcs_rel, "Destination",
                        ctx="the linked data sets must reach Template.dcs")
+    poll_disk_contains(dcs_rel, "LinkParameter",
+                       ctx="the link parameter must reach Template.dcs")
 
     summary = _get(root, "schema")
     assert_ok(summary, "read the schema summary containing data-set links")
@@ -1214,6 +1218,23 @@ def test_schema_summary_and_schema_collection_read_expose_data_set_links():
     assert "# DCS collection: schema" in page.text
     assert "**Items:** 1" in page.text
     assert root + "#/dataSetLinks/0" in page.text
+
+    before_disk = read_disk(dcs_rel)
+    parameter = _get(root + "#/parameters/LinkParameter", "parameter")
+    assert_ok(parameter, "read the parameter retained by the data-set link")
+    refused = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": root + "#/parameters/LinkParameter",
+        "action": "remove",
+        "type": "parameter",
+        "expectedHash": _hash(parameter),
+    })
+    error = assert_error(refused, "remove a parameter retained by a data-set link")
+    assert_error_quality(error, names=["LinkParameter", root + "#/dataSetLinks/0"],
+                         suggests=["referring nodes", "re-run get"],
+                         ctx="a retained link must block parameter removal")
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused linked-parameter removal must leave Template.dcs byte-for-byte unchanged"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
