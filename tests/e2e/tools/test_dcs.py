@@ -1212,6 +1212,52 @@ def test_indexed_group_field_replace_resets_omitted_members_on_model_and_disk():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_table_axis_holder_address_copied_from_read_writes_to_disk():
+    report_name = "E2EDcsTableAxisHolder"
+    root = _seed_report(report_name)
+    old_id = "oldAxisSelection"
+    new_id = "newAxisSelection"
+    seeded = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "items": [{
+                "kind": "table",
+                "name": "SalesTable",
+                "rows": [{
+                    "name": "CustomerAxis",
+                    "selection": {"userSettingID": old_id, "items": []},
+                }],
+            }],
+        },
+    })
+    assert_ok(seeded, "author a table carrying a row-axis selection holder")
+
+    table_address = root + "#/defaultSettings/items/0"
+    holder_address = table_address + "/rows/0/selection"
+    table = _get(table_address, "table")
+    assert_ok(table, "read the table that advertises nested axis-holder addresses")
+    assert "`" + holder_address + "`" in table.text, \
+        "the table read must advertise the canonical axis-holder address: %s" % table.text
+
+    before = _get(holder_address, "selection")
+    assert_ok(before, "read the row-axis selection through the advertised address")
+    replaced = _write(holder_address, "replace", "selection", {
+        "userSettingID": new_id,
+        "items": [],
+    }, expectedHash=_hash(before))
+    assert_ok(replaced, "replace the row-axis selection through its canonical address")
+
+    after = _get(holder_address, "selection")
+    assert_ok(after, "read back the row-axis selection replacement")
+    assert new_id in after.text and old_id not in after.text
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the table-axis holder fixture")
+    poll_disk_contains(dcs_rel, new_id,
+                       ctx="the row-axis holder replacement must reach Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert new_id in on_disk and old_id not in on_disk
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_schema_summary_and_schema_collection_read_expose_data_set_links():
     report_name = "E2EDcsReadLinks"
     root = "Report." + report_name

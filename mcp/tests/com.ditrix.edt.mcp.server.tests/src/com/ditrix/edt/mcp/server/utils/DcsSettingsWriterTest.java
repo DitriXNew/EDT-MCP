@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
@@ -461,6 +462,73 @@ public class DcsSettingsWriterTest
         assertTrue("a replaced holder must not keep the userSettingID it was never given", //$NON-NLS-1$
             table.getSelection() == null || table.getSelection().getUserSettingID() == null
                 || table.getSelection().getUserSettingID().isEmpty());
+    }
+
+    @Test
+    public void testTableAxisHolderAddressesReplaceAuthoritatively()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"table\",\"name\":\"T\"," //$NON-NLS-1$
+            + "\"rows\":[{\"name\":\"Axis\"," //$NON-NLS-1$
+            + "\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}]}," //$NON-NLS-1$
+            + "\"selection\":{\"userSettingID\":\"oldSelection\",\"items\":[]}," //$NON-NLS-1$
+            + "\"filter\":{\"userSettingID\":\"oldFilter\",\"items\":[]}," //$NON-NLS-1$
+            + "\"order\":{\"userSettingID\":\"oldOrder\",\"items\":[]}}]}]}")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult selection = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "rows", "0", "selection"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "replace", "selection", json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(selection.error(), selection.isSuccess());
+
+        DcsSettingsWriter.SettingsResult filter = DcsSettingsWriter.planSettings(selection.settings(),
+            java.util.Arrays.asList("items", "0", "rows", "0", "filter"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "replace", "filter", json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(filter.error(), filter.isSuccess());
+
+        DcsSettingsWriter.SettingsResult order = DcsSettingsWriter.planSettings(filter.settings(),
+            java.util.Arrays.asList("items", "0", "rows", "0", "order"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "replace", "order", json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(order.error(), order.isSuccess());
+
+        DcsSettingsWriter.SettingsResult groupFields = DcsSettingsWriter.planSettings(order.settings(),
+            java.util.Arrays.asList("items", "0", "rows", "0", "groupFields"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "replace", "grouping", json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(groupFields.error(), groupFields.isSuccess());
+
+        DataCompositionTable table = (DataCompositionTable)groupFields.settings().getItems().get(0);
+        DataCompositionTableGroup axis = table.getRows().get(0);
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        assertEquals(factory.createDataCompositionSelectedFields().getUserSettingID(),
+            axis.getSelection().getUserSettingID());
+        assertEquals(factory.createDataCompositionFilter().getUserSettingID(),
+            axis.getFilter().getUserSettingID());
+        assertEquals(factory.createDataCompositionOrder().getUserSettingID(),
+            axis.getOrder().getUserSettingID());
+        assertTrue(axis.getGroupFields().getItems().isEmpty());
+    }
+
+    @Test
+    public void testRemoveCanReachTableAxisHoldersAndTheirItems()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"table\",\"name\":\"T\"," //$NON-NLS-1$
+            + "\"rows\":[{\"name\":\"Axis\"," //$NON-NLS-1$
+            + "\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}]}," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}]}}]}]}")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult selection = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "rows", "0", "selection"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "remove", "selection", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(selection.error(), selection.isSuccess());
+        DataCompositionTable selectedTable =
+            (DataCompositionTable)selection.settings().getItems().get(0);
+        assertNull(selectedTable.getRows().get(0).getSelection());
+
+        DcsSettingsWriter.SettingsResult groupField = DcsSettingsWriter.planSettings(selection.settings(),
+            java.util.Arrays.asList("items", "0", "rows", "0", "groupFields", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+            "remove", "grouping", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(groupField.error(), groupField.isSuccess());
+        DataCompositionTable result = (DataCompositionTable)groupField.settings().getItems().get(0);
+        assertTrue(result.getRows().get(0).getGroupFields().getItems().isEmpty());
     }
 
     @Test

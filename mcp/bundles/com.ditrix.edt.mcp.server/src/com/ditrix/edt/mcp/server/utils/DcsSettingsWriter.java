@@ -939,13 +939,11 @@ public final class DcsSettingsWriter
                 return applyStructurePath(group.getItems(), tail, body, action, languages, version,
                     where + "/items"); //$NON-NLS-1$
             case "selection": //$NON-NLS-1$
-                return applySelectionPath(new GroupSettingsAccess(group), tail, body, action, languages);
             case "filter": //$NON-NLS-1$
-                return applyFilterPath(new GroupSettingsAccess(group), tail, body, action, languages);
             case "order": //$NON-NLS-1$
-                return applyOrderPath(new GroupSettingsAccess(group), tail, body, action, languages);
             case "groupFields": //$NON-NLS-1$
-                return applyGroupFieldsPath(group, tail, body, action, languages, where);
+                return applyGroupingHolderPath(new GroupSettingsAccess(group), head, tail, body,
+                    action, languages, where);
             case "outputParameters": //$NON-NLS-1$
                 return "Group output-parameter node updates are not addressable separately. Update " //$NON-NLS-1$
                     + "the group body and pass outputParameters there."; //$NON-NLS-1$
@@ -953,6 +951,32 @@ public final class DcsSettingsWriter
                 return "Grouping path segment '" + head + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
                     + "' is not authorable. Use items, groupFields, selection, filter, or order."; //$NON-NLS-1$
         }
+    }
+
+    private static String applyGroupingHolderPath(GroupingSettingsAccess owner, String member,
+        List<String> path, JsonObject body, String action,
+        DcsPresentationParser.LanguageContext languages, String where)
+    {
+        switch (member)
+        {
+            case "selection": //$NON-NLS-1$
+                return applySelectionPath(owner, path, body, action, languages);
+            case "filter": //$NON-NLS-1$
+                return applyFilterPath(owner, path, body, action, languages);
+            case "order": //$NON-NLS-1$
+                return applyOrderPath(owner, path, body, action, languages);
+            case "groupFields": //$NON-NLS-1$
+                return applyGroupFieldsPath(owner, path, body, action, languages, where);
+            default:
+                return "Grouping path segment '" + member + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' is not authorable. Use groupFields, selection, filter, or order."; //$NON-NLS-1$
+        }
+    }
+
+    private static boolean isGroupingHolder(String member)
+    {
+        return "groupFields".equals(member) || "selection".equals(member) //$NON-NLS-1$ //$NON-NLS-2$
+            || "filter".equals(member) || "order".equals(member); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String appendGroupings(List<StructureItem> items, JsonArray array, String action,
@@ -1383,10 +1407,17 @@ public final class DcsSettingsWriter
             return applyTableGroup(group, body, action, languages, version,
                 where + "/" + path.get(0)); //$NON-NLS-1$
         }
-        if (!KEY_ITEMS.equals(path.get(1)))
+        String member = path.get(1);
+        if (isGroupingHolder(member))
+        {
+            return applyGroupingHolderPath(new TableGroupSettingsAccess(group), member,
+                path.subList(2, path.size()), body, action, languages,
+                where + "/" + path.get(0)); //$NON-NLS-1$
+        }
+        if (!KEY_ITEMS.equals(member))
         {
             return "Table-axis path '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "' is invalid. Use items for nested axis groups."; //$NON-NLS-1$
+                + "' is invalid. Use items, groupFields, selection, filter, or order."; //$NON-NLS-1$
         }
         return applyTableGroupsPath(group.getItems(), path.subList(2, path.size()), body, action,
             languages, version, where + "/" + path.get(0) + "/items"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1508,13 +1539,13 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    private static String applyGroupFieldsPath(DataCompositionGroup group, List<String> path,
+    private static String applyGroupFieldsPath(GroupingSettingsAccess owner, List<String> path,
         JsonObject body, String action, DcsPresentationParser.LanguageContext languages, String where)
     {
         // A holder addressed directly starts empty on replace, like every other holder: copying it
         // meant the old group fields stayed and the replacement was appended behind them.
         DataCompositionGroupFields fields = ACTION_REPLACE.equals(action) && path.isEmpty() ? null
-            : copy(group.getGroupFields());
+            : copy(owner.groupFields());
         if (fields == null)
         {
             if (ACTION_UPDATE.equals(action))
@@ -1559,7 +1590,7 @@ public final class DcsSettingsWriter
         }
         if (error == null)
         {
-            group.setGroupFields(fields);
+            owner.groupFields(fields);
         }
         return error;
     }
@@ -4245,29 +4276,18 @@ public final class DcsSettingsWriter
     {
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
+        if (isGroupingHolder(head))
+        {
+            return removeGroupingHolder(new GroupSettingsAccess(group), path, where);
+        }
         if (tail.isEmpty())
         {
             switch (head)
             {
-                case "groupFields": group.setGroupFields(null); return null; //$NON-NLS-1$
-                case "selection": group.setSelection(null); return null; //$NON-NLS-1$
-                case "filter": group.setFilter(null); return null; //$NON-NLS-1$
-                case "order": group.setOrder(null); return null; //$NON-NLS-1$
                 case "outputParameters": group.setOutputParameters(null); return null; //$NON-NLS-1$
                 default: break;
             }
         }
-        if ("groupFields".equals(head)) //$NON-NLS-1$
-            return removeIndexed(group.getGroupFields() == null ? null : group.getGroupFields().getItems(),
-                tail, where + "/groupFields"); //$NON-NLS-1$
-        if ("selection".equals(head)) //$NON-NLS-1$
-            return removeIndexed(group.getSelection() == null ? null : group.getSelection().getItems(),
-                tail, where + "/selection"); //$NON-NLS-1$
-        if ("filter".equals(head)) //$NON-NLS-1$
-            return removeFilterPath(group.getFilter(), tail, where + "/filter"); //$NON-NLS-1$
-        if ("order".equals(head)) //$NON-NLS-1$
-            return removeIndexed(group.getOrder() == null ? null : group.getOrder().getItems(),
-                tail, where + "/order"); //$NON-NLS-1$
         if ("outputParameters".equals(head)) //$NON-NLS-1$
             return removeIndexed(group.getOutputParameters() == null ? null
                 : group.getOutputParameters().getItems(), tail, where + "/outputParameters"); //$NON-NLS-1$
@@ -4317,8 +4337,43 @@ public final class DcsSettingsWriter
         if (KEY_ITEMS.equals(tail.get(0)))
             return removeTableGroupPath(group.getItems(), tail.subList(1, tail.size()),
                 where + "/" + path.get(0) + "/items"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (isGroupingHolder(tail.get(0)))
+            return removeGroupingHolder(new TableGroupSettingsAccess(group), tail,
+                where + "/" + path.get(0)); //$NON-NLS-1$
         return "Table-axis child removal at '" + where //$NON-NLS-1$
-            + "' currently supports nested items only. Remove the group or update its body."; //$NON-NLS-1$
+            + "' currently supports items, groupFields, selection, filter, or order. Remove the " //$NON-NLS-1$
+            + "group or update its body."; //$NON-NLS-1$
+    }
+
+    private static String removeGroupingHolder(GroupingSettingsAccess owner, List<String> path,
+        String where)
+    {
+        String head = path.get(0);
+        List<String> tail = path.subList(1, path.size());
+        if (tail.isEmpty())
+        {
+            switch (head)
+            {
+                case "groupFields": owner.groupFields(null); return null; //$NON-NLS-1$
+                case "selection": owner.selection(null); return null; //$NON-NLS-1$
+                case "filter": owner.filter(null); return null; //$NON-NLS-1$
+                case "order": owner.order(null); return null; //$NON-NLS-1$
+                default: break;
+            }
+        }
+        if ("groupFields".equals(head)) //$NON-NLS-1$
+            return removeIndexed(owner.groupFields() == null ? null : owner.groupFields().getItems(),
+                tail, where + "/groupFields"); //$NON-NLS-1$
+        if ("selection".equals(head)) //$NON-NLS-1$
+            return removeIndexed(owner.selection() == null ? null : owner.selection().getItems(),
+                tail, where + "/selection"); //$NON-NLS-1$
+        if ("filter".equals(head)) //$NON-NLS-1$
+            return removeFilterPath(owner.filter(), tail, where + "/filter"); //$NON-NLS-1$
+        if ("order".equals(head)) //$NON-NLS-1$
+            return removeIndexed(owner.order() == null ? null : owner.order().getItems(),
+                tail, where + "/order"); //$NON-NLS-1$
+        return "Grouping child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' does not select exactly one authorable node."; //$NON-NLS-1$
     }
 
     private static String removeFilterPath(DataCompositionFilter filter, List<String> path, String where)
@@ -4442,6 +4497,12 @@ public final class DcsSettingsWriter
         void order(DataCompositionOrder value);
     }
 
+    private interface GroupingSettingsAccess extends SettingsAccess
+    {
+        DataCompositionGroupFields groupFields();
+        void groupFields(DataCompositionGroupFields value);
+    }
+
     private static final class RootSettingsAccess implements SettingsAccess
     {
         private final DataCompositionSettings settings;
@@ -4454,7 +4515,7 @@ public final class DcsSettingsWriter
         @Override public void order(DataCompositionOrder value) { settings.setOrder(value); }
     }
 
-    private static final class GroupSettingsAccess implements SettingsAccess
+    private static final class GroupSettingsAccess implements GroupingSettingsAccess
     {
         private final DataCompositionGroup group;
         GroupSettingsAccess(DataCompositionGroup group) { this.group = group; }
@@ -4464,6 +4525,22 @@ public final class DcsSettingsWriter
         @Override public void filter(DataCompositionFilter value) { group.setFilter(value); }
         @Override public DataCompositionOrder order() { return group.getOrder(); }
         @Override public void order(DataCompositionOrder value) { group.setOrder(value); }
+        @Override public DataCompositionGroupFields groupFields() { return group.getGroupFields(); }
+        @Override public void groupFields(DataCompositionGroupFields value) { group.setGroupFields(value); }
+    }
+
+    private static final class TableGroupSettingsAccess implements GroupingSettingsAccess
+    {
+        private final DataCompositionTableGroup group;
+        TableGroupSettingsAccess(DataCompositionTableGroup group) { this.group = group; }
+        @Override public DataCompositionSelectedFields selection() { return group.getSelection(); }
+        @Override public void selection(DataCompositionSelectedFields value) { group.setSelection(value); }
+        @Override public DataCompositionFilter filter() { return group.getFilter(); }
+        @Override public void filter(DataCompositionFilter value) { group.setFilter(value); }
+        @Override public DataCompositionOrder order() { return group.getOrder(); }
+        @Override public void order(DataCompositionOrder value) { group.setOrder(value); }
+        @Override public DataCompositionGroupFields groupFields() { return group.getGroupFields(); }
+        @Override public void groupFields(DataCompositionGroupFields value) { group.setGroupFields(value); }
     }
 
     /** Detached schema settings plan. */
