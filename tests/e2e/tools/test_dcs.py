@@ -1020,7 +1020,9 @@ def test_variant_nested_settings_and_hash_guarded_filter_index_update():
     assert "99" in changed_projection, "the selected filter item must carry its new value"
     assert "20" not in changed_projection, \
         "the selected filter item must not retain its old value"
-    poll_disk_contains(dcs_rel, ">99<",
+    # the platform serializes an xs:decimal with its fraction, so the literal on disk is 99.0 -
+    # asserting ">99<" can never match and says nothing about the write actually landing
+    poll_disk_contains(dcs_rel, ">99.0<",
                        ctx="the indexed settings update must reach Template.dcs")
 
 
@@ -1095,6 +1097,34 @@ def test_identity_collection_replace_refuses_dangling_references_and_preserves_d
     poll_disk_contains(dcs_rel, "RemovedSource",
                        ctx="the referenced data source must reach Template.dcs")
     before_disk = read_disk(dcs_rel)
+
+    schema = _get(root, "schema")
+    assert_ok(schema, "read the bare schema hash")
+    refused_schema = _write(root, "replace", "schema", {
+        "dataSources": [
+            {"name": "RemovedSource", "type": "Local"},
+            {"name": "RetainedSource", "type": "Local"},
+        ],
+        "dataSets": [
+            {"name": "RemovedSet", "type": "query", "dataSource": "RemovedSource",
+             "query": "SELECT 1 AS Key"},
+        ],
+        "dataSetLinks": [{
+            "sourceDataSet": "RemovedSet",
+            "destinationDataSet": "RetainedSet",
+            "sourceExpression": "Key",
+            "destinationExpression": "Key",
+        }],
+    }, expectedHash=_hash(schema))
+    schema_error = assert_error(
+        refused_schema, "replace the bare schema with a link whose destination was omitted")
+    assert_error_quality(schema_error,
+                         names=["destinationDataSet", "RetainedSet",
+                                root + "#/dataSetLinks/0"],
+                         suggests=["replacement body", "referring nodes"],
+                         ctx="schema replacement names the assembled dangling reference")
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused bare schema replacement must leave Template.dcs byte-for-byte unchanged"
 
     data_sets = _get(root, "dataSet")
     assert_ok(data_sets, "read the data-set collection hash")

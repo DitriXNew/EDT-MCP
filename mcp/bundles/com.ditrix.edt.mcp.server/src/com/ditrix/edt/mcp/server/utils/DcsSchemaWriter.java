@@ -7,14 +7,18 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
@@ -119,6 +123,8 @@ public final class DcsSchemaWriter
         {
             String error = remove(working, request);
             if (error != null) return Result.failure(error);
+            error = assembledReferenceError(working, request.address.rootFqn());
+            if (error != null) return Result.failure(error);
             commitSchemaLayer(schema, working);
             return Result.success(null);
         }
@@ -128,6 +134,8 @@ public final class DcsSchemaWriter
             if (error != null) return Result.failure(error);
             if (TYPE_SCHEMA.equals(request.type) && request.body.entrySet().isEmpty())
             {
+                error = assembledReferenceError(working, request.address.rootFqn());
+                if (error != null) return Result.failure(error);
                 commitSchemaLayer(schema, working);
                 return Result.success(null);
             }
@@ -139,16 +147,14 @@ public final class DcsSchemaWriter
         }
         DcsWriter.Result applied = DcsWriter.apply(working, payload.payload, resolver, request.languages);
         if (applied.hasError()) return Result.failureJson(applied.error);
+        String assembledError = assembledReferenceError(working, request.address.rootFqn());
+        if (assembledError != null) return Result.failure(assembledError);
         commitSchemaLayer(schema, working);
         return Result.success(applied);
     }
 
     private static String identityReferenceError(DataCompositionSchema schema, Request request)
     {
-        if (ACTION_REPLACE.equals(request.action))
-        {
-            return collectionReplacementReferenceError(schema, request);
-        }
         if (!ACTION_REMOVE.equals(request.action) && !ACTION_UPDATE.equals(request.action)) return null;
         List<String> segments = request.address.segments();
         String identity = null;
@@ -168,53 +174,84 @@ public final class DcsSchemaWriter
         return DcsMutationGuard.referenceError(schema, request.address, request.type, identity);
     }
 
-    private static String collectionReplacementReferenceError(DataCompositionSchema schema,
-        Request request)
+    private static String assembledReferenceError(DataCompositionSchema schema, String rootFqn)
     {
-        String collection;
-        List<String> existing;
-        if (TYPE_DATA_SET.equals(request.type))
+        Set<String> dataSetNames = new LinkedHashSet<>();
+        List<DataSet> dataSets = new ArrayList<>();
+        collectDataSets(schema.getDataSets(), dataSetNames, dataSets);
+        for (int i = 0; i < schema.getDataSetLinks().size(); i++)
         {
-            collection = "dataSets"; //$NON-NLS-1$
-            existing = keys(schema, collection, null);
+            DataCompositionSchemaDataSetLink link = schema.getDataSetLinks().get(i);
+            String address = DcsAddress.render(rootFqn,
+                Arrays.asList("dataSetLinks", Integer.toString(i))); //$NON-NLS-1$
+            String error = dataSetLinkReferenceError(link.getSourceDataSet(), "sourceDataSet", //$NON-NLS-1$
+                address, dataSetNames);
+            if (error != null) return error;
+            error = dataSetLinkReferenceError(link.getDestinationDataSet(), "destinationDataSet", //$NON-NLS-1$
+                address, dataSetNames);
+            if (error != null) return error;
         }
-        else if (TYPE_DATA_SOURCE.equals(request.type))
+
+        Set<String> dataSourceNames = new LinkedHashSet<>();
+        for (DataCompositionSchemaDataSource dataSource : schema.getDataSources())
         {
-            collection = "dataSources"; //$NON-NLS-1$
-            existing = keys(schema, collection, null);
+            if (dataSource.getName() != null && !dataSource.getName().isEmpty())
+            {
+                dataSourceNames.add(dataSource.getName());
+            }
         }
-        else
+        for (DataSet dataSet : dataSets)
         {
-            return null;
-        }
-        List<String> path = request.address.segments();
-        if (path.size() != 1 || !collection.equals(path.get(0)))
-        {
-            return null;
-        }
-        String retained = string(request.body, KEY_NAME);
-        if (retained == null || retained.isEmpty())
-        {
-            return null;
-        }
-        for (String identity : existing)
-        {
-            if (identity == null || identity.equals(retained))
+            String dataSource = dataSet instanceof DataCompositionSchemaDataSetQuery
+                ? ((DataCompositionSchemaDataSetQuery)dataSet).getDataSource()
+                : dataSet instanceof DataCompositionSchemaDataSetObject
+                    ? ((DataCompositionSchemaDataSetObject)dataSet).getDataSource() : null;
+            if (dataSource == null || dataSource.isEmpty() || dataSourceNames.contains(dataSource))
             {
                 continue;
             }
-            List<String> references = DcsReadProjection.referenceAddresses(schema,
-                request.address.rootFqn(), request.type, identity);
-            if (!references.isEmpty())
-            {
-                return "Cannot replace identity collection '" + request.address //$NON-NLS-1$
-                    + "' because removing " + request.type + " '" + identity //$NON-NLS-1$ //$NON-NLS-2$
-                    + "' would leave dangling references at: " + String.join(", ", references) //$NON-NLS-1$ //$NON-NLS-2$
-                    + ". Keep that identity in the replacement body, or update/remove the " //$NON-NLS-1$
-                    + "referring nodes first, re-run get, and retry with the new hash."; //$NON-NLS-1$
-            }
+            List<String> addresses = DcsReadProjection.referenceAddresses(schema, rootFqn,
+                TYPE_DATA_SOURCE, dataSource);
+            String address = addresses.isEmpty() ? rootFqn : String.join(", ", addresses); //$NON-NLS-1$
+            return "Data set at '" + address //$NON-NLS-1$
+                + "' has dangling dataSource '" + dataSource //$NON-NLS-1$
+                + "' after assembling the schema. Add or keep a data source named '" + dataSource //$NON-NLS-1$
+                + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
+                + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
         }
         return null;
+    }
+
+    private static void collectDataSets(List<DataSet> candidates, Set<String> names,
+        List<DataSet> dataSets)
+    {
+        for (DataSet dataSet : candidates)
+        {
+            dataSets.add(dataSet);
+            if (dataSet.getName() != null && !dataSet.getName().isEmpty())
+            {
+                names.add(dataSet.getName());
+            }
+            if (dataSet instanceof DataCompositionSchemaDataSetUnion)
+            {
+                collectDataSets(((DataCompositionSchemaDataSetUnion)dataSet).getItems(), names,
+                    dataSets);
+            }
+        }
+    }
+
+    private static String dataSetLinkReferenceError(String identity, String member, String address,
+        Set<String> dataSetNames)
+    {
+        if (identity == null || identity.isEmpty() || dataSetNames.contains(identity))
+        {
+            return null;
+        }
+        return "Data-set link at '" + address + "' has dangling " + member + " '" //$NON-NLS-1$ //$NON-NLS-2$
+            + identity
+            + "' after assembling the schema. Add or keep a data set named '" + identity //$NON-NLS-1$
+            + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
+            + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
     }
 
     private static String clearReplaceTarget(DataCompositionSchema schema, Request request)
@@ -471,23 +508,21 @@ public final class DcsSchemaWriter
         }
         if (existing instanceof DataCompositionSchemaDataSetUnion)
         {
-            entry.addProperty(KEY_TYPE, "union"); //$NON-NLS-1$
-            mergeDataSetFields(entry, existing);
-            if (entry.has(KEY_ITEMS) && entry.get(KEY_ITEMS).isJsonArray())
-            {
-                DataCompositionSchemaDataSetUnion union = (DataCompositionSchemaDataSetUnion)existing;
-                for (JsonObject child : objects(entry.getAsJsonArray(KEY_ITEMS)))
-                {
-                    String childName = string(child, KEY_NAME);
-                    String error = normalizeDataSet(child, findDataSet(union.getItems(), childName), childName);
-                    if (error != null) return error;
-                }
-            }
-            return null;
+            return normalizeUnionDataSet(entry, (DataCompositionSchemaDataSetUnion)existing, name);
         }
         if (existing != null && !(existing instanceof DataCompositionSchemaDataSetQuery))
         {
             return null;
+        }
+        String declaredType = string(entry, KEY_TYPE);
+        if (existing == null && "object".equalsIgnoreCase(declaredType)) //$NON-NLS-1$
+        {
+            entry.addProperty(KEY_TYPE, "object"); //$NON-NLS-1$
+            return null;
+        }
+        if (existing == null && "union".equalsIgnoreCase(declaredType)) //$NON-NLS-1$
+        {
+            return normalizeUnionDataSet(entry, null, name);
         }
         DataCompositionSchemaDataSetQuery query = (DataCompositionSchemaDataSetQuery)existing;
         entry.addProperty(KEY_TYPE, "query"); //$NON-NLS-1$
@@ -511,6 +546,33 @@ public final class DcsSchemaWriter
                 entry.addProperty(KEY_AUTO_FILL, query.isAutoFillAvailableFields());
             }
             mergeDataSetFields(entry, query);
+        }
+        return null;
+    }
+
+    private static String normalizeUnionDataSet(JsonObject entry,
+        DataCompositionSchemaDataSetUnion existing, String name)
+    {
+        if (entry.has(KEY_QUERY))
+        {
+            return "Union data set '" + name + "' cannot declare 'query'. Remove 'query'; " //$NON-NLS-1$ //$NON-NLS-2$
+                + "put each query in a nested data set under 'items'."; //$NON-NLS-1$
+        }
+        entry.addProperty(KEY_TYPE, "union"); //$NON-NLS-1$
+        if (existing != null)
+        {
+            mergeDataSetFields(entry, existing);
+        }
+        if (!entry.has(KEY_ITEMS) || !entry.get(KEY_ITEMS).isJsonArray())
+        {
+            return null;
+        }
+        for (JsonObject child : objects(entry.getAsJsonArray(KEY_ITEMS)))
+        {
+            String childName = string(child, KEY_NAME);
+            DataSet current = existing == null ? null : findDataSet(existing.getItems(), childName);
+            String error = normalizeDataSet(child, current, childName);
+            if (error != null) return error;
         }
         return null;
     }

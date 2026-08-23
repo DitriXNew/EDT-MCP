@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -795,10 +796,6 @@ public final class DcsWriter
         int count = 0;
         for (DataSetPlan setPlan : plan.dataSets)
         {
-            if (setPlan.fields.isEmpty())
-            {
-                continue;
-            }
             DataSet dataSet = getOrCreateDataSet(schema.getDataSets(), setPlan);
             for (FieldPlan fieldPlan : setPlan.fields)
             {
@@ -1212,16 +1209,30 @@ public final class DcsWriter
             return duplicate;
         }
 
-        for (DataSetPlan dataSet : plan.dataSets)
+        String dataSetError = validateDataSetNaturalKeys(schema.getDataSets(), plan.dataSets, false,
+            "data set"); //$NON-NLS-1$
+        if (dataSetError != null)
+        {
+            return dataSetError;
+        }
+        return existingDuplicateKeys(schema);
+    }
+
+    private static String validateDataSetNaturalKeys(List<DataSet> existingDataSets,
+        List<DataSetPlan> plans, boolean checkPlanDuplicates, String kind)
+    {
+        if (checkPlanDuplicates)
+        {
+            String duplicate = duplicatePlanKey(plans, dataSet -> dataSet.name, kind);
+            if (duplicate != null) return duplicate;
+        }
+        for (DataSetPlan dataSet : plans)
         {
             String fieldDuplicate = duplicatePlanKey(dataSet.fields, field -> field.dataPath,
                 "field in data set '" + dataSet.name + "'"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (fieldDuplicate != null)
-            {
-                return fieldDuplicate;
-            }
+            if (fieldDuplicate != null) return fieldDuplicate;
             DataSet matching = null;
-            for (DataSet existing : schema.getDataSets())
+            for (DataSet existing : existingDataSets)
             {
                 if (!dataSet.name.equals(existing.getName()))
                 {
@@ -1249,8 +1260,14 @@ public final class DcsWriter
                     return fieldError;
                 }
             }
+            List<DataSet> existingItems = matching instanceof DataCompositionSchemaDataSetUnion
+                ? ((DataCompositionSchemaDataSetUnion)matching).getItems()
+                : Collections.emptyList();
+            String nestedError = validateDataSetNaturalKeys(existingItems, dataSet.items, true,
+                "data set in union '" + dataSet.name + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (nestedError != null) return nestedError;
         }
-        return existingDuplicateKeys(schema);
+        return null;
     }
 
     private static String validateFieldSubtypes(DataSet existing,
@@ -1543,6 +1560,10 @@ public final class DcsWriter
         if (TYPE_OBJECT.equalsIgnoreCase(type) && !entry.has(KEY_OBJECT_NAME))
             return DataSetParseResult.failed("An object data set (" + where //$NON-NLS-1$
                 + ") needs an 'objectName' member. Pass an empty string only when intentionally resetting it."); //$NON-NLS-1$
+        if (TYPE_UNION.equalsIgnoreCase(type) && entry.has(KEY_QUERY))
+            return DataSetParseResult.failed("Union data set '" + name + "' at " + where //$NON-NLS-1$ //$NON-NLS-2$
+                + " cannot declare 'query'. Remove 'query'; put each query in a nested data set " //$NON-NLS-1$
+                + "under 'items'."); //$NON-NLS-1$
         String dataSource = nonEmptyString(entry, KEY_DATA_SOURCE);
         Boolean autoFill = boolMember(entry, KEY_AUTO_FILL);
 
