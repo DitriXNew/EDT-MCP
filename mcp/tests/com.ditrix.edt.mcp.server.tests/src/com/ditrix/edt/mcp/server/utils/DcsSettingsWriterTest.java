@@ -1008,6 +1008,85 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testGroupingUpdateRefusesCreatingEveryMissingHolder()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"name\":\"G\"}]}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+        String[] holders = {"groupFields", "selection", "filter", "order", "outputParameters"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        for (String holder : holders)
+        {
+            DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(settings,
+                java.util.Arrays.asList("items", "0"), "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                json("{\"" + holder + "\":{}}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertFalse(holder, result.isSuccess());
+            assertTrue(result.error(), result.error().contains(holder));
+            assertTrue(result.error(), result.error().contains("action='upsert'")); //$NON-NLS-1$
+            assertEquals(beforeHash, DcsHash.compute(settings));
+        }
+
+        DcsSettingsWriter.SettingsResult upserted = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "upsert", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"selection\":{}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(upserted.error(), upserted.isSuccess());
+        assertNotNull(((DataCompositionGroup)upserted.settings().getItems().get(0)).getSelection());
+    }
+
+    @Test
+    public void testEveryOtherCompositeUpdateRefusesCreatingMissingHolders()
+    {
+        DataCompositionSettings table = plan(json("{\"items\":[{\"kind\":\"table\"}]}")); //$NON-NLS-1$
+        String tableHash = DcsHash.compute(table);
+        for (String holder : Arrays.asList("selection", "conditionalAppearance", //$NON-NLS-1$ //$NON-NLS-2$
+            "outputParameters")) //$NON-NLS-1$
+        {
+            DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(table,
+                Arrays.asList("items", "0"), "update", "table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                json("{\"" + holder + "\":{}}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(holder, result.isSuccess());
+            assertTrue(result.error(), result.error().contains(holder));
+            assertEquals(tableHash, DcsHash.compute(table));
+        }
+
+        DataCompositionSettings axis = plan(json(
+            "{\"items\":[{\"kind\":\"table\",\"rows\":[{}]}]}")); //$NON-NLS-1$
+        String axisHash = DcsHash.compute(axis);
+        for (String holder : Arrays.asList("groupFields", "selection", "filter", "order", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "conditionalAppearance", "outputParameters")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(axis,
+                Arrays.asList("items", "0", "rows", "0"), "update", "table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                json("{\"" + holder + "\":{}}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(holder, result.isSuccess());
+            assertTrue(result.error(), result.error().contains(holder));
+            assertEquals(axisHash, DcsHash.compute(axis));
+        }
+
+        DataCompositionSettings appearance = plan(json(
+            "{\"conditionalAppearance\":{\"items\":[{}]}}")); //$NON-NLS-1$
+        String appearanceHash = DcsHash.compute(appearance);
+        for (String holder : Arrays.asList("selection", "filter")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(appearance,
+                Arrays.asList("conditionalAppearance", "items", "0"), "update", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "conditionalAppearance", json("{\"" + holder + "\":{}}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertFalse(holder, result.isSuccess());
+            assertTrue(result.error(), result.error().contains(holder));
+            assertEquals(appearanceHash, DcsHash.compute(appearance));
+        }
+
+        DataCompositionSettings userField = plan(json(
+            "{\"userFields\":{\"items\":[{\"kind\":\"case\",\"dataPath\":\"Choice\"}]}}")); //$NON-NLS-1$
+        String userFieldHash = DcsHash.compute(userField);
+        DcsSettingsWriter.SettingsResult variants = DcsSettingsWriter.planSettings(userField,
+            Arrays.asList("userFields", "items", "0"), "update", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"variants\":{}}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(variants.isSuccess());
+        assertTrue(variants.error(), variants.error().contains("variants")); //$NON-NLS-1$
+        assertEquals(userFieldHash, DcsHash.compute(userField));
+    }
+
+    @Test
     public void testExactConditionalAppearanceSelectionFieldCanBeUpdatedAndReplaced()
     {
         DataCompositionSettings settings = plan(json("{\"conditionalAppearance\":{\"items\":[" //$NON-NLS-1$

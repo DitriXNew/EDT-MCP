@@ -230,7 +230,8 @@ public final class DcsXmlCodec
         return offset;
     }
 
-    static int safeEndAtOrBefore(String value, int start, int end)
+    /** Returns an end boundary at or before {@code end} without splitting a surrogate pair. */
+    public static int safeEndAtOrBefore(String value, int start, int end)
     {
         int bounded = Math.max(start, Math.min(end, value.length()));
         if (bounded > start && bounded < value.length()

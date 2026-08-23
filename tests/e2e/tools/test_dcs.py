@@ -1584,6 +1584,59 @@ def test_identity_collection_replace_refuses_dangling_references_and_preserves_d
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_field_collection_replace_refuses_omitting_selected_field_and_preserves_disk():
+    report_name = "E2EDcsReplaceSelectedField"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for the field-collection reference guard")
+    wait_for_project_ready()
+    authored = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "Sales",
+            "type": "query",
+            "query": "SELECT 1 AS Referenced, 2 AS Retained",
+            "fields": [
+                {"dataPath": "Referenced", "field": "Referenced"},
+                {"dataPath": "Retained", "field": "Retained"},
+            ],
+        }],
+        "defaultSettings": {
+            "selection": {
+                "items": [{
+                    "kind": "field",
+                    "field": {"kind": "field", "value": "Referenced"},
+                }],
+            },
+        },
+    })
+    assert_ok(authored, "seed a selected explicit data-set field")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the selected-field fixture")
+    poll_disk_contains(dcs_rel, "Referenced",
+                       ctx="the selected field must reach Template.dcs before the refusal")
+    before_disk = read_disk(dcs_rel)
+
+    collection_address = root + "#/dataSets/Sales/fields"
+    data_set = _get(root + "#/dataSets/Sales", "dataSet")
+    assert_ok(data_set, "read the data set that advertises its field collection")
+    assert collection_address in data_set.text, \
+        "the data-set page must print the field collection address: %s" % data_set.text
+    fields = _get(collection_address, "field")
+    assert_ok(fields, "read the advertised field collection and its hash")
+    refused = _write(collection_address, "replace", "field", {
+        "dataPath": "Retained",
+        "field": "Retained",
+    }, expectedHash=_hash(fields))
+
+    error = assert_error(refused, "replace the field collection while omitting a selected field")
+    assert_error_quality(error,
+                         names=["Referenced", root + "#/defaultSettings/selection"],
+                         suggests=["referring nodes", "retry"],
+                         ctx="field collection replacement names the retained reference")
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused field collection replacement must leave Template.dcs byte-for-byte unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_dynamic_list_write_persists_form_and_external_list_settings_files():
     catalog_name = "E2EDcsListWrite"
     catalog = "Catalog." + catalog_name

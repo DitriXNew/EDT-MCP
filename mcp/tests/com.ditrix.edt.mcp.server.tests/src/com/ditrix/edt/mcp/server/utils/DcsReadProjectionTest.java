@@ -21,12 +21,15 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilter;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrder;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrderItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
@@ -82,6 +85,61 @@ public class DcsReadProjectionTest
             assertTrue(one[0] + ": " + absent.markdown(), absent.markdown().contains(address)); //$NON-NLS-1$
             assertTrue(one[0] + ": " + present.markdown(), present.markdown().contains(address)); //$NON-NLS-1$
         }
+    }
+
+    @Test
+    public void testGenericParameterItemsUseOwningHolderTypeForReadAndWrite()
+    {
+        String root = "Report.Parameters"; //$NON-NLS-1$
+        DataCompositionSchema schema =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionDataParameterValues data = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionDataParameterValues();
+        DataCompositionOutputParameterValues output = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionOutputParameterValues();
+        SettingsParameterValue dataItem = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        SettingsParameterValue outputItem = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        data.getItems().add(dataItem);
+        output.getItems().add(outputItem);
+        settings.setDataParameters(data);
+        settings.setOutputParameters(output);
+        schema.setDefaultSettings(settings);
+        String dataAddress = root + "#/defaultSettings/dataParameters/items/0"; //$NON-NLS-1$
+        String outputAddress = root + "#/defaultSettings/outputParameters/items/0"; //$NON-NLS-1$
+        String outline = DcsReadProjection.renderSettingsOutline(root + "#/defaultSettings", //$NON-NLS-1$
+            settings, "en"); //$NON-NLS-1$
+        assertTrue(outline, outline.contains(dataAddress));
+        assertTrue(outline, outline.contains(outputAddress));
+
+        DcsReadProjection.Result dataPage = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(dataAddress).address(),
+            "dataParameter", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result outputPage = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(outputAddress).address(),
+            "outputParameter", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(dataPage.error(), dataPage.isSuccess());
+        assertTrue(outputPage.error(), outputPage.isSuccess());
+
+        DcsPresentationParser.LanguageContext languages =
+            new DcsPresentationParser.LanguageContext(java.util.Arrays.asList("en")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult dataWrite = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("dataParameters", "items", "0"), "update", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "dataParameter", JsonParser.parseString("{\"use\":false}").getAsJsonObject(), //$NON-NLS-1$ //$NON-NLS-2$
+            languages);
+        DcsSettingsWriter.SettingsResult outputWrite = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("outputParameters", "items", "0"), "update", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "outputParameter", JsonParser.parseString("{\"use\":false}").getAsJsonObject(), //$NON-NLS-1$ //$NON-NLS-2$
+            languages);
+        assertTrue(dataWrite.error(), dataWrite.isSuccess());
+        assertTrue(outputWrite.error(), outputWrite.isSuccess());
+        assertFalse(((SettingsParameterValue)dataWrite.settings().getDataParameters().getItems()
+            .get(0)).isUse());
+        assertFalse(((SettingsParameterValue)outputWrite.settings().getOutputParameters().getItems()
+            .get(0)).isUse());
     }
 
     @Test

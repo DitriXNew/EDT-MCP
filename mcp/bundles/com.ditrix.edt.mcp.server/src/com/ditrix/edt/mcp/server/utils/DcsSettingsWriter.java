@@ -1175,6 +1175,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, group.getGroupFields(),
+                path + ".groupFields"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionGroupFields fields = copy(group.getGroupFields());
             if (fields == null)
             {
@@ -1194,6 +1197,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, group.getSelection(),
+                path + ".selection"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionSelectedFields holder = copy(group.getSelection());
             if (holder == null)
             {
@@ -1213,6 +1219,8 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, group.getFilter(), path + ".filter"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionFilter holder = copy(group.getFilter());
             if (holder == null)
             {
@@ -1232,6 +1240,8 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, group.getOrder(), path + ".order"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionOrder holder = copy(group.getOrder());
             if (holder == null)
             {
@@ -1251,6 +1261,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, group.getOutputParameters(),
+                path + ".outputParameters"); //$NON-NLS-1$
+            if (missing != null) return missing;
             com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupOutputParameterValues holder =
                 copy(group.getOutputParameters());
             if (holder == null)
@@ -1352,6 +1365,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, table.getSelection(),
+                path + ".selection"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null
                 : copy(table.getSelection());
             if (holder == null)
@@ -1372,6 +1388,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, table.getConditionalAppearance(),
+                path + ".conditionalAppearance"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
                 : copy(table.getConditionalAppearance());
             if (holder == null)
@@ -1393,6 +1412,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, table.getOutputParameters(),
+                path + ".outputParameters"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionTableOutputParameterValues holder = ACTION_REPLACE.equals(action) ? null
                 : copy(table.getOutputParameters());
             if (holder == null)
@@ -1577,6 +1599,9 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "groupFields", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, group.getGroupFields(),
+                path + ".groupFields"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionGroupFields holder = ACTION_REPLACE.equals(action) ? null : copy(group.getGroupFields());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionGroupFields();
             String error = applyGroupFields(holder, value, action, path + ".groupFields"); //$NON-NLS-1$
@@ -1587,6 +1612,8 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, group.getFilter(), path + ".filter"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionFilter holder = ACTION_REPLACE.equals(action) ? null : copy(group.getFilter());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionFilter();
             String error = applyFilter(holder, value, action, languages, path + ".filter"); //$NON-NLS-1$
@@ -1597,6 +1624,8 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, group.getOrder(), path + ".order"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionOrder holder = ACTION_REPLACE.equals(action) ? null : copy(group.getOrder());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionOrder();
             String error = applyOrder(holder, value, action, languages, path + ".order"); //$NON-NLS-1$
@@ -1607,6 +1636,9 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, group.getSelection(),
+                path + ".selection"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null : copy(group.getSelection());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
             String error = applySelection(holder, value, action, languages, path + ".selection"); //$NON-NLS-1$
@@ -1617,6 +1649,9 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, group.getConditionalAppearance(),
+                path + ".conditionalAppearance"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
                 : copy(group.getConditionalAppearance());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
@@ -1629,6 +1664,9 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, group.getOutputParameters(),
+                path + ".outputParameters"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionTableGroupOutputParameterValues holder = ACTION_REPLACE.equals(action) ? null
                 : copy(group.getOutputParameters());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionTableGroupOutputParameterValues();
@@ -2832,6 +2870,9 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, item.getSelection(),
+                path + ".selection"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionAppearanceFields fields = ACTION_REPLACE.equals(action) ? null
                 : copy(item.getSelection());
             if (fields == null) fields = DcsFactory.eINSTANCE.createDataCompositionAppearanceFields();
@@ -2843,6 +2884,8 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, item.getFilter(), path + ".filter"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionFilter filter = ACTION_REPLACE.equals(action) ? null : copy(item.getFilter());
             if (filter == null) filter = DcsFactory.eINSTANCE.createDataCompositionFilter();
             String error = applyFilter(filter, value, action, languages, path + ".filter"); //$NON-NLS-1$
@@ -3347,6 +3390,9 @@ public final class DcsSettingsWriter
             JsonObject value = object(body, "variants", path); //$NON-NLS-1$
             if (value == null) return objectError;
             DataCompositionUserFieldCase caseField = (DataCompositionUserFieldCase)field;
+            String missing = missingHolderUpdate(action, caseField.getVariants(),
+                path + ".variants"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionUserFieldsCaseVariants variants = ACTION_REPLACE.equals(action) ? null
                 : copy(caseField.getVariants());
             if (variants == null) variants = DcsFactory.eINSTANCE.createDataCompositionUserFieldsCaseVariants();
@@ -4418,7 +4464,7 @@ public final class DcsSettingsWriter
         String action, String type)
     {
         String renderedPath = path.isEmpty() ? "settings root" : String.join("/", path); //$NON-NLS-1$ //$NON-NLS-2$
-        String actualType = DcsReadProjection.typeOf(target);
+        String actualType = DcsReadProjection.typeOf(target, target.eContainer());
         if (actualType == null)
         {
             return "action='" + action + "' resolved target '" + renderedPath + "' as " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

@@ -68,6 +68,22 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testJsonUserSignalTruncationNeverSplitsSurrogatePair()
+    {
+        String message = "x".repeat(McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS - 2) //$NON-NLS-1$
+            + "\uD83D\uDE00tail"; //$NON-NLS-1$
+
+        JsonObject augmented = JsonParser.parseString(handler.addUserSignalToJson("{\"value\":1}", //$NON-NLS-1$
+            new UserSignal(SignalType.CUSTOM, message))).getAsJsonObject();
+        String retained = augmented.getAsJsonObject("userSignal").get("message").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("x".repeat(McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS - 2) //$NON-NLS-1$
+            + "\u2026", retained); //$NON-NLS-1$
+        assertFalse(Character.isHighSurrogate(retained.charAt(retained.length() - 2)));
+        assertFalse(Character.isLowSurrogate(retained.charAt(retained.length() - 2)));
+    }
+
+    @Test
     public void testJsonUserSignalPreservesRawHtmlSensitiveCharacters()
     {
         String original = "{\"xml\":\"<root>A&B</root>\",\"comparison\":\"x > y\"}"; //$NON-NLS-1$

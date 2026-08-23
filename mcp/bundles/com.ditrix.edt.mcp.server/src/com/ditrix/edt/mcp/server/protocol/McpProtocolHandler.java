@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolsListResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.GuideRenderer;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.Log;
@@ -870,7 +871,9 @@ public class McpProtocolHandler
         {
             return message;
         }
-        return message.substring(0, MAX_USER_SIGNAL_MESSAGE_CHARS - USER_SIGNAL_ELLIPSIS.length())
+        int end = DcsXmlCodec.safeEndAtOrBefore(message, 0,
+            MAX_USER_SIGNAL_MESSAGE_CHARS - USER_SIGNAL_ELLIPSIS.length());
+        return message.substring(0, end)
             + USER_SIGNAL_ELLIPSIS;
     }
     

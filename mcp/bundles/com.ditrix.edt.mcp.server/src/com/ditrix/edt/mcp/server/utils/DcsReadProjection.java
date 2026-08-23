@@ -1226,8 +1226,22 @@ public final class DcsReadProjection
             }
             return "userSettings"; //$NON-NLS-1$
         }
-        String type = typeOf((EObject)node.value);
+        String type = typeOf((EObject)node.value, node.owner);
         return type == null ? collectionType(node.collection) : type;
+    }
+
+    static String typeOf(EObject object, EObject owner)
+    {
+        if (object == null) return null;
+        String type = typeOf(object);
+        if (type != null || owner == null
+            || !"SettingsParameterValue".equals(object.eClass().getName())) //$NON-NLS-1$
+        {
+            return type;
+        }
+        String ownerType = typeOf(owner);
+        return "dataParameter".equals(ownerType) || "outputParameter".equals(ownerType) //$NON-NLS-1$ //$NON-NLS-2$
+            ? ownerType : null;
     }
 
     static String typeOf(EObject object)

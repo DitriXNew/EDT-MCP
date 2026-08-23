@@ -15,6 +15,8 @@ import java.util.Arrays;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
@@ -27,6 +29,11 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -1008,6 +1015,104 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testFieldCollectionReplaceRefusesOmittingReferencedField()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        dataSet.getFields().add(field("Referenced")); //$NON-NLS-1$
+        dataSet.getFields().add(field("Retained")); //$NON-NLS-1$
+        schema.getDataSets().add(dataSet);
+        schema.setDefaultSettings(settingsReferencingFields("Referenced")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "replace", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields", //$NON-NLS-1$
+            "{\"dataPath\":\"Retained\",\"field\":\"Retained\"}"); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("field 'Referenced'")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("#/defaultSettings/selection")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+        assertEquals(2, dataSet.getFields().size());
+    }
+
+    @Test
+    public void testOtherIdentityCollectionReplacesRefuseOmittedReferences()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaParameter referencedParameter = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        referencedParameter.setName("ReferencedParameter"); //$NON-NLS-1$
+        DataCompositionSchemaParameter retainedParameter = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        retainedParameter.setName("RetainedParameter"); //$NON-NLS-1$
+        schema.getParameters().add(referencedParameter);
+        schema.getParameters().add(retainedParameter);
+        DataCompositionSchemaCalculatedField referencedCalculation = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaCalculatedField();
+        referencedCalculation.setDataPath("ReferencedCalculation"); //$NON-NLS-1$
+        referencedCalculation.setExpression("1"); //$NON-NLS-1$
+        DataCompositionSchemaCalculatedField retainedCalculation = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaCalculatedField();
+        retainedCalculation.setDataPath("RetainedCalculation"); //$NON-NLS-1$
+        retainedCalculation.setExpression("2"); //$NON-NLS-1$
+        schema.getCalculatedFields().add(referencedCalculation);
+        schema.getCalculatedFields().add(retainedCalculation);
+        DataCompositionSchemaTotalField referencedTotal = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaTotalField();
+        referencedTotal.setDataPath("ReferencedTotal"); //$NON-NLS-1$
+        referencedTotal.setExpression("1"); //$NON-NLS-1$
+        DataCompositionSchemaTotalField retainedTotal = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaTotalField();
+        retainedTotal.setDataPath("RetainedTotal"); //$NON-NLS-1$
+        retainedTotal.setExpression("2"); //$NON-NLS-1$
+        schema.getTotalFields().add(referencedTotal);
+        schema.getTotalFields().add(retainedTotal);
+        DataCompositionSettings settings = settingsReferencingFields(
+            "ReferencedCalculation", "ReferencedTotal"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionDataParameterValues parameters = com._1c.g5.v8.dt.dcs.model.settings
+            .DcsFactory.eINSTANCE.createDataCompositionDataParameterValues();
+        SettingsParameterValue parameterValue = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createSettingsParameterValue();
+        DataCompositionParameter parameter = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionParameter();
+        parameter.setValue("ReferencedParameter"); //$NON-NLS-1$
+        parameterValue.setParameter(parameter);
+        parameters.getItems().add(parameterValue);
+        settings.setDataParameters(parameters);
+        schema.setDefaultSettings(settings);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result parameterResult = apply(schema, "replace", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters", "{\"name\":\"RetainedParameter\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result calculatedResult = apply(schema, "replace", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields", //$NON-NLS-1$
+            "{\"dataPath\":\"RetainedCalculation\",\"expression\":\"2\"}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result totalResult = apply(schema, "replace", "totalField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/totalFields", //$NON-NLS-1$
+            "{\"dataPath\":\"RetainedTotal\",\"expression\":\"2\"}"); //$NON-NLS-1$
+
+        assertFalse(parameterResult.isSuccess());
+        assertTrue(parameterResult.error(), parameterResult.error().contains("ReferencedParameter")); //$NON-NLS-1$
+        assertFalse(calculatedResult.isSuccess());
+        assertTrue(calculatedResult.error(), calculatedResult.error().contains("ReferencedCalculation")); //$NON-NLS-1$
+        assertFalse(totalResult.isSuccess());
+        assertTrue(totalResult.error(), totalResult.error().contains("ReferencedTotal")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DataCompositionSchema omittedOnly = newSchema();
+        omittedOnly.getCalculatedFields().add(calculatedField("First", "Second + 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        omittedOnly.getCalculatedFields().add(calculatedField("Second", "1")); //$NON-NLS-1$ //$NON-NLS-2$
+        omittedOnly.getCalculatedFields().add(calculatedField("Retained", "2")); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result allowed = apply(omittedOnly, "replace", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields", //$NON-NLS-1$
+            "{\"dataPath\":\"Retained\",\"expression\":\"2\"}"); //$NON-NLS-1$
+        assertTrue(allowed.error(), allowed.isSuccess());
+        assertEquals(1, omittedOnly.getCalculatedFields().size());
+        assertEquals("Retained", omittedOnly.getCalculatedFields().get(0).getDataPath()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRemoveReferencedDataSourceIsRefusedWithoutChangingHash()
     {
         DataCompositionSchema schema = newSchema();
@@ -1276,6 +1381,26 @@ public class DcsSchemaWriterTest
         result.setDataPath(dataPath);
         result.setExpression(expression);
         return result;
+    }
+
+    private static DataCompositionSettings settingsReferencingFields(String... values)
+    {
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionSelectedFields selection = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedFields();
+        for (String value : values)
+        {
+            DataCompositionSelectedField selected = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+                .eINSTANCE.createDataCompositionSelectedField();
+            DataCompositionField field = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionField();
+            field.setValue(value);
+            selected.setField(field);
+            selection.getItems().add(selected);
+        }
+        settings.setSelection(selection);
+        return settings;
     }
 
     private static DataCompositionSchema schemaWithFields(String... dataPaths)

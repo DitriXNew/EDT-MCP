@@ -690,6 +690,9 @@ public final class DcsSchemaWriter
         {
             FieldTarget target = resolveFieldTarget(schema, path);
             if (target.error != null) return target.error;
+            String referenceError = omittedIdentityReferenceError(schema, request,
+                target.dataSet.getFields());
+            if (referenceError != null) return referenceError;
             target.dataSet.getFields().clear();
             return null;
         }
@@ -700,6 +703,13 @@ public final class DcsSchemaWriter
             return "Type '" + request.type + "' has no replaceable schema collection."; //$NON-NLS-1$ //$NON-NLS-2$
         if (collection != null && path.size() == 1 && collection.equals(path.get(0)))
         {
+            if (TYPE_PARAMETER.equals(request.type) || TYPE_CALCULATED_FIELD.equals(request.type)
+                || TYPE_TOTAL_FIELD.equals(request.type))
+            {
+                String referenceError = omittedIdentityReferenceError(schema, request,
+                    identityItems(schema, request.type));
+                if (referenceError != null) return referenceError;
+            }
             clearCollection(schema, collection);
             return null;
         }
@@ -751,6 +761,70 @@ public final class DcsSchemaWriter
         if (removed != null && ACTION_REPLACE.equals(request.action))
             return removed.replace("action='remove'", "action='replace'"); //$NON-NLS-1$ //$NON-NLS-2$
         return removed;
+    }
+
+    private static String omittedIdentityReferenceError(DataCompositionSchema schema,
+        Request request, List<? extends EObject> existing)
+    {
+        String member = keyMember(request.type);
+        String retained = string(request.body, member);
+        if (retained == null || retained.isEmpty()) return null;
+        Set<String> identities = new LinkedHashSet<>();
+        for (EObject item : existing)
+        {
+            if (TYPE_FIELD.equals(request.type)
+                && !(item instanceof DataCompositionSchemaDataSetField))
+            {
+                continue;
+            }
+            org.eclipse.emf.ecore.EStructuralFeature feature = item.eClass()
+                .getEStructuralFeature(member);
+            Object value = feature == null ? null : item.eGet(feature);
+            if (value instanceof String && !((String)value).isEmpty() && !retained.equals(value))
+            {
+                identities.add((String)value);
+            }
+        }
+        DataCompositionSchema retainedSchema = EcoreUtil.copy(schema);
+        retainReplacementIdentity(retainedSchema, request, retained);
+        for (String identity : identities)
+        {
+            List<String> segments = new ArrayList<>(request.address.segments());
+            segments.add(identity);
+            DcsAddress target = DcsAddress.parse(DcsAddress.render(request.address.rootFqn(),
+                segments)).address();
+            String error = DcsMutationGuard.referenceError(retainedSchema, target, request.type,
+                identity);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static void retainReplacementIdentity(DataCompositionSchema schema, Request request,
+        String retained)
+    {
+        if (TYPE_FIELD.equals(request.type))
+        {
+            FieldTarget target = resolveFieldTarget(schema, request.address.segments());
+            if (target.error == null)
+            {
+                target.dataSet.getFields().removeIf(item ->
+                    item instanceof DataCompositionSchemaDataSetField
+                        && !retained.equals(((DataCompositionSchemaDataSetField)item).getDataPath()));
+            }
+        }
+        else if (TYPE_PARAMETER.equals(request.type))
+        {
+            schema.getParameters().removeIf(item -> !retained.equals(item.getName()));
+        }
+        else if (TYPE_CALCULATED_FIELD.equals(request.type))
+        {
+            schema.getCalculatedFields().removeIf(item -> !retained.equals(item.getDataPath()));
+        }
+        else if (TYPE_TOTAL_FIELD.equals(request.type))
+        {
+            schema.getTotalFields().removeIf(item -> !retained.equals(item.getDataPath()));
+        }
     }
 
     private static String remove(DataCompositionSchema schema, Request request)
