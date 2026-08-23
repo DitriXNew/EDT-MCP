@@ -3237,7 +3237,7 @@
           "type": "array"
         },
         "filePath": {
-          "description": "Absolute path of the merge-rules file (required). read: the file to parse, '.xml' or the '.zip' a comparison saves - the extension's CASE does not matter, '.ZIP' is read. write: this is what picks the container, and here the extension must be spelled in LOWER CASE, because EDT's own reader compares it exactly and would refuse the file inside the launch. '.zip' is read by every supported EDT and holds an entry named after the comparison's three PROJECT names, so it needs a live comparison and is refused without one; '.xml' needs none and is read by EDT 2026.1 only. An existing file is OVERWRITTEN only when 'basedOn' names that SAME file, which updates it in place; any other write over an existing file is refused so decisions are never silently discarded.",
+          "description": "Absolute path of the merge-rules file (required). read: the file to parse, '.xml' or the '.zip' a comparison saves - the extension's CASE does not matter, '.ZIP' is read. write: this is what picks the container, and here the extension must be spelled in LOWER CASE, because EDT's own reader compares it exactly and would refuse the file inside the launch. '.zip' is read by every supported EDT and holds an entry named after the comparison's three PROJECT names, so it needs a live comparison and is refused without one; '.xml' needs none and is read by EDT 2026.1 only. An existing file is OVERWRITTEN only when 'basedOn' names that SAME file, whose decisions are carried into the file that REPLACES it; any other write over an existing file is refused so decisions are never silently discarded.",
           "type": "string"
         },
         "limit": {

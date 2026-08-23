@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils.compare;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -13,6 +14,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -1138,7 +1140,7 @@ public class MergeRulesCodecTest
     // MAX_DOCUMENT_BYTES used to be a rule about sources alone. A document that arrives just under
     // it and grows - one more decision, or the canonical printing expanding a compact source -
     // serialised past it, landed on disk, and was reported as written; the next read of that file,
-    // and every in-place update after it, then refused this tool's OWN output as too large. So the
+    // and every same-path rewrite after it, then refused this tool's OWN output as too large. So the
     // serialised bytes are measured before the target is touched, against the same number and by
     // the same count the reader uses.
 
@@ -3113,6 +3115,538 @@ public class MergeRulesCodecTest
         }
         assertEquals("the file that was there must be untouched", "somebody else's rules", //$NON-NLS-1$ //$NON-NLS-2$
             new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+
+    // ============ A source declaring an XML version this codec cannot write ============
+    //
+    // The serializer prints ONE declaration, version="1.0". Nothing checked what the source
+    // declared, so a 1.1 document was read under 1.1's rules and handed back under 1.0's: a
+    // character reference that is perfectly legal in 1.1 - '&#x1;' - arrived in the model as
+    // U+0001 and was re-emitted as itself beneath a declaration that makes it an invalid
+    // character. The write reported success and produced a file this codec's own read refuses,
+    // which is the third instance of the defect this class already refuses twice.
+
+    /** A 1.1 source carrying a character only a 1.1 declaration lets a parser accept. */
+    private static final String ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER =
+        "<?xml version=\"1.1\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+            + "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\" Note=\"a&#x1;b\"/>" //$NON-NLS-1$
+            + "</Node></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /**
+     * The same source with the declaration swapped for the only one this codec prints - and
+     * nothing else changed, which is exactly what makes it a statement about the READER rather
+     * than about a rewrite. See the test that uses it.
+     */
+    private static final String THE_SAME_SOURCE_REDECLARED_AS_ONE_POINT_ZERO =
+        ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER.replace("version=\"1.1\"", "version=\"1.0\""); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** U+0001: legal in an XML 1.1 document through a reference, spellable in 1.0 not at all. */
+    private static final char RESTRICTED_CHARACTER = 1;
+
+    @Test
+    public void testAnXmlOnePointOneSourceIsRefusedInsteadOfRewrittenAsOnePointZero()
+    {
+        try
+        {
+            MergeRulesCodec.parse(ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER);
+            fail("a source this codec cannot re-declare must be refused, not silently downgraded"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException expected)
+        {
+            assertNotNull(expected.getMessage());
+        }
+    }
+
+    /**
+     * A characterization of the READER, and named as one. It establishes the fact the refusal
+     * rests on - the same reference under a 1.0 declaration is not readable, so a 1.1 source
+     * cannot simply have its declaration swapped - and it establishes nothing about what this
+     * codec WRITES: the reference never reaches the serializer, because the parser has already
+     * turned it into the character. What the write would really produce is the two tests below.
+     */
+    @Test
+    public void testTheSameReferenceUnderAOnePointZeroDeclarationIsNotReadableAtAll()
+    {
+        try
+        {
+            MergeRulesCodec.parse(THE_SAME_SOURCE_REDECLARED_AS_ONE_POINT_ZERO);
+            fail("the whole point of the refusal is that this document does not parse"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException expected)
+        {
+            assertTrue("the parser must be refusing it over the character itself: " //$NON-NLS-1$
+                + expected.getMessage(), expected.getMessage().contains("invalid XML character")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * What our own SERIALIZER would write for that character, refused by our own read. This is the
+     * statement the refusal is for - "we do not produce what our own read rejects" - and it is
+     * asserted on the string the serializer actually returns, not on a hand-written approximation
+     * of it.
+     * <p>
+     * The document is BUILT rather than parsed, and it has to be: the guard is precisely what
+     * stops a parser ever handing back a model with U+0001 in it, so a test that reached this
+     * state through {@code parse} would be testing that the guard does not work.
+     */
+    @Test
+    public void testWhatTheSerializerWritesForThatCharacterIsAFileThisCodecCannotReadBack()
+    {
+        String written = MergeRulesCodec.serialize(aDocumentHoldingTheRestrictedCharacter());
+
+        try
+        {
+            MergeRulesCodec.parse(written);
+            fail("this codec must not produce a document its own read refuses: " + written); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException expected)
+        {
+            assertTrue("the read must be refusing it over the character itself: " //$NON-NLS-1$
+                + expected.getMessage(), expected.getMessage().contains("invalid XML character")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * And why the test above is about the serializer rather than about the parser a second time:
+     * what comes out is the CHARACTER, spelled as itself. The serializer escapes {@code &},
+     * {@code <}, {@code >}, the quote and the three whitespace controls, and a restricted
+     * character is in none of those lists - so the reference the source spelled it with is gone
+     * and cannot make the output readable again.
+     */
+    @Test
+    public void testTheSerializerWritesThatCharacterItselfAndNotTheReferenceItArrivedAs()
+    {
+        String written = MergeRulesCodec.serialize(aDocumentHoldingTheRestrictedCharacter());
+
+        assertTrue("the character must be in the output as itself", //$NON-NLS-1$
+            written.indexOf(RESTRICTED_CHARACTER) >= 0);
+        assertFalse("a reference would have been readable again, which is not what happens", //$NON-NLS-1$
+            written.contains("&#x1;")); //$NON-NLS-1$
+    }
+
+    /**
+     * @return a document carrying U+0001 in an attribute value, built directly because no parse
+     *         can produce one
+     */
+    private static MergeRulesDocument aDocumentHoldingTheRestrictedCharacter()
+    {
+        MergeRulesDocument document = MergeRulesDocument.empty();
+        MergeRulesDocument.Element node =
+            new MergeRulesDocument.Element(MergeRulesDocument.TAG_NODE);
+        node.attribute(MergeRulesDocument.ATTR_KEY, "commonModules"); //$NON-NLS-1$
+        node.attribute(MergeRulesDocument.ATTR_MERGE_RULE, "GetFromOther"); //$NON-NLS-1$
+        node.attribute("Note", "a" + RESTRICTED_CHARACTER + "b"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        document.root().children().add(node);
+        return document;
+    }
+
+    // One literal per @Test: JUnit stops a method at its first failed assertion, so pins bundled
+    // into one method would leave every literal after the first unloaded.
+
+    @Test
+    public void testTheXmlVersionRefusalNamesTheVersionItFound()
+    {
+        assertTrue(refusalFor(ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER).contains("'1.1'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheXmlVersionRefusalNamesTheOneVersionThisToolWrites()
+    {
+        assertTrue(refusalFor(ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER).contains("'1.0'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheXmlVersionRefusalSaysWhatTheRewriteWouldHaveCost()
+    {
+        assertTrue(refusalFor(ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER)
+            .contains("could no longer read")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheXmlVersionRefusalNamesTheCharacterThatCannotBeCarried()
+    {
+        assertTrue(refusalFor(ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER).contains("&#x1;")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheXmlVersionRefusalSaysWhereAGoodFileComesFrom()
+    {
+        assertTrue(refusalFor(ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER)
+            .contains("Save merge settings")); //$NON-NLS-1$
+    }
+
+    /**
+     * The decision this refusal makes, pinned as a decision: it judges the DECLARATION, not the
+     * characters. A 1.1 file holding nothing but ordinary text is refused too, because the rewrite
+     * would still replace a declaration it was never asked to change, and because 1.1 folds
+     * U+0085 and U+2028 into line feeds where 1.0 keeps them. A repertoire scan would wave both
+     * through while looking stricter, so this test is what stops one being substituted later.
+     */
+    @Test
+    public void testAOnePointOneSourceWithOnlyOrdinaryCharactersIsRefusedToo()
+    {
+        try
+        {
+            MergeRulesCodec.parse(FIXTURE.replace("version=\"1.0\"", "version=\"1.1\"")); //$NON-NLS-1$ //$NON-NLS-2$
+            fail("the declaration is what is judged, not the characters under it"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException expected)
+        {
+            assertTrue(expected.getMessage().contains("'1.1'")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The refusal reaches the file path too, and - the part worth pinning - the file it refused is
+     * left byte for byte as it was. Asserted on the CONTENT and not on the message: a refusal that
+     * had already rewritten or truncated the file would carry exactly the same text.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testAOnePointOneFileOnDiskIsRefusedAndLeftExactlyAsItWas() throws Exception
+    {
+        Path file = workDir.resolve("one-point-one.xml"); //$NON-NLS-1$
+        byte[] before = ONE_POINT_ONE_WITH_A_RESTRICTED_CHARACTER.getBytes(StandardCharsets.UTF_8);
+        Files.write(file, before);
+
+        try
+        {
+            MergeRulesCodec.read(file);
+            fail("a 1.1 file on disk is refused for the same reason a 1.1 string is"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException expected)
+        {
+            assertTrue(expected.getMessage().contains("'1.1'")); //$NON-NLS-1$
+        }
+        assertArrayEquals("the refused file must be exactly the bytes that were there", //$NON-NLS-1$
+            before, Files.readAllBytes(file));
+    }
+
+    /**
+     * The control that stops the refusal from growing into the ordinary case: a 1.0 document reads
+     * and rewrites byte for byte, exactly as it did before any of this existed.
+     *
+     * @throws Exception when the document cannot be parsed
+     */
+    @Test
+    public void testAnOrdinaryOnePointZeroDocumentIsStillReadAndRewrittenUnchanged() throws Exception
+    {
+        assertEquals(FIXTURE, MergeRulesCodec.serialize(MergeRulesCodec.parse(FIXTURE)));
+    }
+
+    /**
+     * The other control: a document with NO declaration is not a document declaring something
+     * else. The reader applies 1.0's rules to it, so what was parsed is what this codec writes,
+     * and the declaration it gains on the way out is the canonical layout it has always gained.
+     *
+     * @throws Exception when the document cannot be parsed
+     */
+    @Test
+    public void testADocumentWithNoXmlDeclarationAtAllIsStillRead() throws Exception
+    {
+        String undeclared = FIXTURE.substring(FIXTURE.indexOf('\n') + 1);
+
+        assertEquals(FIXTURE, MergeRulesCodec.serialize(MergeRulesCodec.parse(undeclared)));
+    }
+
+    /**
+     * And the control on the file path, so that "read the file" is not quietly refusing every
+     * source it opens.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testAnOrdinaryOnePointZeroFileStillReadsFromDisk() throws Exception
+    {
+        Path file = workDir.resolve("one-point-zero.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(FIXTURE, MergeRulesCodec.serialize(MergeRulesCodec.read(file)));
+    }
+
+    /**
+     * @param xml a document expected to be refused
+     * @return the refusal text
+     */
+    private static String refusalFor(String xml)
+    {
+        try
+        {
+            MergeRulesCodec.parse(xml);
+            fail("expected a refusal for: " + xml); //$NON-NLS-1$
+            return null;
+        }
+        catch (MergeRulesFormatException expected)
+        {
+            return expected.getMessage();
+        }
+    }
+
+    // ======== The write REPLACES the file object, and does NOT carry the target's owner ========
+    //
+    // Carrying the owner - and refusing the write when it could not be carried - was written,
+    // measured and withdrawn. Files.getOwner and Files.setOwner are public and do exist; what is
+    // missing is the GUARANTEE that an owner survives a replacing move on this platform:
+    // Files.move(REPLACE_EXISTING) goes through MoveFileEx and brings the TEMPORARY's security
+    // descriptor onto the path, applying an owner afterwards needs a privilege an ordinary account
+    // does not hold, and the ACL view cannot represent a full descriptor - which is also why the
+    // target's ACL does not survive even when its owner does.
+    // "Carry it or refuse" therefore refused ORDINARY writes - a target left owned by
+    // BUILTIN\Administrators after one elevated run, or by a colleague's account on a share -
+    // which is a worse defect than the quiet one it replaced. What stands instead is a DECLARED
+    // limitation, and these tests hold both halves of it: an ordinary write is not refused for
+    // any reason to do with owners, and the limitation is stated where it was promised.
+
+    /** The headline of the bullet the guide and its docs mirror both have to carry. */
+    private static final String DECLARED_LIMITATION =
+        "- **`write` REPLACES the file object, and the OWNER of the file already on the path is " //$NON-NLS-1$
+            + "NOT carried.**"; //$NON-NLS-1$
+
+    /** The guide the tool ships and hands to a caller at run time. */
+    private static final String GUIDE =
+        "mcp/bundles/com.ditrix.edt.mcp.server/guides/merge_rules.md"; //$NON-NLS-1$
+
+    /** Its mirror under {@code docs/tools}, which has to say the same thing in the same words. */
+    private static final String DOC_MIRROR = "docs/tools/merge_rules.md"; //$NON-NLS-1$
+
+    /** The codec whose write the limitation is about. */
+    private static final String CODEC_SOURCE = "mcp/bundles/com.ditrix.edt.mcp.server/src/com/" //$NON-NLS-1$
+        + "ditrix/edt/mcp/server/utils/compare/MergeRulesCodec.java"; //$NON-NLS-1$
+
+    /**
+     * The behaviour the limitation promises is still there: a write over a file that is ALREADY
+     * on the path lands, and is not refused. This is precisely the call the withdrawn refusal
+     * broke - it stopped a write whose target belonged to an account other than the temporary's,
+     * which on Windows is an everyday state and not an exceptional one.
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAWriteOverAnExistingFileIsNotRefusedOverItsOwner() throws Exception
+    {
+        Path target = workDir.resolve("owned.xml"); //$NON-NLS-1$
+        Files.write(target, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("catalogs"), "DoNotMerge"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        MergeRulesCodec.write(target, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        String written = new String(Files.readAllBytes(target), StandardCharsets.UTF_8);
+        assertTrue("the replacement must really have landed:\n" + written, //$NON-NLS-1$
+            written.contains("Key=\"catalogs\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
+    }
+
+    /**
+     * A NARROW mutation smoke test, and this javadoc says what it is because the version before it
+     * claimed to be more.
+     * <p>
+     * Reintroducing the withdrawn refusal cannot be caught end-to-end here: building a target that
+     * really belongs to another account needs root, so on every machine this project builds on the
+     * two owners compare equal, a restored refusal would never fire, and the test above would stay
+     * green while the defect was back. Scanning the codec's TEXT for the owner APIs is the cheap
+     * stand-in, and it earns its place - a paste of the withdrawn code back into this file trips it
+     * at once.
+     *
+     * <h2>What it does NOT establish, and why the list is not called exhaustive</h2>
+     * A predecessor of this test said "every way Java has of reading or applying an owner is
+     * named", which was not true and could not be made true by lengthening the list. Three kinds of
+     * owner work walk straight past a scan of this shape, and naming them is the point:
+     * <ul>
+     * <li><b>Another spelling of the same call.</b> The generic attribute API reaches an owner
+     * through a STRING - {@code Files.getAttribute(path, "owner:owner")} - and named none of the
+     * tokens the old list held. That one specific bypass IS closed below, because it was
+     * demonstrated; a token computed at run time, reached by reflection, or simply written with a
+     * space before its bracket still is not.</li>
+     * <li><b>Another file.</b> Only {@link #CODEC_SOURCE} is read, so the same logic moved into a
+     * neutrally named helper elsewhere in the bundle is invisible here. Widening the scan to the
+     * whole bundle would not fix that either - it would only move the boundary.</li>
+     * <li><b>Anything about behaviour.</b> This reads characters. It cannot tell whether the write
+     * still works, which is what the test above it is for.</li>
+     * </ul>
+     * So what stands is: the owner APIs this scan KNOWS are not called in this one file. That is
+     * worth having and it is all that is claimed.
+     *
+     * <h2>Why a call is told from a mention</h2>
+     * The codec's own javadoc now NAMES {@code Files.getOwner} and {@code Files.setOwner}, to
+     * explain that what is missing is the guarantee and not the API. A bare-token ban would fire on
+     * that explanation, so the invocation forms are what is banned - a call always carries its
+     * bracket. That is a discriminator, not a guarantee, and it is one of the holes named above.
+     *
+     * @throws IOException when the source cannot be read
+     */
+    @Test
+    public void testNoOwnerApiThisScanKnowsIsCalledInTheCodecSource() throws IOException
+    {
+        String source =
+            new String(Files.readAllBytes(repoFile(CODEC_SOURCE)), StandardCharsets.UTF_8);
+
+        assertTrue("the positive control: this scan must really have read the codec", //$NON-NLS-1$
+            source.contains("private static void inheritPermissions(Path target, Path replacement)")); //$NON-NLS-1$
+        for (String api : List.of("getOwner(", "setOwner(", "FileOwnerAttributeView", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "UserPrincipal", ".owner()", //$NON-NLS-1$ //$NON-NLS-2$
+            // The bypass the review demonstrated: the generic attribute API names an owner in a
+            // STRING, so it carried none of the tokens above.
+            "Files.getAttribute", "Files.setAttribute", "owner:owner", "posix:owner")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertFalse("the owner work is withdrawn and the limitation declared in its place, so '" //$NON-NLS-1$
+                + api + "' must not be back in MergeRulesCodec", source.contains(api)); //$NON-NLS-1$
+        }
+    }
+
+    // One literal per @Test: JUnit stops a method at its first failed assertion, so pins bundled
+    // into one method would leave every literal after the first unloaded.
+
+    /**
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheGuideDeclaresTheLimitation() throws IOException
+    {
+        assertTrue(GUIDE + " must carry the declared limitation", //$NON-NLS-1$
+            limitationBulletOf(GUIDE).startsWith(DECLARED_LIMITATION));
+    }
+
+    /**
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheLimitationSaysTheOwnerChangesAndThatNothingReportsIt() throws IOException
+    {
+        assertTrue(limitationBulletOf(GUIDE)
+            .contains("the owner CHANGES, and nothing in the answer says so")); //$NON-NLS-1$
+    }
+
+    /**
+     * A limitation the caller can do nothing about is a complaint, so it names the action.
+     *
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheLimitationTellsTheCallerWhatToDoAboutIt() throws IOException
+    {
+        assertTrue(limitationBulletOf(GUIDE).contains(
+            "Do not point `filePath` at a file that belongs to another account.")); //$NON-NLS-1$
+    }
+
+    /**
+     * The other half of the tidy-up: the GROUP is attempted, never promised. A guide that
+     * promised it would be making the same kind of claim the owner one has just lost.
+     *
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheLimitationCallsTheGroupBestEffortRatherThanPromisingIt() throws IOException
+    {
+        assertTrue(limitationBulletOf(GUIDE).contains("carrying the GROUP is BEST-EFFORT")); //$NON-NLS-1$
+    }
+
+    /**
+     * The bullet used to say there was "no public way" to keep an owner, which is a claim about
+     * the API surface and is false - {@code Files.getOwner} and {@code Files.setOwner} are public.
+     * What is actually absent is the GUARANTEE, and that is what it has to say, because a reader
+     * who checks the first version finds the API and concludes the limitation is imaginary.
+     *
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheLimitationBlamesTheMissingGuaranteeRatherThanAMissingApi() throws IOException
+    {
+        assertTrue(limitationBulletOf(GUIDE)
+            .contains("no public Java API guarantees an owner survives a replacing move here")); //$NON-NLS-1$
+    }
+
+    /**
+     * The owner is the visible half of a bigger fact: the move brings the TEMPORARY's whole
+     * security descriptor onto the path, so a target with the SAME owner but an ACL somebody
+     * arranged by hand loses that ACL too. Advice written about owners alone does not cover that
+     * caller, so the bullet has to name it.
+     *
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheLimitationSaysTheAclAndOtherSecurityMetadataAreNotKeptEither()
+        throws IOException
+    {
+        assertTrue(limitationBulletOf(GUIDE).contains(
+            "a Windows ACL and the rest of a file's security metadata are not preserved either")); //$NON-NLS-1$
+    }
+
+    /**
+     * The mode is carried only where the store accepts applying it - the codec skips a
+     * {@code setPosixFilePermissions} the filesystem answers as unsupported - so an unqualified
+     * "the POSIX mode IS carried" would be the same kind of over-claim this bullet exists to
+     * retire.
+     *
+     * @throws IOException when the guide cannot be read
+     */
+    @Test
+    public void testTheLimitationQualifiesTheModeAsCarriedOnlyWhereItCanBeApplied()
+        throws IOException
+    {
+        assertTrue(limitationBulletOf(GUIDE).contains(
+            "The POSIX mode IS carried onto the replacement where the filesystem accepts applying it")); //$NON-NLS-1$
+    }
+
+    /**
+     * The guide and its {@code docs/tools} mirror say it in the SAME words. Two copies of one
+     * limitation that drift apart are one limitation and one piece of folklore, and only the
+     * shipped guide is what a caller is handed at run time.
+     *
+     * @throws IOException when either file cannot be read
+     */
+    @Test
+    public void testTheDocMirrorCarriesTheLimitationWordForWord() throws IOException
+    {
+        assertEquals("the guide and its docs/tools mirror must state it identically", //$NON-NLS-1$
+            limitationBulletOf(GUIDE), limitationBulletOf(DOC_MIRROR));
+    }
+
+    /**
+     * Reads the one line that declares the limitation, without its line ending. The ending is
+     * deliberately not part of the comparison: the guide is checked out with the platform's,
+     * while its mirror is pinned to LF by {@code .gitattributes}, and that difference is not what
+     * these two files have to agree about.
+     *
+     * @param repoRelative the file to read, from the repository root
+     * @return the bullet, ending stripped
+     * @throws IOException when the file cannot be read
+     */
+    private static String limitationBulletOf(String repoRelative) throws IOException
+    {
+        String text =
+            new String(Files.readAllBytes(repoFile(repoRelative)), StandardCharsets.UTF_8);
+        int start = text.indexOf(DECLARED_LIMITATION);
+        assertTrue(repoRelative + " must declare the limitation", start >= 0); //$NON-NLS-1$
+        int end = text.indexOf('\n', start);
+        return (end < 0 ? text.substring(start) : text.substring(start, end)).replace("\r", ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Locates a file of this repository by walking up from the test working directory, the way
+     * the other source-scanning ratchets in this suite do.
+     *
+     * @param repoRelative the path from the repository root
+     * @return the file
+     */
+    private static Path repoFile(String repoRelative)
+    {
+        File dir = new File(System.getProperty("user.dir")); //$NON-NLS-1$
+        for (int i = 0; i < 12 && dir != null; i++)
+        {
+            File candidate = new File(dir, repoRelative);
+            if (candidate.isFile())
+            {
+                return candidate.toPath();
+            }
+            dir = dir.getParentFile();
+        }
+        fail("could not locate " + repoRelative + " by walking up from user.dir=" //$NON-NLS-1$ //$NON-NLS-2$
+            + System.getProperty("user.dir")); //$NON-NLS-1$
+        return null; // unreachable
     }
 
     /**

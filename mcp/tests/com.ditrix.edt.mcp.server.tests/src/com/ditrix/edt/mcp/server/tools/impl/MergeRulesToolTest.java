@@ -2402,7 +2402,7 @@ public class MergeRulesToolTest
             read(target).contains("<Node Key=\"$$Root$$\" MergeRule=\"DoNotMerge\"/>")); //$NON-NLS-1$
     }
 
-    // ============ An in-place update may not detach two names of one file ============
+    // ============ A same-path rewrite may not detach two names of one file ============
 
     @Test
     public void testAHardLinkedTargetIsRefusedInsteadOfDetachingTheTwoNames() throws IOException
@@ -2424,7 +2424,7 @@ public class MergeRulesToolTest
 
         // The identity check accepts them - they ARE one file - but the write replaces a directory
         // entry rather than the content behind it, so afterwards they would be two files while the
-        // report called it an update in place.
+        // report called them one file rewritten.
         assertErrorNaming(result, "hard links", target.toRealPath().toString(), //$NON-NLS-1$
             base.toRealPath().toString());
         assertEquals("nothing may be written", FIXTURE, read(base)); //$NON-NLS-1$
@@ -2454,17 +2454,17 @@ public class MergeRulesToolTest
     }
 
     @Test
-    public void testUpdatingOneFileInPlaceUnderOneNameStillWorks() throws IOException
+    public void testRewritingOneFileAtItsOwnPathUnderOneNameStillWorks() throws IOException
     {
-        // The control: the refusal above may not catch an ordinary in-place update, which is the
-        // only way this tool edits an existing file at all.
+        // The control: the refusal above may not catch an ordinary same-path rewrite, which is
+        // the only way this tool edits an existing file at all.
         Path file = seedFixture();
 
         String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "basedOn", file.toString(), //$NON-NLS-1$
             "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertTrue("an in-place update is the point of basedOn: " + result, //$NON-NLS-1$
+        assertTrue("a same-path rewrite is the point of basedOn: " + result, //$NON-NLS-1$
             result.startsWith("# Merge rules written:")); //$NON-NLS-1$
         assertTrue("the decision carried in must still be there", //$NON-NLS-1$
             read(file).contains("Key=\"Alpha:Beta:Gamma\"")); //$NON-NLS-1$
@@ -2839,10 +2839,10 @@ public class MergeRulesToolTest
         assertTrue(read(target).contains("Key=\"A:B:C\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
     }
 
-    // ============ Two in-place updates of one file do not lose each other ============
+    // ============ Two same-path rewrites of one file do not lose each other ============
 
     /**
-     * Two calls that update the SAME existing file are a read-modify-write each, and the
+     * Two calls that rewrite the SAME existing file are a read-modify-replace each, and the
      * reservation cannot cover them: it refuses a target that must not exist, and here the file
      * exists legitimately. Unserialised, both read the same starting document and each writes only
      * its own additions, so one caller's decisions vanish while both reports claim success.
@@ -2856,7 +2856,7 @@ public class MergeRulesToolTest
      * @throws Exception when a worker cannot be joined
      */
     @Test
-    public void testTwoConcurrentInPlaceUpdatesKeepBothSetsOfDecisions() throws Exception
+    public void testTwoConcurrentSamePathRewritesKeepBothSetsOfDecisions() throws Exception
     {
         Path target = seedFixture();
         CountDownLatch firstIsInside = new CountDownLatch(1);
@@ -2905,6 +2905,71 @@ public class MergeRulesToolTest
             written.contains("Key=\"documents\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
         assertTrue("and neither may have discarded what the file already held:\n" + written, //$NON-NLS-1$
             written.contains("Key=\"Alpha:Beta:Gamma\" MergeRule=\"MergePrioritizingMain\"")); //$NON-NLS-1$
+    }
+
+
+    // ============ A same-path rewrite of an XML 1.1 file is refused, not performed ============
+    //
+    // The codec writes one declaration, version="1.0". A same-path rewrite therefore read a 1.1
+    // source under 1.1's rules and would have written it back under 1.0's - and a character
+    // reference legal only in 1.1 makes the result a file neither this tool nor EDT can read,
+    // reported as a successful save. Refused at the read, so the file on the path never moves.
+
+    /** A 1.1 rules file carrying a character only a 1.1 declaration lets a parser accept. */
+    private static final String ONE_POINT_ONE_RULES = "<?xml version=\"1.1\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
+        + "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+        + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+        + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\" Note=\"a&#x1;b\"/>" //$NON-NLS-1$
+        + "</Node></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    @Test
+    public void testASamePathRewriteOfAnXmlOnePointOneFileIsRefused() throws IOException
+    {
+        Path file = seed("one-point-one.xml", ONE_POINT_ONE_RULES); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "1.1"); //$NON-NLS-1$
+    }
+
+    /**
+     * The part that matters more than the wording: the file is still there, byte for byte. A
+     * refusal that had already replaced or truncated it would print exactly the same message.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testTheRefusedSamePathRewriteLeavesTheFileExactlyAsItWas() throws IOException
+    {
+        Path file = seed("one-point-one.xml", ONE_POINT_ONE_RULES); //$NON-NLS-1$
+
+        call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("nothing may have been written over the file that was refused", //$NON-NLS-1$
+            ONE_POINT_ONE_RULES, read(file));
+    }
+
+    /**
+     * The control: the same call over an ordinary 1.0 file still writes. Without it the two above
+     * would pass just as well against a tool that had stopped writing anything at all.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testTheSameSamePathRewriteOfAnOrdinaryFileStillWrites() throws IOException
+    {
+        Path file = seedFixture();
+
+        call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the ordinary same-path rewrite must still land:\n" + read(file), //$NON-NLS-1$
+            read(file).contains("Key=\"catalogs\" MergeRule=\"DoNotMerge\"")); //$NON-NLS-1$
     }
 
     private String call(Map<String, String> params)

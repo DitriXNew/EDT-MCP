@@ -16,10 +16,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * another one in this process.
  *
  * <h2>The hazard it closes</h2>
- * Updating a file in place is three steps - read it, apply the change in memory, write the result
- * back - and only the last of them is atomic on the filesystem. Two calls that update the same
- * file at the same time therefore both read the SAME starting document, and each writes its own
- * change over the other's: one caller's work disappears and both reports say it was recorded.
+ * Updating a file at one path is three steps - read it, apply the change in memory, write the
+ * result back - and only the last of them is atomic on the filesystem. Two calls that update
+ * the same file at the same time therefore both read the SAME starting document, and each
+ * writes its own change over the other's: one caller's work disappears and both reports say it
+ * was recorded.
  * A "the file must not already exist" reservation does not cover this at all - here the file
  * exists legitimately, which is the whole point of an update.
  *

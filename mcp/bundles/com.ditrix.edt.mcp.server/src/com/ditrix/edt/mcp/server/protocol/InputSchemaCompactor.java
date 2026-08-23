@@ -172,7 +172,7 @@ public final class InputSchemaCompactor
             asSet("deleteRegistration", "deleteDatabaseFiles")); //$NON-NLS-1$ //$NON-NLS-2$
         keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
         // The one parameter of the three-way comparison family whose prose warns about an effect
-        // of THAT parameter: in write mode the named file is OVERWRITTEN in place, and only when
+        // of THAT parameter: in write mode the named file is REPLACED at the same path, and only when
         // 'basedOn' names that same file - any other write over an existing file is refused. A
         // caller that cannot see the condition either loses decisions it meant to keep or cannot
         // find the one call shape that updates a rules file at all.

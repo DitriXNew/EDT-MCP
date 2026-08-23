@@ -255,8 +255,9 @@ public class MergeRulesTool implements IMcpTool
                     + "comparison's three PROJECT names, so it needs a live comparison and is " //$NON-NLS-1$
                     + "refused without one; '.xml' needs none and is read by EDT 2026.1 only. An " //$NON-NLS-1$
                     + "existing file is OVERWRITTEN only when 'basedOn' names that SAME file, " //$NON-NLS-1$
-                    + "which updates it in place; any other write over an existing file is " //$NON-NLS-1$
-                    + "refused so decisions are never silently discarded.", //$NON-NLS-1$
+                    + "whose decisions are carried into the file that REPLACES it; any other " //$NON-NLS-1$
+                    + "write over an existing file is refused so decisions are never silently " //$NON-NLS-1$
+                    + "discarded.", //$NON-NLS-1$
                 true)
             .stringProperty(KEY_BASED_ON,
                 "write: an existing rules file to start from, so its decisions and payload are " //$NON-NLS-1$
@@ -596,8 +597,9 @@ public class MergeRulesTool implements IMcpTool
      * target path against every other call in it.
      *
      * <h2>What the mutex is FOR</h2>
-     * An in-place update is a READ-MODIFY-WRITE: the document is read from {@code basedOn}, this
-     * call's decisions are applied to it in memory, and the result replaces the target. Two calls
+     * A same-path rewrite is a READ-MODIFY-REPLACE: the document is read from {@code basedOn},
+     * this call's decisions are applied to it in memory, and the result REPLACES the target - what
+     * sits on the path afterwards is a NEW file object, not the one that was read. Two calls
      * that name the same existing file as both {@code filePath} and {@code basedOn} are a case the
      * reservation cannot cover - the reservation refuses a target that must NOT exist, and here
      * the file exists legitimately. Unserialised, both read the SAME old document, both pass the
@@ -659,7 +661,8 @@ public class MergeRulesTool implements IMcpTool
                 return ToolResult.error("A file already exists at " + file + startedElsewhere //$NON-NLS-1$
                     + " and would be replaced, discarding the decisions it holds. Either pass " //$NON-NLS-1$
                     + KEY_BASED_ON + " with the SAME path, " + file //$NON-NLS-1$
-                    + ", to update it in place, or choose another " + KEY_FILE_PATH + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", to carry its decisions into the replacement, or choose another " //$NON-NLS-1$
+                    + KEY_FILE_PATH + ".").toJson(); //$NON-NLS-1$
             }
             String detached = separateNameRefusal(file, base);
             if (detached != null)
@@ -1671,15 +1674,16 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
-     * Refuses an in-place update whose two paths are SEPARATE names for one file - hard links.
+     * Refuses a same-path update whose two paths are SEPARATE names for one file - hard links.
      * <p>
      * {@link #isSameFile} accepts them, and rightly so: they are one file, and the identity check
      * is asking whether the write replaces something the caller did not mean to lose. What the
      * identity check cannot see is that the write replaces a directory ENTRY rather than the
      * content behind it, so afterwards the two names are two different files - {@code filePath}
      * carrying the new rules and {@code basedOn} still carrying the old ones - while the report
-     * says the file was updated in place. A symbolic link is not this case and is not refused: the
-     * codec follows it, so the file it names is the file that gets written and the link survives.
+     * says the ONE file they name was rewritten. A symbolic link is not this case and is not
+     * refused: the codec follows it, so the file it names is the file that gets written and the
+     * link survives.
      * <p>
      * The two are told apart WITHOUT any platform-specific attribute: one file reached through a
      * link resolves to one real path, whereas two hard links are two real paths of equal identity.
@@ -1713,7 +1717,7 @@ public class MergeRulesTool implements IMcpTool
             + "replaces a directory entry, not the content behind it, so it would leave " + realFile //$NON-NLS-1$
             + " holding the new rules and " + realBase //$NON-NLS-1$
             + " still holding the old ones - the two names would stop being the same file, and " //$NON-NLS-1$
-            + "this report would have called that an update in place. Pass the SAME path as " //$NON-NLS-1$
+            + "this report would have called that ONE file rewritten. Pass the SAME path as " //$NON-NLS-1$
             + KEY_FILE_PATH + " and " + KEY_BASED_ON + " to update that one file, or write to a " //$NON-NLS-1$ //$NON-NLS-2$
             + "path that is not a second name for it.").toJson(); //$NON-NLS-1$
     }
@@ -1721,7 +1725,8 @@ public class MergeRulesTool implements IMcpTool
     /**
      * Whether two paths name the same file on disk. Asked of the filesystem rather than of the
      * strings, because a case difference or a link makes two spellings of ONE file compare
-     * unequal - and treating an in-place update as a replacement would refuse correct input.
+     * unequal - and treating a rewrite of one file as a write over another file's decisions
+     * would refuse correct input.
      *
      * @param left an existing file
      * @param right the file to compare it with, or {@code null}

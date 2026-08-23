@@ -288,7 +288,7 @@ def test_write_with_based_on_keeps_what_was_already_decided():
         "basedOn": path,
         "decisions": [{"path": ["catalogs", "Products:Products:Products"], "rule": "DoNotMerge"}],
     })
-    assert_ok(r, "updating a rules file in place")
+    assert_ok(r, "rewriting a rules file from its own decisions")
 
     written = _read_file(path)
     assert_contains(written, '<Node Key="Alpha:Beta:Gamma" MergeRule="MergePrioritizingMain"/>',

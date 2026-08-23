@@ -107,6 +107,18 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
  * a rule of its own, and the rewrite then hands back a document that says two different things
  * about one node. The tool already refuses two decisions addressing one node in its own request;
  * this is that same question asked of the file. See {@code rejectDuplicateNodeKeys}.
+ * <p>
+ * <b>A document that declares an XML version this codec does not write is REFUSED as well</b>, and
+ * it is the third member of the same family: what cannot be carried honestly goes back rather than
+ * being rewritten into something else. The declaration this class emits is fixed
+ * ({@code version="1.0"}), so a source that declared {@code 1.1} would come back declared
+ * {@code 1.0} - and that is not a layout difference, it is a different GRAMMAR handed to the next
+ * reader. XML 1.1 admits characters 1.0 has no spelling for: measured on this JDK's StAX reader,
+ * {@code &#x1;} in text or in an attribute value parses under a {@code 1.1} declaration and yields
+ * U+0001, while the same reference under {@code 1.0} is refused outright as "an invalid XML
+ * character". Re-emitting that character under a {@code 1.0} declaration therefore produces a file
+ * that THIS codec's own {@link #read(Path)} refuses - the tool would report the rules as written
+ * and then be unable to read them back, and so would EDT. See {@code rejectUnwritableXmlVersion}.
  */
 public final class MergeRulesCodec
 {
@@ -117,6 +129,13 @@ public final class MergeRulesCodec
     public static final String ZIP_EXTENSION = ".zip"; //$NON-NLS-1$
 
     private static final String XML_DECLARATION = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"; //$NON-NLS-1$
+
+    /**
+     * The XML version {@link #XML_DECLARATION} spells, and so the only one this codec can hand
+     * back. A source that declares anything else is refused rather than re-declared - see
+     * {@link #rejectUnwritableXmlVersion(String)}.
+     */
+    private static final String WRITABLE_XML_VERSION = "1.0"; //$NON-NLS-1$
 
     private static final String INDENT = "  "; //$NON-NLS-1$
 
@@ -371,8 +390,8 @@ public final class MergeRulesCodec
      * because only the caller knows whether the comparison the file is for can be named at all -
      * see this class's javadoc.
      * <p>
-     * The bytes land in a sibling temporary file that is then moved over the target, so an
-     * update-in-place (reading a file and writing it back) cannot leave a half-written file
+     * The bytes land in a sibling temporary file that is then moved over the target, so a
+     * same-path rewrite (reading a file and writing it back) cannot leave a half-written file
      * where a complete one used to be.
      * <p>
      * That temporary is UNIQUE PER CALL, and the uniqueness is load-bearing rather than tidy. A
@@ -392,18 +411,35 @@ public final class MergeRulesCodec
      * the same file identity the caller's own guard accepted.
      *
      * <p>
-     * <b>The replacement keeps the target's permissions.</b> A move replaces the directory entry,
-     * so the file that ends up on the path is the TEMPORARY's inode with the temporary's mode -
-     * and {@code Files.createTempFile} creates one readable by its owner alone. Replacing a rules
-     * file a team shares would therefore have narrowed it to whoever ran the write, silently, on
-     * every save. The mode of whatever is on the path is carried onto the temporary BEFORE the
-     * move, so the replacement is atomic in its permissions as well as in its bytes; a filesystem
-     * with no POSIX view - Windows - has no mode to carry and is left alone. A path with nothing on
-     * it has no mode to inherit either, so such a file keeps the temporary's own - which is the
-     * restrictive one, and the safe direction for a file this call is creating. Under
-     * {@link Target#MUST_NOT_EXIST} there IS something on the path by then: the reservation this
-     * method made with {@code Files.createFile}, so the finished file wears the process default
-     * rather than the temporary's owner-only mode.
+     * <b>The replacement carries the target's POSIX MODE where the store accepts it, and only
+     * ATTEMPTS its group.</b> A move replaces the directory entry, so the file that ends up on the
+     * path is the TEMPORARY's inode with the temporary's mode - and {@code Files.createTempFile}
+     * creates one readable by its owner alone. Replacing a rules file a team shares would
+     * therefore have narrowed it to whoever ran the write, silently, on every save. The mode of
+     * whatever is on the path is read and applied to the temporary BEFORE the move, so where the
+     * store accepts it the file lands wearing the target's mode instead of the temporary's; where
+     * the store answers that it keeps no POSIX permissions, applying it is SKIPPED and the
+     * temporary's own mode stands. The GROUP is a separate step whose every failure is swallowed -
+     * see {@code inheritGroup} - so a file can land with its mode carried and its group not.
+     * <b>There is no blanket promise here that the target's permissions survive</b>: one attribute
+     * is carried where the store accepts it, the other is attempted, and what a file's permissions
+     * are made of beyond those two - a Windows ACL, an access-control entry somebody set by hand -
+     * is not carried at all.
+     * <p>
+     * A filesystem with no POSIX view - Windows - has no mode or group to carry and is left alone.
+     * A path with nothing on it has no mode to inherit either, so such a file keeps the
+     * temporary's own - which is the restrictive one, and the safe direction for a file this call
+     * is creating. Under {@link Target#MUST_NOT_EXIST} there IS something on the path by then: the
+     * reservation this method made with {@code Files.createFile}, so the finished file wears the
+     * process default rather than the temporary's owner-only mode.
+     * <p>
+     * <b>DECLARED LIMITATION: the target's OWNER is NOT carried.</b> This method replaces the file
+     * OBJECT, so what ends up on the path is the temporary, belonging to whichever account the
+     * temporary was created for; where that differs from the account the target belonged to, the
+     * owner CHANGES and nothing in the answer says so. Carrying it is not attempted and the write
+     * is not refused over it either - see {@code inheritPermissions} for why both alternatives
+     * were measured and rejected. Do not aim {@code filePath} at a file that belongs to another
+     * account.
      * <p>
      * <b>The move itself always replaces</b>, and it has to: it moves the temporary onto the
      * target. What {@link Target#MUST_NOT_EXIST} adds is a RESERVATION taken before a single byte
@@ -567,7 +603,7 @@ public final class MergeRulesCodec
      * checked what it produced. A document that arrives just under the bound and grows - one more
      * decision, or simply the canonical printing expanding a compact source - serialises past it,
      * lands on disk, and is reported as written; the next {@link #read(Path)} of that file, and
-     * every in-place update after it, then refuses this tool's OWN output as too large. So the
+     * every same-path rewrite after it, then refuses this tool's OWN output as too large. So the
      * serialised bytes are measured here, against the same number and by the same count the
      * reader uses, and an oversized document is refused instead of written.
      * <p>
@@ -610,8 +646,15 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Carries the POSIX mode AND the owning group of whatever is on {@code target} onto the
-     * {@code replacement} that is about to take its place.
+     * Carries the POSIX mode of whatever is on {@code target} onto the {@code replacement} that
+     * is about to take its place, and ATTEMPTS its owning group.
+     * <p>
+     * <b>Neither step is unconditional, so this method does not preserve "the target's
+     * permissions".</b> The mode is applied only where the store accepts it - a
+     * {@code setPosixFilePermissions} the filesystem answers as unsupported is skipped and the
+     * temporary keeps its own mode - and every failure of the group step is swallowed. One
+     * attribute is carried where it can be, the other is tried; nothing else about the file's
+     * security is touched.
      * <p>
      * A move replaces an inode, so without this the replacement arrives wearing
      * {@code Files.createTempFile}'s own mode - owner-only - and the group of whoever ran the
@@ -619,18 +662,41 @@ public final class MergeRulesCodec
      * account. Nothing about that is visible in the answer the caller gets: the write succeeds and
      * reports the rules as written.
      * <p>
-     * <b>The group is carried for the same reason the mode is, and it is not optional in
-     * practice.</b> A file shared through a secondary group - {@code rw-rw-r--} owned by
-     * {@code developers} - keeps its mode across the move and still stops being writable by the
-     * team, because the group those {@code rw-} bits apply to is no longer the team's. Preserving
-     * the mode while dropping the group preserves the half that does nothing on its own.
-     * <p>
-     * <b>The user owner is NOT carried, and that is a different case rather than an inconsistency.</b>
-     * Changing a file's user owner is reserved to root on Linux; a process that is not root cannot
-     * do it even for a file it owns, so attempting it would be attempting something known to fail.
-     * Changing the GROUP is allowed to the owner for any group the owner belongs to, which is
-     * exactly the case this method exists for. And an unchanged user owner does not break sharing
-     * on its own: the write is performed by the account that already had write access.
+     * <b>The group is ATTEMPTED for the same reason the mode is carried, and the attempt is
+     * BEST-EFFORT.</b>
+     * A file shared through a secondary group - {@code rw-rw-r--} owned by {@code developers} -
+     * keeps its mode across the move and still stops being writable by the team, because the group
+     * those {@code rw-} bits apply to is no longer the team's. Preserving the mode while dropping
+     * the group preserves the half that does nothing on its own. It is still only ATTEMPTED, and
+     * the guide says so rather than promising the group is kept: setting one needs the account to
+     * belong to it, so where the filesystem says no the file lands with the group it was created
+     * with.
+     *
+     * <h2>DECLARED LIMITATION: the user OWNER is not carried, and no write is refused over it</h2>
+     * The file that ends up on the path is the temporary, so it belongs to whichever account the
+     * temporary was created for; where that differs from the target's owner, the owner CHANGES -
+     * silently, exactly the way the mode used to. Both ways of doing better were tried and are
+     * worse:
+     * <ul>
+     * <li><b>Preserving it is not GUARANTEED by anything public.</b> {@code Files.getOwner} and
+     * {@code Files.setOwner} are public and do exist, so what is missing is the guarantee rather
+     * than the API. The replacing move goes through {@code MoveFileEx} on the platform this plugin
+     * runs on, which brings the TEMPORARY's whole security descriptor onto the path; applying an
+     * owner afterwards needs a privilege an ordinary account does not hold, and the ACL view cannot
+     * represent a full descriptor. That same descriptor swap is why the target's ACL does not
+     * survive either, even where the owner happens to match.</li>
+     * <li><b>So "preserve it or refuse the write" is a refusal in ORDINARY cases</b> - a target
+     * left owned by {@code BUILTIN\Administrators} by one elevated run, or by a colleague's
+     * account on a share - which trades a quiet defect for a rules file that cannot be saved at
+     * all. That is the more expensive of the two, so it was withdrawn.</li>
+     * <li><b>Writing into the existing file instead of replacing it is worse again.</b> The right
+     * to replace a file through its directory is not the right to open THAT file for writing, and
+     * a failure after the truncate leaves a partial file on the path where a concurrent reader can
+     * see it - which is precisely what the temporary-then-move exists to prevent.</li>
+     * </ul>
+     * The limitation is therefore declared - here, in {@code write}, and in the tool's guide - and
+     * the advice that follows from it is the caller's to act on: do not aim a write at a file that
+     * belongs to another account.
      * <p>
      * Three things are deliberately NOT done here.
      * <ul>
@@ -642,21 +708,25 @@ public final class MergeRulesCodec
      * and that is what gets carried.</li>
      * <li><b>A filesystem without POSIX permissions is not a failure.</b> Windows has no mode or
      * group to carry, and the view is simply absent there; treating that as an error would make
-     * every write on Windows fail over a concept that does not exist on it.</li>
+     * every write on Windows fail over a concept that does not exist on it. This method is then a
+     * no-op from end to end, which is the limitation above stated in code.</li>
      * <li><b>A group that cannot be set is a SKIP, not a write failure.</b> Changing a group is
      * refused whenever the account does not belong to the target's group - a file left behind by a
      * colleague, a shared directory the writer is not a member of - and the filesystem may not
      * support the operation at all. Refusing the whole write over it would turn a rules file that
      * saves perfectly well today into one that cannot be saved, over a permission the caller never
      * asked this tool to manage; the mode is still carried, and the file still lands. That is why
-     * the group is attempted AFTER the mode and its failures are swallowed while the mode's
-     * failure to apply is not.</li>
+     * the group is attempted AFTER the mode, and why the two swallow DIFFERENT amounts: the
+     * group's failures are swallowed wholesale, while applying the mode swallows only the store's
+     * {@code UnsupportedOperationException} - an {@link IOException} from applying it still fails
+     * the write, before the move, with the target untouched.</li>
      * </ul>
      *
      * @param target the file about to be replaced
      * @param replacement the temporary that will replace it
-     * @throws IOException when the mode could be read but not applied - which happens before the
-     *     move, so the target is still untouched and the caller's cleanup runs
+     * @throws IOException when the mode was read and applying it failed with an I/O error - which
+     *     happens before the move, so the target is still untouched and the caller's cleanup runs.
+     *     A store that answers "no such concept" is NOT an I/O error and is skipped instead
      */
     private static void inheritPermissions(Path target, Path replacement) throws IOException
     {
@@ -698,9 +768,10 @@ public final class MergeRulesCodec
      * <p>
      * Every way this can fail is a fact about the account and the filesystem rather than about the
      * write: the process may not belong to that group, the store may not implement the operation,
-     * a security manager may forbid it. None of them is a reason to refuse to save the caller's
+     * a security policy may forbid it. None of them is a reason to refuse to save the caller's
      * rules, so none of them is allowed to escape - the file lands with its mode carried and its
-     * group left as created, which is the state the whole write had before this existed.
+     * group left as created, which is the state the whole write had before this existed. Carrying
+     * the group is BEST-EFFORT, and the guide says so rather than promising it is kept.
      *
      * @param replacement the temporary that will replace the target
      * @param group the target's group, or {@code null} when the attributes carried none
@@ -1295,6 +1366,10 @@ public final class MergeRulesCodec
     {
         try
         {
+            // FIRST, before a single event is pulled: the declaration is the one property of the
+            // document that decides what the REST of it is allowed to contain, and a source this
+            // codec cannot re-declare is refused without being read at all.
+            rejectUnwritableXmlVersion(reader.getVersion());
             ParsedTree tree = readTree(reader);
             Element rootElement = tree.root;
             if (rootElement == null || !MergeRulesDocument.TAG_SETTINGS.equals(rootElement.tag()))
@@ -1574,6 +1649,56 @@ public final class MergeRulesCodec
     }
 
     /**
+     * Refuses a source whose XML declaration names a version this codec cannot hand back.
+     *
+     * <h2>Why the DECLARATION is what is judged, and not the characters</h2>
+     * The serializer prints one fixed declaration, {@link #XML_DECLARATION}, so every rewrite comes
+     * back as XML 1.0 whatever the source said. That is not a layout difference of the kind this
+     * class's javadoc allows: the version decides which characters the document may hold at all,
+     * so re-declaring it hands the next reader a grammar the file was never checked against.
+     * <p>
+     * <b>The route by which that goes wrong has exactly one entrance, and this is it.</b> Measured
+     * on this JDK's StAX reader, with the same factory settings {@link #newSecureFactory()} uses:
+     * <ul>
+     * <li>{@code &#x1;} in character data or in an attribute value parses under a {@code 1.1}
+     * declaration and arrives in the model as U+0001, and the same reference under a {@code 1.0}
+     * declaration is refused - {@code Character reference "&#x1" is an invalid XML character};</li>
+     * <li>a LITERAL U+0001 is refused under BOTH versions, in content and in a comment alike, so a
+     * restricted character can only ever enter through a character reference;</li>
+     * <li>a declaration of {@code 1.2} never reaches this method - the reader refuses it itself
+     * with {@code XML version "1.2" is not supported}.</li>
+     * </ul>
+     * So refusing the declaration closes the whole family at its single entrance, and no scan of
+     * the parsed characters is needed to do it: nothing 1.0 cannot spell can be in a document that
+     * declared 1.0, and nothing else is read.
+     * <p>
+     * <b>A 1.1 source with only ordinary characters is refused too</b>, and that is deliberate
+     * rather than collateral. Two reasons, either of which is enough. The rewrite would silently
+     * REPLACE the declaration, which is content of the file this codec promises to give back
+     * unchanged. And XML 1.1 normalises U+0085 and U+2028 to a line feed where 1.0 does not, so a
+     * 1.1 source's line ends come back differently and a rewrite would bake that in under a
+     * declaration that never asked for it. Judging the repertoire instead would wave both through
+     * while looking stricter.
+     * <p>
+     * <b>What is NOT refused:</b> a document with no declaration at all. The reader then applies
+     * 1.0's rules - {@code getVersion()} answers {@code null} - so the parsed document is one this
+     * codec can write, and adding the declaration on the way out is the canonical layout this class
+     * has always produced.
+     *
+     * @param version the version the declaration named, or {@code null} when there was none
+     * @throws MergeRulesFormatException when the version is neither absent nor
+     *             {@link #WRITABLE_XML_VERSION}
+     */
+    private static void rejectUnwritableXmlVersion(String version) throws MergeRulesFormatException
+    {
+        if (version == null || WRITABLE_XML_VERSION.equals(version))
+        {
+            return;
+        }
+        throw new MergeRulesFormatException(unwritableXmlVersion(version));
+    }
+
+    /**
      * Refuses one element that uses an XML namespace, in any of the three shapes it can take.
      * <p>
      * <b>The three shapes are checked separately because a reader reports them separately, and
@@ -1764,6 +1889,29 @@ public final class MergeRulesCodec
             + "gone. Refusing the file is what keeps that payload intact, because a rewrite of it " //$NON-NLS-1$
             + "would not. Save the settings again from EDT's comparison window ('Save merge " //$NON-NLS-1$
             + "settings'), or remove the foreign block from the file, and read it again."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for a source declaring an XML version this codec cannot write back.
+     *
+     * @param version the version the declaration named
+     * @return the message
+     */
+    private static String unwritableXmlVersion(String version)
+    {
+        return "The merge-settings document declares XML version '" + version //$NON-NLS-1$
+            + "' and was not read. This tool writes one declaration - '" + WRITABLE_XML_VERSION //$NON-NLS-1$
+            + "' - so rewriting the file would hand it back declaring a version it was never " //$NON-NLS-1$
+            + "checked against, and that is a different grammar rather than a difference in " //$NON-NLS-1$
+            + "layout. XML 1.1 admits characters 1.0 has no spelling for: a '&#x1;' in a value " //$NON-NLS-1$
+            + "reads perfectly well under a '1.1' declaration and is an invalid character under a " //$NON-NLS-1$
+            + "'1.0' one, so the rewritten file would be one this tool - and EDT - could no " //$NON-NLS-1$
+            + "longer read, after reporting the rules as written. 1.1 also folds U+0085 and " //$NON-NLS-1$
+            + "U+2028 into line feeds, which 1.0 keeps as themselves. Save the settings again " //$NON-NLS-1$
+            + "from EDT's comparison window ('Save merge settings'), which writes '" //$NON-NLS-1$
+            + WRITABLE_XML_VERSION + "'; or, if the file really holds nothing but ordinary " //$NON-NLS-1$
+            + "characters, change its declaration to '" + WRITABLE_XML_VERSION //$NON-NLS-1$
+            + "' yourself and read it again."; //$NON-NLS-1$
     }
 
     private static String tooDeep(String tag)
