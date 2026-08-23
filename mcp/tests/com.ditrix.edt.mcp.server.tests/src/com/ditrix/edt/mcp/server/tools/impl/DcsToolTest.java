@@ -96,6 +96,18 @@ public class DcsToolTest
         String limitDescription =
             properties.getAsJsonObject("limit").get("description").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(limitDescription, limitDescription.contains("XML chunk characters")); //$NON-NLS-1$
+        assertTrue(limitDescription, limitDescription.contains("default 100, maximum 1000")); //$NON-NLS-1$
+        assertTrue(limitDescription, limitDescription.contains("default 40000")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMarkdownLimitPreservesOmissionAndLargeCharacterRequest()
+    {
+        assertNull(DcsTool.requestedLimit("md", false, 0)); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(100_000),
+            DcsTool.requestedLimit("md", true, 100_000)); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(40_000),
+            DcsTool.requestedLimit("xml", false, 40_000)); //$NON-NLS-1$
     }
 
     @Test

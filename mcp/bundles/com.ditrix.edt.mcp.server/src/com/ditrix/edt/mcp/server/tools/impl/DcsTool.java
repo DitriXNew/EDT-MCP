@@ -50,7 +50,6 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
-import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -123,8 +122,11 @@ public class DcsTool implements IMcpTool
             .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for presentations.") //$NON-NLS-1$
             .enumProperty(KEY_FORMAT, "Read output; defaults to md. xml is only for a bare schema get.", //$NON-NLS-1$
                 false, FORMAT_MD, FORMAT_XML)
-            .integerProperty(McpKeys.LIMIT, "Markdown collection page size, or scalar/XML chunk characters.") //$NON-NLS-1$
-            .integerProperty(KEY_OFFSET, "Zero-based collection or scalar/XML character offset for get.") //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT,
+                "Markdown collection/summary item count (default 100, maximum 1000), or " //$NON-NLS-1$
+                    + "exact-value/XML chunk characters (default 40000, bounded by the output envelope).") //$NON-NLS-1$
+            .integerProperty(KEY_OFFSET,
+                "Zero-based collection/summary item or exact-value/XML character offset for get.") //$NON-NLS-1$
             .build();
     }
 
@@ -160,8 +162,8 @@ public class DcsTool implements IMcpTool
         String language = JsonUtils.extractStringArgument(params, KEY_LANGUAGE);
         String rawFormat = JsonUtils.extractStringArgument(params, KEY_FORMAT);
         String format = rawFormat == null ? FORMAT_MD : rawFormat;
-        int defaultLimit = FORMAT_XML.equals(format) ? DcsXmlCodec.DEFAULT_CHUNK_CHARS
-            : Pagination.DEFAULT_LIMIT;
+        boolean hasLimit = params.containsKey(McpKeys.LIMIT);
+        int defaultLimit = FORMAT_XML.equals(format) ? DcsXmlCodec.DEFAULT_CHUNK_CHARS : 0;
         int rawLimit = JsonUtils.extractIntArgument(params, McpKeys.LIMIT, defaultLimit);
         int offset = JsonUtils.extractIntArgument(params, KEY_OFFSET, 0);
 
@@ -212,8 +214,7 @@ public class DcsTool implements IMcpTool
         {
             return shapeError;
         }
-        int limit = FORMAT_XML.equals(format) ? Math.max(1, rawLimit)
-            : Pagination.clampLimit(rawLimit, Pagination.MAX_LIMIT);
+        Integer limit = requestedLimit(format, hasLimit, rawLimit);
         Display display = Display.getDefault();
         if (display == null || display.isDisposed())
         {
@@ -252,8 +253,9 @@ public class DcsTool implements IMcpTool
         if (rawLimit != null && !isInteger(rawLimit))
         {
             return ToolResult.error("limit '" + rawLimit //$NON-NLS-1$
-                + "' is not an integer. Pass a whole number; Markdown gets clamp it to 1..1000, " //$NON-NLS-1$
-                + "while XML gets use it as the requested character chunk size.").toJson(); //$NON-NLS-1$
+                + "' is not an integer. Pass a whole number; Markdown collection reads clamp it " //$NON-NLS-1$
+                + "to 1..1000 items, while exact-value and XML reads bound it by their " //$NON-NLS-1$
+                + "serialized-character output envelope.").toJson(); //$NON-NLS-1$
         }
         String rawOffset = JsonUtils.extractStringArgument(params, KEY_OFFSET);
         if (rawOffset != null && !isInteger(rawOffset))
@@ -354,6 +356,15 @@ public class DcsTool implements IMcpTool
         return null;
     }
 
+    static Integer requestedLimit(String format, boolean supplied, int rawLimit)
+    {
+        if (FORMAT_XML.equals(format))
+        {
+            return Integer.valueOf(Math.max(1, rawLimit));
+        }
+        return supplied ? Integer.valueOf(rawLimit) : null;
+    }
+
     private static String validateFormat(String format, String action, String type, DcsAddress address)
     {
         if (!FORMAT_XML.equals(format))
@@ -413,7 +424,7 @@ public class DcsTool implements IMcpTool
     }
 
     private static String executeGet(String projectName, DcsAddress address, String type,
-        String language, String format, int limit, int offset)
+        String language, String format, Integer limit, int offset)
     {
         try
         {
@@ -479,7 +490,8 @@ public class DcsTool implements IMcpTool
                         return ToolResult.error(xml.error()).toJson();
                     }
                     String hash = DcsHash.compute(read.root());
-                    return DcsXmlCodec.serializePageEnvelope(xml.xml(), hash, offset, limit);
+                    return DcsXmlCodec.serializePageEnvelope(xml.xml(), hash, offset,
+                        limit.intValue());
                 }
                 String hash = DcsHash.compute(read.root());
                 DcsReadProjection.Result projection = DcsReadProjection.render(

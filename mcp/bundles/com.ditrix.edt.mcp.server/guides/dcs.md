@@ -180,7 +180,7 @@ If a segment cannot be resolved, the error names that segment and lists the keys
 indices that exist at its parent. Copy one of the listed values or read the parent
 collection.
 
-### Collection paging
+### Paging
 
 At a bare root, pass a collection type to page that collection:
 
@@ -195,10 +195,12 @@ At a bare root, pass a collection type to page that collection:
 }
 ```
 
-`limit` defaults to 100 and is clamped to 1..1000. `offset` is zero-based and must not
-be negative. The result says `showing N of M` and prints `Next offset`; pass that value
-in the next call. The same arguments page characters when reading a dynamic list's
-advertised `#/queryText` scalar; concatenate fenced value chunks in offset order.
+For collection and root-summary pages, `limit` is an item count that defaults to 100 and
+is clamped to 1..1000. For an exact composite node or an advertised `#/query` or
+`#/queryText` scalar, it is a character count that defaults to 40000 and is bounded by
+the measured output envelope. `offset` is zero-based in the corresponding unit and must
+not be negative. The result prints `Next offset`; pass that value in the next call and
+concatenate character chunks in offset order.
 `field` pages all schema data-set fields, retaining each field's full
 `#/dataSets/<name>(/items/<name>)*/fields/<dataPath>` address. On a dynamic-list root it
 pages the dynamic list's own `#/fields` collection.

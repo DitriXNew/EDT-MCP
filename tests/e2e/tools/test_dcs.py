@@ -41,6 +41,8 @@ _UUID_RE = re.compile(
 )
 
 _OUTPUT_GUARD_NOTICE = "so the response stays under the size cap."
+_DCS_DEFAULT_CHARACTER_LIMIT = 40_000
+_DCS_MAX_CHARACTER_REQUEST = 100_000
 
 
 def _seed_report(name, data_set_names=("DataSet1",)):
@@ -95,7 +97,8 @@ def _seed_dynamic_list(suffix):
     return attribute
 
 
-def _get(fqn, target_type, **extra):
+def _get(fqn, target_type, *, limit=None, **extra):
+    """Read through the public contract; ``None`` always means omit ``limit``."""
     args = {
         "projectName": PROJECT,
         "fqn": fqn,
@@ -103,6 +106,11 @@ def _get(fqn, target_type, **extra):
         "type": target_type,
     }
     args.update(extra)
+    if limit is None:
+        # Keep an explicit no-limit intent authoritative even if a blanket key is added above.
+        args.pop("limit", None)
+    else:
+        args["limit"] = limit
     return call("dcs", args)
 
 
@@ -193,10 +201,8 @@ def _read_all_xml(fqn, limit=None):
     transfer_hash = None
     total_chars = None
     while True:
-        extra = {"format": "xml", "offset": offset}
-        if limit is not None:
-            extra["limit"] = limit
-        result = _get(fqn, "schema", **extra)
+        # Pass None explicitly: _get guarantees that this means the tool's real XML default.
+        result = _get(fqn, "schema", format="xml", limit=limit, offset=offset)
         assert_ok(result, "read DCS XML chunk at offset %d" % offset)
         page = result.structured
         assert isinstance(page, dict), \
@@ -247,7 +253,7 @@ def _read_all_xml(fqn, limit=None):
     return document, pages
 
 
-def _read_all_fenced_scalar(fqn, target_type, limit):
+def _read_all_fenced_scalar(fqn, target_type, *, limit):
     """Read and concatenate every character page from one advertised scalar address."""
     offset = 0
     chunks = []
@@ -269,8 +275,46 @@ def _read_all_fenced_scalar(fqn, target_type, limit):
         assert next_offset, "scalar page must advertise its continuation offset: %s" % page.text
         if next_offset.group(1) == "none":
             return "".join(chunks)
+        effective_limit = _DCS_DEFAULT_CHARACTER_LIMIT if limit is None \
+            else min(max(1, limit), _DCS_MAX_CHARACTER_REQUEST)
+        assert page_chars >= effective_limit // 2, \
+            "a non-final scalar page must use the character budget: %s" % page.text[:500]
         following = int(next_offset.group(1))
         assert following > offset, "a non-final scalar page must make progress"
+        offset = following
+
+
+def _read_all_text_value(fqn, target_type, *, limit):
+    """Read and concatenate every unfenced UTF-16 character page."""
+    offset = 0
+    chunks = []
+    pages = []
+    while True:
+        page = _get(fqn, target_type, limit=limit, offset=offset)
+        assert_ok(page, "read composite page at offset %d" % offset)
+        assert _OUTPUT_GUARD_NOTICE not in page.text, \
+            "a DCS page must fit before the outer guard sees it: %s" % page.text[-500:]
+        count = re.search(r"\*\*Page characters:\*\* (\d+)", page.text)
+        heading = "## Value\n\n"
+        start = page.text.find(heading)
+        assert count and start >= 0, "composite page must expose its exact value slice: %s" % page.text
+        page_chars = int(count.group(1))
+        start += len(heading)
+        encoded = page.text[start:].encode("utf-16-le")
+        chunk = encoded[:page_chars * 2].decode("utf-16-le")
+        chunks.append(chunk)
+        pages.append(page.text)
+
+        next_offset = re.search(r"\*\*Next offset:\*\* (none|\d+)", page.text)
+        assert next_offset, "composite page must advertise its continuation offset: %s" % page.text
+        if next_offset.group(1) == "none":
+            return "".join(chunks), pages
+        effective_limit = _DCS_DEFAULT_CHARACTER_LIMIT if limit is None \
+            else min(max(1, limit), _DCS_MAX_CHARACTER_REQUEST)
+        assert page_chars >= effective_limit // 2, \
+            "a non-final composite page must use the character budget: %s" % page.text[:500]
+        following = int(next_offset.group(1))
+        assert following > offset, "a non-final composite page must make progress"
         offset = following
 
 
@@ -519,6 +563,7 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
     assert "| Data sets | 3 |" in summary.text
     assert "SELECT 1 AS Amount" not in summary.text, "summary must not expose full query text"
 
+    # One item keeps Second on a middle page; the default 100 would also consume Third.
     page = _get(root, "dataSet", limit=1, offset=1)
     assert_ok(page, "page report data sets")
     assert "showing 1 of 3" in page.text
@@ -531,7 +576,8 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
     query_address = root + "#/dataSets/Second/query"
     assert query_address in drill.text
     assert "SELECT 2 AS Amount" not in drill.text
-    assert _read_all_fenced_scalar(query_address, "dataSet", 1000) == "SELECT 2 AS Amount"
+    assert _read_all_fenced_scalar(
+        query_address, "dataSet", limit=None) == "SELECT 2 AS Amount"
     assert root + "#/dataSets/Second/fields/Amount2" in drill.text
     _assert_read_did_not_change(before, "report summary/pagination/drill-down")
 
@@ -559,9 +605,48 @@ def test_data_set_query_pages_reassemble_the_exact_long_text():
     query_address = data_set_address + "/query"
     copied = re.search(re.escape(query_address), data_set.text)
     assert copied, "the data-set page must advertise its exact query address: %s" % data_set.text
-    reconstructed = _read_all_fenced_scalar(copied.group(0), "dataSet", 257)
+    # 257 forces multiple chunks; the 40,000-character default would return this query whole.
+    reconstructed = _read_all_fenced_scalar(copied.group(0), "dataSet", limit=257)
     assert reconstructed.encode("utf-8") == query.encode("utf-8"), \
         "concatenated query pages must reproduce the authored query byte-for-byte"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_large_variant_settings_exact_read_is_complete_and_has_no_duplicate_nodes():
+    report_name = "E2EDcsPagedVariantSettings"
+    root = _seed_report(report_name)
+    variant_name = "ErpShape"
+    item_count = 250
+    items = [{
+        "kind": "field",
+        "field": {
+            "kind": "field",
+            "value": "E2EDcsLargeSettings%03d.%s" % (
+                index,
+                ".".join("Segment%02d" % part for part in range(18)),
+            ),
+        },
+    } for index in range(item_count)]
+    authored = _write(root, "upsert", "schema", {
+        "variants": [{
+            "name": variant_name,
+            "settings": {"selection": {"items": items}},
+        }],
+    })
+    assert_ok(authored, "author an ERP-shaped settings outline larger than the output guard")
+
+    address = root + "#/variants/" + variant_name + "/settings"
+    outline, pages = _read_all_text_value(address, "userSettings", limit=None)
+    assert len(outline) > 100_000, \
+        "the fixture must exceed the production content guard before paging"
+    assert len(pages) > 1, "the oversized exact settings node must advertise continuation"
+    for index in range(item_count):
+        item_address = address + "/selection/items/%d" % index
+        line = "DataCompositionSelectedField — `%s`" % item_address
+        assert outline.count(line) == 1, \
+            "every settings node must appear exactly once across all pages: %s" % item_address
+    assert pages[-1].find("**Next offset:** none") >= 0, \
+        "the final page must distinguish completion from a size stop"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -593,7 +678,7 @@ def test_union_member_fields_page_prints_addresses_that_resolve_verbatim():
     poll_disk_contains(dcs_rel, "UnionField24",
                        ctx="all union-member fields must reach Template.dcs")
 
-    page = _get(root, "field", limit=100)
+    page = _get(root, "field")
     assert_ok(page, "page fields across recursive union members")
     expected = root + "#/dataSets/AllSales/items/Retail/fields/UnionField00"
     copied = re.search(re.escape(expected), page.text)
@@ -792,9 +877,16 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
     assert_ok(drill, "read back the upserted dataset")
     query_address = root + "#/dataSets/Sales/query"
     assert query_address in drill.text
-    assert _read_all_fenced_scalar(query_address, "dataSet", 1000) == second_query
+    assert _read_all_fenced_scalar(query_address, "dataSet", limit=None) == second_query
     assert first_query not in drill.text
-    assert drill.text.count(root + "#/dataSets/Sales`") == 1, \
+
+    data_sets = _get(root + "#/dataSets", "dataSet")
+    assert_ok(data_sets, "read the parent data-set collection after re-authoring Sales")
+    sales_rows = [
+        line for line in data_sets.text.splitlines()
+        if line.startswith("| Sales | ")
+    ]
+    assert len(sales_rows) == 1, \
         "the same natural key must be updated, never duplicated"
 
     dcs_rel = _poll_report_dcs(report_name, ctx="the first dcs write")
@@ -1406,7 +1498,7 @@ def test_bare_user_settings_read_exposes_the_complete_default_settings_target():
     poll_disk_contains(dcs_rel, marker,
                        ctx="the selected field must reach Template.dcs before the read")
 
-    settings = _get(root, "userSettings", limit=1000)
+    settings = _get(root, "userSettings")
     assert_ok(settings, "read the complete defaultSettings target from the bare report root")
     assert "**Address:** `" + root + "#/defaultSettings`" in settings.text, \
         "the bare userSettings read must identify the object the matching write targets"
@@ -1805,7 +1897,7 @@ def test_dynamic_list_write_persists_form_and_external_list_settings_files():
     copied_query = re.search(re.escape(query_address), read_back.text)
     assert copied_query, \
         "the query-text count row must advertise its exact drill-down address: %s" % read_back.text
-    query_page = _get(copied_query.group(0), "dynamicList", limit=1000)
+    query_page = _get(copied_query.group(0), "dynamicList")
     assert_ok(query_page, "read queryText through the address advertised by the summary")
     opening = re.search(r"(?m)^(`{3,})sql\n", query_page.text)
     assert opening, "the scalar page must carry one fenced exact-value block: %s" % query_page.text

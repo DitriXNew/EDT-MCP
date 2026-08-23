@@ -57,7 +57,7 @@ public class McpProtocolHandler
     /** JSON key flagging a structured success/failure outcome. */
     private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
 
-    /** Maximum user-authored signal text retained in a JSON tool result, including the ellipsis. */
+    /** Maximum user-authored signal text retained in a tool result, including the ellipsis. */
     public static final int MAX_USER_SIGNAL_MESSAGE_CHARS = 512;
 
     /**
@@ -69,6 +69,14 @@ public class McpProtocolHandler
      */
     public static final int MAX_USER_SIGNAL_JSON_AUGMENTATION_CHARS =
         48 + MAX_USER_SIGNAL_MESSAGE_CHARS * 6;
+
+    /**
+     * Maximum Markdown growth after tool execution: the fixed
+     * {@code \n\n---\n**USER SIGNAL:** } banner is 23 characters and the retained message is at
+     * most 512, so {@code 23 + 512 = 535}. DCS Markdown paging reserves this exact headroom.
+     */
+    public static final int MAX_MARKDOWN_USER_SIGNAL_AUGMENTATION_CHARS =
+        23 + MAX_USER_SIGNAL_MESSAGE_CHARS;
 
     private static final String USER_SIGNAL_ELLIPSIS = "\u2026"; //$NON-NLS-1$
 
@@ -562,7 +570,7 @@ public class McpProtocolHandler
         // Append user signal as markdown
         if (signal != null)
         {
-            result = result + "\n\n---\n**USER SIGNAL:** " + signal.getMessage();
+            result = addUserSignalToMarkdown(result, signal);
         }
         // In plain text mode, return markdown as plain text instead of embedded resource
         if (plainTextMode)
@@ -863,6 +871,12 @@ public class McpProtocolHandler
             Activator.logError("Failed to add user signal to JSON", e);
         }
         return jsonResult;
+    }
+
+    static String addUserSignalToMarkdown(String markdown, UserSignal signal)
+    {
+        return markdown + "\n\n---\n**USER SIGNAL:** " //$NON-NLS-1$
+            + boundedUserSignalMessage(signal.getMessage());
     }
 
     private static String boundedUserSignalMessage(String message)

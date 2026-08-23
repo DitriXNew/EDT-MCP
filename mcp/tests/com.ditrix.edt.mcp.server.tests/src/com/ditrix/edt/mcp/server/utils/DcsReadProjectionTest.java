@@ -10,6 +10,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.eclipse.emf.ecore.EObject;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
@@ -19,6 +23,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
@@ -35,6 +40,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.google.gson.JsonParser;
 
@@ -122,6 +128,250 @@ public class DcsReadProjectionTest
             "userSettings", "en", 40, 0); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(bounded.error(), bounded.isSuccess());
         assertFalse(bounded.markdown(), bounded.markdown().contains("**Next offset:** none")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExactCompositePagesByCharactersAndReassemblesWithoutLoss()
+    {
+        String root = "Report.LargeSettings"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionSelectedFields selection = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedFields();
+        for (int i = 0; i < 24; i++)
+        {
+            selection.getItems().add(selectedField("ExactMarker" + i + "x".repeat(60))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        settings.setSelection(selection);
+        schema.setDefaultSettings(settings);
+        String address = root + "#/defaultSettings"; //$NON-NLS-1$
+
+        DcsReadProjection.Result complete = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "userSettings", "en", 100_000, 0, 100_000); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(complete.error(), complete.isSuccess());
+        String expected = textPageValue(complete.markdown());
+
+        DcsReadProjection.Result first = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "userSettings", "en", 100_000, 0, 550); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(first.markdown(), first.markdown().contains(
+            "**Stopped by:** serialized character budget")); //$NON-NLS-1$
+
+        String reconstructed = readAllTextPages(root, schema, address, "userSettings", 550); //$NON-NLS-1$
+        assertEquals(expected, reconstructed);
+        for (int i = 0; i < 24; i++)
+        {
+            String itemAddress = address + "/selection/items/" + i; //$NON-NLS-1$
+            assertEquals(1, occurrences(reconstructed,
+                "DataCompositionSelectedField — `" + itemAddress + "`")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testEveryCharacterPagedPathUsesTheCharacterDefaultAndMeasuredClamp()
+    {
+        int pageBudget = 60_000;
+        String reportRoot = "Report.CharacterLimits"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionSelectedFields selection = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedFields();
+        for (int i = 0; i < 600; i++)
+        {
+            selection.getItems().add(selectedField(
+                "CompositeBudgetMarker" + i + "x".repeat(100))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        settings.setSelection(selection);
+        schema.setDefaultSettings(settings);
+        schema.getDataSets().add(query("LargeQuery", "q".repeat(150_000))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertCharacterPageUtilization(reportRoot, TargetKind.REPORT_MAIN_DCS, schema,
+            reportRoot, "userSettings", pageBudget); //$NON-NLS-1$
+        assertCharacterPageUtilization(reportRoot, TargetKind.REPORT_MAIN_DCS, schema,
+            reportRoot + "#/defaultSettings", "userSettings", pageBudget); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCharacterPageUtilization(reportRoot, TargetKind.REPORT_MAIN_DCS, schema,
+            reportRoot + "#/dataSets/LargeQuery/query", "dataSet", pageBudget); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String dynamicRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        dynamic.eSet(dynamic.eClass().getEStructuralFeature("queryText"), //$NON-NLS-1$
+            "d".repeat(150_000)); //$NON-NLS-1$
+        assertCharacterPageUtilization(dynamicRoot, TargetKind.DYNAMIC_LIST, dynamic,
+            dynamicRoot + "#/queryText", "dynamicList", pageBudget); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testItemPagesKeepCollectionDefaultAndMaximum()
+    {
+        String root = "Report.ItemLimits"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        for (int i = 0; i < 1100; i++)
+        {
+            DataCompositionSchemaParameter parameter = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+                .eINSTANCE.createDataCompositionSchemaParameter();
+            parameter.setName("P" + i); //$NON-NLS-1$
+            schema.getParameters().add(parameter);
+        }
+
+        DcsReadProjection.Result defaultPage = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "parameter", "en", null, 0, 500_000); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result clampedPage = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "parameter", "en", Integer.valueOf(100_000), 0, 500_000); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(defaultPage.error(), defaultPage.isSuccess());
+        assertTrue(clampedPage.error(), clampedPage.isSuccess());
+        assertEquals(100, metadataInt(defaultPage.markdown(), "Page items")); //$NON-NLS-1$
+        assertEquals(100, metadataInt(defaultPage.markdown(), "Next offset")); //$NON-NLS-1$
+        assertEquals(1000, metadataInt(clampedPage.markdown(), "Page items")); //$NON-NLS-1$
+        assertEquals(1000, metadataInt(clampedPage.markdown(), "Next offset")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCollectionPageStopsAtFirstUnrenderedItemWhenBudgetBinds()
+    {
+        String root = "Report.LargeCollection"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        for (int i = 0; i < 16; i++)
+        {
+            DataCompositionSchemaParameter parameter = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+                .eINSTANCE.createDataCompositionSchemaParameter();
+            parameter.setName("CollectionMarker" + i + "x".repeat(70)); //$NON-NLS-1$ //$NON-NLS-2$
+            schema.getParameters().add(parameter);
+        }
+
+        DcsReadProjection.Result first = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "parameter", "en", 100, 0, 750); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(first.markdown(), first.markdown().contains(
+            "**Stopped by:** serialized character budget")); //$NON-NLS-1$
+        int firstNext = metadataInt(first.markdown(), "Next offset"); //$NON-NLS-1$
+        int rendered = 0;
+        for (int i = 0; i < 16; i++)
+        {
+            rendered += namedTableRows(first.markdown(),
+                "CollectionMarker" + i + "x".repeat(70)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertEquals(firstNext, rendered);
+
+        String pages = readAllItemPages(root, TargetKind.REPORT_MAIN_DCS, schema,
+            "parameter", 100, 750); //$NON-NLS-1$
+        for (int i = 0; i < 16; i++)
+        {
+            assertEquals(1, namedTableRows(pages,
+                "CollectionMarker" + i + "x".repeat(70))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        DcsReadProjection.Result limited = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "parameter", "en", 2, 0, 100_000); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(limited.markdown(), limited.markdown().contains(
+            "**Stopped by:** requested limit")); //$NON-NLS-1$
+        assertEquals(2, metadataInt(limited.markdown(), "Next offset")); //$NON-NLS-1$
+
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("LargePresentation"); //$NON-NLS-1$
+        DcsPresentationParser.ParseResult presentation = DcsPresentationParser.parse(
+            JsonParser.parseString("{\"en\":\"" + "p".repeat(10_000) + "\"}"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new DcsPresentationParser.LanguageContext(java.util.Collections.singletonList("en")), //$NON-NLS-1$
+            "variant.presentation"); //$NON-NLS-1$
+        assertTrue(presentation.error(), presentation.isSuccess());
+        variant.setPresentation(DcsPresentationParser.build(presentation.plan()));
+        schema.getSettingsVariants().add(variant);
+        DcsReadProjection.Result boundedCell = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "variant", "en", 100, 0, 5000); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(boundedCell.error(), boundedCell.isSuccess());
+        assertTrue(boundedCell.markdown(), boundedCell.markdown().length() <= 5000);
+        assertTrue(boundedCell.markdown(), boundedCell.markdown().contains(
+            "characters; read `" + root + "#/variants/LargePresentation`")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testProductionPageFitsAfterHashAndWorstCaseMarkdownSignal()
+    {
+        String root = "Report.SerializedBudget"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        for (int i = 0; i < 400; i++)
+        {
+            DataCompositionSchemaParameter parameter = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+                .eINSTANCE.createDataCompositionSchemaParameter();
+            parameter.setName("WireMarker" + i + "<&>".repeat(70)); //$NON-NLS-1$ //$NON-NLS-2$
+            schema.getParameters().add(parameter);
+        }
+
+        DcsReadProjection.Result page = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "parameter", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(page.error(), page.isSuccess());
+        assertTrue(page.markdown(), page.markdown().contains(
+            "**Stopped by:** serialized character budget")); //$NON-NLS-1$
+        int finalClientCharacters = 34 + page.markdown().length()
+            + McpProtocolHandler.MAX_MARKDOWN_USER_SIGNAL_AUGMENTATION_CHARS;
+        assertTrue(page.markdown(), finalClientCharacters <= OutputSizeGuard.MAX_CONTENT_CHARS);
+    }
+
+    @Test
+    public void testRootSummariesKeepCountsAndPageEveryAggregateRowExactlyOnce()
+    {
+        String reportRoot = "Report.LargeSummary"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        for (int i = 0; i < 18; i++)
+        {
+            schema.getDataSets().add(query("SummaryMarker" + i + "x".repeat(70), "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        DcsReadProjection.Result first = DcsReadProjection.render(reportRoot,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(reportRoot).address(),
+            "schema", "en", 100, 0, 2500); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(first.markdown(), first.markdown().contains("| Data sets | 18 |")); //$NON-NLS-1$
+        assertTrue(first.markdown(), first.markdown().contains(
+            "**Stopped by:** serialized character budget")); //$NON-NLS-1$
+
+        DcsReadProjection.Result limited = DcsReadProjection.render(reportRoot,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(reportRoot).address(),
+            "schema", "en", 2, 0, 100_000); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(limited.markdown(), limited.markdown().contains(
+            "**Stopped by:** requested limit")); //$NON-NLS-1$
+        assertEquals(2, metadataInt(limited.markdown(), "Next offset")); //$NON-NLS-1$
+
+        String reportPages = readAllItemPages(reportRoot, TargetKind.REPORT_MAIN_DCS,
+            schema, "schema", 100, 2500); //$NON-NLS-1$
+        for (int i = 0; i < 18; i++)
+        {
+            assertEquals(1, namedTableRows(reportPages,
+                "SummaryMarker" + i + "x".repeat(70))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        for (int i = 0; i < 12; i++)
+        {
+            DataCompositionSchemaDataSetField field = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+                .eINSTANCE.createDataCompositionSchemaDataSetField();
+            field.setDataPath("DynamicSummaryMarker" + i + "x".repeat(60)); //$NON-NLS-1$ //$NON-NLS-2$
+            dynamic.getFields().add(field);
+        }
+        String dynamicRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        String dynamicPages = readAllItemPages(dynamicRoot, TargetKind.DYNAMIC_LIST,
+            dynamic, "dynamicList", 100, 1800); //$NON-NLS-1$
+        for (int i = 0; i < 12; i++)
+        {
+            assertEquals(1, namedTableRows(dynamicPages,
+                "DynamicSummaryMarker" + i + "x".repeat(60))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     @Test
@@ -257,7 +507,7 @@ public class DcsReadProjectionTest
 
         DcsReadProjection.Result exact = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
             TargetKind.REPORT_MAIN_DCS, schema,
-            DcsAddress.parse("Report.Sales#/dataSetLinks/0").address(), "schema", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            DcsAddress.parse("Report.Sales#/dataSetLinks/0").address(), "schema", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertTrue(exact.error(), exact.isSuccess());
         assertTrue(exact.markdown(), exact.markdown().contains("Sales\\|Retail")); //$NON-NLS-1$
         assertTrue(exact.markdown(), exact.markdown().contains("Archive")); //$NON-NLS-1$
@@ -368,7 +618,7 @@ public class DcsReadProjectionTest
         DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT\n  Amount"); //$NON-NLS-1$ //$NON-NLS-2$
         DcsAddress address = DcsAddress.parse("Report.Sales#/dataSets/Sales").address(); //$NON-NLS-1$
         DcsReadProjection.Result result = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
-            TargetKind.REPORT_MAIN_DCS, schema, address, "dataSet", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+            TargetKind.REPORT_MAIN_DCS, schema, address, "dataSet", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(result.isSuccess());
         assertFalse(result.markdown().contains("```sql\nSELECT\n  Amount\n```")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("**Characters:** 15")); //$NON-NLS-1$
@@ -441,7 +691,7 @@ public class DcsReadProjectionTest
 
         DcsReadProjection.Result exact = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
             TargetKind.REPORT_MAIN_DCS, schema,
-            DcsAddress.parse("Report.Sales#/variants/Main").address(), "variant", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            DcsAddress.parse("Report.Sales#/variants/Main").address(), "variant", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         DcsReadProjection.Result collection = render(schema, "Report.Sales", "variant"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertTrue(exact.error(), exact.isSuccess());
@@ -476,7 +726,7 @@ public class DcsReadProjectionTest
 
         DcsReadProjection.Result resolved = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
             TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(copied).address(), "field", //$NON-NLS-1$
-            "en", 100, 0); //$NON-NLS-1$
+            "en", 1000, 0); //$NON-NLS-1$
         assertTrue(resolved.error(), resolved.isSuccess());
         assertTrue(resolved.markdown(), resolved.markdown().contains("MemberAmount")); //$NON-NLS-1$
     }
@@ -658,6 +908,137 @@ public class DcsReadProjectionTest
         return markdown.substring(start, end);
     }
 
+    private static String readAllTextPages(String root, EObject rootObject, String address,
+        String type, int maxPageChars)
+    {
+        StringBuilder result = new StringBuilder();
+        int offset = 0;
+        for (int page = 0; page < 1000; page++)
+        {
+            DcsReadProjection.Result rendered = DcsReadProjection.render(root,
+                TargetKind.REPORT_MAIN_DCS, rootObject, DcsAddress.parse(address).address(),
+                type, "en", 100_000, offset, maxPageChars); //$NON-NLS-1$
+            assertTrue(rendered.error(), rendered.isSuccess());
+            assertTrue(rendered.markdown(), rendered.markdown().length() <= maxPageChars);
+            result.append(textPageValue(rendered.markdown()));
+            String next = metadataValue(rendered.markdown(), "Next offset"); //$NON-NLS-1$
+            if ("none".equals(next)) //$NON-NLS-1$
+            {
+                return result.toString();
+            }
+            int following = Integer.parseInt(next);
+            assertTrue("a text continuation must advance", following > offset); //$NON-NLS-1$
+            offset = following;
+        }
+        throw new AssertionError("text pagination did not terminate"); //$NON-NLS-1$
+    }
+
+    private static void assertCharacterPageUtilization(String root, TargetKind kind,
+        EObject rootObject, String address, String type, int pageBudget)
+    {
+        DcsReadProjection.Result defaultPage = DcsReadProjection.render(root, kind, rootObject,
+            DcsAddress.parse(address).address(), type, "en", null, 0, pageBudget); //$NON-NLS-1$
+        assertBusyCharacterPage(defaultPage, DcsXmlCodec.DEFAULT_CHUNK_CHARS,
+            pageBudget);
+        assertEquals(DcsXmlCodec.DEFAULT_CHUNK_CHARS,
+            metadataInt(defaultPage.markdown(), "Page characters")); //$NON-NLS-1$
+        assertTrue(defaultPage.markdown(), defaultPage.markdown().contains(
+            "**Stopped by:** requested limit")); //$NON-NLS-1$
+
+        DcsReadProjection.Result clampedPage = DcsReadProjection.render(root, kind, rootObject,
+            DcsAddress.parse(address).address(), type, "en", Integer.valueOf(100_000), //$NON-NLS-1$
+            0, pageBudget);
+        assertBusyCharacterPage(clampedPage, pageBudget, pageBudget);
+        assertTrue(clampedPage.markdown(), clampedPage.markdown().contains(
+            "**Stopped by:** serialized character budget")); //$NON-NLS-1$
+    }
+
+    private static void assertBusyCharacterPage(DcsReadProjection.Result page,
+        int effectiveLimit, int pageBudget)
+    {
+        assertTrue(page.error(), page.isSuccess());
+        assertFalse(page.markdown(), "none".equals(metadataValue(page.markdown(), //$NON-NLS-1$
+            "Next offset"))); //$NON-NLS-1$
+        int pageCharacters = metadataInt(page.markdown(), "Page characters"); //$NON-NLS-1$
+        assertTrue(page.markdown(), pageCharacters >= effectiveLimit / 2);
+        assertTrue(page.markdown(), page.markdown().length() <= pageBudget);
+    }
+
+    private static String readAllItemPages(String root, TargetKind kind, EObject rootObject,
+        String type, int limit, int maxPageChars)
+    {
+        StringBuilder result = new StringBuilder();
+        int offset = 0;
+        for (int page = 0; page < 1000; page++)
+        {
+            DcsReadProjection.Result rendered = DcsReadProjection.render(root, kind, rootObject,
+                DcsAddress.parse(root).address(), type, "en", limit, offset, maxPageChars); //$NON-NLS-1$
+            assertTrue(rendered.error(), rendered.isSuccess());
+            assertTrue(rendered.markdown(), rendered.markdown().length() <= maxPageChars);
+            result.append(rendered.markdown());
+            String next = metadataValue(rendered.markdown(), "Next offset"); //$NON-NLS-1$
+            if ("none".equals(next)) //$NON-NLS-1$
+            {
+                return result.toString();
+            }
+            int following = Integer.parseInt(next);
+            assertTrue("an item continuation must advance", following > offset); //$NON-NLS-1$
+            offset = following;
+        }
+        throw new AssertionError("item pagination did not terminate"); //$NON-NLS-1$
+    }
+
+    private static String textPageValue(String markdown)
+    {
+        int characters = metadataInt(markdown, "Page characters"); //$NON-NLS-1$
+        String heading = "## Value\n\n"; //$NON-NLS-1$
+        int start = markdown.indexOf(heading);
+        assertTrue(markdown, start >= 0);
+        start += heading.length();
+        return markdown.substring(start, start + characters);
+    }
+
+    private static int metadataInt(String markdown, String label)
+    {
+        return Integer.parseInt(metadataValue(markdown, label));
+    }
+
+    private static String metadataValue(String markdown, String label)
+    {
+        Matcher matcher = Pattern.compile("\\*\\*" + Pattern.quote(label) //$NON-NLS-1$
+            + ":\\*\\* ([^\\r\\n]+)").matcher(markdown); //$NON-NLS-1$
+        assertTrue(markdown, matcher.find());
+        return matcher.group(1);
+    }
+
+    private static int occurrences(String text, String value)
+    {
+        int count = 0;
+        int from = 0;
+        while (true)
+        {
+            int found = text.indexOf(value, from);
+            if (found < 0)
+            {
+                return count;
+            }
+            count++;
+            from = found + value.length();
+        }
+    }
+
+    private static int namedTableRows(String markdown, String name)
+    {
+        Matcher matcher = Pattern.compile("(?m)^\\| " + Pattern.quote(name) + " \\|") //$NON-NLS-1$ //$NON-NLS-2$
+            .matcher(markdown);
+        int count = 0;
+        while (matcher.find())
+        {
+            count++;
+        }
+        return count;
+    }
+
     private static boolean hasUnpairedSurrogate(String value)
     {
         for (int i = 0; i < value.length(); i++)
@@ -678,4 +1059,16 @@ public class DcsReadProjectionTest
         }
         return false;
     }
+    private static com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField selectedField(
+        String value)
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField selected =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createDataCompositionSelectedField();
+        com._1c.g5.v8.dt.dcs.model.core.DataCompositionField field =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionField();
+        field.setValue(value);
+        selected.setField(field);
+        return selected;
+    }
+
 }

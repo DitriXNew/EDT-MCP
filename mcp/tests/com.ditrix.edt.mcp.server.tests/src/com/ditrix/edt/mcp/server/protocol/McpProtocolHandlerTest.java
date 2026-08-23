@@ -68,6 +68,20 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testMarkdownUserSignalIsBoundedByTheReservedAugmentation()
+    {
+        String markdown = "page"; //$NON-NLS-1$
+        String augmented = McpProtocolHandler.addUserSignalToMarkdown(markdown,
+            new UserSignal(SignalType.CUSTOM,
+                "x".repeat(McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS + 100))); //$NON-NLS-1$
+
+        assertEquals(markdown.length()
+            + McpProtocolHandler.MAX_MARKDOWN_USER_SIGNAL_AUGMENTATION_CHARS,
+            augmented.length());
+        assertTrue(augmented, augmented.endsWith("\u2026")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testJsonUserSignalTruncationNeverSplitsSurrogatePair()
     {
         String message = "x".repeat(McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS - 2) //$NON-NLS-1$

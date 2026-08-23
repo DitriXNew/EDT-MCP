@@ -37,6 +37,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
+import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 
 /**
@@ -55,6 +56,33 @@ public final class DcsReadProjection
     private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
     private static final String CHART_CLASS = "DataCompositionChart"; //$NON-NLS-1$
     private static final int ERROR_KEY_LIMIT = 20;
+
+    // Aggregate rows are item-paged and cannot split one cell across item offsets. Keep a very long
+    // presentation bounded and point at its exact node, whose character pager carries the full value.
+    private static final int MAX_TABLE_CELL_CHARS = 4096;
+    private static final int HASH_HEADER_CHARS = 34;
+    private static final int DEFAULT_CHARACTER_LIMIT = DcsXmlCodec.DEFAULT_CHUNK_CHARS;
+
+    // The protocol caps the decoded content text, not its JSON-RPC escaping. Reserve the fixed
+    // DcsTool hash header and the largest bounded Markdown signal that can be appended afterwards,
+    // so every candidate measured here is also guaranteed to fit what the client receives.
+    private static final int MAX_PAGE_CHARS = OutputSizeGuard.MAX_CONTENT_CHARS
+        - HASH_HEADER_CHARS - McpProtocolHandler.MAX_MARKDOWN_USER_SIGNAL_AUGMENTATION_CHARS;
+
+    private static final PageBoundaries ITEM_BOUNDARIES = new PageBoundaries()
+    {
+        @Override
+        public int atOrBefore(int start, int candidate)
+        {
+            return candidate;
+        }
+
+        @Override
+        public int next(int start)
+        {
+            return start + 1;
+        }
+    };
 
     private static final Set<String> NATURAL_NAME_COLLECTIONS = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList("dataSources", "dataSets", "parameters", FEATURE_VARIANTS))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -76,12 +104,20 @@ public final class DcsReadProjection
      * @param requestedAddress parsed caller address
      * @param type requested contract type
      * @param language resolved language code
-     * @param limit already clamped page size
+     * @param limit caller page size, or {@code null} when omitted
      * @param offset non-negative page offset
      * @return Markdown or an actionable failure
      */
     public static Result render(String rootFqn, TargetKind kind, EObject root,
-        DcsAddress requestedAddress, String type, String language, int limit, int offset)
+        DcsAddress requestedAddress, String type, String language, Integer limit, int offset)
+    {
+        return render(rootFqn, kind, root, requestedAddress, type, language, limit, offset,
+            MAX_PAGE_CHARS);
+    }
+
+    static Result render(String rootFqn, TargetKind kind, EObject root,
+        DcsAddress requestedAddress, String type, String language, Integer limit, int offset,
+        int maxPageChars)
     {
         String canonicalRoot = DcsAddress.render(rootFqn, Collections.<String> emptyList());
         if (requestedAddress == null)
@@ -97,7 +133,8 @@ public final class DcsReadProjection
                     return typeMismatch(type, TYPE_DYNAMIC_LIST, canonicalRoot);
                 }
                 return Result.success(renderSchemaSummary(canonicalRoot,
-                    root instanceof DataCompositionSchema ? (DataCompositionSchema)root : null, language));
+                    root instanceof DataCompositionSchema ? (DataCompositionSchema)root : null,
+                    language, itemPageLimit(limit), offset, maxPageChars));
             }
             if (TYPE_DYNAMIC_LIST.equals(type))
             {
@@ -105,14 +142,16 @@ public final class DcsReadProjection
                 {
                     return typeMismatch(type, TYPE_SCHEMA, canonicalRoot);
                 }
-                return Result.success(renderDynamicListSummary(canonicalRoot, root, language));
+                return Result.success(renderDynamicListSummary(canonicalRoot, root, language,
+                    itemPageLimit(limit), offset, maxPageChars));
             }
             if ("userSettings".equals(type)) //$NON-NLS-1$
             {
                 return Result.success(renderSettingsPage(canonicalRoot, kind, root, type, language,
-                    limit, offset));
+                    characterPageLimit(limit, maxPageChars), offset, maxPageChars));
             }
-            return renderRootCollection(canonicalRoot, kind, root, type, language, limit, offset);
+            return renderRootCollection(canonicalRoot, kind, root, type, language,
+                itemPageLimit(limit), offset, maxPageChars);
         }
 
         if (root == null)
@@ -140,15 +179,29 @@ public final class DcsReadProjection
         if (node.value instanceof List<?>)
         {
             return Result.success(renderCollectionPage(node.address, type, node.items, language,
-                limit, offset));
+                itemPageLimit(limit), offset, maxPageChars));
         }
         if ((TYPE_DYNAMIC_LIST.equals(type) && FEATURE_QUERY_TEXT.equals(node.collection))
             || ("dataSet".equals(type) && FEATURE_QUERY.equals(node.collection))) //$NON-NLS-1$
         {
             return Result.success(renderScalarPage(node.address, type,
-                node.value == null ? "" : node.value.toString(), limit, offset)); //$NON-NLS-1$
+                node.value == null ? "" : node.value.toString(), //$NON-NLS-1$
+                characterPageLimit(limit, maxPageChars), offset, maxPageChars));
         }
-        return Result.success(renderFullNode(node, language));
+        return Result.success(renderTextPage(node.address, type, renderFullNode(node, language),
+            characterPageLimit(limit, maxPageChars), offset, false, maxPageChars));
+    }
+
+    private static int itemPageLimit(Integer requested)
+    {
+        int raw = requested == null ? Pagination.DEFAULT_LIMIT : requested.intValue();
+        return Pagination.clampLimit(raw, Pagination.MAX_LIMIT);
+    }
+
+    private static int characterPageLimit(Integer requested, int maxPageChars)
+    {
+        int raw = requested == null ? DEFAULT_CHARACTER_LIMIT : requested.intValue();
+        return Math.min(Math.max(1, raw), maxPageChars);
     }
 
     /**
@@ -316,7 +369,7 @@ public final class DcsReadProjection
     }
 
     private static Result renderRootCollection(String rootFqn, TargetKind kind, EObject root,
-        String type, String language, int limit, int offset)
+        String type, String language, int limit, int offset, int maxPageChars)
     {
         CollectionRef collection = rootCollection(rootFqn, kind, root, type);
         if (collection.error != null)
@@ -324,11 +377,11 @@ public final class DcsReadProjection
             return Result.failure(collection.error);
         }
         return Result.success(renderCollectionPage(collection.address, type, collection.items,
-            language, limit, offset));
+            language, limit, offset, maxPageChars));
     }
 
     private static String renderSchemaSummary(String rootFqn, DataCompositionSchema schema,
-        String language)
+        String language, int limit, int offset, int maxPageChars)
     {
         StringBuilder result = summaryHeader("Data Composition Schema", rootFqn); //$NON-NLS-1$
         result.append("## Counts\n\n"); //$NON-NLS-1$
@@ -347,26 +400,29 @@ public final class DcsReadProjection
         appendCount(result, "Variants", size(schema, MODEL_FEATURE_VARIANTS), child(rootFqn, FEATURE_VARIANTS)); //$NON-NLS-1$
         result.append('\n');
 
+        List<SummarySection> sections = new ArrayList<>();
         if (schema != null)
         {
-            appendNameTable(result, "Data sources", directItems(rootFqn, schema, "dataSources"), language); //$NON-NLS-1$ //$NON-NLS-2$
-            appendNameTable(result, "Data sets", directItems(rootFqn, schema, "dataSets"), language); //$NON-NLS-1$ //$NON-NLS-2$
-            appendDataSetLinksTable(result, rootFqn, schema);
-            appendNameTable(result, "Calculated fields", //$NON-NLS-1$
+            addNameSection(sections, "Data sources", directItems(rootFqn, schema, "dataSources"), language); //$NON-NLS-1$ //$NON-NLS-2$
+            addNameSection(sections, "Data sets", directItems(rootFqn, schema, "dataSets"), language); //$NON-NLS-1$ //$NON-NLS-2$
+            addDataSetLinksSection(sections, rootFqn, schema);
+            addNameSection(sections, "Calculated fields", //$NON-NLS-1$
                 directItems(rootFqn, schema, "calculatedFields"), language); //$NON-NLS-1$
-            appendNameTable(result, "Total fields", directItems(rootFqn, schema, "totalFields"), language); //$NON-NLS-1$ //$NON-NLS-2$
-            appendNameTable(result, "Parameters", directItems(rootFqn, schema, "parameters"), language); //$NON-NLS-1$ //$NON-NLS-2$
-            appendNameTable(result, "Variants", directItems(rootFqn, schema, MODEL_FEATURE_VARIANTS), language); //$NON-NLS-1$
+            addNameSection(sections, "Total fields", directItems(rootFqn, schema, "totalFields"), language); //$NON-NLS-1$ //$NON-NLS-2$
+            addNameSection(sections, "Parameters", directItems(rootFqn, schema, "parameters"), language); //$NON-NLS-1$ //$NON-NLS-2$
+            addNameSection(sections, "Variants", directItems(rootFqn, schema, MODEL_FEATURE_VARIANTS), language); //$NON-NLS-1$
         }
-        result.append("_Query text and recursive settings are omitted from this summary. Drill down with an address._\n"); //$NON-NLS-1$
-        return result.toString();
+        return renderSummaryPage(result.toString(), sections,
+            "_Query text and recursive settings are omitted from this summary. Drill down with an address._\n", //$NON-NLS-1$
+            limit, offset, maxPageChars);
     }
 
-    private static String renderDynamicListSummary(String rootFqn, EObject root, String language)
+    private static String renderDynamicListSummary(String rootFqn, EObject root, String language,
+        int limit, int offset, int maxPageChars)
     {
         StringBuilder result = summaryHeader("Dynamic List", rootFqn); //$NON-NLS-1$
-        result.append("## Properties\n\n"); //$NON-NLS-1$
-        result.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<SummarySection> sections = new ArrayList<>();
+        List<String> properties = new ArrayList<>();
         if (root != null)
         {
             for (EAttribute attribute : root.eClass().getEAllAttributes())
@@ -378,15 +434,24 @@ public final class DcsReadProjection
                     value = query.length() + " characters (omitted from summary; read at `" //$NON-NLS-1$
                         + child(rootFqn, FEATURE_QUERY_TEXT) + "`)"; //$NON-NLS-1$
                 }
-                result.append(MarkdownUtils.tableRow(attribute.getName(), displayValue(value, language)));
+                String address = child(rootFqn, attribute.getName());
+                properties.add(MarkdownUtils.tableRow(attribute.getName(),
+                    boundedTableCell(displayValue(value, language), address)));
             }
             EStructuralFeature mainTable = root.eClass().getEStructuralFeature("mainTable"); //$NON-NLS-1$
             if (mainTable != null)
             {
-                result.append(MarkdownUtils.tableRow("mainTable", displayValue(root.eGet(mainTable), language))); //$NON-NLS-1$
+                properties.add(MarkdownUtils.tableRow("mainTable", //$NON-NLS-1$
+                    boundedTableCell(displayValue(root.eGet(mainTable), language),
+                        child(rootFqn, "mainTable")))); //$NON-NLS-1$
             }
         }
-        result.append("\n## Counts\n\n"); //$NON-NLS-1$
+        if (!properties.isEmpty())
+        {
+            sections.add(new SummarySection("Properties", //$NON-NLS-1$
+                MarkdownUtils.tableHeader("Property", "Value"), properties)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        result.append("## Counts\n\n"); //$NON-NLS-1$
         result.append(MarkdownUtils.tableHeader("Section", "Count", "Address")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         appendCount(result, "Fields", size(root, "fields"), child(rootFqn, "fields")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         appendCount(result, "Calculated fields", size(root, "calculatedFields"), //$NON-NLS-1$ //$NON-NLS-2$
@@ -396,11 +461,13 @@ public final class DcsReadProjection
         appendCount(result, "List settings", settings == null ? 0 : 1, child(rootFqn, "listSettings")); //$NON-NLS-1$ //$NON-NLS-2$
         appendSettingsCounts(result, settings, child(rootFqn, "listSettings")); //$NON-NLS-1$
         result.append('\n');
-        appendNameTable(result, "Fields", directItems(rootFqn, root, "fields"), language); //$NON-NLS-1$ //$NON-NLS-2$
-        appendNameTable(result, "Calculated fields", directItems(rootFqn, root, "calculatedFields"), language); //$NON-NLS-1$ //$NON-NLS-2$
-        appendNameTable(result, "Parameters", directItems(rootFqn, root, "parameters"), language); //$NON-NLS-1$ //$NON-NLS-2$
-        result.append("_Query text and recursive list settings are omitted from this summary. Drill down with an address._\n"); //$NON-NLS-1$
-        return result.toString();
+        addNameSection(sections, "Fields", directItems(rootFqn, root, "fields"), language); //$NON-NLS-1$ //$NON-NLS-2$
+        addNameSection(sections, "Calculated fields", //$NON-NLS-1$
+            directItems(rootFqn, root, "calculatedFields"), language); //$NON-NLS-1$
+        addNameSection(sections, "Parameters", directItems(rootFqn, root, "parameters"), language); //$NON-NLS-1$ //$NON-NLS-2$
+        return renderSummaryPage(result.toString(), sections,
+            "_Query text and recursive list settings are omitted from this summary. Drill down with an address._\n", //$NON-NLS-1$
+            limit, offset, maxPageChars);
     }
 
     private static StringBuilder summaryHeader(String label, String rootFqn)
@@ -442,40 +509,96 @@ public final class DcsReadProjection
         result.append(MarkdownUtils.tableRow(label, Integer.toString(count), address));
     }
 
-    private static void appendNameTable(StringBuilder result, String title, List<NodeRef> items,
-        String language)
+    private static void addNameSection(List<SummarySection> sections, String title,
+        List<NodeRef> items, String language)
     {
         if (items.isEmpty())
         {
             return;
         }
-        result.append("## ").append(title).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        result.append(MarkdownUtils.tableHeader("Name", "Kind", "Address")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        List<String> rows = new ArrayList<>();
         for (NodeRef item : items)
         {
-            result.append(MarkdownUtils.tableRow(itemName(item.value, language), itemKind(item.value),
-                item.address));
+            rows.add(MarkdownUtils.tableRow(
+                boundedTableCell(itemName(item.value, language), item.address),
+                itemKind(item.value), item.address));
         }
-        result.append('\n');
+        sections.add(new SummarySection(title,
+            MarkdownUtils.tableHeader("Name", "Kind", "Address"), rows)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
-    private static void appendDataSetLinksTable(StringBuilder result, String rootFqn,
+    private static void addDataSetLinksSection(List<SummarySection> sections, String rootFqn,
         DataCompositionSchema schema)
     {
         if (schema.getDataSetLinks().isEmpty())
         {
             return;
         }
-        result.append("## Data set links\n\n"); //$NON-NLS-1$
-        result.append(MarkdownUtils.tableHeader("Address", "Link")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> rows = new ArrayList<>();
         String collectionAddress = child(rootFqn, "dataSetLinks"); //$NON-NLS-1$
         for (int i = 0; i < schema.getDataSetLinks().size(); i++)
         {
             DataCompositionSchemaDataSetLink link = schema.getDataSetLinks().get(i);
-            result.append(MarkdownUtils.tableRow(child(collectionAddress, Integer.toString(i)),
-                endpoint(link.getSourceDataSet()) + " → " + endpoint(link.getDestinationDataSet()))); //$NON-NLS-1$
+            String address = child(collectionAddress, Integer.toString(i));
+            rows.add(MarkdownUtils.tableRow(address, boundedTableCell(
+                endpoint(link.getSourceDataSet()) + " → " + endpoint(link.getDestinationDataSet()), //$NON-NLS-1$
+                address)));
         }
-        result.append('\n');
+        sections.add(new SummarySection("Data set links", //$NON-NLS-1$
+            MarkdownUtils.tableHeader("Address", "Link"), rows)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String renderSummaryPage(String fixed, List<SummarySection> sections,
+        String footer, int limit, int offset, int maxPageChars)
+    {
+        List<SummaryRow> rows = new ArrayList<>();
+        for (SummarySection section : sections)
+        {
+            for (String row : section.rows)
+            {
+                rows.add(new SummaryRow(section, row));
+            }
+        }
+        int total = rows.size();
+        int from = Math.min(offset, total);
+        int requestedEnd = Math.min(from + limit, total);
+        return fitBoundedPage(from, requestedEnd, total, maxPageChars, ITEM_BOUNDARIES,
+            (end, stoppedBy) -> renderSummaryCandidate(fixed, rows, footer, from, end,
+                stoppedBy));
+    }
+
+    private static String renderSummaryCandidate(String fixed, List<SummaryRow> rows,
+        String footer, int from, int to, PageStop stoppedBy)
+    {
+        StringBuilder result = new StringBuilder(fixed)
+            .append("## Aggregate tables page\n\n") //$NON-NLS-1$
+            .append("**Aggregate items:** ").append(rows.size()).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Page items:** ").append(to - from).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Offset:** ").append(from).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Next offset:** ") //$NON-NLS-1$
+            .append(to < rows.size() ? Integer.toString(to) : "none").append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Stopped by:** ").append(stoppedBy.label).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        SummarySection current = null;
+        for (int i = from; i < to; i++)
+        {
+            SummaryRow row = rows.get(i);
+            if (row.section != current)
+            {
+                current = row.section;
+                result.append("## ").append(current.title).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(current.header);
+            }
+            result.append(row.markdown);
+            if (i + 1 >= to || rows.get(i + 1).section != current)
+            {
+                result.append('\n');
+            }
+        }
+        if (from == to)
+        {
+            result.append("_(no aggregate rows on this page)_\n\n"); //$NON-NLS-1$
+        }
+        return result.append(footer).toString();
     }
 
     private static String endpoint(String dataSetName)
@@ -774,18 +897,29 @@ public final class DcsReadProjection
     }
 
     private static String renderCollectionPage(String address, String type, List<NodeRef> all,
-        String language, int limit, int offset)
+        String language, int limit, int offset, int maxPageChars)
     {
         int total = all.size();
         int from = Math.min(offset, total);
-        int to = Math.min(from + limit, total);
+        int requestedEnd = Math.min(from + limit, total);
+        return fitBoundedPage(from, requestedEnd, total, maxPageChars, ITEM_BOUNDARIES,
+            (end, stoppedBy) -> renderCollectionCandidate(address, type, all, language,
+                from, end, stoppedBy));
+    }
+
+    private static String renderCollectionCandidate(String address, String type,
+        List<NodeRef> all, String language, int from, int to, PageStop stoppedBy)
+    {
+        int total = all.size();
         List<NodeRef> page = all.subList(from, to);
         StringBuilder result = new StringBuilder("# DCS collection: ").append(type).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Address:** `").append(address).append("`\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Items:** ").append(total)
             .append(Pagination.truncationNotice(page.size(), total)).append("\n\n") //$NON-NLS-1$
-            .append("**Offset:** ").append(offset).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
-            .append("**Next offset:** ").append(to < total ? Integer.toString(to) : "none").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .append("**Page items:** ").append(page.size()).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Offset:** ").append(from).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Next offset:** ").append(to < total ? Integer.toString(to) : "none").append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .append("**Stopped by:** ").append(stoppedBy.label).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         if (page.isEmpty())
         {
             result.append("_(no items on this page)_\n"); //$NON-NLS-1$
@@ -806,40 +940,64 @@ public final class DcsReadProjection
                     note = "Presentation: " + presentation; //$NON-NLS-1$
                 }
             }
-            result.append(MarkdownUtils.tableRow(itemName(item.value, language), itemKind(item.value),
-                item.address, note));
+            result.append(MarkdownUtils.tableRow(
+                boundedTableCell(itemName(item.value, language), item.address),
+                itemKind(item.value), item.address, boundedTableCell(note, item.address)));
         }
         return result.toString();
     }
 
     private static String renderScalarPage(String address, String type, String value, int limit,
-        int offset)
+        int offset, int maxPageChars)
     {
-        return renderTextPage(address, type, value, limit, offset, true);
+        return renderTextPage(address, type, value, limit, offset, true, maxPageChars);
     }
 
     private static String renderSettingsPage(String rootFqn, TargetKind kind, EObject root,
-        String type, String language, int limit, int offset)
+        String type, String language, int limit, int offset, int maxPageChars)
     {
         String feature = kind == TargetKind.DYNAMIC_LIST ? "listSettings" : "defaultSettings"; //$NON-NLS-1$ //$NON-NLS-2$
         String address = child(rootFqn, feature);
         DataCompositionSettings settings = asSettings(featureValue(root, feature));
         return renderTextPage(address, type, renderSettingsOutline(address, settings, language),
-            limit, offset, false);
+            limit, offset, false, maxPageChars);
     }
 
     private static String renderTextPage(String address, String type, String value, int limit,
-        int offset, boolean fenced)
+        int offset, boolean fenced, int maxPageChars)
     {
         int total = value.length();
         int from = DcsXmlCodec.safeStart(value, Math.min(offset, total));
         long requestedEnd = (long)from + Math.max(1, limit);
-        int to = DcsXmlCodec.safeEndAtOrBefore(value, from,
+        int boundedEnd = DcsXmlCodec.safeEndAtOrBefore(value, from,
             (int)Math.min(total, requestedEnd));
-        if (to == from && from < total)
+        if (boundedEnd == from && from < total)
         {
-            to = DcsXmlCodec.nextBoundary(value, from);
+            boundedEnd = DcsXmlCodec.nextBoundary(value, from);
         }
+        PageBoundaries boundaries = new PageBoundaries()
+        {
+            @Override
+            public int atOrBefore(int start, int candidate)
+            {
+                return DcsXmlCodec.safeEndAtOrBefore(value, start, candidate);
+            }
+
+            @Override
+            public int next(int start)
+            {
+                return DcsXmlCodec.nextBoundary(value, start);
+            }
+        };
+        return fitBoundedPage(from, boundedEnd, total, maxPageChars, boundaries,
+            (end, stoppedBy) -> renderTextCandidate(address, type, value, from, end,
+                fenced, stoppedBy));
+    }
+
+    private static String renderTextCandidate(String address, String type, String value,
+        int from, int to, boolean fenced, PageStop stoppedBy)
+    {
+        int total = value.length();
         String page = value.substring(from, to);
         StringBuilder result = new StringBuilder("# DCS value: ").append(type).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Address:** `").append(address).append("`\n\n") //$NON-NLS-1$ //$NON-NLS-2$
@@ -848,6 +1006,7 @@ public final class DcsReadProjection
             .append("**Page characters:** ").append(page.length()).append("\n\n") //$NON-NLS-1$
             .append("**Offset:** ").append(from).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Next offset:** ").append(to < total ? Integer.toString(to) : "none") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("\n\n**Stopped by:** ").append(stoppedBy.label) //$NON-NLS-1$
             .append("\n\n## Value\n\n"); //$NON-NLS-1$
         if (fenced)
         {
@@ -862,6 +1021,61 @@ public final class DcsReadProjection
             }
         }
         return result.toString();
+    }
+
+    private static String fitBoundedPage(int from, int requestedEnd, int total,
+        int maxPageChars, PageBoundaries boundaries, PageCandidate renderer)
+    {
+        PageStop requestedStop = requestedEnd >= total ? PageStop.COMPLETE : PageStop.LIMIT;
+        String requested = renderer.render(requestedEnd, requestedStop);
+        if (requested.length() <= maxPageChars)
+        {
+            return requested;
+        }
+        if (from >= total)
+        {
+            throw new IllegalStateException("The fixed DCS page envelope exceeds the output budget"); //$NON-NLS-1$
+        }
+
+        int minimumEnd = boundaries.next(from);
+        String minimum = renderer.render(minimumEnd, PageStop.BUDGET);
+        if (minimum.length() > maxPageChars)
+        {
+            throw new IllegalStateException(
+                "One DCS page item cannot fit the serialized-character output budget"); //$NON-NLS-1$
+        }
+
+        int bestEnd = minimumEnd;
+        String best = minimum;
+        int low = minimumEnd + 1;
+        int high = requestedEnd - 1;
+        while (low <= high)
+        {
+            int midpoint = low + (high - low) / 2;
+            int candidateEnd = boundaries.atOrBefore(from, midpoint);
+            if (candidateEnd < minimumEnd)
+            {
+                low = midpoint + 1;
+                continue;
+            }
+            String candidate = renderer.render(candidateEnd, PageStop.BUDGET);
+            if (candidate.length() <= maxPageChars)
+            {
+                bestEnd = candidateEnd;
+                best = candidate;
+                low = midpoint + 1;
+            }
+            else
+            {
+                high = midpoint - 1;
+            }
+        }
+        String fitted = renderer.render(bestEnd, PageStop.BUDGET);
+        if (fitted.length() > maxPageChars)
+        {
+            throw new IllegalStateException("Measured DCS page exceeds the output budget"); //$NON-NLS-1$
+        }
+        return fitted.equals(best) ? best : fitted;
     }
 
     private static NodeResolution resolvePointer(String rootFqn, EObject root, List<String> segments)
@@ -1478,6 +1692,18 @@ public final class DcsReadProjection
         return name.isEmpty() ? "(unnamed)" : name; //$NON-NLS-1$
     }
 
+    private static String boundedTableCell(String value, String address)
+    {
+        if (value == null || value.length() <= MAX_TABLE_CELL_CHARS)
+        {
+            return value;
+        }
+        String suffix = "… (" + value.length() + " characters; read `" + address + "`)"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        int end = DcsXmlCodec.safeEndAtOrBefore(value, 0,
+            Math.max(0, MAX_TABLE_CELL_CHARS - suffix.length()));
+        return value.substring(0, end) + suffix;
+    }
+
     private static String itemKind(Object value)
     {
         return value instanceof EObject ? ((EObject)value).eClass().getName()
@@ -1626,6 +1852,59 @@ public final class DcsReadProjection
         for (int i = 0; i < depth; i++)
         {
             result.append("  "); //$NON-NLS-1$
+        }
+    }
+
+    @FunctionalInterface
+    private interface PageCandidate
+    {
+        String render(int end, PageStop stoppedBy);
+    }
+
+    private interface PageBoundaries
+    {
+        int atOrBefore(int start, int candidate);
+
+        int next(int start);
+    }
+
+    private enum PageStop
+    {
+        COMPLETE("end of content"), //$NON-NLS-1$
+        LIMIT("requested limit"), //$NON-NLS-1$
+        BUDGET("serialized character budget"); //$NON-NLS-1$
+
+        final String label;
+
+        PageStop(String label)
+        {
+            this.label = label;
+        }
+    }
+
+    private static final class SummarySection
+    {
+        final String title;
+        final String header;
+        final List<String> rows;
+
+        SummarySection(String title, String header, List<String> rows)
+        {
+            this.title = title;
+            this.header = header;
+            this.rows = rows;
+        }
+    }
+
+    private static final class SummaryRow
+    {
+        final SummarySection section;
+        final String markdown;
+
+        SummaryRow(SummarySection section, String markdown)
+        {
+            this.section = section;
+            this.markdown = markdown;
         }
     }
 
