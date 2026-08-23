@@ -76,6 +76,25 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testSchemaBodyRefusesDuplicateVariantNaturalKeysBeforeApplyingEntries()
+    {
+        DataCompositionSchema schema = schemaWithVariant();
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "replace", //$NON-NLS-1$
+            "schema", address("Report.Sales"), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"variants\":[{\"name\":\"Duplicate\"},{\"name\":\"Duplicate\"}]}"), //$NON-NLS-1$
+            LANGUAGES);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains(
+            "body names variant natural key 'Duplicate' more than once")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("Keep exactly one entry")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+        assertEquals("Operational", schema.getSettingsVariants().get(0).getName()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRecursiveGroupsFilterGroupsFieldValueAndScaffolding()
     {
         JsonObject bilingualBody = settingsBody();
@@ -571,6 +590,43 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testTableChildUpdateRefusesAbsentHoldersWhileUpsertAndReplaceCreateThem()
+    {
+        DataCompositionSettings settings = plan(json(
+            "{\"items\":[{\"kind\":\"table\",\"name\":\"T\"}]}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+
+        DcsSettingsWriter.SettingsResult selection = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "selection"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "update", "selection", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DcsSettingsWriter.SettingsResult appearance = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "conditionalAppearance"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "update", "conditionalAppearance", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse(selection.isSuccess());
+        assertTrue(selection.error(), selection.error().contains("items/0/selection")); //$NON-NLS-1$
+        assertTrue(selection.error(), selection.error().contains("action='upsert'")); //$NON-NLS-1$
+        assertFalse(appearance.isSuccess());
+        assertTrue(appearance.error(),
+            appearance.error().contains("items/0/conditionalAppearance")); //$NON-NLS-1$
+        assertTrue(appearance.error(), appearance.error().contains("action='upsert'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(settings));
+
+        DcsSettingsWriter.SettingsResult upserted = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "selection"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "upsert", "selection", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(upserted.error(), upserted.isSuccess());
+        assertNotNull(((DataCompositionTable)upserted.settings().getItems().get(0)).getSelection());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "conditionalAppearance"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "replace", "conditionalAppearance", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertNotNull(((DataCompositionTable)replaced.settings().getItems().get(0))
+            .getConditionalAppearance());
+    }
+
+    @Test
     public void testReplaceAtAnItemsCollectionAddressClearsItFirst()
     {
         // '#/.../selection/items' is a collection address: the replacement replaces the list, it
@@ -675,6 +731,55 @@ public class DcsSettingsWriterTest
             json("{}"), LANGUAGES); //$NON-NLS-1$
         assertTrue(bareSelection.error(), bareSelection.isSuccess());
         assertNull(bareSelection.settings().getSelection());
+    }
+
+    @Test
+    public void testMutationsCheckResolvedNodeTypeButUnresolvedUpsertStillCreates()
+    {
+        DataCompositionSettings settings = plan(json("{\"filter\":{\"items\":[" //$NON-NLS-1$
+            + "{\"left\":{\"kind\":\"field\",\"value\":\"Amount\"}," //$NON-NLS-1$
+            + "\"comparisonType\":\"Greater\",\"right\":[{\"kind\":\"number\"," //$NON-NLS-1$
+            + "\"value\":10}],\"use\":true}]}}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+
+        for (String action : java.util.Arrays.asList("upsert", "update", "replace")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            DcsSettingsWriter.SettingsResult refused = DcsSettingsWriter.planSettings(settings,
+                java.util.Arrays.asList("filter", "items", "0"), action, "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                json("{\"use\":false}"), LANGUAGES); //$NON-NLS-1$
+
+            assertFalse(refused.isSuccess());
+            assertTrue(refused.error(), refused.error().contains("action='" + action + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(refused.error(), refused.error().contains("type='selection'")); //$NON-NLS-1$
+            assertTrue(refused.error(), refused.error().contains("type='filter'")); //$NON-NLS-1$
+        }
+        assertEquals(beforeHash, DcsHash.compute(settings));
+
+        DataCompositionSettings structureSettings = plan(json("{\"items\":[{\"kind\":\"grouping\"," //$NON-NLS-1$
+            + "\"name\":\"G\",\"groupFields\":{\"items\":[]}}]}")); //$NON-NLS-1$
+        String structureHash = DcsHash.compute(structureSettings);
+        DcsSettingsWriter.SettingsResult replacedAsTable = DcsSettingsWriter.planSettings(structureSettings,
+            java.util.Arrays.asList("items", "0"), "replace", "table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"table\",\"name\":\"T\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replacedAsTable.error(), replacedAsTable.isSuccess());
+        assertTrue(replacedAsTable.settings().getItems().get(0) instanceof DataCompositionTable);
+
+        DcsSettingsWriter.SettingsResult updateAsTable = DcsSettingsWriter.planSettings(structureSettings,
+            java.util.Arrays.asList("items", "0"), "update", "table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"table\",\"name\":\"T\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(updateAsTable.isSuccess());
+        assertTrue(updateAsTable.error(), updateAsTable.error().contains("action='update'")); //$NON-NLS-1$
+        assertTrue(updateAsTable.error(), updateAsTable.error().contains("type='table'")); //$NON-NLS-1$
+        assertTrue(updateAsTable.error(), updateAsTable.error().contains("type='grouping'")); //$NON-NLS-1$
+        assertEquals(structureHash, DcsHash.compute(structureSettings));
+
+        DcsSettingsWriter.SettingsResult created = DcsSettingsWriter.planSettings(settings,
+            java.util.Collections.singletonList("selection"), "upsert", "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            json("{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Amount\"}}]}"), //$NON-NLS-1$
+            LANGUAGES);
+        assertTrue(created.error(), created.isSuccess());
+        assertNotNull(created.settings().getSelection());
+        assertEquals(1, created.settings().getSelection().getItems().size());
     }
 
     @Test

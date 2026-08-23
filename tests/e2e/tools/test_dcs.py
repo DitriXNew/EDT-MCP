@@ -1136,6 +1136,46 @@ def test_variant_nested_settings_and_hash_guarded_filter_index_update():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_settings_write_refuses_type_mismatch_without_touching_disk():
+    report_name = "E2EDcsSettingsTypeGuard"
+    root = _seed_report(report_name)
+    operand_marker = "L1GuardOperand"
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "filter": {
+                "items": [{
+                    "left": {"kind": "field", "value": operand_marker},
+                    "comparisonType": "Greater",
+                    "right": [{"kind": "number", "value": 10}],
+                    "use": True,
+                }],
+            },
+        },
+    })
+    assert_ok(authored, "author a default-settings filter item")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the settings type-guard fixture")
+    poll_disk_contains(dcs_rel, operand_marker,
+                       ctx="the filter operand must reach Template.dcs before the refusal")
+
+    address = root + "#/defaultSettings/filter/items/0"
+    outline = _get(root + "#/defaultSettings", "userSettings")
+    assert_ok(outline, "read the settings outline containing the filter-item address")
+    assert "`" + address + "`" in outline.text, \
+        "the refused address must be copied from the settings read: %s" % outline.text
+    before = _get(address, "filter")
+    assert_ok(before, "read the filter item before the mismatched write")
+    before_disk = read_disk(dcs_rel)
+
+    refused = _write(address, "replace", "selection", {"use": False},
+                     expectedHash=_hash(before))
+    error = assert_error(refused, "replace a filter item while declaring selection")
+    assert "type='selection'" in error and "type='filter'" in error, \
+        "the refusal must name both the declared and resolved types: %s" % error
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused settings type mismatch must leave Template.dcs byte-for-byte unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_user_fields_holder_replace_with_empty_body_clears_exported_items():
     report_name = "E2EDcsReplaceUserFields"
     root = _seed_report(report_name)
@@ -1608,11 +1648,15 @@ def test_dynamic_list_settings_accept_replace_and_remove_but_its_own_types_do_no
     assert "**ListSettings.dcss export scheduled:** `true`" in replaced.text,         "a settings replace must schedule the external file's export: %s" % replaced.text[:400]
     settings_rel = ("src/Catalogs/%s/Forms/ListForm/Attributes/List/ExtInfo/ListSettings.dcss"
                     % catalog_name)
-    # Wait for the file to EXIST before asserting what is not in it. An absence check on a missing
-    # file passes for the wrong reason - poll_disk_lacks is satisfied immediately by a file that was
-    # never written, which is how this assertion passed locally and failed on CI.
-    poll_disk_contains(settings_rel, "selection",
-                       ctx="the replaced settings must reach ListSettings.dcss")
+    # Two waits, because each guards a different wrong-reason pass. Poll for the ROOT ELEMENT first:
+    # an absence check on a missing file is satisfied by the file never having been written. Then poll
+    # for the ABSENCE itself, because the export is asynchronous and the seed already put "selection"
+    # in this file - polling for "selection" is satisfied by the STALE content and reads the old title
+    # back, which is how this passed on a fast local disk and flaked on a CI shard.
+    poll_disk_contains(settings_rel, "<Settings",
+                       ctx="the settings file must exist before asserting what is not in it")
+    poll_disk_lacks(settings_rel, "Reference",
+                    ctx="the replaced settings must reach ListSettings.dcss")
     on_disk = read_disk(settings_rel)
     assert "Reference" not in on_disk,         "the title the replace never mentioned must not survive on disk: %s" % on_disk[:600]
 

@@ -278,6 +278,11 @@ public final class DcsSettingsWriter
                 {
                     return SchemaResult.failure(arrayError);
                 }
+                String duplicate = variantBodyKeyError(array);
+                if (duplicate != null)
+                {
+                    return SchemaResult.failure(duplicate);
+                }
                 for (int i = 0; i < array.size(); i++)
                 {
                     JsonObject variantBody = arrayObject(array, i, "variants"); //$NON-NLS-1$
@@ -471,6 +476,11 @@ public final class DcsSettingsWriter
         {
             path = defaultPath(type);
         }
+        String typeError = resolvedMutationTypeError(current, path, action, type);
+        if (typeError != null)
+        {
+            return SettingsResult.failure(typeError);
+        }
         DataCompositionSettings working = ACTION_REPLACE.equals(action) && path.isEmpty()
             ? DcsFactory.eINSTANCE.createDataCompositionSettings() : copy(current);
         if (working == null)
@@ -539,6 +549,24 @@ public final class DcsSettingsWriter
         return SettingsLocation.failure("Settings address '" + address //$NON-NLS-1$
             + "' must start with '#/defaultSettings' or '#/variants/<name>/settings'. " //$NON-NLS-1$
             + "Copy an address from dcs action='get'."); //$NON-NLS-1$
+    }
+
+    private static String variantBodyKeyError(JsonArray variants)
+    {
+        Set<String> names = new LinkedHashSet<>();
+        for (int i = 0; i < variants.size(); i++)
+        {
+            JsonObject body = arrayObject(variants, i, "variants"); //$NON-NLS-1$
+            if (body == null) return arrayObjectError;
+            String name = optionalString(body, KEY_NAME, "body.variants[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (stringError != null) return stringError;
+            if (name != null && !name.isEmpty() && !names.add(name))
+            {
+                return "The body names variant natural key '" + name //$NON-NLS-1$
+                    + "' more than once. Keep exactly one entry for that key."; //$NON-NLS-1$
+            }
+        }
+        return null;
     }
 
     private static String applyVariant(List<SettingsVariant> variants, String pointerName, String action,
@@ -1324,6 +1352,8 @@ public final class DcsSettingsWriter
     {
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
+        String relativeAddress = where.startsWith("settings.") //$NON-NLS-1$
+            ? where.substring("settings.".length()) : where; //$NON-NLS-1$
         if ("rows".equals(head) || "columns".equals(head)) //$NON-NLS-1$ //$NON-NLS-2$
         {
             return applyTableGroupsPath("rows".equals(head) ? table.getRows() : table.getColumns(), //$NON-NLS-1$
@@ -1340,8 +1370,15 @@ public final class DcsSettingsWriter
             // of its own alongside its items. The address ends AT it, so replace starts from
             // nothing rather than from a copy - otherwise clearing the items still left the
             // holder's own scalars set. Same idiom the settings-level paths already use.
+            DataCompositionSelectedFields existing = table.getSelection();
+            if (ACTION_UPDATE.equals(action) && existing == null)
+            {
+                return "action='update' cannot find selection at relative address '" //$NON-NLS-1$
+                    + relativeAddress
+                    + "/selection'. Use action='upsert' to create it."; //$NON-NLS-1$
+            }
             DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null
-                : copy(table.getSelection());
+                : copy(existing);
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
             String error = applySelection(holder, body, action, languages, where + "/selection"); //$NON-NLS-1$
             if (error == null) table.setSelection(holder);
@@ -1349,8 +1386,15 @@ public final class DcsSettingsWriter
         }
         if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
         {
+            DataCompositionConditionalAppearance existing = table.getConditionalAppearance();
+            if (ACTION_UPDATE.equals(action) && existing == null)
+            {
+                return "action='update' cannot find conditionalAppearance at relative address '" //$NON-NLS-1$
+                    + relativeAddress
+                    + "/conditionalAppearance'. Use action='upsert' to create it."; //$NON-NLS-1$
+            }
             DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
-                : copy(table.getConditionalAppearance());
+                : copy(existing);
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
             String error = applyConditionalAppearance(holder, body, action, languages, version,
                 where + "/conditionalAppearance"); //$NON-NLS-1$
@@ -4132,20 +4176,8 @@ public final class DcsSettingsWriter
             return "action='remove' could not resolve target '" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$
                 + "'. Re-run dcs action='get' and copy an existing node address."; //$NON-NLS-1$
         }
-        String actualType = DcsReadProjection.typeOf(target);
-        if (actualType == null)
-        {
-            return "action='remove' resolved target '" + String.join("/", path) + "' as " //$NON-NLS-1$ //$NON-NLS-2$
-                + target.eClass().getName() + ", which has no public DCS type. Remove a parent node " //$NON-NLS-1$
-                + "rendered by dcs action='get' instead."; //$NON-NLS-1$
-        }
-        if (!type.equals(actualType))
-        {
-            return "action='remove' declared type='" + type + "', but resolved target '" //$NON-NLS-1$ //$NON-NLS-2$
-                + String.join("/", path) + "' has type='" + actualType //$NON-NLS-1$ //$NON-NLS-2$
-                + "'. Removing is not reversible, so pass type='" + actualType //$NON-NLS-1$
-                + "' or copy another exact address from dcs action='get'."; //$NON-NLS-1$
-        }
+        String typeError = resolvedSettingsTypeError(target, path, ACTION_REMOVE, type);
+        if (typeError != null) return typeError;
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
         if (KEY_ITEMS.equals(head))
@@ -4237,6 +4269,51 @@ public final class DcsSettingsWriter
             current = (EObject)value;
         }
         return current;
+    }
+
+    private static String resolvedMutationTypeError(DataCompositionSettings settings,
+        List<String> path, String action, String type)
+    {
+        if (settings == null) return null;
+        EObject target = resolveSettingsNode(settings, path);
+        if (target == null)
+        {
+            // An upsert may be addressing a node that does not exist yet. Leave unresolved paths
+            // to the action-specific dispatch, which creates for upsert and refuses for update.
+            return null;
+        }
+        return resolvedSettingsTypeError(target, path, action, type);
+    }
+
+    private static String resolvedSettingsTypeError(EObject target, List<String> path,
+        String action, String type)
+    {
+        String renderedPath = path.isEmpty() ? "settings root" : String.join("/", path); //$NON-NLS-1$ //$NON-NLS-2$
+        String actualType = DcsReadProjection.typeOf(target);
+        if (actualType == null)
+        {
+            return "action='" + action + "' resolved target '" + renderedPath + "' as " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + target.eClass().getName() + ", which has no public DCS type. " //$NON-NLS-1$
+                + (ACTION_REMOVE.equals(action) ? "Remove" : "Address") //$NON-NLS-1$ //$NON-NLS-2$
+                + " a parent node " //$NON-NLS-1$
+                + "rendered by dcs action='get' instead."; //$NON-NLS-1$
+        }
+        if (!type.equals(actualType))
+        {
+            // Structure slots are polymorphic, so exact replace may swap grouping and table kinds.
+            if (ACTION_REPLACE.equals(action) && target instanceof StructureItem
+                && (TYPE_GROUPING.equals(type) || TYPE_TABLE.equals(type))
+                && (TYPE_GROUPING.equals(actualType) || TYPE_TABLE.equals(actualType)))
+            {
+                return null;
+            }
+            return "action='" + action + "' declared type='" + type + "', but resolved target '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + renderedPath + "' has type='" + actualType + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                + (ACTION_REMOVE.equals(action) ? "Removing is not reversible, so pass" : "Pass") //$NON-NLS-1$ //$NON-NLS-2$
+                + " type='" + actualType //$NON-NLS-1$
+                + "' or copy another exact address from dcs action='get'."; //$NON-NLS-1$
+        }
+        return null;
     }
 
     private static String removeStructurePath(List<StructureItem> items, List<String> path, String where)
