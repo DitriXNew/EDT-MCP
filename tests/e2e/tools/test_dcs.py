@@ -1330,6 +1330,34 @@ def test_settings_collection_address_copied_from_outline_renders_a_page():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_bare_user_settings_read_exposes_the_complete_default_settings_target():
+    report_name = "E2EDcsBareUserSettings"
+    root = _seed_report(report_name)
+    marker = "BareRootRevenue"
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "selection": {
+                "items": [{"field": {"kind": "field", "value": marker}}],
+            },
+        },
+    })
+    assert_ok(authored, "author a selection item in defaultSettings")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the bare userSettings read fixture")
+    poll_disk_contains(dcs_rel, marker,
+                       ctx="the selected field must reach Template.dcs before the read")
+
+    settings = _get(root, "userSettings", limit=1000)
+    assert_ok(settings, "read the complete defaultSettings target from the bare report root")
+    assert "**Address:** `" + root + "#/defaultSettings`" in settings.text, \
+        "the bare userSettings read must identify the object the matching write targets"
+    selection_address = root + "#/defaultSettings/selection/items/0"
+    assert "`" + selection_address + "`" in settings.text, \
+        "the whole-settings projection must expose the selected item address: %s" % settings.text
+    assert marker in settings.text, \
+        "the bare read must expose selection content that a bare userSettings write can change"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_indexed_group_field_replace_resets_omitted_members_on_model_and_disk():
     report_name = "E2EDcsReplaceGroupField"
     root = _seed_report(report_name)

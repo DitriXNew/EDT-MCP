@@ -936,24 +936,43 @@ public class DcsTool implements IMcpTool
      * <p>A concrete settings type addressed at a BARE root (action='replace', type='selection')
      * resolves to that type's default settings path, but the address itself still carries no
      * pointer - so checking it against the whole document treated every unmodellable node anywhere
-     * as a descendant, and a chart in an unrelated variant or data set blocked a selection-only
-     * replacement it could not have removed. Scope to the settings root and the type's own default
-     * path in that case; an explicitly pointered address already says what it means.</p>
+     * as a descendant. Scope concrete settings types and userSettings to their settings root, and
+     * variant to the schema's variants collection, even when the target settings root is absent;
+     * an explicitly pointered address already says what it means.</p>
      *
-     * @param whole the whole schema or ext-info, used when the address carries a pointer
+     * @param whole the whole schema or ext-info used for pointer and collection-scoped checks
      * @param settingsRoot the settings the bare-root form resolves into, possibly {@code null}
      * @param type the requested type token
      * @param address the caller's address
      * @return the refusal message, or {@code null} when nothing blocks the replacement
      */
-    private static String replaceRefusal(EObject whole, EObject settingsRoot, String type,
+    static String replaceRefusal(EObject whole, EObject settingsRoot, String type,
         DcsAddress address)
     {
-        if (!address.hasPointer() && settingsRoot != null)
+        if (!address.hasPointer())
         {
+            if ("variant".equals(type)) //$NON-NLS-1$
+            {
+                DcsAddress.ParseResult parsed = DcsAddress.parse(
+                    DcsAddress.render(address.rootFqn(), List.of("variants"))); //$NON-NLS-1$
+                if (parsed.isSuccess())
+                {
+                    return DcsMutationGuard.replaceError(whole, parsed.address());
+                }
+            }
+            if ("userSettings".equals(type)) //$NON-NLS-1$
+            {
+                // DynamicListExtInfo.listSettings is not an EMF containment, so scan the actual
+                // settings object rather than trying to reach it by walking the whole ext-info.
+                return DcsMutationGuard.replaceError(settingsRoot, address);
+            }
             List<String> scoped = DcsSettingsWriter.defaultSettingsPath(type);
             if (!scoped.isEmpty())
             {
+                if (settingsRoot == null)
+                {
+                    return null;
+                }
                 DcsAddress.ParseResult parsed =
                     DcsAddress.parse(DcsAddress.render(address.rootFqn(), scoped));
                 if (parsed.isSuccess())

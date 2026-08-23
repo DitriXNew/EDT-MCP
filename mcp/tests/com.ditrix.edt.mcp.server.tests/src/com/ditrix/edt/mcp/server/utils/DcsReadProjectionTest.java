@@ -13,6 +13,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
@@ -27,6 +28,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrder;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrderItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
@@ -72,7 +74,7 @@ public class DcsReadProjectionTest
             {"conditionalAppearance", "#/defaultSettings/conditionalAppearance/items"}, //$NON-NLS-1$ //$NON-NLS-2$
             {"userField", "#/defaultSettings/userFields/items"}, //$NON-NLS-1$ //$NON-NLS-2$
             {"outputParameter", "#/defaultSettings/outputParameters/items"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"userSettings", "#/defaultSettings/additionalProperties"} //$NON-NLS-1$ //$NON-NLS-2$
+            {"userSettings", "#/defaultSettings"} //$NON-NLS-1$ //$NON-NLS-2$
         };
 
         for (String[] one : cases)
@@ -85,6 +87,41 @@ public class DcsReadProjectionTest
             assertTrue(one[0] + ": " + absent.markdown(), absent.markdown().contains(address)); //$NON-NLS-1$
             assertTrue(one[0] + ": " + present.markdown(), present.markdown().contains(address)); //$NON-NLS-1$
         }
+    }
+
+    @Test
+    public void testBareUserSettingsReadPagesTheWholeSettingsTarget()
+    {
+        String reportRoot = "Report.Settings"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        schema.setDefaultSettings(settingsWithSelection("ReportRevenue")); //$NON-NLS-1$
+
+        DcsReadProjection.Result report = DcsReadProjection.render(reportRoot,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(reportRoot).address(),
+            "userSettings", "en", 10000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(report.error(), report.isSuccess());
+        assertTrue(report.markdown(), report.markdown().contains(
+            "**Address:** `Report.Settings#/defaultSettings`")); //$NON-NLS-1$
+        assertTrue(report.markdown(), report.markdown().contains("ReportRevenue")); //$NON-NLS-1$
+        assertTrue(report.markdown(), report.markdown().contains(
+            "Report.Settings#/defaultSettings/selection/items/0")); //$NON-NLS-1$
+
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        dynamic.setListSettings(settingsWithSelection("ListRevenue")); //$NON-NLS-1$
+        String listRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DcsReadProjection.Result list = DcsReadProjection.render(listRoot, TargetKind.DYNAMIC_LIST,
+            dynamic, DcsAddress.parse(listRoot).address(), "userSettings", "en", 10000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(list.error(), list.isSuccess());
+        assertTrue(list.markdown(), list.markdown().contains(
+            "**Address:** `" + listRoot + "#/listSettings`")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(list.markdown(), list.markdown().contains("ListRevenue")); //$NON-NLS-1$
+
+        DcsReadProjection.Result bounded = DcsReadProjection.render(reportRoot,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(reportRoot).address(),
+            "userSettings", "en", 40, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(bounded.error(), bounded.isSuccess());
+        assertFalse(bounded.markdown(), bounded.markdown().contains("**Next offset:** none")); //$NON-NLS-1$
     }
 
     @Test
@@ -238,6 +275,51 @@ public class DcsReadProjectionTest
         assertEquals(java.util.Arrays.asList("Report.Sales#/dataSetLinks/0"), //$NON-NLS-1$
             DcsReadProjection.referenceAddresses(schema, "Report.Sales", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
                 "LinkParameter")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStructuredReferencesMatchIdentitiesCaseInsensitively()
+    {
+        String root = "Report.Sales"; //$NON-NLS-1$
+        DataCompositionSchema schema = schemaWithDataSet("Retail", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((DataCompositionSchemaDataSetQuery)schema.getDataSets().get(0))
+            .setDataSource("mysource"); //$NON-NLS-1$
+
+        DataCompositionSchemaDataSetLink link = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+            .eINSTANCE.createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("sales"); //$NON-NLS-1$
+        link.setDestinationDataSet("archive"); //$NON-NLS-1$
+        link.setParameter("linkparameter"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+
+        DataCompositionSettings settings = settingsWithSelection("revenue"); //$NON-NLS-1$
+        DataCompositionDataParameterValues parameters = com._1c.g5.v8.dt.dcs.model.settings
+            .DcsFactory.eINSTANCE.createDataCompositionDataParameterValues();
+        SettingsParameterValue parameterValue = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createSettingsParameterValue();
+        DataCompositionParameter parameter = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionParameter();
+        parameter.setValue("period"); //$NON-NLS-1$
+        parameterValue.setParameter(parameter);
+        parameters.getItems().add(parameterValue);
+        settings.setDataParameters(parameters);
+        schema.setDefaultSettings(settings);
+
+        assertEquals(java.util.Arrays.asList(
+            root + "#/defaultSettings/selection/items/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "field", "Revenue")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(java.util.Arrays.asList(
+            root + "#/defaultSettings/dataParameters/items/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "parameter", "Period")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(java.util.Arrays.asList(root + "#/dataSetLinks/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "parameter", //$NON-NLS-1$
+                "LinkParameter")); //$NON-NLS-1$
+        assertEquals(java.util.Arrays.asList(root + "#/dataSetLinks/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "dataSet", "Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(java.util.Arrays.asList(root + "#/dataSetLinks/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "dataSet", "Archive")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(java.util.Arrays.asList(root + "#/dataSets/Retail"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "dataSource", "MySource")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -516,6 +598,23 @@ public class DcsReadProjectionTest
         dataSet.setName(name);
         dataSet.setQuery(text);
         return dataSet;
+    }
+
+    private static DataCompositionSettings settingsWithSelection(String value)
+    {
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionSelectedFields selection = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedFields();
+        DataCompositionSelectedField selected = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedField();
+        DataCompositionField field = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionField();
+        field.setValue(value);
+        selected.setField(field);
+        selection.getItems().add(selected);
+        settings.setSelection(selection);
+        return settings;
     }
 
     private static String fencedValue(String markdown)

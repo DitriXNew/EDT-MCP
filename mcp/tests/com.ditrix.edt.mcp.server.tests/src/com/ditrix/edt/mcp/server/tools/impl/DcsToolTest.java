@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
@@ -19,6 +20,14 @@ import java.util.Set;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetFieldFolder;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
+import com._1c.g5.v8.dt.form.model.FormFactory;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
@@ -140,6 +149,73 @@ public class DcsToolTest
     }
 
     @Test
+    public void testBareSettingsReplaceWithAbsentRootDoesNotScanTheWholeDocument()
+    {
+        DcsAddress address = address("Report.Sales"); //$NON-NLS-1$
+        DataCompositionSchema schema = schemaWithUnsupportedField();
+        assertNull(DcsTool.replaceRefusal(schema, null, "selection", address)); //$NON-NLS-1$
+
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DataCompositionSchemaDataSetFieldFolder folder = com._1c.g5.v8.dt.dcs.model.schema
+            .DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetFieldFolder();
+        folder.setDataPath("UnsupportedFolder"); //$NON-NLS-1$
+        dynamic.getFields().add(folder);
+        assertNull(DcsTool.replaceRefusal(dynamic, null, "selection", address)); //$NON-NLS-1$
+        assertNull(DcsTool.replaceRefusal(dynamic, null, "userSettings", address)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBareUserSettingsAndVariantReplaceScanOnlyTheirActualTargets()
+    {
+        DcsAddress address = address("Report.Sales"); //$NON-NLS-1$
+        DataCompositionSchema schema = schemaWithUnsupportedField();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        schema.setDefaultSettings(settings);
+        assertNull(DcsTool.replaceRefusal(schema, settings, "userSettings", address)); //$NON-NLS-1$
+
+        DataCompositionChart settingsChart = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionChart();
+        settings.getItems().add(settingsChart);
+        assertNull(DcsTool.replaceRefusal(schema, settings, "selection", address)); //$NON-NLS-1$
+        String reportSettingsRefusal =
+            DcsTool.replaceRefusal(schema, settings, "userSettings", address); //$NON-NLS-1$
+        assertNotNull(reportSettingsRefusal);
+        assertTrue(reportSettingsRefusal, reportSettingsRefusal.contains("DataCompositionChart")); //$NON-NLS-1$
+
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Main"); //$NON-NLS-1$
+        DataCompositionSettings variantSettings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSettings();
+        variant.setSettings(variantSettings);
+        schema.getSettingsVariants().add(variant);
+        assertNull(DcsTool.replaceRefusal(schema, settings, "variant", address)); //$NON-NLS-1$
+
+        DataCompositionChart variantChart = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionChart();
+        variantSettings.getItems().add(variantChart);
+        String variantRefusal = DcsTool.replaceRefusal(schema, settings, "variant", address); //$NON-NLS-1$
+        assertNotNull(variantRefusal);
+        assertTrue(variantRefusal, variantRefusal.contains("DataCompositionChart")); //$NON-NLS-1$
+
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        dynamic.getFields().add(com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetFieldFolder());
+        DataCompositionSettings listSettings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSettings();
+        dynamic.setListSettings(listSettings);
+        assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address)); //$NON-NLS-1$
+        listSettings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChart());
+        assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "selection", address)); //$NON-NLS-1$
+        String listSettingsRefusal =
+            DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address); //$NON-NLS-1$
+        assertNotNull(listSettingsRefusal);
+        assertTrue(listSettingsRefusal, listSettingsRefusal.contains("DataCompositionChart")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnnotationsMatchFixedMixedReadWriteContract()
     {
         ToolAnnotations annotations = new DcsTool().getAnnotations();
@@ -204,6 +280,29 @@ public class DcsToolTest
         params.put("action", "get"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("type", type); //$NON-NLS-1$
         return params;
+    }
+
+    private static DataCompositionSchema schemaWithUnsupportedField()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSchemaDataSetQuery dataSet = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+            .eINSTANCE.createDataCompositionSchemaDataSetQuery();
+        dataSet.setName("Sales"); //$NON-NLS-1$
+        dataSet.setQuery("SELECT 1"); //$NON-NLS-1$
+        DataCompositionSchemaDataSetFieldFolder folder = com._1c.g5.v8.dt.dcs.model.schema
+            .DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetFieldFolder();
+        folder.setDataPath("UnsupportedFolder"); //$NON-NLS-1$
+        dataSet.getFields().add(folder);
+        schema.getDataSets().add(dataSet);
+        return schema;
+    }
+
+    private static DcsAddress address(String value)
+    {
+        DcsAddress.ParseResult parsed = DcsAddress.parse(value);
+        assertTrue(value, parsed.isSuccess());
+        return parsed.address();
     }
 
     private static void assertXmlFormatRefusal(String result, String action, String type, String address)

@@ -107,6 +107,11 @@ public final class DcsReadProjection
                 }
                 return Result.success(renderDynamicListSummary(canonicalRoot, root, language));
             }
+            if ("userSettings".equals(type)) //$NON-NLS-1$
+            {
+                return Result.success(renderSettingsPage(canonicalRoot, kind, root, type, language,
+                    limit, offset));
+            }
             return renderRootCollection(canonicalRoot, kind, root, type, language, limit, offset);
         }
 
@@ -242,24 +247,25 @@ public final class DcsReadProjection
     {
         if (("field".equals(kind) || "calculatedField".equals(kind) || "totalField".equals(kind)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             && object instanceof DataCompositionField
-            && identity.equals(((DataCompositionField)object).getValue()))
+            && sameIdentity(identity, ((DataCompositionField)object).getValue()))
         {
             result.add(parentAddress(address));
         }
         if ("parameter".equals(kind) && object instanceof DataCompositionParameter //$NON-NLS-1$
-            && identity.equals(((DataCompositionParameter)object).getValue()))
+            && sameIdentity(identity, ((DataCompositionParameter)object).getValue()))
         {
             result.add(parentAddress(address));
         }
         if ("parameter".equals(kind) && object instanceof DataCompositionSchemaDataSetLink //$NON-NLS-1$
-            && identity.equals(((DataCompositionSchemaDataSetLink)object).getParameter()))
+            && sameIdentity(identity, ((DataCompositionSchemaDataSetLink)object).getParameter()))
         {
             result.add(address);
         }
         if ("dataSet".equals(kind) && object instanceof DataCompositionSchemaDataSetLink) //$NON-NLS-1$
         {
             DataCompositionSchemaDataSetLink link = (DataCompositionSchemaDataSetLink)object;
-            if (identity.equals(link.getSourceDataSet()) || identity.equals(link.getDestinationDataSet()))
+            if (sameIdentity(identity, link.getSourceDataSet())
+                || sameIdentity(identity, link.getDestinationDataSet()))
             {
                 result.add(address);
             }
@@ -270,7 +276,7 @@ public final class DcsReadProjection
                 ? ((DataCompositionSchemaDataSetQuery)object).getDataSource()
                 : object instanceof DataCompositionSchemaDataSetObject
                     ? ((DataCompositionSchemaDataSetObject)object).getDataSource() : null;
-            if (identity.equals(dataSource))
+            if (sameIdentity(identity, dataSource))
             {
                 result.add(address);
             }
@@ -573,6 +579,27 @@ public final class DcsReadProjection
         }
     }
 
+    /**
+     * Compares two DCS identities the way 1C does - case-insensitively - because a retained
+     * reference spelled `revenue` really does point at the field `Revenue`.
+     *
+     * <p>This is DELIBERATELY stricter than the resolvers: natural-key lookup, duplicate counting,
+     * rename-collision detection and pointer resolution all still compare exactly. A guard may
+     * safely see MORE references than a resolver would select, because its only effect is to
+     * refuse; loosening the resolvers instead would change which node an address selects, redefine
+     * what counts as a duplicate, and could reject schemas that already exist. Guards conservative,
+     * resolvers exact - do not "align" these by making the resolvers case-insensitive.
+     *
+     * @param first one identity, may be {@code null}
+     * @param second the other identity, may be {@code null}
+     * @return {@code true} when both are present and equal ignoring case
+     */
+    private static boolean sameIdentity(String first, String second)
+    {
+        return first != null && second != null
+            && first.toLowerCase(Locale.ROOT).equals(second.toLowerCase(Locale.ROOT));
+    }
+
     private static boolean expressionReferences(String expression, String identity)
     {
         String normalizedIdentity = identity.toLowerCase(Locale.ROOT);
@@ -787,6 +814,22 @@ public final class DcsReadProjection
     private static String renderScalarPage(String address, String type, String value, int limit,
         int offset)
     {
+        return renderTextPage(address, type, value, limit, offset, true);
+    }
+
+    private static String renderSettingsPage(String rootFqn, TargetKind kind, EObject root,
+        String type, String language, int limit, int offset)
+    {
+        String feature = kind == TargetKind.DYNAMIC_LIST ? "listSettings" : "defaultSettings"; //$NON-NLS-1$ //$NON-NLS-2$
+        String address = child(rootFqn, feature);
+        DataCompositionSettings settings = asSettings(featureValue(root, feature));
+        return renderTextPage(address, type, renderSettingsOutline(address, settings, language),
+            limit, offset, false);
+    }
+
+    private static String renderTextPage(String address, String type, String value, int limit,
+        int offset, boolean fenced)
+    {
         int total = value.length();
         int from = DcsXmlCodec.safeStart(value, Math.min(offset, total));
         long requestedEnd = (long)from + Math.max(1, limit);
@@ -805,7 +848,18 @@ public final class DcsReadProjection
             .append("**Offset:** ").append(from).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Next offset:** ").append(to < total ? Integer.toString(to) : "none") //$NON-NLS-1$ //$NON-NLS-2$
             .append("\n\n## Value\n\n"); //$NON-NLS-1$
-        appendFenced(result, page);
+        if (fenced)
+        {
+            appendFenced(result, page);
+        }
+        else
+        {
+            result.append(page);
+            if (!page.endsWith("\n")) //$NON-NLS-1$
+            {
+                result.append('\n');
+            }
+        }
         return result.toString();
     }
 
