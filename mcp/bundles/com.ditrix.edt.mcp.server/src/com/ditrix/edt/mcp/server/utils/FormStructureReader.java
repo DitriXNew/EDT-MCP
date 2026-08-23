@@ -127,6 +127,38 @@ public final class FormStructureReader
     /** The root-owner label used in the Event handlers table for a form-level handler. */
     private static final String FORM_OWNER_LABEL = "(form)"; //$NON-NLS-1$
 
+    /**
+     * What the Event-handlers section says when its own walk stopped at {@link #MAX_NODES} visited
+     * elements.
+     *
+     * <p>This bound is INDEPENDENT of the caller's row limit and has to be reported independently.
+     * The row cap bites on rows that were collected and declined, and it is visible in the numbers;
+     * this one bites on elements that were never LOOKED AT, so it can leave the section holding
+     * fewer handlers than the caller asked for - or none at all - and every surface that would have
+     * betrayed it stays silent: no row was declined, so no cap note is due, and a shorter table is
+     * indistinguishable from a complete one. The worst case was the empty one, where the section
+     * went on to state {@code _(no event handlers)_} about a form whose handler-bearing elements the
+     * walk had never reached.</p>
+     */
+    private static final String HANDLER_WALK_CUT_SHORT =
+        "the handler walk stopped after visiting " + MAX_NODES //$NON-NLS-1$
+            + " elements, so elements past that point were never looked at"; //$NON-NLS-1$
+
+    /**
+     * The Event-handlers section's line when the walk was cut short having found no handler.
+     * <p>
+     * It deliberately does not carry the words the complete walk uses: "no event handlers" is a
+     * statement about the FORM, and nothing here observed the form - only the part of it the walk
+     * got through.
+     */
+    private static final String HANDLERS_NONE_FOUND_WALK_CUT_SHORT =
+        "_(no handler was found, but " + HANDLER_WALK_CUT_SHORT //$NON-NLS-1$
+            + " - whether this form has event handlers is not established)_"; //$NON-NLS-1$
+
+    /** The line printed under a handler table whose walk was cut short. */
+    private static final String HANDLERS_WALK_CUT_SHORT_NOTE =
+        "_(" + HANDLER_WALK_CUT_SHORT + " and their handlers are not in this table)_"; //$NON-NLS-1$ //$NON-NLS-2$
+
     private FormStructureReader()
     {
         // utility class
@@ -492,20 +524,33 @@ public final class FormStructureReader
     /**
      * Renders the {@code ## Event handlers} table (Element / Event / Handler) for the BSL handler bound
      * to each event of the form root and every element, or {@code _(no event handlers)_} when none.
+     *
+     * <p>TWO independent bounds can narrow this section, and each is reported on its own. The
+     * caller's {@code limit} declines collected rows and is announced by {@link #appendCapNote}; the
+     * walk's {@link #MAX_NODES} ceiling stops the traversal and is announced by
+     * {@link #HANDLERS_WALK_CUT_SHORT_NOTE}. Neither implies the other: a walk cut short usually
+     * collects FEWER rows than the limit, so gating the report on the row cap - which is what this
+     * section used to do - hid the walk's bound exactly in the cases where it mattered. The absence
+     * sentence is therefore reserved for a walk that COMPLETED; a cut-short walk that found nothing
+     * says {@link #HANDLERS_NONE_FOUND_WALK_CUT_SHORT} instead, which claims nothing about the
+     * form.</p>
      */
     private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language,
         int limit)
     {
         sb.append("## Event handlers\n\n"); //$NON-NLS-1$
         List<String[]> handlers = new ArrayList<>();
+        boolean[] walkCutShort = {false};
         // collectHandlers recurses the form root's 'items' AND its singular containments (the form-wide
         // auto command bar, context menus, tooltips), so the whole element tree is covered from here. It
         // shares the same MAX_NODES bound as the item-outline pass (its own fresh budget, since it is an
         // independent walk) so the Event-handlers section honours the same cap on a pathological form.
-        collectHandlers(formModel, FORM_OWNER_LABEL, language, handlers, new int[] {MAX_NODES});
+        collectHandlers(formModel, FORM_OWNER_LABEL, language, handlers, new int[] {MAX_NODES},
+            walkCutShort);
         if (handlers.isEmpty())
         {
-            sb.append("_(no event handlers)_\n\n"); //$NON-NLS-1$
+            sb.append(walkCutShort[0] ? HANDLERS_NONE_FOUND_WALK_CUT_SHORT
+                : "_(no event handlers)_").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -521,6 +566,11 @@ public final class FormStructureReader
         if (shown < handlers.size())
         {
             appendCapNote(sb, "event handlers", limit); //$NON-NLS-1$
+        }
+        // NOT an 'else': the two bounds are independent and can both have bitten on one form.
+        if (walkCutShort[0])
+        {
+            sb.append('\n').append(HANDLERS_WALK_CUT_SHORT_NOTE).append('\n');
         }
         sb.append('\n');
     }
@@ -993,12 +1043,22 @@ public final class FormStructureReader
      * @param language the event-name language CODE
      * @param rows the accumulator receiving {@code {owner, event, handler}} rows
      * @param budget the shared per-visited-element node budget, capping the walk on a pathological form
+     * @param cutShort raised when the budget actually DECLINED an element, so the caller can report
+     *            a walk that stopped early instead of publishing a short list as a complete one.
+     *            Set only on the budget branch: a {@code null} child drops nothing, and a form with
+     *            exactly {@link #MAX_NODES} elements drains the budget to zero while every element
+     *            is still visited - the same off-by-one the item outline is gated against
      */
     private static void collectHandlers(EObject element, String ownerLabel, String language,
-        List<String[]> rows, int[] budget)
+        List<String[]> rows, int[] budget, boolean[] cutShort)
     {
-        if (element == null || budget[0] <= 0)
+        if (element == null)
         {
+            return;
+        }
+        if (budget[0] <= 0)
+        {
+            cutShort[0] = true;
             return;
         }
         budget[0]--;
@@ -1010,14 +1070,14 @@ public final class FormStructureReader
         }
         for (EObject child : getReferenceList(element, FEATURE_ITEMS))
         {
-            collectHandlers(child, nameOf(child), language, rows, budget);
+            collectHandlers(child, nameOf(child), language, rows, budget, cutShort);
         }
         for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
         {
             EObject child = getSingleReference(element, featureName);
             if (child != null)
             {
-                collectHandlers(child, nameOf(child), language, rows, budget);
+                collectHandlers(child, nameOf(child), language, rows, budget, cutShort);
             }
         }
     }

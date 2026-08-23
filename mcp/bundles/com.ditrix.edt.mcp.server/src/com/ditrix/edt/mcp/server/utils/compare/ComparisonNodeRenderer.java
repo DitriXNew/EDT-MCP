@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -167,6 +168,13 @@ public final class ComparisonNodeRenderer
      * saying "no value there", so rendering a failed read as one turns a gap in what this server
      * could see into a statement about the configuration - the exact substitution the unfinished
      * guard and the one-side guard exist to prevent, one level further down.
+     * <p>
+     * It is a RENDERING and nothing else. Whether a side was read is carried beside the cell in
+     * {@link PropertyRow#readFailed}, never recovered by comparing the cell against this string: a
+     * metadata property whose real value happens to be this text would otherwise be classified as
+     * unread, and a difference it carries would be downgraded to {@link RowState#UNDETERMINED} and
+     * dropped from the differing count while the document announced that the property cannot be
+     * read.
      */
     public static final String UNREADABLE = "_(could not be read)_"; //$NON-NLS-1$
 
@@ -568,12 +576,12 @@ public final class ComparisonNodeRenderer
 
         private final boolean read;
         private final int presentSides;
-        private final Map<String, String[]> rows;
+        private final Map<String, PropertyRow> rows;
         private final List<String> differing;
         private final List<String> undetermined;
         private final List<String> ordered;
 
-        private PropertyDigest(boolean read, int presentSides, Map<String, String[]> rows,
+        private PropertyDigest(boolean read, int presentSides, Map<String, PropertyRow> rows,
             List<String> differing, List<String> undetermined, List<String> equal)
         {
             this.read = read;
@@ -590,6 +598,34 @@ public final class ComparisonNodeRenderer
             all.addAll(undetermined);
             all.addAll(equal);
             this.ordered = all;
+        }
+    }
+
+    /**
+     * One property across the three sides: what each cell RENDERS, and - separately - whether the
+     * read behind it failed.
+     * <p>
+     * The two are separate fields because they answer different questions and only one of them is
+     * derivable from the other's absence. The rendered cell is text chosen for a human reader, and
+     * any text a cell can carry is text a metadata property can legitimately hold, {@link #UNREADABLE}
+     * included. Recovering "this side was not read" by comparing the cell against that string
+     * therefore misclassifies a property whose real value is that text: the row is called
+     * unreadable, a difference it carries is downgraded to {@link RowState#UNDETERMINED}, the
+     * differing count loses it, and the summary tells the caller the property could not be read
+     * when it was read perfectly well. The flag is set by the ONE place that knows - the
+     * introspector's own {@code readFailed} - and nothing downstream has to guess.
+     */
+    private static final class PropertyRow
+    {
+        /** What each side's cell renders; empty string where the side carries no value. */
+        private final String[] values = new String[SIDES.length];
+
+        /** Whether the read of that side's value FAILED, independent of what the cell renders. */
+        private final boolean[] readFailed = new boolean[SIDES.length];
+
+        PropertyRow()
+        {
+            Arrays.fill(values, ""); //$NON-NLS-1$
         }
     }
 
@@ -619,7 +655,7 @@ public final class ComparisonNodeRenderer
             return PropertyDigest.NO_OBJECTS;
         }
 
-        Map<String, String[]> rows = new LinkedHashMap<>();
+        Map<String, PropertyRow> rows = new LinkedHashMap<>();
         for (int i = 0; i < sides.length; i++)
         {
             collectProperties(rows, sides[i], i);
@@ -628,7 +664,7 @@ public final class ComparisonNodeRenderer
         List<String> differing = new ArrayList<>();
         List<String> undetermined = new ArrayList<>();
         List<String> equal = new ArrayList<>();
-        for (Map.Entry<String, String[]> entry : rows.entrySet())
+        for (Map.Entry<String, PropertyRow> entry : rows.entrySet())
         {
             switch (compare(entry.getValue(), sides))
             {
@@ -681,7 +717,7 @@ public final class ComparisonNodeRenderer
         for (int i = 0; i < shown; i++)
         {
             String name = properties.ordered.get(i);
-            String[] values = properties.rows.get(name);
+            String[] values = properties.rows.get(name).values;
             sb.append(MarkdownUtils.tableRow(label(name), values[0], values[1], values[2]));
         }
         sb.append('\n');
@@ -729,8 +765,11 @@ public final class ComparisonNodeRenderer
      * current value - the read is guarded so that one dangling proxy cannot abort the whole object
      * - and folding them together published a failure as an absence, which on a three-column
      * comparison also made two unreadable sides look like agreement.
+     * <p>
+     * The failure is recorded in {@link PropertyRow#readFailed} as well as rendered, and it is that
+     * flag - never the rendered text - that {@link #compare} reads back. See {@link PropertyRow}.
      */
-    private static void collectProperties(Map<String, String[]> rows, EObject source, int index)
+    private static void collectProperties(Map<String, PropertyRow> rows, EObject source, int index)
     {
         if (source == null)
         {
@@ -738,19 +777,20 @@ public final class ComparisonNodeRenderer
         }
         for (PropertyInfo info : MetadataPropertyIntrospector.introspect(source))
         {
-            String[] cells = rows.get(info.name);
-            if (cells == null)
+            PropertyRow row = rows.get(info.name);
+            if (row == null)
             {
-                cells = new String[] {"", "", ""}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                rows.put(info.name, cells);
+                row = new PropertyRow();
+                rows.put(info.name, row);
             }
             if (info.readFailed)
             {
-                cells[index] = UNREADABLE;
+                row.readFailed[index] = true;
+                row.values[index] = UNREADABLE;
             }
             else
             {
-                cells[index] = info.currentValue == null ? "" : info.currentValue; //$NON-NLS-1$
+                row.values[index] = info.currentValue == null ? "" : info.currentValue; //$NON-NLS-1$
             }
         }
     }
@@ -774,12 +814,19 @@ public final class ComparisonNodeRenderer
      * OPPOSITE claim: with a side unreadable, "these agree" is not something anybody observed, and
      * the two-answer version reported exactly that - it compared the placeholder for a failed read
      * with the placeholder for an absent value and found them equal.
+     * <p>
+     * Which sides were unreadable is taken from {@link PropertyRow#readFailed} and NOT from the
+     * rendered cells. Reading it back out of the text made the answer depend on what the
+     * configuration happens to contain: a property whose value really is {@link #UNREADABLE} was
+     * classified as unread, so a genuine difference it carried came back
+     * {@link RowState#UNDETERMINED} instead of {@link RowState#DIFFERENT}, vanished from the
+     * differing count, and was announced to the caller as a property this server cannot read.
      *
-     * @param values the three rendered cells
+     * @param row the three rendered cells and, beside them, which reads failed
      * @param sides the three compared objects, {@code null} where the side has none
      * @return what the row establishes
      */
-    private static RowState compare(String[] values, EObject[] sides)
+    private static RowState compare(PropertyRow row, EObject[] sides)
     {
         Set<String> readable = new LinkedHashSet<>();
         boolean anyUnreadable = false;
@@ -789,13 +836,13 @@ public final class ComparisonNodeRenderer
             {
                 continue;
             }
-            if (UNREADABLE.equals(values[i]))
+            if (row.readFailed[i])
             {
                 anyUnreadable = true;
             }
             else
             {
-                readable.add(values[i] == null ? "" : values[i]); //$NON-NLS-1$
+                readable.add(row.values[i] == null ? "" : row.values[i]); //$NON-NLS-1$
             }
         }
         if (readable.size() > 1)

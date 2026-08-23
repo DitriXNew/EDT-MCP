@@ -365,6 +365,161 @@ public class FormStructureReaderTest
         assertFalse(md.contains("- F" + MAX_NODES + " (")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ the handler walk's OWN bound is reported, and reported separately ============
+    //
+    // Two independent bounds narrow the Event-handlers section: the caller's row limit, which
+    // declines COLLECTED rows, and the walk's MAX_NODES ceiling, which stops the traversal. Only
+    // the first was ever announced, and it is the one that does not bite here: a cut-short walk
+    // collects FEWER handlers than the limit - often none - so no row is declined, no cap note is
+    // due, and a short table is indistinguishable from a complete one. In the empty case the
+    // section went on to state outright that the form has no event handlers, about a form whose
+    // handler-bearing elements the walk had never reached.
+
+    /**
+     * The form that reaches the ceiling: the walk visits the root and then MAX_NODES-1 children, so
+     * the LAST child - the only one carrying a handler - is declined and never looked at.
+     *
+     * @return the form
+     */
+    private static EObject formWhoseLastElementIsPastTheHandlerWalkBound()
+    {
+        EObject form = newForm();
+        for (int i = 0; i < MAX_NODES; i++)
+        {
+            EObject field = newItem(MODEL.formField, "F" + i, i); //$NON-NLS-1$
+            if (i == MAX_NODES - 1)
+            {
+                addHandler(field, "OnChange", null, "LastOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            addItem(form, field);
+        }
+        return form;
+    }
+
+    @Test
+    public void testHandlerWalkCutShortDoesNotClaimTheFormHasNoHandlers()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseLastElementIsPastTheHandlerWalkBound(), "en"); //$NON-NLS-1$
+
+        // The form HAS a handler; the walk simply never reached it. Stating its absence is the one
+        // thing this section may not do without a complete walk.
+        assertFalse("a cut-short walk may not state the form has no event handlers", //$NON-NLS-1$
+            md.contains("_(no event handlers)_")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHandlerWalkCutShortSaysTheWalkStopped()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseLastElementIsPastTheHandlerWalkBound(), "en"); //$NON-NLS-1$
+
+        assertTrue("the bound that bit must be named: " + md, md.contains( //$NON-NLS-1$
+            "the handler walk stopped after visiting " + MAX_NODES //$NON-NLS-1$
+                + " elements, so elements past that point were never looked at")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHandlerWalkCutShortSaysWhatIsNotEstablished()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseLastElementIsPastTheHandlerWalkBound(), "en"); //$NON-NLS-1$
+
+        assertTrue("and it must say the question is left open, not answered: " + md, //$NON-NLS-1$
+            md.contains("whether this form has event handlers is not established")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same bound with the table NON-empty: the root's handler was collected before the walk ran
+     * out, so the table has a row, the row limit declined nothing, and the walk's own bound is the
+     * only thing that narrowed the answer.
+     *
+     * @return the form
+     */
+    private static EObject formWithARootHandlerAndElementsPastTheBound()
+    {
+        EObject form = newForm();
+        addHandler(form, "OnOpen", null, "FormOnOpen"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < MAX_NODES; i++)
+        {
+            addItem(form, newItem(MODEL.formField, "F" + i, i)); //$NON-NLS-1$
+        }
+        return form;
+    }
+
+    @Test
+    public void testHandlerWalkCutShortIsReportedUnderANonEmptyTable()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWithARootHandlerAndElementsPastTheBound(), "en"); //$NON-NLS-1$
+
+        assertTrue("the table is short because the walk stopped, and it must say so: " + md, //$NON-NLS-1$
+            md.contains("the handler walk stopped after visiting " + MAX_NODES //$NON-NLS-1$
+                + " elements, so elements past that point were never looked at and their handlers " //$NON-NLS-1$
+                + "are not in this table")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHandlerWalkCutShortIsReportedThoughNoRowWasDeclined()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWithARootHandlerAndElementsPastTheBound(), "en"); //$NON-NLS-1$
+
+        // The point of the previous test: the ROW cap did not fire, so gating the walk's report on
+        // it - which is what this section used to do - reports nothing exactly here.
+        assertFalse("no row was declined, so the row-cap note may not appear: " + md, //$NON-NLS-1$
+            md.contains("event handlers truncated: only the first")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHandlerWalkCutShortKeepsTheRowsItDidCollect()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWithARootHandlerAndElementsPastTheBound(), "en"); //$NON-NLS-1$
+
+        assertTrue("what the walk DID reach is still reported: " + md, //$NON-NLS-1$
+            md.contains("| (form) | OnOpen | FormOnOpen |")); //$NON-NLS-1$
+    }
+
+    /**
+     * BOUNDARY, mirroring the item outline's: a form the walk visits ENTIRELY - the root plus
+     * MAX_NODES-1 children - drains the budget to zero without declining anything, so no cut is
+     * reported. Without this the report could be produced by an implementation that flags every
+     * exhausted budget, which would cry truncation on a form it read completely.
+     */
+    @Test
+    public void testExactlyTheHandlerWalkBoundIsNotReportedAsCutShort()
+    {
+        EObject form = newForm();
+        for (int i = 0; i < MAX_NODES - 1; i++)
+        {
+            addItem(form, newItem(MODEL.formField, "F" + i, i)); //$NON-NLS-1$
+        }
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nothing was declined, so no walk-cut note is due: " + md, //$NON-NLS-1$
+            md.contains("the handler walk stopped")); //$NON-NLS-1$
+    }
+
+    /**
+     * The positive control for the pair above: on a COMPLETE walk the plain absence sentence is
+     * still what the section prints, so a reader that had lost the phrase entirely would not pass
+     * {@link #testHandlerWalkCutShortDoesNotClaimTheFormHasNoHandlers}.
+     */
+    @Test
+    public void testACompleteWalkStillStatesTheAbsencePlainly()
+    {
+        EObject form = newForm();
+        for (int i = 0; i < MAX_NODES - 1; i++)
+        {
+            addItem(form, newItem(MODEL.formField, "F" + i, i)); //$NON-NLS-1$
+        }
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a walk that saw the whole form may state the absence: " + md, //$NON-NLS-1$
+            md.contains("_(no event handlers)_")); //$NON-NLS-1$
+    }
+
     @Test
     public void testRenderDetailedEnumReadsLiteralNotName()
     {

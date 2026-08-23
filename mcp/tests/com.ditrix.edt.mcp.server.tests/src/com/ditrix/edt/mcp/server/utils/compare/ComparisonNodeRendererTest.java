@@ -178,6 +178,66 @@ public class ComparisonNodeRendererTest
             text.contains(ComparisonNodeRenderer.UNREADABLE));
     }
 
+    // ======= the marker is a RENDERING, not a channel the classifier reads back =======
+    //
+    // "This side was not read" used to be recovered by comparing the rendered cell against the
+    // marker literal. Any text a cell can carry is text a metadata property can legitimately hold,
+    // so a property whose real value IS that text was classified as unread: a difference it carried
+    // came back UNDETERMINED instead of DIFFERENT, the differing count lost it, and the document
+    // told the caller the property could not be read - about a property that had been read. The
+    // flag now travels beside the cell and the text decides nothing.
+
+    /**
+     * The read succeeded, the two sides disagree, and the row must be counted as differing however
+     * much its value happens to look like the marker.
+     */
+    @Test
+    public void testAPropertyWhoseValueIsTheMarkerTextIsStillCountedAsDiffering()
+    {
+        EObject main = mdObject("Products", ComparisonNodeRenderer.UNREADABLE); //$NON-NLS-1$
+        EObject other = mdObject("Products", "other comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertTrue("a value that merely LOOKS like the marker was read, so the row differs: " //$NON-NLS-1$
+            + text, text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * The negative half, in its own test because JUnit stops a method at the first failed
+     * assertion: no read failed here, so the summary may not report one.
+     */
+    @Test
+    public void testAPropertyWhoseValueIsTheMarkerTextIsNotReportedAsUnreadable()
+    {
+        EObject main = mdObject("Products", ComparisonNodeRenderer.UNREADABLE); //$NON-NLS-1$
+        EObject other = mdObject("Products", "other comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertFalse("every side was read, so nothing may be announced as unreadable: " + text, //$NON-NLS-1$
+            text.contains("not readable")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control the two above need: a read that REALLY failed is still undetermined and still
+     * counted, so they cannot be passed by a renderer that stopped classifying failed reads at all.
+     */
+    @Test
+    public void testAGenuineReadFailureIsStillUndeterminedAndStillCounted()
+    {
+        EObject main = unreadableComment("Products"); //$NON-NLS-1$
+        EObject other = mdObject("Products", "other comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertTrue("a side that truly could not be read establishes nothing: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (0 differing, 1 not readable)")); //$NON-NLS-1$
+    }
+
     // ==================== The lazy tree ====================
 
     @Test

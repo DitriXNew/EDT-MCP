@@ -448,6 +448,12 @@ public class MergeRulesTool implements IMcpTool
      * absence here: {@code decisions()} has no address to report such a rule under and the
      * preserved-section count does not cover it either, so without this the file would be
      * reported as holding nothing while holding a rule somebody wrote.
+     * <p>
+     * <b>Shared by BOTH reports, and it has to be.</b> The read report is not the only place the
+     * fact is due: a write with {@code basedOn} carries such a rule into the file it writes, so
+     * the write report's own counts understate the file for exactly the same reason. One clause
+     * against one counter ({@code MergeRulesDocument.unreachableRuleCount()}) keeps the two
+     * halves from wording - or numbering - the same fact differently.
      *
      * @param count how many such rules the file carries, always positive
      * @return the clause, ending in a newline
@@ -1004,6 +1010,18 @@ public class MergeRulesTool implements IMcpTool
         out.append("- Decisions in the file now: ").append(document.decisions().size()).append('\n'); //$NON-NLS-1$
         out.append("- Preserved sections this tool does not interpret: ") //$NON-NLS-1$
             .append(document.preservedSectionCount()).append("\n\n"); //$NON-NLS-1$
+        // The SAME disclosure the read report makes, for the same reason and against the same
+        // counter. A rule at an unreachable node arrives through basedOn and the rewrite carries it
+        // through verbatim - so the file this call just wrote holds it - while neither number above
+        // covers it: decisions() has no address to return it under and preservedSectionCount does
+        // not count a Node as a preserved block. Reported only by the read half, the write report
+        // presented the file as holding exactly the rules it had listed, and the one rule nobody
+        // can address stayed invisible to the caller who had just copied it forward.
+        int unreachable = document.unreachableRuleCount();
+        if (unreachable > 0)
+        {
+            out.append(unreachableRuleClause(unreachable)).append('\n');
+        }
         out.append(MarkdownUtils.tableHeader("#", "Node", "Rule")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         int shown = Math.min(limit, requested.size());
         for (int i = 0; i < shown; i++)

@@ -133,6 +133,16 @@ public class MergeRulesToolTest
 
     private static final String CLAIMS_NO_RULE = "The file records no merge rule"; //$NON-NLS-1$
 
+    /**
+     * The words the unreachable-rule clause is recognised by, in BOTH reports.
+     * <p>
+     * They are the clause's own text and not a paraphrase of it, which is the whole point: the
+     * absence pins below assert that a report does NOT carry the clause, and a phrase the tool
+     * never prints makes such a pin pass on every behaviour, the always-emit one included.
+     */
+    private static final String UNREACHABLE_CLAUSE_MARK =
+        " in a part of the node tree addressing never enters"; //$NON-NLS-1$
+
     /** A rule on a {@code Node} sitting BESIDE the root: in the file, at no address. */
     private static final String RULE_BESIDE_THE_ROOT =
         "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
@@ -669,8 +679,11 @@ public class MergeRulesToolTest
     {
         String result = call(params("mode", "read", "filePath", seedFixture().toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
+        // Pinned on the clause's OWN words. It used to be pinned on "no address reaches", which is
+        // the javadoc's phrasing and appears in no report this tool prints - so the control passed
+        // on any behaviour at all, including a report that emitted the clause every time.
         assertFalse("nothing in this file is unaddressable, so the report must not say so:\n" //$NON-NLS-1$
-            + result, result.contains("no address reaches")); //$NON-NLS-1$
+            + result, result.contains(UNREACHABLE_CLAUSE_MARK));
     }
 
     /**
@@ -686,7 +699,81 @@ public class MergeRulesToolTest
         assertTrue("an empty file records no rule, and the report says so: " + result, //$NON-NLS-1$
             result.contains(CLAIMS_NO_RULE));
         assertFalse("and there is no unreachable rule to mention: " + result, //$NON-NLS-1$
-            result.contains("no address reaches")); //$NON-NLS-1$
+            result.contains(UNREACHABLE_CLAUSE_MARK));
+    }
+
+    // ============ the WRITE report discloses it too, and against the same counter ============
+    //
+    // A rewrite carries an unreachable rule through verbatim, so a write started from a basedOn
+    // that holds one writes a file that holds it. Neither number the write report prints covers
+    // it - decisions() has no address to return it under, preservedSectionCount does not count a
+    // Node as a preserved block - so the report presented the file as holding exactly the rules it
+    // had just listed, and the rule nobody can address stayed invisible to the caller who had just
+    // copied it forward. The read half had said so all along; only the write half was silent.
+
+    @Test
+    public void testAWriteCarryingAnUnreachableRuleForwardSaysSo() throws IOException
+    {
+        Path file = seed("write-unreachable.xml", RULE_BESIDE_THE_ROOT); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the write report has to count what it carried forward: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWriteCarryingAnUnreachableRuleForwardSaysItIsKept() throws IOException
+    {
+        Path file = seed("write-unreachable.xml", RULE_BESIDE_THE_ROOT); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("and that the rewrite kept it rather than dropping it: " + result, //$NON-NLS-1$
+            result.contains("carries it through verbatim")); //$NON-NLS-1$
+    }
+
+    /**
+     * What makes the clause true rather than decorative: the rule really is in the file this call
+     * wrote. Without this the report could be naming something the rewrite had silently dropped.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testTheUnreachableRuleTheWriteReportNamesIsReallyInTheWrittenFile()
+        throws IOException
+    {
+        Path file = seed("write-unreachable.xml", RULE_BESIDE_THE_ROOT); //$NON-NLS-1$
+
+        call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the rewrite must have carried the unaddressable node through:\n" + read(file), //$NON-NLS-1$
+            read(file).contains("Key=\"orphan\"")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: an ordinary {@code basedOn} gains nothing, so the three above cannot be passed
+     * by a write report that prints the clause every time.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAnOrdinaryWriteIsUnchangedByTheUnreachableClause() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("nothing in this file is unaddressable, so the report must not say so:\n" //$NON-NLS-1$
+            + result, result.contains(UNREACHABLE_CLAUSE_MARK));
     }
 
     // ==================== write, no live comparison ====================
