@@ -145,11 +145,16 @@ public final class DcsSchemaWriter
 
     private static String identityReferenceError(DataCompositionSchema schema, Request request)
     {
+        if (ACTION_REPLACE.equals(request.action))
+        {
+            return collectionReplacementReferenceError(schema, request);
+        }
         if (!ACTION_REMOVE.equals(request.action) && !ACTION_UPDATE.equals(request.action)) return null;
         List<String> segments = request.address.segments();
         String identity = null;
         if (TYPE_FIELD.equals(request.type) && segments.size() == 4) identity = segments.get(3);
-        else if ((TYPE_DATA_SET.equals(request.type) || TYPE_PARAMETER.equals(request.type)
+        else if ((TYPE_DATA_SOURCE.equals(request.type) || TYPE_DATA_SET.equals(request.type)
+            || TYPE_PARAMETER.equals(request.type)
             || TYPE_CALCULATED_FIELD.equals(request.type) || TYPE_TOTAL_FIELD.equals(request.type))
             && segments.size() == 2) identity = segments.get(1);
         if (identity == null) return null;
@@ -161,6 +166,55 @@ public final class DcsSchemaWriter
             if (replacement == null || identity.equals(replacement)) return null;
         }
         return DcsMutationGuard.referenceError(schema, request.address, request.type, identity);
+    }
+
+    private static String collectionReplacementReferenceError(DataCompositionSchema schema,
+        Request request)
+    {
+        String collection;
+        List<String> existing;
+        if (TYPE_DATA_SET.equals(request.type))
+        {
+            collection = "dataSets"; //$NON-NLS-1$
+            existing = keys(schema, collection, null);
+        }
+        else if (TYPE_DATA_SOURCE.equals(request.type))
+        {
+            collection = "dataSources"; //$NON-NLS-1$
+            existing = keys(schema, collection, null);
+        }
+        else
+        {
+            return null;
+        }
+        List<String> path = request.address.segments();
+        if (path.size() != 1 || !collection.equals(path.get(0)))
+        {
+            return null;
+        }
+        String retained = string(request.body, KEY_NAME);
+        if (retained == null || retained.isEmpty())
+        {
+            return null;
+        }
+        for (String identity : existing)
+        {
+            if (identity == null || identity.equals(retained))
+            {
+                continue;
+            }
+            List<String> references = DcsReadProjection.referenceAddresses(schema,
+                request.address.rootFqn(), request.type, identity);
+            if (!references.isEmpty())
+            {
+                return "Cannot replace identity collection '" + request.address //$NON-NLS-1$
+                    + "' because removing " + request.type + " '" + identity //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' would leave dangling references at: " + String.join(", ", references) //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". Keep that identity in the replacement body, or update/remove the " //$NON-NLS-1$
+                    + "referring nodes first, re-run get, and retry with the new hash."; //$NON-NLS-1$
+            }
+        }
+        return null;
     }
 
     private static String clearReplaceTarget(DataCompositionSchema schema, Request request)

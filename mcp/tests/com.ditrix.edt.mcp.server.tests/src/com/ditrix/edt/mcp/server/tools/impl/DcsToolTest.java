@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -100,6 +101,25 @@ public class DcsToolTest
         String result = new DcsTool().execute(params);
         assertTrue(result.contains("expectedHash is required")); //$NON-NLS-1$
         assertTrue(result.contains("action='get'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testIdentityCollectionReplaceRequiresHashThroughStructuredErrorContract()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("fqn", "Report.Sales#/dataSets"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("action", "replace"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("type", "dataSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("body", "{\"name\":\"Only\",\"type\":\"query\",\"query\":\"SELECT 1\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject result = JsonParser.parseString(new DcsTool().execute(params)).getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue(error, error.contains("expectedHash is required")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Report.Sales#/dataSets")); //$NON-NLS-1$
+        assertTrue(error, error.contains("action='get'")); //$NON-NLS-1$
     }
 
     @Test

@@ -22,6 +22,8 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
+import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
@@ -51,6 +53,7 @@ public final class DcsReadProjection
     private static final String FEATURE_QUERY = "query"; //$NON-NLS-1$
     private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
     private static final String CHART_CLASS = "DataCompositionChart"; //$NON-NLS-1$
+    private static final int ERROR_KEY_LIMIT = 20;
 
     private static final Set<String> NATURAL_NAME_COLLECTIONS = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList("dataSources", "dataSets", "parameters", FEATURE_VARIANTS))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -239,6 +242,17 @@ public final class DcsReadProjection
         {
             DataCompositionSchemaDataSetLink link = (DataCompositionSchemaDataSetLink)object;
             if (identity.equals(link.getSourceDataSet()) || identity.equals(link.getDestinationDataSet()))
+            {
+                result.add(address);
+            }
+        }
+        if ("dataSource".equals(kind)) //$NON-NLS-1$
+        {
+            String dataSource = object instanceof DataCompositionSchemaDataSetQuery
+                ? ((DataCompositionSchemaDataSetQuery)object).getDataSource()
+                : object instanceof DataCompositionSchemaDataSetObject
+                    ? ((DataCompositionSchemaDataSetObject)object).getDataSource() : null;
+            if (identity.equals(dataSource))
             {
                 result.add(address);
             }
@@ -457,11 +471,38 @@ public final class DcsReadProjection
                     continue;
                 }
                 String dataSetSelector = selector("dataSets", null, (EObject)dataSet, i); //$NON-NLS-1$
-                String fieldsAddress = child(child(child(rootFqn, "dataSets"), dataSetSelector), "fields"); //$NON-NLS-1$ //$NON-NLS-2$
-                result.addAll(directItemsAt(fieldsAddress, (EObject)dataSet, "fields")); //$NON-NLS-1$
+                String dataSetAddress = child(child(rootFqn, "dataSets"), dataSetSelector); //$NON-NLS-1$
+                collectDataSetFields((EObject)dataSet, dataSetAddress, result);
             }
         }
         return CollectionRef.success(child(rootFqn, "dataSets"), result); //$NON-NLS-1$
+    }
+
+    private static void collectDataSetFields(EObject dataSet, String dataSetAddress,
+        List<NodeRef> result)
+    {
+        result.addAll(directItemsAt(dataSetAddress, dataSet, "fields")); //$NON-NLS-1$
+        if (!(dataSet instanceof DataCompositionSchemaDataSetUnion))
+        {
+            return;
+        }
+        Object value = featureValue(dataSet, FEATURE_ITEMS);
+        if (!(value instanceof List<?>))
+        {
+            return;
+        }
+        List<?> items = (List<?>)value;
+        String itemsAddress = child(dataSetAddress, FEATURE_ITEMS);
+        for (int i = 0; i < items.size(); i++)
+        {
+            Object item = items.get(i);
+            if (item instanceof EObject)
+            {
+                EObject member = (EObject)item;
+                collectDataSetFields(member,
+                    child(itemsAddress, selector(FEATURE_ITEMS, dataSet, member, i)), result);
+            }
+        }
     }
 
     private static CollectionRef settingsCollection(String rootFqn, TargetKind kind, EObject root,
@@ -597,6 +638,16 @@ public final class DcsReadProjection
         {
             String note = isChart(item.value)
                 ? "Read-only existing chart; chart authoring is unsupported." : ""; //$NON-NLS-1$ //$NON-NLS-2$
+            if (item.value instanceof EObject
+                && "SettingsVariant".equals(((EObject)item.value).eClass().getName())) //$NON-NLS-1$
+            {
+                String presentation = presentationFeature((EObject)item.value, "presentation", //$NON-NLS-1$
+                    language);
+                if (!presentation.isEmpty())
+                {
+                    note = "Presentation: " + presentation; //$NON-NLS-1$
+                }
+            }
             result.append(MarkdownUtils.tableRow(itemName(item.value, language), itemKind(item.value),
                 item.address, note));
         }
@@ -660,10 +711,22 @@ public final class DcsReadProjection
 
     private static NodeResolution failedSegment(String segment, String address, List<String> existing)
     {
-        String available = existing.isEmpty() ? "none" : String.join(", ", existing); //$NON-NLS-1$ //$NON-NLS-2$
+        String available = boundedExisting(existing);
         return NodeResolution.failure("Pointer segment '" + segment + "' could not be resolved at '" //$NON-NLS-1$ //$NON-NLS-2$
             + address + "'. Existing keys/indices at that level: " + available //$NON-NLS-1$
             + ". Copy one of those into the address, or get its parent collection first."); //$NON-NLS-1$
+    }
+
+    private static String boundedExisting(List<String> existing)
+    {
+        if (existing.isEmpty())
+        {
+            return "none"; //$NON-NLS-1$
+        }
+        int shown = Math.min(ERROR_KEY_LIMIT, existing.size());
+        String available = String.join(", ", existing.subList(0, shown)); //$NON-NLS-1$
+        int remaining = existing.size() - shown;
+        return remaining == 0 ? available : available + ", ... (" + remaining + " more)"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static int find(List<?> list, String collection, EObject owner, String requested)
@@ -753,6 +816,20 @@ public final class DcsReadProjection
         }
         else if ("SettingsVariant".equals(object.eClass().getName())) //$NON-NLS-1$
         {
+            EObject presentation = asEObject(featureValue(object, "presentation")); //$NON-NLS-1$
+            if (presentation != null)
+            {
+                result.append("## Presentation\n\n"); //$NON-NLS-1$
+                String resolved = presentationFeature(object, "presentation", language); //$NON-NLS-1$
+                if (!resolved.isEmpty())
+                {
+                    result.append("**Resolved value:** ") //$NON-NLS-1$
+                        .append(MarkdownUtils.escapeMarkdown(resolved)).append("\n\n"); //$NON-NLS-1$
+                }
+                appendObjectOutline(result, presentation, child(node.address, "presentation"), 0, //$NON-NLS-1$
+                    language);
+                result.append('\n');
+            }
             DataCompositionSettings settings = asSettings(featureValue(object, "settings")); //$NON-NLS-1$
             if (settings != null)
             {
@@ -1151,10 +1228,25 @@ public final class DcsReadProjection
         {
             return ""; //$NON-NLS-1$
         }
+        if (presentation instanceof Presentation)
+        {
+            Presentation typed = (Presentation)presentation;
+            LocalString localized = typed.getLocalValue();
+            if (localized != null && language != null)
+            {
+                String value = localized.getContent().get(language);
+                if (value != null && !value.isEmpty())
+                {
+                    return value;
+                }
+            }
+            return typed.getValue() == null ? "" : typed.getValue(); //$NON-NLS-1$
+        }
         String neutral = stringFeature(presentation, "value"); //$NON-NLS-1$
         EObject local = asEObject(featureValue(presentation, "localValue")); //$NON-NLS-1$
-        EObject content = asEObject(featureValue(local, "content")); //$NON-NLS-1$
-        Object map = content == null ? null : featureValue(content, "map"); //$NON-NLS-1$
+        Object content = featureValue(local, "content"); //$NON-NLS-1$
+        Object map = content instanceof Map<?, ?> ? content
+            : content instanceof EObject ? featureValue((EObject)content, "map") : null; //$NON-NLS-1$
         if (map instanceof Map<?, ?> && language != null)
         {
             Object localized = ((Map<?, ?>)map).get(language);

@@ -15,11 +15,14 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrder;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrderItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
+import com.google.gson.JsonParser;
 
 /** Pure summary, pagination, pointer and address-printing tests. */
 public class DcsReadProjectionTest
@@ -75,6 +78,92 @@ public class DcsReadProjectionTest
         assertTrue(result.error().contains("Missing")); //$NON-NLS-1$
         assertTrue(result.error().contains("Sales")); //$NON-NLS-1$
         assertTrue(result.error().contains("Existing keys/indices")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVariantPresentationAppearsInExactNodeAndCollectionReads()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Main"); //$NON-NLS-1$
+        DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(
+            JsonParser.parseString("{\"en\":\"Main variant\"}"), //$NON-NLS-1$
+            new DcsPresentationParser.LanguageContext(java.util.Collections.singletonList("en")), //$NON-NLS-1$
+            "variant.presentation"); //$NON-NLS-1$
+        assertTrue(parsed.error(), parsed.isSuccess());
+        variant.setPresentation(DcsPresentationParser.build(parsed.plan()));
+        variant.setSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings());
+        schema.getSettingsVariants().add(variant);
+
+        DcsReadProjection.Result exact = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/variants/Main").address(), "variant", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DcsReadProjection.Result collection = render(schema, "Report.Sales", "variant"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(exact.error(), exact.isSuccess());
+        assertTrue(exact.markdown(), exact.markdown().contains("Main variant")); //$NON-NLS-1$
+        assertTrue(exact.markdown(), exact.markdown().contains("#/variants/Main/presentation")); //$NON-NLS-1$
+        assertTrue(collection.error(), collection.isSuccess());
+        assertTrue(collection.markdown(), collection.markdown().contains("Main variant")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootFieldPageRecursesIntoUnionAndPrintsResolvableAddressOnce()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSchemaDataSetUnion union =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetUnion();
+        union.setName("AllSales"); //$NON-NLS-1$
+        DataCompositionSchemaDataSetQuery member = query("Retail", "SELECT 1 AS MemberAmount"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetField field = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetField();
+        field.setDataPath("MemberAmount"); //$NON-NLS-1$
+        member.getFields().add(field);
+        union.getItems().add(member);
+        schema.getDataSets().add(union);
+
+        DcsReadProjection.Result page = render(schema, "Report.Sales", "field"); //$NON-NLS-1$ //$NON-NLS-2$
+        String copied = "Report.Sales#/dataSets/AllSales/items/0/fields/MemberAmount"; //$NON-NLS-1$
+        assertTrue(page.error(), page.isSuccess());
+        assertTrue(page.markdown(), page.markdown().contains(copied));
+        assertFalse(page.markdown(), page.markdown().contains("/fields/fields/")); //$NON-NLS-1$
+
+        DcsReadProjection.Result resolved = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(copied).address(), "field", //$NON-NLS-1$
+            "en", 100, 0); //$NON-NLS-1$
+        assertTrue(resolved.error(), resolved.isSuccess());
+        assertTrue(resolved.markdown(), resolved.markdown().contains("MemberAmount")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFailedPointerBoundsLargeExistingKeyList()
+    {
+        DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetQuery dataSet = (DataCompositionSchemaDataSetQuery)
+            schema.getDataSets().get(0);
+        dataSet.getFields().clear();
+        for (int i = 0; i < 25; i++)
+        {
+            DataCompositionSchemaDataSetField field =
+                com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                    .createDataCompositionSchemaDataSetField();
+            field.setDataPath(String.format("Field%02d", i)); //$NON-NLS-1$
+            dataSet.getFields().add(field);
+        }
+
+        DcsReadProjection.Result result = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/dataSets/Sales/fields/Missing").address(), //$NON-NLS-1$
+            "field", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("Field19")); //$NON-NLS-1$
+        assertFalse(result.error(), result.error().contains("Field20")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("(5 more)")); //$NON-NLS-1$
     }
 
     @Test

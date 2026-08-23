@@ -417,6 +417,43 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testReplaceOnUserFieldsHolderClearsItemsWhenBodyOmitsThem()
+    {
+        DataCompositionSettings settings = plan(json("{\"userFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"expression\",\"dataPath\":\"OldMargin\"," //$NON-NLS-1$
+            + "\"detailExpression\":\"Amount - Cost\"}]}}")); //$NON-NLS-1$
+        assertEquals(1, settings.getUserFields().getItems().size());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Collections.singletonList("userFields"), "replace", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            json("{}"), LANGUAGES); //$NON-NLS-1$
+
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertNotNull(replaced.settings().getUserFields());
+        assertTrue("a holder-addressed replace with {} must clear every old user field", //$NON-NLS-1$
+            replaced.settings().getUserFields().getItems().isEmpty());
+    }
+
+    @Test
+    public void testReplaceOnTableConditionalAppearanceStartsWithFreshHolder()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"table\"," //$NON-NLS-1$
+            + "\"name\":\"T\",\"conditionalAppearance\":{\"items\":[]," //$NON-NLS-1$
+            + "\"viewMode\":\"Normal\",\"userSettingID\":\"keepnot\"}}]}")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "conditionalAppearance"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "replace", "conditionalAppearance", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue(replaced.error(), replaced.isSuccess());
+        DataCompositionTable table = (DataCompositionTable)replaced.settings().getItems().get(0);
+        assertTrue("a table-child replacement must not keep holder scalars it omitted", //$NON-NLS-1$
+            table.getConditionalAppearance() == null
+                || table.getConditionalAppearance().getUserSettingID() == null
+                || table.getConditionalAppearance().getUserSettingID().isEmpty());
+    }
+
+    @Test
     public void testReplaceAtAnItemsCollectionAddressClearsItFirst()
     {
         // '#/.../selection/items' is a collection address: the replacement replaces the list, it

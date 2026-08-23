@@ -17,7 +17,9 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -118,6 +120,65 @@ public class DcsSchemaWriterTest
             russianSynonym.equals(schema.getDataSets().get(1).getName()));
     }
 
+    @Test
+    public void testDataSetCollectionReplaceRefusesToStrandRetainedLink()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery removed = dataSet("Removed", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetQuery retained = dataSet("Retained", "SELECT 2"); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(removed);
+        schema.getDataSets().add(retained);
+        DataCompositionSchemaDataSetLink link = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("Removed"); //$NON-NLS-1$
+        link.setDestinationDataSet("Retained"); //$NON-NLS-1$
+        link.setSourceExpression("Key"); //$NON-NLS-1$
+        link.setDestinationExpression("Key"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+
+        DcsSchemaWriter.Result result = apply(schema, "replace", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets", //$NON-NLS-1$
+            "{\"name\":\"Retained\",\"type\":\"query\",\"query\":\"SELECT 2\"}"); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("Removed")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("#/dataSetLinks/0")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("referring nodes")); //$NON-NLS-1$
+        assertEquals("a refused collection replacement must leave both identities in place", //$NON-NLS-1$
+            2, schema.getDataSets().size());
+        assertEquals(1, schema.getDataSetLinks().size());
+    }
+
+    @Test
+    public void testDataSourceCollectionReplaceRefusesToStrandRetainedDataSet()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSource removed = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSource();
+        removed.setName("RemovedSource"); //$NON-NLS-1$
+        removed.setDataSourceType("Local"); //$NON-NLS-1$
+        DataCompositionSchemaDataSource retained = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSource();
+        retained.setName("RetainedSource"); //$NON-NLS-1$
+        retained.setDataSourceType("Local"); //$NON-NLS-1$
+        schema.getDataSources().add(removed);
+        schema.getDataSources().add(retained);
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        dataSet.setDataSource("RemovedSource"); //$NON-NLS-1$
+        schema.getDataSets().add(dataSet);
+
+        DcsSchemaWriter.Result result = apply(schema, "replace", "dataSource", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSources", //$NON-NLS-1$
+            "{\"name\":\"RetainedSource\",\"type\":\"Local\"}"); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("RemovedSource")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("#/dataSets/Sales")); //$NON-NLS-1$
+        assertEquals("a refused source replacement must leave both sources on the model", //$NON-NLS-1$
+            2, schema.getDataSources().size());
+        assertEquals("RemovedSource", dataSet.getDataSource()); //$NON-NLS-1$
+    }
+
     private static DcsSchemaWriter.Result apply(DataCompositionSchema schema, String action, String type,
         String address, String body)
     {
@@ -150,5 +211,14 @@ public class DcsSchemaWriterTest
     private static DataCompositionSchemaDataSetQuery query(DataCompositionSchema schema)
     {
         return (DataCompositionSchemaDataSetQuery)schema.getDataSets().get(0);
+    }
+
+    private static DataCompositionSchemaDataSetQuery dataSet(String name, String query)
+    {
+        DataCompositionSchemaDataSetQuery result = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetQuery();
+        result.setName(name);
+        result.setQuery(query);
+        return result;
     }
 }

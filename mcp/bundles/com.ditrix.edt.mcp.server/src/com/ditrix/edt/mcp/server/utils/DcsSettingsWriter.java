@@ -2917,7 +2917,8 @@ public final class DcsSettingsWriter
     private static String applyUserFieldsPath(DataCompositionSettings settings, List<String> path,
         JsonObject body, String action, DcsPresentationParser.LanguageContext languages, Version version)
     {
-        DataCompositionUserFields holder = copy(settings.getUserFields());
+        DataCompositionUserFields holder = ACTION_REPLACE.equals(action) && path.isEmpty()
+            ? null : copy(settings.getUserFields());
         if (holder == null)
         {
             if (ACTION_UPDATE.equals(action))

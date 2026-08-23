@@ -23,6 +23,7 @@ from harness import (
     e2e_test,
     poll_diff_contains,
     poll_disk_contains,
+    poll_disk_lacks,
     read_disk,
     wait_for_project_ready,
 )
@@ -474,6 +475,61 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_union_member_fields_page_prints_addresses_that_resolve_verbatim():
+    report_name = "E2EDcsUnionFields"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for recursive union fields")
+    wait_for_project_ready()
+    fields = [
+        {"dataPath": "UnionField%02d" % index, "field": "UnionField%02d" % index}
+        for index in range(25)
+    ]
+    authored = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "AllSales",
+            "type": "union",
+            "items": [{
+                "name": "Retail",
+                "type": "query",
+                "query": "SELECT 1 AS UnionField00",
+                "autoFillFields": False,
+                "fields": fields,
+            }],
+        }],
+    })
+    assert_ok(authored, "author a union whose member data set owns the fields")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the recursive union fixture")
+    poll_disk_contains(dcs_rel, "UnionField24",
+                       ctx="all union-member fields must reach Template.dcs")
+
+    page = _get(root, "field", limit=100)
+    assert_ok(page, "page fields across recursive union members")
+    expected = root + "#/dataSets/AllSales/items/0/fields/UnionField00"
+    copied = re.search(re.escape(expected), page.text)
+    assert copied, "the root field page must include the union member field address: %s" % page.text
+    assert "/fields/fields/" not in page.text, \
+        "the field feature must be appended exactly once: %s" % page.text
+
+    resolved = _get(copied.group(0), "field")
+    assert_ok(resolved, "resolve an address copied verbatim from the root field page")
+    assert "UnionField00" in resolved.text, \
+        "the copied address must resolve the actual member field: %s" % resolved.text
+
+    bounded = _get(root + "#/dataSets/AllSales/items/0/fields/MissingUnionField", "field")
+    error = assert_error(bounded, "bad selector in a large union-member field collection")
+    assert_error_quality(error, names=["MissingUnionField", "UnionField19"],
+                         suggests=["(5 more)", "parent collection"],
+                         ctx="large pointer errors show a bounded sample and the omitted count")
+    assert "UnionField20" not in error, \
+        "the pointer error must not dump every sibling key: %s" % error
+
+    on_disk = read_disk(dcs_rel)
+    assert "UnionField00" in on_disk and "UnionField24" in on_disk, \
+        "the recursively-read fields must originate from the exported Template.dcs"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_common_template_root():
     root = "CommonTemplate.E2EDcsCommon"
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
@@ -918,6 +974,21 @@ def test_variant_nested_settings_and_hash_guarded_filter_index_update():
     }, language="en")
     assert_ok(authored, "author a complete settings variant")
 
+    variant_node = _get(root + "#/variants/ManagerView", "variant", language="en")
+    assert_ok(variant_node, "read the exact variant including its presentation containment")
+    assert "Manager view" in variant_node.text, \
+        "an exact variant read must render the user-visible presentation: %s" % variant_node.text
+    assert root + "#/variants/ManagerView/presentation" in variant_node.text, \
+        "the presentation containment must have its canonical address"
+    variants = _get(root, "variant", language="en")
+    assert_ok(variants, "page settings variants with their presentations")
+    assert "Manager view" in variants.text, \
+        "the variant collection page must expose each user-visible presentation: %s" % variants.text
+
+    dcs_rel = _poll_report_dcs("E2EDcsSettings", ctx="the settings-variant write")
+    poll_disk_contains(dcs_rel, "Manager view",
+                       ctx="the variant presentation must reach Template.dcs")
+
     variant = _get(root + "#/variants/ManagerView/settings", "userSettings")
     assert_ok(variant, "read back the settings addresses")
     first_address = root + "#/variants/ManagerView/settings/filter/items/0/items/0"
@@ -949,6 +1020,113 @@ def test_variant_nested_settings_and_hash_guarded_filter_index_update():
     assert "99" in changed_projection, "the selected filter item must carry its new value"
     assert "20" not in changed_projection, \
         "the selected filter item must not retain its old value"
+    poll_disk_contains(dcs_rel, ">99<",
+                       ctx="the indexed settings update must reach Template.dcs")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_user_fields_holder_replace_with_empty_body_clears_exported_items():
+    report_name = "E2EDcsReplaceUserFields"
+    root = _seed_report(report_name)
+    marker = "E2EOldUserMargin"
+    seeded = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "userFields": {
+                "items": [{
+                    "kind": "expression",
+                    "dataPath": marker,
+                    "detailExpression": "Amount - Cost",
+                    "title": {"en": "Old user margin"},
+                }],
+            },
+        },
+    }, language="en")
+    assert_ok(seeded, "seed one default-settings user field")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the user-fields fixture")
+    poll_disk_contains(dcs_rel, marker,
+                       ctx="the old user field must exist on disk before replacement")
+
+    before = _get(root + "#/defaultSettings/userFields", "userField", language="en")
+    assert_ok(before, "read the holder hash before authoritative replacement")
+    assert marker in before.text, "the fixture must expose the user field that should be lost"
+    replaced = _write(root + "#/defaultSettings/userFields", "replace", "userField", {},
+                      expectedHash=_hash(before), language="en")
+    assert_ok(replaced, "replace the addressed userFields holder from an empty body")
+
+    after = _get(root + "#/defaultSettings/userFields", "userField", language="en")
+    assert_ok(after, "read back the replaced userFields holder")
+    assert marker not in after.text, \
+        "an authoritative holder replacement must not retain omitted items: %s" % after.text
+    poll_disk_lacks(dcs_rel, marker, timeout=30,
+                    ctx="the omitted user field must be removed from Template.dcs")
+    assert marker not in read_disk(dcs_rel), \
+        "the old user field must be absent from disk after export"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_identity_collection_replace_refuses_dangling_references_and_preserves_disk():
+    report_name = "E2EDcsReplaceReferences"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for identity-reference replacement guards")
+    wait_for_project_ready()
+    authored = _write(root, "upsert", "schema", {
+        "dataSources": [
+            {"name": "RemovedSource", "type": "Local"},
+            {"name": "RetainedSource", "type": "Local"},
+        ],
+        "dataSets": [
+            {"name": "RemovedSet", "type": "query", "dataSource": "RemovedSource",
+             "query": "SELECT 1 AS Key"},
+            {"name": "RetainedSet", "type": "query", "dataSource": "RetainedSource",
+             "query": "SELECT 2 AS Key"},
+        ],
+        "dataSetLinks": [{
+            "sourceDataSet": "RemovedSet",
+            "destinationDataSet": "RetainedSet",
+            "sourceExpression": "Key",
+            "destinationExpression": "Key",
+        }],
+    })
+    assert_ok(authored, "seed data-set and data-source references")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the reference-guard fixture")
+    poll_disk_contains(dcs_rel, "RemovedSet",
+                       ctx="the referenced data set must reach Template.dcs")
+    poll_disk_contains(dcs_rel, "RemovedSource",
+                       ctx="the referenced data source must reach Template.dcs")
+    before_disk = read_disk(dcs_rel)
+
+    data_sets = _get(root, "dataSet")
+    assert_ok(data_sets, "read the data-set collection hash")
+    refused_sets = _write(root + "#/dataSets", "replace", "dataSet", {
+        "name": "RetainedSet", "type": "query", "dataSource": "RetainedSource",
+        "query": "SELECT 2 AS Key",
+    }, expectedHash=_hash(data_sets))
+    set_error = assert_error(refused_sets, "replace collection while a retained link refers to omission")
+    assert_error_quality(set_error, names=["RemovedSet", root + "#/dataSetLinks/0"],
+                         suggests=["referring nodes", "replacement body"],
+                         ctx="data-set replacement names the dangling link and remediation")
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused data-set collection replacement must leave Template.dcs byte-for-byte unchanged"
+
+    data_sources = _get(root, "dataSource")
+    assert_ok(data_sources, "read the data-source collection hash")
+    refused_sources = _write(root + "#/dataSources", "replace", "dataSource", {
+        "name": "RetainedSource", "type": "Local",
+    }, expectedHash=_hash(data_sources))
+    source_error = assert_error(
+        refused_sources, "replace collection while a retained data set refers to omission")
+    assert_error_quality(source_error,
+                         names=["RemovedSource", root + "#/dataSets/RemovedSet"],
+                         suggests=["referring nodes", "replacement body"],
+                         ctx="data-source replacement names the dangling data set and remediation")
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused data-source collection replacement must leave Template.dcs byte-for-byte unchanged"
+
+    model = _get(root, "schema")
+    assert_ok(model, "read back the schema after both refused replacements")
+    assert "RemovedSet" in model.text and "RemovedSource" in model.text, \
+        "both referenced identities must remain in the model after refusal: %s" % model.text
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
