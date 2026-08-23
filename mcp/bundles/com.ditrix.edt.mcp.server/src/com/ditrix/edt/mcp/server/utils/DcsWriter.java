@@ -783,8 +783,9 @@ public final class DcsWriter
             }
             if (dataSet instanceof DataCompositionSchemaDataSetUnion)
             {
-                applyNestedDataSets(schema, ((DataCompositionSchemaDataSetUnion)dataSet).getItems(),
-                    setPlan.items, defaultSourceName);
+                defaultSourceName = applyNestedDataSets(schema,
+                    ((DataCompositionSchemaDataSetUnion)dataSet).getItems(), setPlan.items,
+                    defaultSourceName);
             }
         }
         return schema.getDataSources().size();
@@ -1062,7 +1063,7 @@ public final class DcsWriter
         return result;
     }
 
-    private static void applyNestedDataSets(DataCompositionSchema schema, List<DataSet> target,
+    private static String applyNestedDataSets(DataCompositionSchema schema, List<DataSet> target,
         List<DataSetPlan> plans, String defaultSourceName)
     {
         for (DataSetPlan plan : plans)
@@ -1072,7 +1073,9 @@ public final class DcsWriter
             {
                 DataCompositionSchemaDataSetQuery query = (DataCompositionSchemaDataSetQuery)dataSet;
                 query.setQuery(plan.query);
-                query.setDataSource(ensureSourceName(schema, plan.dataSource, defaultSourceName));
+                String sourceName = ensureSourceName(schema, plan.dataSource, defaultSourceName);
+                if (defaultSourceName == null) defaultSourceName = sourceName;
+                query.setDataSource(sourceName);
                 query.setAutoFillAvailableFields(plan.autoFill != null ? plan.autoFill.booleanValue()
                     : plan.fields.isEmpty());
             }
@@ -1080,14 +1083,18 @@ public final class DcsWriter
             {
                 DataCompositionSchemaDataSetObject object = (DataCompositionSchemaDataSetObject)dataSet;
                 object.setObjectName(plan.objectName);
-                object.setDataSource(ensureSourceName(schema, plan.dataSource, defaultSourceName));
+                String sourceName = ensureSourceName(schema, plan.dataSource, defaultSourceName);
+                if (defaultSourceName == null) defaultSourceName = sourceName;
+                object.setDataSource(sourceName);
             }
             else
             {
-                applyNestedDataSets(schema, ((DataCompositionSchemaDataSetUnion)dataSet).getItems(),
-                    plan.items, defaultSourceName);
+                defaultSourceName = applyNestedDataSets(schema,
+                    ((DataCompositionSchemaDataSetUnion)dataSet).getItems(), plan.items,
+                    defaultSourceName);
             }
         }
+        return defaultSourceName;
     }
 
     private static int applyNestedFields(DataCompositionSchema schema, DataSetPlan plan, DataSet dataSet)

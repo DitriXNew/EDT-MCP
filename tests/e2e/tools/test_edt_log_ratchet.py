@@ -85,8 +85,8 @@ def _workspace_dir():
 
     result = call("list_projects", {})
     text = result.text or ""
-    for raw in re.findall(r"[A-Za-z]:\\[^|\s]+", text):
-        candidate = raw.rstrip("\\ ")
+    for raw in re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text):
+        candidate = raw.rstrip("\\/ `")
         for _ in range(4):
             candidate = os.path.dirname(candidate)
             if not candidate:

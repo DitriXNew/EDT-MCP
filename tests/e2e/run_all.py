@@ -340,10 +340,18 @@ def main():
     shard_note = ""
     if shard_total > 1:
         shard_note = " [shard %d/%d of %d selected]" % (shard_index, shard_total, len(tests))
-    # Deferred tests go to the END, stable so everything else keeps registry order. Applied
-    # AFTER sharding on purpose: a deferred test exists once in the registry and therefore lands
-    # in exactly one shard, and the window it is responsible for is that shard's own.
-    tests = [t for t in selected if not t.get("last")] + [t for t in selected if t.get("last")]
+    # Deferred tests go to the END, stable so everything else keeps registry order. The EDT-log
+    # ratchet is different from an ordinary registered test: every shard owns a separate EDT log,
+    # so every shard must append and run it after its own selected tests. In an unsharded run its
+    # one registry entry is merely moved to the end, never appended a second time.
+    if shard_total > 1:
+        ratchets = [t for t in harness.REGISTRY if t.get("last")
+                    and t["tool"] == "_edt_log_ratchet"]
+        selected = [t for t in selected if t not in ratchets]
+        tests = ([t for t in selected if not t.get("last")]
+                 + [t for t in selected if t.get("last")] + ratchets)
+    else:
+        tests = [t for t in selected if not t.get("last")] + [t for t in selected if t.get("last")]
 
     print("EDT-MCP e2e: %d test(s)%s against %s, project=%s"
           % (len(tests), shard_note, harness.MCP_URL, harness.PROJECT))

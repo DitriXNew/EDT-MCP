@@ -1,5 +1,3 @@
-## Guide
-
 `dcs` addresses a data composition schema (DCS) or a form attribute's dynamic-list
 configuration as one root plus an optional fragment. It supports `get`, `upsert`,
 `update`, `replace` and `remove`; the action table below defines the valid root/layer
@@ -124,7 +122,8 @@ A root read is deliberately a summary. It returns the current `hash`, a counts t
 whose addresses can be copied into later calls, and one-line name tables. It does not
 print full query text or recursively expand settings. A dynamic-list summary also
 prints its scalar configuration; `queryText` is represented by its character count,
-not by the query itself.
+not by the query itself, and that row names the copyable `#/queryText` drill-down
+address. Read that address with `type='dynamicList'` to retrieve the exact text.
 
 ### Addressing grammar
 
@@ -198,9 +197,11 @@ At a bare root, pass a collection type to page that collection:
 
 `limit` defaults to 100 and is clamped to 1..1000. `offset` is zero-based and must not
 be negative. The result says `showing N of M` and prints `Next offset`; pass that value
-in the next call. `field` pages all schema data-set fields, retaining each field's full
-`#/dataSets/<name>/fields/<dataPath>` address. On a dynamic-list root it pages the
-dynamic list's own `#/fields` collection.
+in the next call. The same arguments page characters when reading a dynamic list's
+advertised `#/queryText` scalar; concatenate fenced value chunks in offset order.
+`field` pages all schema data-set fields, retaining each field's full
+`#/dataSets/<name>(/items/<name>)*/fields/<dataPath>` address. On a dynamic-list root it
+pages the dynamic list's own `#/fields` collection.
 
 Settings collection types (`grouping`, `selection`, `filter`, `dataParameter`, `order`,
 `conditionalAppearance`, `table`, `userField`, `outputParameter`, `userSettings`) refer
@@ -220,6 +221,13 @@ same kind inside a named variant, address that variant's `settings` subtree expl
 `replace` and `remove` act on the settings layer. On a dynamic list that means an address below
 `#/listSettings`; the list's own scalars, fields, calculated fields and parameters take `upsert` or
 `update`, and asking them for `replace` is refused rather than quietly treated as an update.
+
+An `update` addressed at an exact schema identity (`#/dataSets/<name>`, `#/dataSources/<name>`,
+`#/parameters/<name>`, `#/calculatedFields/<dataPath>`, `#/totalFields/<dataPath>`,
+`#/dataSets/<name>(/items/<name>)*/fields/<dataPath>`) may carry a DIFFERENT natural key in
+its body, which renames that node in place. The rename is refused while anything still
+refers to the old identity, and refused when the new key is already taken. Every other
+action still requires the body key to match the pointer.
 
 An empty array is a no-op in `upsert` and clears that collection in `replace`. `update`
 rejects schema-layer root/collection targets where no single existing node is selected;
@@ -243,14 +251,14 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 
 | `type` | Target / body shape |
 | --- | --- |
-| `schema` | Root schema: `{dataSources?, dataSets?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
+| `schema` | Root schema: `{dataSources?, dataSets?, dataSetLinks?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. A link is `{sourceDataSet, destinationDataSet, sourceExpression, destinationExpression, parameter?, linkCondition?, startExpression?, required?}`; links have no natural key, so they are addressed by index (`#/dataSetLinks/<i>`) and read under this same `type="schema"`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
 | `dynamicList` | Dynamic-list ext-info: `{queryText?, mainTable?, dynamicDataRead?, autoFillAvailableFields?, customQuery?, autoSaveUserSettings?, getInvisibleFieldPresentations?, keyType?, keyField?, fields?, calculatedFields?, parameters?, listSettings?}`. Existing dynamic-list conversion safety gates still apply. |
 | `dataSource` | `{name, type?}`; natural key is `name`; `type` defaults to `"Local"`. |
-| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. |
+| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. An exact `replace` may declare a different `type` to change the subtype in place; omitting `type` keeps the existing one. |
 | `field` | `{dataPath, field?, title?:PresentationSpec, role?, useRestriction?}`; natural key is `dataPath`. `DataCompositionField` values use their string path. |
 | `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?}`; natural key is `name`. |
-| `calculatedField` | `{dataPath, title?:PresentationSpec, expression?}`; natural key is `dataPath`. |
-| `totalField` | `{dataPath, expression?, groups?:string[]}`; natural key is `dataPath`. |
+| `calculatedField` | `{dataPath, title?:PresentationSpec, expression?}`; natural key is `dataPath`. An exact `replace` must carry `expression`: it has no valid empty value, so it cannot be reset by omission. |
+| `totalField` | `{dataPath, expression?, groups?:string[]}`; natural key is `dataPath`. An exact `replace` must carry `expression`, as for `calculatedField`. |
 | `variant` | `{name, presentation?:PresentationSpec, settings?}`; natural key is `name`. |
 | `grouping` | `{name?, use?, groupFields?:{items:[{field?:ValueSpec, use?, groupType?, periodAdditionType?, periodAdditionBegin?:ValueSpec, periodAdditionEnd?:ValueSpec}]}, selection?, filter?, order?, outputParameters?, items?, ...GroupScaffold}`. Groups recurse through `items`; all group addresses use the returned index and hash. Renaming writes the group's `name` property without changing the indexed addressing rule. |
 | `selection` | `{items:[{kind?:"field", field?:ValueSpec, title?:PresentationSpec, use?, viewMode?} | {kind:"group", field?:ValueSpec, title?:PresentationSpec, use?, placement?, items:[...], viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
@@ -258,7 +266,7 @@ ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
 | `dataParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `order` | `{items:[{kind?:"item", field?:ValueSpec, orderType?, use?, viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
 | `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. `appearance` keys are validated against the platform parameter list for the project version; an unknown key is refused and the valid keys are listed. |
-| `table` | `{kind?:"table", name?, use?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. |
+| `table` | `{kind?:"table", name?, use?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. An exact `replace` of a structure item builds it from the `kind` in the body, so a grouping and a table can be exchanged at the same index. |
 | `userField` | Expression field: `{kind:"expression", dataPath, use?, title?:PresentationSpec, detailExpression?, detailExpressionPresentation?, totalExpression?, totalExpressionPresentation?}`. Case field: `{kind:"case", dataPath, use?, title?:PresentationSpec, variants?}`. Items are ordered/indexed. |
 | `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `userSettings` | Whole settings body: `{items?, selection?, filter?, dataParameters?, order?, conditionalAppearance?:{items:[], ...HolderScaffold}, outputParameters?, itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec}`. Never use these fields to store invented MCP IDs. |
@@ -371,7 +379,9 @@ Configure a dynamic list and reproduce empty settings holders in the same call:
 
 Converting a plain form attribute is destructive. The existing consent gate, dynamic-list
 type availability check, main-table resolution, and orphaned-column refusal all run before
-the conversion. Query properties remain available through `modify_metadata` as well.
+the conversion. Request conversion with `action='upsert'`; `update` requires ext-info that
+already exists and never converts a plain attribute. Query properties remain available through
+`modify_metadata` as well.
 
 Dynamic-list ext-info and schema-style items are stored with the content form and exported
 to `Form.form`. `listSettings` is a separate external top object; EDT serializes and the

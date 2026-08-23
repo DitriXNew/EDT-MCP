@@ -505,7 +505,7 @@ def test_union_member_fields_page_prints_addresses_that_resolve_verbatim():
 
     page = _get(root, "field", limit=100)
     assert_ok(page, "page fields across recursive union members")
-    expected = root + "#/dataSets/AllSales/items/0/fields/UnionField00"
+    expected = root + "#/dataSets/AllSales/items/Retail/fields/UnionField00"
     copied = re.search(re.escape(expected), page.text)
     assert copied, "the root field page must include the union member field address: %s" % page.text
     assert "/fields/fields/" not in page.text, \
@@ -516,7 +516,14 @@ def test_union_member_fields_page_prints_addresses_that_resolve_verbatim():
     assert "UnionField00" in resolved.text, \
         "the copied address must resolve the actual member field: %s" % resolved.text
 
-    bounded = _get(root + "#/dataSets/AllSales/items/0/fields/MissingUnionField", "field")
+    edited_marker = "EditedUnionFieldSource"
+    edited = _write(copied.group(0), "update", "field", {"field": edited_marker},
+                    expectedHash=_hash(resolved))
+    assert_ok(edited, "edit a union-member field through the address copied from its page")
+    poll_disk_contains(dcs_rel, edited_marker,
+                       ctx="the nested field edit must reach Template.dcs")
+
+    bounded = _get(root + "#/dataSets/AllSales/items/Retail/fields/MissingUnionField", "field")
     error = assert_error(bounded, "bad selector in a large union-member field collection")
     assert_error_quality(error, names=["MissingUnionField", "UnionField19"],
                          suggests=["(5 more)", "parent collection"],
@@ -525,8 +532,9 @@ def test_union_member_fields_page_prints_addresses_that_resolve_verbatim():
         "the pointer error must not dump every sibling key: %s" % error
 
     on_disk = read_disk(dcs_rel)
-    assert "UnionField00" in on_disk and "UnionField24" in on_disk, \
-        "the recursively-read fields must originate from the exported Template.dcs"
+    assert "UnionField00" in on_disk and "UnionField24" in on_disk \
+        and edited_marker in on_disk, \
+        "the recursively-read and edited fields must originate from Template.dcs"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -701,6 +709,30 @@ def test_calculated_field_upserts_in_place_and_persists_to_disk():
     assert first_expression not in second_disk, "the old expression must be removed from %s" % dcs_rel
     assert second_disk.count(data_path) == 1, \
         "the calculated field must be updated in place, never duplicated in %s" % dcs_rel
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_update_renames_unreferenced_data_set_in_template_dcs():
+    report_name = "E2EDcsRenameDataSet"
+    root = _seed_report(report_name)
+    old_name = "DataSet1"
+    new_name = "RenamedSet"
+    before = _get(root + "#/dataSets/" + old_name, "dataSet")
+    assert_ok(before, "read the data set and root hash before renaming")
+
+    renamed = _write(root + "#/dataSets/" + old_name, "update", "dataSet", {
+        "name": new_name,
+    }, expectedHash=_hash(before))
+    assert_ok(renamed, "rename an unreferenced data set through update")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the renamed data-set fixture")
+    poll_disk_contains(dcs_rel, new_name,
+                       ctx="the new data-set name must reach Template.dcs")
+    poll_disk_lacks(dcs_rel, old_name,
+                    ctx="the old data-set name must leave Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert new_name in on_disk
+    assert old_name not in on_disk
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -1066,6 +1098,125 @@ def test_user_fields_holder_replace_with_empty_body_clears_exported_items():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_settings_collection_address_copied_from_outline_renders_a_page():
+    root = _seed_report("E2EDcsSettingsCollectionRead")
+    authored = _write(root, "upsert", "variant", {
+        "name": "Readable",
+        "settings": {
+            "selection": {
+                "items": [{"field": {"kind": "field", "value": "Amount1"}}],
+            },
+        },
+    })
+    assert_ok(authored, "author a selection collection under variant settings")
+
+    outline = _get(root + "#/variants/Readable/settings", "userSettings")
+    assert_ok(outline, "read the settings outline that advertises collection addresses")
+    collection_address = root + "#/variants/Readable/settings/selection/items"
+    assert "`" + collection_address + "`" in outline.text, \
+        "the settings outline must advertise the exact collection address: %s" % outline.text
+
+    page = _get(collection_address, "selection")
+    assert_ok(page, "read the collection address copied verbatim from the settings outline")
+    assert "# DCS collection: selection" in page.text
+    assert "**Address:** `" + collection_address + "`" in page.text
+    assert "**Items:** 1" in page.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_indexed_group_field_replace_resets_omitted_members_on_model_and_disk():
+    report_name = "E2EDcsReplaceGroupField"
+    root = _seed_report(report_name)
+    old_field = "OldGroupField"
+    new_field = "NewGroupField"
+    seeded = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "items": [{
+                "name": "Group",
+                "groupFields": {
+                    "items": [{
+                        "field": {"kind": "field", "value": old_field},
+                        "use": False,
+                        "groupType": "Items",
+                        "periodAdditionType": "None",
+                        "periodAdditionBegin": {"kind": "number", "value": 31337},
+                        "periodAdditionEnd": {"kind": "number", "value": 31338},
+                    }],
+                },
+            }],
+        },
+    })
+    assert_ok(seeded, "seed a group field carrying non-default members")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the group-field replacement fixture")
+    poll_disk_contains(dcs_rel, "31337",
+                       ctx="the old period addition must reach Template.dcs before replacement")
+
+    address = root + "#/defaultSettings/items/0/groupFields/items/0"
+    before = _get(address, "grouping")
+    assert_ok(before, "read the non-default group field before replacement")
+    assert "| use | false |" in before.text
+    assert "31337" in before.text
+
+    replaced = _write(address, "replace", "grouping", {
+        "field": {"kind": "field", "value": new_field},
+    }, expectedHash=_hash(before))
+    assert_ok(replaced, "replace the indexed group field with only its field member")
+
+    after = _get(address, "grouping")
+    assert_ok(after, "read the authoritative group-field replacement")
+    assert "| use | true |" in after.text, \
+        "the omitted use member must return to its model default: %s" % after.text
+    assert "31337" not in after.text and "31338" not in after.text, \
+        "omitted period additions must return to their defaults: %s" % after.text
+    assert new_field in after.text and old_field not in after.text
+
+    poll_disk_contains(dcs_rel, new_field,
+                       ctx="the replacement group field must reach Template.dcs")
+    poll_disk_lacks(dcs_rel, "31337",
+                    ctx="the omitted period addition must leave Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert new_field in on_disk and old_field not in on_disk
+    assert "31337" not in on_disk and "31338" not in on_disk
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_schema_summary_and_schema_collection_read_expose_data_set_links():
+    report_name = "E2EDcsReadLinks"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for data-set-link reads")
+    wait_for_project_ready()
+    authored = _write(root, "upsert", "schema", {
+        "dataSets": [
+            {"name": "Source", "type": "query", "query": "SELECT 1 AS Key"},
+            {"name": "Destination", "type": "query", "query": "SELECT 1 AS Key"},
+        ],
+        "dataSetLinks": [{
+            "sourceDataSet": "Source",
+            "destinationDataSet": "Destination",
+            "sourceExpression": "Key",
+            "destinationExpression": "Key",
+        }],
+    })
+    assert_ok(authored, "author two data sets and their link")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the readable data-set-link fixture")
+    poll_disk_contains(dcs_rel, "Destination",
+                       ctx="the linked data sets must reach Template.dcs")
+
+    summary = _get(root, "schema")
+    assert_ok(summary, "read the schema summary containing data-set links")
+    assert "| Data set links | 1 | " + root + "#/dataSetLinks |" in summary.text
+    assert root + "#/dataSetLinks/0" in summary.text
+    assert "Source → Destination" in summary.text
+
+    page = _get(root + "#/dataSetLinks", "schema")
+    assert_ok(page, "page data-set links through the schema public type")
+    assert "# DCS collection: schema" in page.text
+    assert "**Items:** 1" in page.text
+    assert root + "#/dataSetLinks/0" in page.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_identity_collection_replace_refuses_dangling_references_and_preserves_disk():
     report_name = "E2EDcsReplaceReferences"
     root = "Report." + report_name
@@ -1176,8 +1327,9 @@ def test_dynamic_list_write_persists_form_and_external_list_settings_files():
     wait_for_project_ready()
 
     query_marker = "E2EDcsDynamicDescription"
+    query_text = "SELECT Ref,\n    Description AS %s\nFROM %s" % (query_marker, catalog)
     configured = _write(root, "upsert", "dynamicList", {
-        "queryText": "SELECT Ref, Description AS %s FROM %s" % (query_marker, catalog),
+        "queryText": query_text,
         "customQuery": True,
         "mainTable": catalog,
         "dynamicDataRead": True,
@@ -1235,6 +1387,22 @@ def test_dynamic_list_write_persists_form_and_external_list_settings_files():
     read_back = _get(root, "dynamicList")
     assert_ok(read_back, "read back the authored dynamic list")
     assert root + "#/fields/Ref" in read_back.text
+    query_address = root + "#/queryText"
+    copied_query = re.search(re.escape(query_address), read_back.text)
+    assert copied_query, \
+        "the query-text count row must advertise its exact drill-down address: %s" % read_back.text
+    query_page = _get(copied_query.group(0), "dynamicList", limit=1000)
+    assert_ok(query_page, "read queryText through the address advertised by the summary")
+    opening = re.search(r"(?m)^(`{3,})sql\n", query_page.text)
+    assert opening, "the scalar page must carry one fenced exact-value block: %s" % query_page.text
+    value_start = opening.end()
+    read_query = query_page.text[value_start:value_start + len(query_text)]
+    value_end = value_start + len(query_text)
+    closing = opening.group(1) if query_text.endswith("\n") else "\n" + opening.group(1)
+    assert query_page.text.startswith(closing, value_end), \
+        "the scalar value fence must close after the advertised page characters: %s" % query_page.text
+    assert read_query.encode("utf-8") == query_text.encode("utf-8"), \
+        "queryText read through the advertised address must be byte-identical"
     settings = _get(root + "#/listSettings", "userSettings")
     assert_ok(settings, "read back external dynamic-list settings")
     assert root + "#/listSettings/selection" in settings.text

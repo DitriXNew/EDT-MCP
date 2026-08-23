@@ -123,8 +123,8 @@ public class DcsTool implements IMcpTool
             .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for presentations.") //$NON-NLS-1$
             .enumProperty(KEY_FORMAT, "Read output; defaults to md. xml is only for a bare schema get.", //$NON-NLS-1$
                 false, FORMAT_MD, FORMAT_XML)
-            .integerProperty(McpKeys.LIMIT, "Markdown collection page size, or XML chunk characters.") //$NON-NLS-1$
-            .integerProperty(KEY_OFFSET, "Zero-based collection or XML character offset for get.") //$NON-NLS-1$
+            .integerProperty(McpKeys.LIMIT, "Markdown collection page size, or scalar/XML chunk characters.") //$NON-NLS-1$
+            .integerProperty(KEY_OFFSET, "Zero-based collection or scalar/XML character offset for get.") //$NON-NLS-1$
             .build();
     }
 

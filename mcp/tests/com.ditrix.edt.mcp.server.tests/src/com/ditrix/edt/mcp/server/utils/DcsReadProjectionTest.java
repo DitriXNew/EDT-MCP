@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -13,14 +14,22 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilter;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrder;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOrderItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
+import com._1c.g5.v8.dt.form.model.FormFactory;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.google.gson.JsonParser;
 
@@ -37,6 +46,65 @@ public class DcsReadProjectionTest
         assertTrue(result.markdown().contains("Sales")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("| Data sets | 1 |")); //$NON-NLS-1$
         assertFalse(result.markdown().contains("SecretQueryText")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDynamicListSummaryAdvertisesPagedByteExactQueryText()
+    {
+        DynamicListExtInfo list = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        String query = "SELECT Ref, Description\nFROM Catalog.Products"; //$NON-NLS-1$
+        list.eSet(list.eClass().getEStructuralFeature("queryText"), query); //$NON-NLS-1$
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        String address = root + "#/queryText"; //$NON-NLS-1$
+
+        DcsReadProjection.Result summary = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            list, DcsAddress.parse(root).address(), "dynamicList", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(summary.error(), summary.isSuccess());
+        assertTrue(summary.markdown(), summary.markdown().contains(address));
+        assertTrue(summary.markdown(), summary.markdown().contains(query.length() + " characters")); //$NON-NLS-1$
+        assertFalse(summary.markdown(), summary.markdown().contains(query));
+
+        DcsReadProjection.Result first = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            list, DcsAddress.parse(address).address(), "dynamicList", "en", 12, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result second = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            list, DcsAddress.parse(address).address(), "dynamicList", "en", 100, 12); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(second.error(), second.isSuccess());
+        assertEquals(query.substring(0, 12), fencedValue(first.markdown()));
+        assertEquals(query.substring(12), fencedValue(second.markdown()));
+        assertTrue(first.markdown(), first.markdown().contains("**Page characters:** 12")); //$NON-NLS-1$
+        assertTrue(first.markdown(), first.markdown().contains("**Next offset:** 12")); //$NON-NLS-1$
+        assertTrue(second.markdown(), second.markdown().contains("**Next offset:** none")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSchemaSummaryAndSchemaReadsExposeDataSetLinks()
+    {
+        DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetLink link = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("Sales|Retail"); //$NON-NLS-1$
+        link.setDestinationDataSet("Archive"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+
+        DcsReadProjection.Result summary = render(schema, "Report.Sales", "schema"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(summary.error(), summary.isSuccess());
+        assertTrue(summary.markdown(), summary.markdown().contains("| Data set links | 1 |")); //$NON-NLS-1$
+        assertTrue(summary.markdown(), summary.markdown().contains("Report.Sales#/dataSetLinks")); //$NON-NLS-1$
+        assertTrue(summary.markdown(), summary.markdown().contains("Sales\\|Retail → Archive")); //$NON-NLS-1$
+
+        DcsReadProjection.Result collection = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/dataSetLinks").address(), "schema", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(collection.error(), collection.isSuccess());
+        assertTrue(collection.markdown(), collection.markdown().contains("Report.Sales#/dataSetLinks/0")); //$NON-NLS-1$
+
+        DcsReadProjection.Result exact = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/dataSetLinks/0").address(), "schema", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(exact.error(), exact.isSuccess());
+        assertTrue(exact.markdown(), exact.markdown().contains("Sales\\|Retail")); //$NON-NLS-1$
+        assertTrue(exact.markdown(), exact.markdown().contains("Archive")); //$NON-NLS-1$
     }
 
     @Test
@@ -128,7 +196,7 @@ public class DcsReadProjectionTest
         schema.getDataSets().add(union);
 
         DcsReadProjection.Result page = render(schema, "Report.Sales", "field"); //$NON-NLS-1$ //$NON-NLS-2$
-        String copied = "Report.Sales#/dataSets/AllSales/items/0/fields/MemberAmount"; //$NON-NLS-1$
+        String copied = "Report.Sales#/dataSets/AllSales/items/Retail/fields/MemberAmount"; //$NON-NLS-1$
         assertTrue(page.error(), page.isSuccess());
         assertTrue(page.markdown(), page.markdown().contains(copied));
         assertFalse(page.markdown(), page.markdown().contains("/fields/fields/")); //$NON-NLS-1$
@@ -199,6 +267,69 @@ public class DcsReadProjectionTest
         assertTrue(dynamic.contains("DataCompositionOrderItem")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSettingsCollectionAddressesUseTheirOwnerPublicType()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionSelectedFields selection =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionSelectedFields();
+        settings.setSelection(selection);
+        DataCompositionFilter filter = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionFilter();
+        settings.setFilter(filter);
+        DataCompositionOrder order = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionOrder();
+        settings.setOrder(order);
+        DataCompositionConditionalAppearance conditionalAppearance =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionConditionalAppearance();
+        DataCompositionConditionalAppearanceItem appearanceItem =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionConditionalAppearanceItem();
+        DataCompositionAppearanceFields appearance =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionAppearanceFields();
+        appearanceItem.setSelection(appearance);
+        appearanceItem.setAppearance(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionAppearance());
+        conditionalAppearance.getItems().add(appearanceItem);
+        settings.setConditionalAppearance(conditionalAppearance);
+        DataCompositionGroup group = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionGroup();
+        group.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionGroup());
+        settings.getItems().add(group);
+        schema.setDefaultSettings(settings);
+
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/selection/items", "selection"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/filter/items", "filter"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/order/items", "order"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema,
+            "Report.Sales#/defaultSettings/conditionalAppearance/items", //$NON-NLS-1$
+            "conditionalAppearance"); //$NON-NLS-1$
+        assertCollectionType(schema,
+            "Report.Sales#/defaultSettings/conditionalAppearance/items/0/selection/items", //$NON-NLS-1$
+            "conditionalAppearance"); //$NON-NLS-1$
+        assertCollectionType(schema,
+            "Report.Sales#/defaultSettings/conditionalAppearance/items/0/appearance/items", //$NON-NLS-1$
+            "conditionalAppearance"); //$NON-NLS-1$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/items/0/items", "grouping"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void assertCollectionType(DataCompositionSchema schema, String address,
+        String type)
+    {
+        DcsReadProjection.Result result = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(), type,
+            "en", 100, 0); //$NON-NLS-1$
+        assertTrue(result.error(), result.isSuccess());
+        assertTrue(result.markdown(), result.markdown().contains("# DCS collection: " + type)); //$NON-NLS-1$
+    }
+
     private static DcsReadProjection.Result render(DataCompositionSchema schema, String fqn,
         String type)
     {
@@ -227,5 +358,13 @@ public class DcsReadProjectionTest
         dataSet.setName(name);
         dataSet.setQuery(text);
         return dataSet;
+    }
+
+    private static String fencedValue(String markdown)
+    {
+        String opening = "```sql\n"; //$NON-NLS-1$
+        int start = markdown.indexOf(opening) + opening.length();
+        int end = markdown.lastIndexOf("\n```"); //$NON-NLS-1$
+        return markdown.substring(start, end);
     }
 }

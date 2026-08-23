@@ -82,9 +82,17 @@ public final class DcsDynamicListWriter
                 + "form attribute is still a plain attribute. Create the list first with " //$NON-NLS-1$
                 + "action='upsert' and type='dynamicList'."); //$NON-NLS-1$
         }
+        if (current == null && ACTION_UPDATE.equals(action))
+        {
+            return Result.failure("action='update' cannot find an existing dynamic list at form " //$NON-NLS-1$
+                + "attribute '" + address.rootFqn() + "'; that attribute is still plain. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "update never creates or converts a node. Use action='upsert' with " //$NON-NLS-1$
+                + "type='dynamicList' and a non-empty 'queryText' or 'mainTable' to request the " //$NON-NLS-1$
+                + "guarded conversion."); //$NON-NLS-1$
+        }
         if (current == null)
         {
-            // Detached placeholder for a plain-attribute conversion. The commit still goes through
+            // Detached placeholder for an upsert conversion. The commit still goes through
             // FormElementWriter.configureDynamicListQuery, which creates the real ext-info only after
             // the existing consent/orphan preflight has allowed the destructive retype.
             current = FormFactory.eINSTANCE.createDynamicListExtInfo();

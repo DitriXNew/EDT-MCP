@@ -483,7 +483,7 @@ def call(tool, arguments):
             raise
         result = Result(raw)
         if not _is_transient_building(result) or time.time() >= deadline:
-            _record_outcome(tool, result.is_error)
+            _record_outcome(tool, result.is_error, result.text)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
@@ -509,8 +509,9 @@ DEEP_MUTATION_TOOLS = frozenset({
     "clean_project", "create_project", "delete_project",
 })
 
-# Tools that change the BM model. A SUCCESSFUL call to any of them forfeits the shortcut
-# outright, whatever the later evidence says.
+# Tools that change the BM model. A SUCCESSFUL call, or a DCS error explicitly reporting that its
+# transaction committed before export scheduling failed, forfeits the shortcut outright, whatever
+# the later evidence says.
 #
 # Because the evidence has a blind spot, and this closes it: a metadata write can succeed
 # with persisted=false — the transaction changed the in-memory model while the fixture stays
@@ -525,9 +526,10 @@ MODEL_MUTATION_TOOLS = frozenset({
     "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
     "apply_quick_fix", "build_external_objects",
     # dcs authors schemas / settings / dynamic lists. It belongs here rather than in
-    # DEEP_MUTATION_TOOLS because a REFUSED call provably does not move the model: the writer
-    # validates the whole request before the first eSet, so only a successful call forfeits the
-    # reset shortcut.
+    # DEEP_MUTATION_TOOLS because an ordinary refusal does not move the model: the writer validates
+    # the request before the first eSet. The exception is a post-commit force-export scheduling
+    # failure; its error carries "committed in EDT memory", and _record_outcome treats that marker
+    # as a confirmed mutation without making every negative test forfeit the shortcut.
     "dcs",
     # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection, so
     # no marker in this repository's sources can reveal them. The ratchet pins them by name for
@@ -565,13 +567,13 @@ def _record_attempt(tool):
         _MUTATIONS_UNRESOLVED += 1
 
 
-def _record_outcome(tool, is_error):
+def _record_outcome(tool, is_error, result_text):
     """Called once the server's answer has actually been read."""
     global _MUTATIONS_UNRESOLVED, _MUTATION_CONFIRMED
     if tool not in MODEL_MUTATION_TOOLS:
         return
     _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
-    if not is_error:
+    if not is_error or "committed in EDT memory" in (result_text or ""):
         _MUTATION_CONFIRMED = True
 
 

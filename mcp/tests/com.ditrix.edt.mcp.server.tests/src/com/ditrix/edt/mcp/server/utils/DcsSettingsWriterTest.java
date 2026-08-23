@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -206,6 +207,25 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testPlainAttributeUpdateRefusesConversionButUpsertCanPlanIt()
+    {
+        DcsAddress attribute = address("Catalog.Products.Form.ListForm.Attribute.List"); //$NON-NLS-1$
+        JsonObject query = json("{\"queryText\":\"SELECT Ref FROM Catalog.Products\"}"); //$NON-NLS-1$
+
+        DcsDynamicListWriter.Result update = DcsDynamicListWriter.plan(null, "update", //$NON-NLS-1$
+            "dynamicList", attribute, query, null, LANGUAGES, Version.LATEST); //$NON-NLS-1$
+        assertFalse(update.isSuccess());
+        assertTrue(update.error(), update.error().contains(attribute.rootFqn()));
+        assertTrue(update.error(), update.error().contains("plain")); //$NON-NLS-1$
+        assertTrue(update.error(), update.error().contains("action='upsert'")); //$NON-NLS-1$
+
+        DcsDynamicListWriter.Result upsert = DcsDynamicListWriter.plan(null, "upsert", //$NON-NLS-1$
+            "dynamicList", attribute, query, null, LANGUAGES, Version.LATEST); //$NON-NLS-1$
+        assertTrue(upsert.error(), upsert.isSuccess());
+        assertEquals("SELECT Ref FROM Catalog.Products", upsert.plan().queryText()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testValidatedCommitPreservesExistingDynamicListSettingsIdentity()
     {
         DynamicListExtInfo extInfo = FormFactory.eINSTANCE.createDynamicListExtInfo();
@@ -357,6 +377,33 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testExactStructureReplaceCanChangeBetweenGroupingAndTable()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"grouping\"," //$NON-NLS-1$
+            + "\"name\":\"OldGroup\",\"groupFields\":{\"items\":[]}}]}")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult table = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "replace", "table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"table\",\"name\":\"NewTable\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(table.error(), table.isSuccess());
+        assertTrue(table.settings().getItems().get(0) instanceof DataCompositionTable);
+
+        DcsSettingsWriter.SettingsResult group = DcsSettingsWriter.planSettings(table.settings(),
+            java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"grouping\",\"name\":\"NewGroup\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(group.error(), group.isSuccess());
+        assertTrue(group.settings().getItems().get(0) instanceof DataCompositionGroup);
+
+        DcsSettingsWriter.SettingsResult unknown = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"chart\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(unknown.isSuccess());
+        assertTrue(unknown.error(), unknown.error().contains("chart")); //$NON-NLS-1$
+        assertTrue(unknown.error(), unknown.error().contains("grouping")); //$NON-NLS-1$
+        assertTrue(unknown.error(), unknown.error().contains("table")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testReplaceOnAnIndexedFilterItemResetsOmittedProperties()
     {
         DataCompositionSettings settings = plan(json("{\"filter\":{\"items\":[" //$NON-NLS-1$
@@ -488,6 +535,76 @@ public class DcsSettingsWriterTest
         DataCompositionGroup after = (DataCompositionGroup)replaced.settings().getItems().get(0);
         assertEquals("a replaced groupFields holder must not keep the old fields", //$NON-NLS-1$
             1, after.getGroupFields().getItems().size());
+    }
+
+    @Test
+    public void testReplaceOnIndexedGroupFieldResetsEveryOmittedMember()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"name\":\"G\"," //$NON-NLS-1$
+            + "\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Old\"}," //$NON-NLS-1$
+            + "\"use\":false,\"groupType\":\"Items\",\"periodAdditionType\":\"None\"," //$NON-NLS-1$
+            + "\"periodAdditionBegin\":{\"kind\":\"number\",\"value\":31337}," //$NON-NLS-1$
+            + "\"periodAdditionEnd\":{\"kind\":\"number\",\"value\":31338}}]}}]}")); //$NON-NLS-1$
+        DataCompositionGroup beforeGroup = (DataCompositionGroup)settings.getItems().get(0);
+        DataCompositionGroupField before = (DataCompositionGroupField)beforeGroup.getGroupFields()
+            .getItems().get(0);
+        assertFalse(before.isUse());
+        assertNotNull(before.getPeriodAdditionBegin());
+        assertNotNull(before.getPeriodAdditionEnd());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "groupFields", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"field\":{\"kind\":\"field\",\"value\":\"New\"}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+
+        DataCompositionGroup afterGroup = (DataCompositionGroup)replaced.settings().getItems().get(0);
+        DataCompositionGroupField after = (DataCompositionGroupField)afterGroup.getGroupFields()
+            .getItems().get(0);
+        DataCompositionGroupField defaults = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionGroupField();
+        assertEquals("New", after.getField().getValue()); //$NON-NLS-1$
+        assertEquals(defaults.isUse(), after.isUse());
+        assertEquals(defaults.getGroupType(), after.getGroupType());
+        assertEquals(defaults.getPeriodAdditionType(), after.getPeriodAdditionType());
+        assertNull(after.getPeriodAdditionBegin());
+        assertNull(after.getPeriodAdditionEnd());
+    }
+
+    @Test
+    public void testRemoveChecksResolvedNodeTypeAndKeepsNestedLegitimateTargets()
+    {
+        DataCompositionSettings settings = plan(json("{\"selection\":{\"items\":[]},\"items\":[" //$NON-NLS-1$
+            + "{\"name\":\"G\",\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\"," //$NON-NLS-1$
+            + "\"value\":\"Customer\"}}]},\"selection\":{\"items\":[]}}," //$NON-NLS-1$
+            + "{\"kind\":\"table\",\"name\":\"T\",\"selection\":{\"items\":[]}}]}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+
+        DcsSettingsWriter.SettingsResult refused = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "selection"), "remove", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(refused.isSuccess());
+        assertTrue(refused.error(), refused.error().contains("type='grouping'")); //$NON-NLS-1$
+        assertTrue(refused.error(), refused.error().contains("type='selection'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(settings));
+
+        DcsSettingsWriter.SettingsResult tableSelection = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "1", "selection"), "remove", "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(tableSelection.error(), tableSelection.isSuccess());
+        assertNull(((DataCompositionTable)tableSelection.settings().getItems().get(1)).getSelection());
+
+        DcsSettingsWriter.SettingsResult groupFields = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0", "groupFields"), "remove", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(groupFields.error(), groupFields.isSuccess());
+        assertNull(((DataCompositionGroup)groupFields.settings().getItems().get(0)).getGroupFields());
+
+        DcsSettingsWriter.SettingsResult bareSelection = DcsSettingsWriter.planSettings(settings,
+            java.util.Collections.singletonList("selection"), "remove", "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            json("{}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(bareSelection.error(), bareSelection.isSuccess());
+        assertNull(bareSelection.settings().getSelection());
     }
 
     private static DataCompositionSettings plan(JsonObject body)

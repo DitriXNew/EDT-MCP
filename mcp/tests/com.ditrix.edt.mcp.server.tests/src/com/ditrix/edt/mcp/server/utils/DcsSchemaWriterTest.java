@@ -16,12 +16,14 @@ import java.util.Arrays;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -97,6 +99,64 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testReaderAddressWritesNestedUnionMemberFieldForEveryAction()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsSchemaWriter.Result seeded = apply(schema, "upsert", "schema", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"dataSets\":[{\"name\":\"AllSales\",\"type\":\"union\",\"items\":[" //$NON-NLS-1$
+                + "{\"name\":\"Retail\",\"type\":\"query\",\"query\":\"SELECT 1 AS Amount\"," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Amount\",\"field\":\"OriginalAmount\"}]}]}]}"); //$NON-NLS-1$
+        assertTrue(seeded.error(), seeded.isSuccess());
+
+        String copied = "Report.Sales#/dataSets/AllSales/items/Retail/fields/Amount"; //$NON-NLS-1$
+        DcsReadProjection.Result page = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            DcsTargetResolver.TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales").address(), "field", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(page.error(), page.isSuccess());
+        assertTrue(page.markdown(), page.markdown().contains(copied));
+
+        DcsSchemaWriter.Result updated = apply(schema, "update", "field", copied, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"field\":\"UpdatedAmount\"}"); //$NON-NLS-1$
+        assertTrue(updated.error(), updated.isSuccess());
+        assertEquals("UpdatedAmount", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetField)retail(schema).getFields().get(0)).getField());
+
+        String collection = "Report.Sales#/dataSets/AllSales/items/Retail/fields"; //$NON-NLS-1$
+        DcsSchemaWriter.Result upserted = apply(schema, "upsert", "field", collection, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"dataPath\":\"Tax\",\"field\":\"OriginalTax\"}"); //$NON-NLS-1$
+        assertTrue(upserted.error(), upserted.isSuccess());
+        assertEquals(2, retail(schema).getFields().size());
+
+        String beforeCollision = DcsHash.compute(schema);
+        DcsSchemaWriter.Result collision = apply(schema, "update", "field", copied, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"dataPath\":\"Tax\"}"); //$NON-NLS-1$
+        assertFalse(collision.isSuccess());
+        assertTrue(collision.error(), collision.error().contains("Tax")); //$NON-NLS-1$
+        assertEquals(beforeCollision, DcsHash.compute(schema));
+
+        String taxAddress = collection + "/Tax"; //$NON-NLS-1$
+        DcsSchemaWriter.Result replaced = apply(schema, "replace", "field", taxAddress, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"field\":\"ReplacementTax\"}"); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertEquals("ReplacementTax", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetField)retail(schema).getFields().get(1)).getField());
+
+        String beforeSubtypeError = DcsHash.compute(schema);
+        DcsSchemaWriter.Result badSubtype = apply(schema, "upsert", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/AllSales/items/Retail/items/Impossible/fields", //$NON-NLS-1$
+            "{\"dataPath\":\"Nope\"}"); //$NON-NLS-1$
+        assertFalse(badSubtype.isSuccess());
+        assertTrue(badSubtype.error(), badSubtype.error().contains("not union")); //$NON-NLS-1$
+        assertEquals(beforeSubtypeError, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result removed = apply(schema, "remove", "field", taxAddress, "{}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(removed.error(), removed.isSuccess());
+        assertEquals(1, retail(schema).getFields().size());
+        assertEquals("Amount", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetField)retail(schema).getFields().get(0)).getDataPath());
+    }
+
+    @Test
     public void testUnionRefusesQueryWithoutMutatingSchema()
     {
         DataCompositionSchema schema = newSchema();
@@ -151,6 +211,94 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testUpdateRenamesSupportedNaturalKeysInPlace()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("OldSet", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSource source = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSource();
+        source.setName("OldSource"); //$NON-NLS-1$
+        source.setDataSourceType("Local"); //$NON-NLS-1$
+        schema.getDataSources().add(source);
+        DataCompositionSchemaParameter oldParameter = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        oldParameter.setName("OldParameter"); //$NON-NLS-1$
+        schema.getParameters().add(oldParameter);
+        DataCompositionSchemaCalculatedField oldCalculation = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaCalculatedField();
+        oldCalculation.setDataPath("OldCalculation"); //$NON-NLS-1$
+        oldCalculation.setExpression("1 + 1"); //$NON-NLS-1$
+        schema.getCalculatedFields().add(oldCalculation);
+
+        DcsSchemaWriter.Result dataSet = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/OldSet", "{\"name\":\"NewSet\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result dataSource = apply(schema, "update", "dataSource", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSources/OldSource", "{\"name\":\"NewSource\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result parameter = apply(schema, "update", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/OldParameter", "{\"name\":\"NewParameter\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result calculation = apply(schema, "update", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields/OldCalculation", //$NON-NLS-1$
+            "{\"dataPath\":\"NewCalculation\"}"); //$NON-NLS-1$
+
+        assertTrue(dataSet.error(), dataSet.isSuccess());
+        assertTrue(dataSource.error(), dataSource.isSuccess());
+        assertTrue(parameter.error(), parameter.isSuccess());
+        assertTrue(calculation.error(), calculation.isSuccess());
+        assertEquals("NewSet", schema.getDataSets().get(0).getName()); //$NON-NLS-1$
+        assertEquals("SELECT 1", query(schema).getQuery()); //$NON-NLS-1$
+        assertTrue(schema.getDataSources().stream()
+            .anyMatch(item -> "NewSource".equals(item.getName()))); //$NON-NLS-1$
+        assertFalse(schema.getDataSources().stream()
+            .anyMatch(item -> "OldSource".equals(item.getName()))); //$NON-NLS-1$
+        assertEquals("NewParameter", schema.getParameters().get(0).getName()); //$NON-NLS-1$
+        assertEquals("NewCalculation", schema.getCalculatedFields().get(0).getDataPath()); //$NON-NLS-1$
+        assertEquals("1 + 1", schema.getCalculatedFields().get(0).getExpression()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUpdateRenameRefusesTakenSiblingAndLeavesHashUnchanged()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("Old", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(dataSet("Taken", "SELECT 2")); //$NON-NLS-1$ //$NON-NLS-2$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Old", "{\"name\":\"Taken\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result empty = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Old", "{\"name\":\"\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("Old")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("sibling 'Taken'")); //$NON-NLS-1$
+        assertFalse(empty.isSuccess());
+        assertTrue(empty.error(), empty.error().contains("non-empty 'name'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testUpdateRenameRefusesReferencedIdentityAndLeavesHashUnchanged()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("Old", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(dataSet("Destination", "SELECT 2")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetLink link = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("Old"); //$NON-NLS-1$
+        link.setDestinationDataSet("Destination"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Old", "{\"name\":\"New\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("Cannot remove or rename")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("Report.Sales#/dataSetLinks/0")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
     public void testUnknownNestedMemberLeavesExistingModelUntouched()
     {
         DataCompositionSchema schema = newSchema();
@@ -182,6 +330,93 @@ public class DcsSchemaWriterTest
         assertEquals(1, schema.getTotalFields().size());
         assertEquals("Sum(Amount)", schema.getTotalFields().get(0).getExpression()); //$NON-NLS-1$
         assertEquals(Arrays.asList("Warehouse"), schema.getTotalFields().get(0).getGroups()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExactExpressionFieldReplaceRequiresExpressionAndLeavesModelUnchanged()
+    {
+        DataCompositionSchema schema = newSchema();
+        assertTrue(apply(schema, "upsert", "calculatedField", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"dataPath\":\"Margin\",\"expression\":\"Revenue - Cost\"}").isSuccess()); //$NON-NLS-1$
+        assertTrue(apply(schema, "upsert", "totalField", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"dataPath\":\"Amount\",\"expression\":\"Sum(Amount)\"}").isSuccess()); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result calculated = apply(schema, "replace", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields/Margin", "{\"dataPath\":\"Margin\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result total = apply(schema, "replace", "totalField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/totalFields/Amount", "{\"dataPath\":\"Amount\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(calculated.isSuccess());
+        assertTrue(calculated.error(), calculated.error().contains("must carry 'expression'")); //$NON-NLS-1$
+        assertTrue(calculated.error(), calculated.error().contains("action='get'")); //$NON-NLS-1$
+        assertFalse(total.isSuccess());
+        assertTrue(total.error(), total.error().contains("must carry 'expression'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testExactDataSetReplaceChangesSubtypeAndKeepsLinkIdentity()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("Switch", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(dataSet("Other", "SELECT 2")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetField oldField = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetField();
+        oldField.setDataPath("OldField"); //$NON-NLS-1$
+        schema.getDataSets().get(0).getFields().add(oldField);
+        DataCompositionSchemaDataSetLink link = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("Switch"); //$NON-NLS-1$
+        link.setDestinationDataSet("Other"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+
+        DcsSchemaWriter.Result object = apply(schema, "replace", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Switch", //$NON-NLS-1$
+            "{\"type\":\"object\",\"objectName\":\"Catalog.Products\"}"); //$NON-NLS-1$
+        assertTrue(object.error(), object.isSuccess());
+        assertTrue(schema.getDataSets().get(0) instanceof DataCompositionSchemaDataSetObject);
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetObject)schema.getDataSets().get(0)).getObjectName());
+        assertTrue(schema.getDataSets().get(0).getFields().isEmpty());
+
+        DcsSchemaWriter.Result union = apply(schema, "replace", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Switch", //$NON-NLS-1$
+            "{\"type\":\"union\",\"items\":[{\"name\":\"Member\",\"type\":\"query\"," //$NON-NLS-1$
+                + "\"query\":\"SELECT 3\"}]}"); //$NON-NLS-1$
+        assertTrue(union.error(), union.isSuccess());
+        assertTrue(schema.getDataSets().get(0) instanceof DataCompositionSchemaDataSetUnion);
+        assertEquals(1, ((DataCompositionSchemaDataSetUnion)schema.getDataSets().get(0))
+            .getItems().size());
+
+        DcsSchemaWriter.Result query = apply(schema, "replace", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Switch", //$NON-NLS-1$
+            "{\"type\":\"query\",\"query\":\"SELECT 4\"}"); //$NON-NLS-1$
+        assertTrue(query.error(), query.isSuccess());
+        assertTrue(schema.getDataSets().get(0) instanceof DataCompositionSchemaDataSetQuery);
+        assertEquals("SELECT 4", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetQuery)schema.getDataSets().get(0)).getQuery());
+        assertEquals("Switch", schema.getDataSetLinks().get(0).getSourceDataSet()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExactDataSetReplaceWithoutTypeKeepsExistingSubtype()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetObject object = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetObject();
+        object.setName("Products"); //$NON-NLS-1$
+        object.setObjectName("Catalog.OldProducts"); //$NON-NLS-1$
+        schema.getDataSets().add(object);
+
+        DcsSchemaWriter.Result result = apply(schema, "replace", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Products", //$NON-NLS-1$
+            "{\"objectName\":\"Catalog.NewProducts\"}"); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        assertTrue(schema.getDataSets().get(0) instanceof DataCompositionSchemaDataSetObject);
+        assertEquals("Catalog.NewProducts", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetObject)schema.getDataSets().get(0)).getObjectName());
     }
 
     @Test
@@ -351,6 +586,29 @@ public class DcsSchemaWriterTest
             beforeHash, DcsHash.compute(schema));
     }
 
+    @Test
+    public void testRemoveReferencedDataSourceIsRefusedWithoutChangingHash()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSource source = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSource();
+        source.setName("Source"); //$NON-NLS-1$
+        source.setDataSourceType("Local"); //$NON-NLS-1$
+        schema.getDataSources().add(source);
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        dataSet.setDataSource("Source"); //$NON-NLS-1$
+        schema.getDataSets().add(dataSet);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "remove", "dataSource", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSources/Source", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("Source")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("Report.Sales#/dataSets/Sales")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
     private static DcsSchemaWriter.Result apply(DataCompositionSchema schema, String action, String type,
         String address, String body)
     {
@@ -392,5 +650,12 @@ public class DcsSchemaWriterTest
         result.setName(name);
         result.setQuery(query);
         return result;
+    }
+
+    private static DataCompositionSchemaDataSetQuery retail(DataCompositionSchema schema)
+    {
+        DataCompositionSchemaDataSetUnion union = (DataCompositionSchemaDataSetUnion)
+            schema.getDataSets().get(0);
+        return (DataCompositionSchemaDataSetQuery)union.getItems().get(0);
     }
 }

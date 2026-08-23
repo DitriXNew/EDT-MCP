@@ -20,6 +20,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
@@ -115,6 +116,29 @@ public class DcsWriterTest
             "Src", firstQuery(schema).getDataSource()); //$NON-NLS-1$
         // Only the declared source exists - no spurious auto-created default.
         assertEquals(1, schema.getDataSources().size());
+    }
+
+    @Test
+    public void testFirstNestedMemberSourceBecomesDefaultForFollowingSiblings()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{" //$NON-NLS-1$
+            + "\"name\":\"AllSales\",\"type\":\"union\",\"items\":[" //$NON-NLS-1$
+            + "{\"name\":\"A\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+            + "\"dataSource\":\"MySource\"}," //$NON-NLS-1$
+            + "{\"name\":\"B\",\"type\":\"query\",\"query\":\"SELECT 2\"}]}]}"), null); //$NON-NLS-1$
+        assertFalse(result.error, result.hasError());
+
+        DataCompositionSchemaDataSetUnion union = (DataCompositionSchemaDataSetUnion)
+            schema.getDataSets().get(0);
+        DataCompositionSchemaDataSetQuery first = (DataCompositionSchemaDataSetQuery)
+            union.getItems().get(0);
+        DataCompositionSchemaDataSetQuery second = (DataCompositionSchemaDataSetQuery)
+            union.getItems().get(1);
+        assertEquals("MySource", first.getDataSource()); //$NON-NLS-1$
+        assertEquals("MySource", second.getDataSource()); //$NON-NLS-1$
+        assertEquals(1, schema.getDataSources().size());
+        assertEquals("MySource", schema.getDataSources().get(0).getName()); //$NON-NLS-1$
     }
 
     // ==================== explicit fields ====================

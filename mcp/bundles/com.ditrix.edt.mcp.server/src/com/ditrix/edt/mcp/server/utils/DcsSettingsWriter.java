@@ -16,6 +16,7 @@ import java.util.Set;
 
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -865,11 +866,44 @@ public final class DcsSettingsWriter
                 + ". Re-run dcs action='get' and copy the new address."; //$NON-NLS-1$
         }
         StructureItem selected = items.get(index);
+        if (ACTION_REPLACE.equals(action) && path.size() == 1)
+        {
+            if (!(selected instanceof DataCompositionGroup)
+                && !(selected instanceof DataCompositionTable))
+            {
+                return "Structure item '" + selector + "' is " + selected.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", not a supported grouping or table. Replace a grouping or table address " //$NON-NLS-1$
+                    + "returned by get."; //$NON-NLS-1$
+            }
+            String kind = optionalString(body, KEY_KIND, where + "/" + selector); //$NON-NLS-1$
+            if (stringError != null)
+            {
+                return stringError;
+            }
+            if (kind == null)
+            {
+                kind = selected instanceof DataCompositionTable ? "table" : "grouping"; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if ("table".equalsIgnoreCase(kind)) //$NON-NLS-1$
+            {
+                DataCompositionTable table = DcsFactory.eINSTANCE.createDataCompositionTable();
+                items.set(index, table);
+                return applyTable(table, body, action, languages, version,
+                    where + "/" + selector, items); //$NON-NLS-1$
+            }
+            if ("grouping".equalsIgnoreCase(kind)) //$NON-NLS-1$
+            {
+                DataCompositionGroup group = DcsFactory.eINSTANCE.createDataCompositionGroup();
+                items.set(index, group);
+                return applyGrouping(group, body, action, languages, version,
+                    where + "/" + selector, items); //$NON-NLS-1$
+            }
+            return "Structure item kind '" + kind + "' at '" + where + "/" + selector //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "' is invalid. Use kind='grouping' or kind='table'."; //$NON-NLS-1$
+        }
         if (selected instanceof DataCompositionTable)
         {
-            DataCompositionTable table = ACTION_REPLACE.equals(action) && path.size() == 1
-                ? DcsFactory.eINSTANCE.createDataCompositionTable() : (DataCompositionTable)selected;
-            if (table != selected) items.set(index, table);
+            DataCompositionTable table = (DataCompositionTable)selected;
             if (path.size() == 1)
             {
                 return applyTable(table, body, action, languages, version,
@@ -884,9 +918,7 @@ public final class DcsSettingsWriter
                 + ", not DataCompositionGroup. Group authoring cannot replace tables, charts, or " //$NON-NLS-1$
                 + "nested settings; address a group returned by get."; //$NON-NLS-1$
         }
-        DataCompositionGroup group = ACTION_REPLACE.equals(action) && path.size() == 1
-            ? DcsFactory.eINSTANCE.createDataCompositionGroup() : (DataCompositionGroup)selected;
-        if (group != selected) items.set(index, group);
+        DataCompositionGroup group = (DataCompositionGroup)selected;
         if (path.size() == 1)
         {
             return applyGrouping(group, body, action, languages, version, where + "/" + selector, items); //$NON-NLS-1$
@@ -1510,7 +1542,14 @@ public final class DcsSettingsWriter
                 return "Group field index '" + path.get(1) + "' is " + item.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                     + ", not DataCompositionGroupField. Choose a field address returned by get."; //$NON-NLS-1$
             }
-            error = applyGroupField((DataCompositionGroupField)item, body,
+            DataCompositionGroupField field = ACTION_REPLACE.equals(action)
+                ? DcsFactory.eINSTANCE.createDataCompositionGroupField()
+                : (DataCompositionGroupField)item;
+            if (field != item)
+            {
+                fields.getItems().set(index, field);
+            }
+            error = applyGroupField(field, body,
                 where + "/groupFields/items/" + path.get(1)); //$NON-NLS-1$
         }
         else
@@ -4057,22 +4096,25 @@ public final class DcsSettingsWriter
     private static String removeSettingsPath(DataCompositionSettings settings, List<String> path,
         String type)
     {
-        // A destructive call must not follow the ADDRESS past a type that does not match it. The
-        // dispatch below keys purely on the address, so type='selection' with '#/.../filter'
-        // deleted the filter and reported success against the declared target. Reads already reject
-        // that mismatch; the write path used type only in the eventual error text.
-        //
-        // The check is "the type's own segment appears somewhere in the path", which is deliberately
-        // permissive: a holder can be nested (a table's '#/items/0/selection' is a legitimate
-        // selection address), so demanding it at a fixed position would refuse valid work.
-        List<String> expected = defaultPath(type);
-        if (!expected.isEmpty() && !path.contains(expected.get(0)))
+        EObject target = resolveSettingsNode(settings, path);
+        if (target == null)
         {
-            return "action='remove' declared type='" + type + "', which addresses '" //$NON-NLS-1$ //$NON-NLS-2$
-                + expected.get(0) + "', but '" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$
-                + "' does not name it. Removing is not reversible, so the declared type and the " //$NON-NLS-1$
-                + "address must agree - re-run dcs action='get' and use the type that node was " //$NON-NLS-1$
-                + "rendered under."; //$NON-NLS-1$
+            return "action='remove' could not resolve target '" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Re-run dcs action='get' and copy an existing node address."; //$NON-NLS-1$
+        }
+        String actualType = DcsReadProjection.typeOf(target);
+        if (actualType == null)
+        {
+            return "action='remove' resolved target '" + String.join("/", path) + "' as " //$NON-NLS-1$ //$NON-NLS-2$
+                + target.eClass().getName() + ", which has no public DCS type. Remove a parent node " //$NON-NLS-1$
+                + "rendered by dcs action='get' instead."; //$NON-NLS-1$
+        }
+        if (!type.equals(actualType))
+        {
+            return "action='remove' declared type='" + type + "', but resolved target '" //$NON-NLS-1$ //$NON-NLS-2$
+                + String.join("/", path) + "' has type='" + actualType //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Removing is not reversible, so pass type='" + actualType //$NON-NLS-1$
+                + "' or copy another exact address from dcs action='get'."; //$NON-NLS-1$
         }
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
@@ -4130,6 +4172,41 @@ public final class DcsSettingsWriter
         }
         return "action='remove' cannot address settings path '" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$
             + "' for type='" + type + "'. Copy an exact node address from dcs action='get'."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static EObject resolveSettingsNode(EObject root, List<String> path)
+    {
+        EObject current = root;
+        for (int i = 0; i < path.size(); i++)
+        {
+            EStructuralFeature feature = current.eClass().getEStructuralFeature(path.get(i));
+            if (feature == null)
+            {
+                return null;
+            }
+            Object value = current.eGet(feature);
+            if (feature.isMany())
+            {
+                if (!(value instanceof List<?>) || ++i >= path.size()
+                    || !DcsAddress.isZeroBasedIndex(path.get(i)))
+                {
+                    return null;
+                }
+                List<?> values = (List<?>)value;
+                int selected = Integer.parseInt(path.get(i));
+                if (selected >= values.size())
+                {
+                    return null;
+                }
+                value = values.get(selected);
+            }
+            if (!(value instanceof EObject))
+            {
+                return null;
+            }
+            current = (EObject)value;
+        }
+        return current;
     }
 
     private static String removeStructurePath(List<StructureItem> items, List<String> path, String where)

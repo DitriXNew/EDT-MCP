@@ -419,6 +419,8 @@ jobs:
           # The divisor comes from strategy.job-total, so the matrix list above is the single
           # place a shard count is written. Report and artifact names carry the shard number
           # because they are collected from every runner into one place.
+          WS="$RUNNER_TEMP/edt-ws"
+          export EDT_MCP_EDT_WORKSPACE="$WS"
           python -u tests/e2e/run_all.py \
             --project TestConfiguration \
             --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \

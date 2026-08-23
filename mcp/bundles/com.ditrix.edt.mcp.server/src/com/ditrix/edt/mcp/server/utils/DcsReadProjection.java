@@ -121,6 +121,12 @@ public final class DcsReadProjection
         }
         NodeRef node = resolution.node;
         String actualType = typeOf(node);
+        if (actualType == null)
+        {
+            return Result.failure("DCS collection '" + node.address //$NON-NLS-1$
+                + "' is not addressable by any public type. Read its parent '" //$NON-NLS-1$
+                + parentAddress(node.address) + "' instead."); //$NON-NLS-1$
+        }
         if (!type.equals(actualType))
         {
             return typeMismatch(type, actualType, node.address);
@@ -129,6 +135,11 @@ public final class DcsReadProjection
         {
             return Result.success(renderCollectionPage(node.address, type, node.items, language,
                 limit, offset));
+        }
+        if (TYPE_DYNAMIC_LIST.equals(type) && FEATURE_QUERY_TEXT.equals(node.collection))
+        {
+            return Result.success(renderScalarPage(node.address, type,
+                node.value == null ? "" : node.value.toString(), limit, offset)); //$NON-NLS-1$
         }
         return Result.success(renderFullNode(node, language));
     }
@@ -303,6 +314,8 @@ public final class DcsReadProjection
         result.append(MarkdownUtils.tableHeader("Section", "Count", "Address")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         appendCount(result, "Data sources", size(schema, "dataSources"), child(rootFqn, "dataSources")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         appendCount(result, "Data sets", size(schema, "dataSets"), child(rootFqn, "dataSets")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        appendCount(result, "Data set links", size(schema, "dataSetLinks"), //$NON-NLS-1$ //$NON-NLS-2$
+            child(rootFqn, "dataSetLinks")); //$NON-NLS-1$
         appendCount(result, "Calculated fields", size(schema, "calculatedFields"), //$NON-NLS-1$ //$NON-NLS-2$
             child(rootFqn, "calculatedFields")); //$NON-NLS-1$
         appendCount(result, "Total fields", size(schema, "totalFields"), child(rootFqn, "totalFields")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -317,6 +330,7 @@ public final class DcsReadProjection
         {
             appendNameTable(result, "Data sources", directItems(rootFqn, schema, "dataSources"), language); //$NON-NLS-1$ //$NON-NLS-2$
             appendNameTable(result, "Data sets", directItems(rootFqn, schema, "dataSets"), language); //$NON-NLS-1$ //$NON-NLS-2$
+            appendDataSetLinksTable(result, rootFqn, schema);
             appendNameTable(result, "Calculated fields", //$NON-NLS-1$
                 directItems(rootFqn, schema, "calculatedFields"), language); //$NON-NLS-1$
             appendNameTable(result, "Total fields", directItems(rootFqn, schema, "totalFields"), language); //$NON-NLS-1$ //$NON-NLS-2$
@@ -340,7 +354,8 @@ public final class DcsReadProjection
                 if (FEATURE_QUERY_TEXT.equals(attribute.getName()))
                 {
                     String query = value == null ? "" : value.toString(); //$NON-NLS-1$
-                    value = query.length() + " characters (omitted from summary)"; //$NON-NLS-1$
+                    value = query.length() + " characters (omitted from summary; read at `" //$NON-NLS-1$
+                        + child(rootFqn, FEATURE_QUERY_TEXT) + "`)"; //$NON-NLS-1$
                 }
                 result.append(MarkdownUtils.tableRow(attribute.getName(), displayValue(value, language)));
             }
@@ -421,6 +436,30 @@ public final class DcsReadProjection
                 item.address));
         }
         result.append('\n');
+    }
+
+    private static void appendDataSetLinksTable(StringBuilder result, String rootFqn,
+        DataCompositionSchema schema)
+    {
+        if (schema.getDataSetLinks().isEmpty())
+        {
+            return;
+        }
+        result.append("## Data set links\n\n"); //$NON-NLS-1$
+        result.append(MarkdownUtils.tableHeader("Address", "Link")); //$NON-NLS-1$ //$NON-NLS-2$
+        String collectionAddress = child(rootFqn, "dataSetLinks"); //$NON-NLS-1$
+        for (int i = 0; i < schema.getDataSetLinks().size(); i++)
+        {
+            DataCompositionSchemaDataSetLink link = schema.getDataSetLinks().get(i);
+            result.append(MarkdownUtils.tableRow(child(collectionAddress, Integer.toString(i)),
+                endpoint(link.getSourceDataSet()) + " → " + endpoint(link.getDestinationDataSet()))); //$NON-NLS-1$
+        }
+        result.append('\n');
+    }
+
+    private static String endpoint(String dataSetName)
+    {
+        return dataSetName == null || dataSetName.isEmpty() ? "(unset)" : dataSetName; //$NON-NLS-1$
     }
 
     private static CollectionRef rootCollection(String rootFqn, TargetKind kind, EObject root,
@@ -533,7 +572,7 @@ public final class DcsReadProjection
             EObject value = asEObject(featureValue(settings, feature));
             List<NodeRef> one = value == null ? Collections.<NodeRef> emptyList()
                 : Collections.singletonList(new NodeRef(value, child(settingsAddress, feature),
-                    feature, Collections.<NodeRef> emptyList()));
+                    feature, settings, Collections.<NodeRef> emptyList()));
             return CollectionRef.success(child(settingsAddress, feature), one);
         }
         EObject holder = asEObject(featureValue(settings, feature));
@@ -601,7 +640,7 @@ public final class DcsReadProjection
             {
                 String selector = selector(canonical, owner, (EObject)item, i);
                 result.add(new NodeRef(item, child(collectionAddress, selector), canonical,
-                    Collections.<NodeRef> emptyList()));
+                    owner, Collections.<NodeRef> emptyList()));
             }
         }
         return result;
@@ -654,9 +693,29 @@ public final class DcsReadProjection
         return result.toString();
     }
 
+    private static String renderScalarPage(String address, String type, String value, int limit,
+        int offset)
+    {
+        int total = value.length();
+        int from = Math.min(offset, total);
+        int to = Math.min(from + limit, total);
+        String page = value.substring(from, to);
+        StringBuilder result = new StringBuilder("# DCS value: ").append(type).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Address:** `").append(address).append("`\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Characters:** ").append(total)
+            .append(Pagination.truncationNotice(page.length(), total)).append("\n\n") //$NON-NLS-1$
+            .append("**Page characters:** ").append(page.length()).append("\n\n") //$NON-NLS-1$
+            .append("**Offset:** ").append(offset).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Next offset:** ").append(to < total ? Integer.toString(to) : "none") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("\n\n## Value\n\n"); //$NON-NLS-1$
+        appendFenced(result, page);
+        return result.toString();
+    }
+
     private static NodeResolution resolvePointer(String rootFqn, EObject root, List<String> segments)
     {
         Object current = root;
+        EObject owner = null;
         String currentAddress = rootFqn;
         String collectionName = null;
         for (int i = 0; i < segments.size(); i++)
@@ -674,12 +733,18 @@ public final class DcsReadProjection
                 return failedSegment(segment, currentAddress, navigationKeys(object));
             }
             Object value = object.eGet(feature);
+            owner = object;
             currentAddress = child(currentAddress, canonicalFeature(feature.getName()));
             collectionName = canonicalFeature(feature.getName());
             if (!feature.isMany())
             {
                 if (value == null)
                 {
+                    if (feature instanceof EAttribute && i + 1 >= segments.size())
+                    {
+                        current = null;
+                        continue;
+                    }
                     return failedSegment(segment, parentAddress(currentAddress), navigationKeys(object));
                 }
                 current = value;
@@ -693,7 +758,7 @@ public final class DcsReadProjection
             if (i + 1 >= segments.size())
             {
                 return NodeResolution.success(new NodeRef(list, currentAddress, collectionName,
-                    nodeRefs(currentAddress, object, collectionName, list)));
+                    object, nodeRefs(currentAddress, object, collectionName, list)));
             }
             String selector = segments.get(++i);
             int selected = find(list, collectionName, object, selector);
@@ -706,7 +771,7 @@ public final class DcsReadProjection
                 (EObject)current, selected));
         }
         return NodeResolution.success(new NodeRef(current, currentAddress, collectionName,
-            Collections.<NodeRef> emptyList()));
+            owner, Collections.<NodeRef> emptyList()));
     }
 
     private static NodeResolution failedSegment(String segment, String address, List<String> existing)
@@ -781,7 +846,7 @@ public final class DcsReadProjection
             {
                 result.add(new NodeRef(item,
                     child(collectionAddress, selector(collection, owner, (EObject)item, i)),
-                    collection, Collections.<NodeRef> emptyList()));
+                    collection, owner, Collections.<NodeRef> emptyList()));
             }
         }
         return result;
@@ -1020,7 +1085,8 @@ public final class DcsReadProjection
         }
         if (className.equals(object.eClass().getName()))
         {
-            result.add(new NodeRef(object, address, FEATURE_ITEMS, Collections.<NodeRef> emptyList()));
+            result.add(new NodeRef(object, address, FEATURE_ITEMS, null,
+                Collections.<NodeRef> emptyList()));
         }
         for (EReference reference : object.eClass().getEAllContainments())
         {
@@ -1052,14 +1118,28 @@ public final class DcsReadProjection
     {
         if (node.value instanceof List<?>)
         {
-            return collectionType(node.collection);
+            String type = collectionType(node.collection);
+            return type == null && node.owner != null ? typeOf(node.owner) : type;
         }
         if (!(node.value instanceof EObject))
         {
+            if (node.owner != null && TYPE_DYNAMIC_LIST.equals(typeOf(node.owner)))
+            {
+                return TYPE_DYNAMIC_LIST;
+            }
             return "userSettings"; //$NON-NLS-1$
         }
-        EObject object = (EObject)node.value;
+        String type = typeOf((EObject)node.value);
+        return type == null ? collectionType(node.collection) : type;
+    }
+
+    static String typeOf(EObject object)
+    {
         if (object instanceof DataCompositionSchema)
+        {
+            return TYPE_SCHEMA;
+        }
+        if (object instanceof DataCompositionSchemaDataSetLink)
         {
             return TYPE_SCHEMA;
         }
@@ -1104,6 +1184,10 @@ public final class DcsReadProjection
         {
             return "conditionalAppearance"; //$NON-NLS-1$
         }
+        if (name.contains("Appearance")) //$NON-NLS-1$
+        {
+            return "conditionalAppearance"; //$NON-NLS-1$
+        }
         if (name.contains("Selected")) //$NON-NLS-1$
         {
             return "selection"; //$NON-NLS-1$
@@ -1136,7 +1220,7 @@ public final class DcsReadProjection
         {
             return "table"; //$NON-NLS-1$
         }
-        return collectionType(node.collection);
+        return null;
     }
 
     private static String collectionType(String collection)
@@ -1151,6 +1235,8 @@ public final class DcsReadProjection
                 return "dataSource"; //$NON-NLS-1$
             case "dataSets": //$NON-NLS-1$
                 return "dataSet"; //$NON-NLS-1$
+            case "dataSetLinks": //$NON-NLS-1$
+                return TYPE_SCHEMA;
             case "fields": //$NON-NLS-1$
                 return "field"; //$NON-NLS-1$
             case "parameters": //$NON-NLS-1$
@@ -1162,7 +1248,7 @@ public final class DcsReadProjection
             case FEATURE_VARIANTS:
                 return "variant"; //$NON-NLS-1$
             default:
-                return collection;
+                return null;
         }
     }
 
@@ -1175,7 +1261,9 @@ public final class DcsReadProjection
 
     private static String selector(String collection, EObject owner, EObject item, int index)
     {
-        if (NATURAL_NAME_COLLECTIONS.contains(collection))
+        boolean unionItems = FEATURE_ITEMS.equals(collection)
+            && owner instanceof DataCompositionSchemaDataSetUnion;
+        if (NATURAL_NAME_COLLECTIONS.contains(collection) || unionItems)
         {
             String name = stringFeature(item, "name"); //$NON-NLS-1$
             if (!name.isEmpty())
@@ -1409,13 +1497,15 @@ public final class DcsReadProjection
         final Object value;
         final String address;
         final String collection;
+        final EObject owner;
         final List<NodeRef> items;
 
-        NodeRef(Object value, String address, String collection, List<NodeRef> items)
+        NodeRef(Object value, String address, String collection, EObject owner, List<NodeRef> items)
         {
             this.value = value;
             this.address = address;
             this.collection = collection;
+            this.owner = owner;
             this.items = items;
         }
     }
