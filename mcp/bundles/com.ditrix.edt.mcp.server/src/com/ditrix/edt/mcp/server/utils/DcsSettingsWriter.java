@@ -2747,8 +2747,7 @@ public final class DcsSettingsWriter
     private static AppearanceResult appearance(JsonObject body,
         DcsPresentationParser.LanguageContext languages, Version version, String path)
     {
-        String language = languages == null || languages.declaredCodes().isEmpty() ? "en" //$NON-NLS-1$
-            : languages.declaredCodes().get(0);
+        String language = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
         try
         {
             DcsAvailableParameterCollection available =

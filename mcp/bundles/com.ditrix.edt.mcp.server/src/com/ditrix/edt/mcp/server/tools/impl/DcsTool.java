@@ -531,7 +531,8 @@ public class DcsTool implements IMcpTool
             }
             DcsTargetResolver.Target target = resolution.target();
             DcsPresentationParser.LanguageContext languages =
-                new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes());
+                new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
+                    effectiveLanguage);
             DcsSchemaContent.Services services = DcsSchemaContent.resolveServices(context, model);
             if (!services.isSuccess())
             {
