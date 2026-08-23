@@ -142,7 +142,8 @@ public final class DcsReadProjection
             return Result.success(renderCollectionPage(node.address, type, node.items, language,
                 limit, offset));
         }
-        if (TYPE_DYNAMIC_LIST.equals(type) && FEATURE_QUERY_TEXT.equals(node.collection))
+        if ((TYPE_DYNAMIC_LIST.equals(type) && FEATURE_QUERY_TEXT.equals(node.collection))
+            || ("dataSet".equals(type) && FEATURE_QUERY.equals(node.collection))) //$NON-NLS-1$
         {
             return Result.success(renderScalarPage(node.address, type,
                 node.value == null ? "" : node.value.toString(), limit, offset)); //$NON-NLS-1$
@@ -1025,7 +1026,7 @@ public final class DcsReadProjection
             return result.toString();
         }
         appendScalarTable(result, object, language, FEATURE_QUERY, FEATURE_QUERY_TEXT);
-        appendQuery(result, object);
+        appendQuerySummary(result, object, node.address);
         if (object instanceof DataSet)
         {
             appendFieldsTable(result, (DataSet)object, node.address, language);
@@ -1091,7 +1092,7 @@ public final class DcsReadProjection
         result.append('\n');
     }
 
-    private static void appendQuery(StringBuilder result, EObject object)
+    private static void appendQuerySummary(StringBuilder result, EObject object, String address)
     {
         String featureName = object instanceof DataCompositionSchemaDataSetQuery
             ? FEATURE_QUERY : FEATURE_QUERY_TEXT;
@@ -1102,8 +1103,12 @@ public final class DcsReadProjection
         }
         Object raw = object.eGet(feature);
         String query = raw == null ? "" : raw.toString(); //$NON-NLS-1$
-        result.append("## Query text\n\n"); //$NON-NLS-1$
-        appendFenced(result, query);
+        String type = FEATURE_QUERY.equals(featureName) ? "dataSet" : TYPE_DYNAMIC_LIST; //$NON-NLS-1$
+        result.append("## Query text\n\n") //$NON-NLS-1$
+            .append("**Characters:** ").append(query.length()).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Address:** `").append(child(address, featureName)).append("`\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("_Query text is omitted from this node page; read the address above with ") //$NON-NLS-1$
+            .append("type='").append(type).append("' and character limit/offset._\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static void appendFenced(StringBuilder result, String text)
@@ -1274,9 +1279,14 @@ public final class DcsReadProjection
         }
         if (!(node.value instanceof EObject))
         {
-            if (node.owner != null && TYPE_DYNAMIC_LIST.equals(typeOf(node.owner)))
+            String ownerType = node.owner == null ? null : typeOf(node.owner);
+            if (TYPE_DYNAMIC_LIST.equals(ownerType))
             {
                 return TYPE_DYNAMIC_LIST;
+            }
+            if ("dataSet".equals(ownerType) && FEATURE_QUERY.equals(node.collection)) //$NON-NLS-1$
+            {
+                return "dataSet"; //$NON-NLS-1$
             }
             return "userSettings"; //$NON-NLS-1$
         }

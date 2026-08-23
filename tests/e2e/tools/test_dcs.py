@@ -247,6 +247,33 @@ def _read_all_xml(fqn, limit=None):
     return document, pages
 
 
+def _read_all_fenced_scalar(fqn, target_type, limit):
+    """Read and concatenate every character page from one advertised scalar address."""
+    offset = 0
+    chunks = []
+    while True:
+        page = _get(fqn, target_type, limit=limit, offset=offset)
+        assert_ok(page, "read scalar page at offset %d" % offset)
+        count = re.search(r"\*\*Page characters:\*\* (\d+)", page.text)
+        opening = re.search(r"(?m)^(`{3,})sql\n", page.text)
+        assert count and opening, "scalar page must carry its exact fenced value: %s" % page.text
+        page_chars = int(count.group(1))
+        start = opening.end()
+        chunk = page.text[start:start + page_chars]
+        closing = opening.group(1) if chunk.endswith("\n") else "\n" + opening.group(1)
+        assert page.text.startswith(closing, start + page_chars), \
+            "the scalar fence must close exactly after Page characters: %s" % page.text
+        chunks.append(chunk)
+
+        next_offset = re.search(r"\*\*Next offset:\*\* (none|\d+)", page.text)
+        assert next_offset, "scalar page must advertise its continuation offset: %s" % page.text
+        if next_offset.group(1) == "none":
+            return "".join(chunks)
+        following = int(next_offset.group(1))
+        assert following > offset, "a non-final scalar page must make progress"
+        offset = following
+
+
 @e2e_test(tool="dcs", kind="write-metadata")
 def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk():
     language = "Language.E2EDcsRussianXml"
@@ -501,9 +528,40 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
 
     drill = _get(root + "#/dataSets/Second", "dataSet")
     assert_ok(drill, "drill into one query data set")
-    assert "```sql\nSELECT 2 AS Amount\n```" in drill.text
+    query_address = root + "#/dataSets/Second/query"
+    assert query_address in drill.text
+    assert "SELECT 2 AS Amount" not in drill.text
+    assert _read_all_fenced_scalar(query_address, "dataSet", 1000) == "SELECT 2 AS Amount"
     assert root + "#/dataSets/Second/fields/Amount2" in drill.text
     _assert_read_did_not_change(before, "report summary/pagination/drill-down")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_data_set_query_pages_reassemble_the_exact_long_text():
+    report_name = "E2EDcsPagedDataSetQuery"
+    root = _seed_report(report_name)
+    data_set_address = root + "#/dataSets/DataSet1"
+    query = "\nUNION ALL\n".join(
+        "SELECT %d AS E2EDcsPagedQuery%03d" % (index, index)
+        for index in range(180)
+    )
+    before = _get(data_set_address, "dataSet")
+    assert_ok(before, "read the data-set hash before writing its long query")
+    updated = _write(data_set_address, "update", "dataSet", {"query": query},
+                     expectedHash=_hash(before))
+    assert_ok(updated, "write a data-set query long enough to require character paging")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the paged data-set query fixture")
+    poll_disk_contains(dcs_rel, "E2EDcsPagedQuery179",
+                       ctx="the complete long query must reach Template.dcs")
+
+    data_set = _get(data_set_address, "dataSet")
+    assert_ok(data_set, "read the data-set page advertising its query scalar")
+    query_address = data_set_address + "/query"
+    copied = re.search(re.escape(query_address), data_set.text)
+    assert copied, "the data-set page must advertise its exact query address: %s" % data_set.text
+    reconstructed = _read_all_fenced_scalar(copied.group(0), "dataSet", 257)
+    assert reconstructed.encode("utf-8") == query.encode("utf-8"), \
+        "concatenated query pages must reproduce the authored query byte-for-byte"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -732,7 +790,9 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
 
     drill = _get(root + "#/dataSets/Sales", "dataSet")
     assert_ok(drill, "read back the upserted dataset")
-    assert second_query in drill.text
+    query_address = root + "#/dataSets/Sales/query"
+    assert query_address in drill.text
+    assert _read_all_fenced_scalar(query_address, "dataSet", 1000) == second_query
     assert first_query not in drill.text
     assert drill.text.count(root + "#/dataSets/Sales`") == 1, \
         "the same natural key must be updated, never duplicated"
@@ -1836,6 +1896,44 @@ def test_dynamic_list_settings_accept_replace_and_remove_but_its_own_types_do_no
     error = assert_error(refused, "replace on a dynamic list's own type")
     assert_error_quality(error, names=["#/listSettings"],
                          ctx="the refusal must point at the settings layer that does accept it")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dynamic_list_settings_change_refuses_the_pre_change_hash():
+    root = _seed_dynamic_list("SettingsHashGuard")
+    selection_address = root + "#/listSettings/selection"
+    seeded = _write(root, "upsert", "dynamicList", {
+        "listSettings": {
+            "selection": {
+                "items": [
+                    {"kind": "field", "field": {"kind": "field", "value": "First"}},
+                    {"kind": "field", "field": {"kind": "field", "value": "Second"}},
+                ],
+            },
+        },
+    })
+    assert_ok(seeded, "seed two index-addressable dynamic-list selection items")
+
+    first_read = _get(root, "dynamicList")
+    assert_ok(first_read, "get the dynamic-list hash before reordering its settings")
+    first_hash = _hash(first_read)
+    reordered = _write(selection_address, "replace", "selection", {
+        "items": [
+            {"kind": "field", "field": {"kind": "field", "value": "Second"}},
+            {"kind": "field", "field": {"kind": "field", "value": "First"}},
+        ],
+    }, expectedHash=first_hash)
+    assert_ok(reordered, "reorder dynamic-list settings through a second call")
+    current_hash = _hash(reordered)
+    assert current_hash != first_hash, \
+        "the hash returned after a settings reorder must describe the new settings order"
+
+    stale = _write(selection_address + "/items/0", "update", "selection", {"use": False},
+                   expectedHash=first_hash)
+    error = assert_error(stale, "reuse the hash from before the dynamic-list settings reorder")
+    assert_error_quality(error, names=[first_hash, current_hash],
+                         suggests=["Re-run dcs action='get'", "expectedHash"],
+                         ctx="dynamic-list settings must participate in the stale-index guard")
 
 
 @e2e_test(tool="dcs", kind="read")

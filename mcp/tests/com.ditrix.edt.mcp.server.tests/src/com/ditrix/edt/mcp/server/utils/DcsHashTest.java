@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
+
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
@@ -20,6 +21,15 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
+
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
+import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.metadata.dbview.DbViewFactory;
+import com._1c.g5.v8.dt.metadata.dbview.DbViewTableDef;
 
 /** Determinism and structural-sensitivity tests for {@link DcsHash}. */
 public class DcsHashTest
@@ -62,6 +72,54 @@ public class DcsHashTest
         added.eSet(model.name, "C"); //$NON-NLS-1$
         model.children.add(added);
         assertNotEquals(before, DcsHash.compute(model.root));
+    }
+
+    @Test
+    public void testDynamicListSettingsContentMovesEveryToolStageHash()
+    {
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionSelectedFields selection = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedFields();
+        selection.getItems().add(selectedField("First")); //$NON-NLS-1$
+        selection.getItems().add(selectedField("Second")); //$NON-NLS-1$
+        settings.setSelection(selection);
+        dynamic.setListSettings(settings);
+
+        String getHash = DcsHash.compute(dynamic);
+        assertEquals("an unchanged dynamic list must hash stably", getHash, //$NON-NLS-1$
+            DcsHash.compute(dynamic));
+
+        // EMF's EList enforces 'no duplicates', and Collections.swap sets one slot before the
+        // other - which transiently duplicates an element and throws. move() is EMF's own
+        // reorder, and it is what a designer reorder does to the model.
+        selection.getItems().move(0, 1);
+        String expectedHashCheck = DcsHash.compute(dynamic);
+        assertNotEquals("reordering authored listSettings must stale the hash returned by get", //$NON-NLS-1$
+            getHash, expectedHashCheck);
+
+        String returnedWriteHash = DcsHash.compute(dynamic);
+        assertEquals("the post-write hash must describe the same reordered settings content", //$NON-NLS-1$
+            expectedHashCheck, returnedWriteHash);
+    }
+
+    @Test
+    public void testDynamicListMainTableRemainsIdentityHashed()
+    {
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DbViewTableDef products = DbViewFactory.eINSTANCE.createDbViewTableDef();
+        products.setName("Catalog.Products"); //$NON-NLS-1$
+        DbViewTableDef partners = DbViewFactory.eINSTANCE.createDbViewTableDef();
+        partners.setName("Catalog.Partners"); //$NON-NLS-1$
+
+        dynamic.setMainTable(products);
+        String productsHash = DcsHash.compute(dynamic);
+        assertEquals(productsHash, DcsHash.compute(dynamic));
+
+        dynamic.setMainTable(partners);
+        assertNotEquals("repointing external mainTable identity must move the hash", //$NON-NLS-1$
+            productsHash, DcsHash.compute(dynamic));
     }
 
     @Test
@@ -154,6 +212,17 @@ public class DcsHashTest
             values.add(child);
         }
         return new Model(root, childClass, name, values);
+    }
+
+    private static DataCompositionSelectedField selectedField(String value)
+    {
+        DataCompositionSelectedField selected = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSelectedField();
+        DataCompositionField field = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionField();
+        field.setValue(value);
+        selected.setField(field);
+        return selected;
     }
 
     /** Keeps the EMF constant out of the test's model-building flow. */

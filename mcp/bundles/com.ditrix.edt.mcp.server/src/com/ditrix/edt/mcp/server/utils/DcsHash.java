@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
+import java.util.Set;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
@@ -20,18 +21,29 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.dt.form.model.FormPackage;
+
 /**
  * Computes a compact structural fingerprint for a resolved DCS or dynamic-list root.
  *
  * <p>The fingerprint is deliberately a within-session stale-address guard, not a serialized format
  * or a promise of stability across EDT/model versions. It records containment order, each node's
- * EClass, every explicitly set attribute, and the identity of every set non-containment reference.
- * A caller must compute it while the root is still inside the same BM transaction boundary used to
- * read it.</p>
+ * EClass and every explicitly set attribute. A non-containment reference whose target the DCS tool
+ * authors is fingerprinted by content; pointers to objects outside the tool's ownership boundary
+ * are fingerprinted by identity. A caller must compute it while the root is still inside the same
+ * BM transaction boundary used to read it.</p>
  */
 public final class DcsHash
 {
     private static final int SHORT_HEX_LENGTH = 20;
+
+    /**
+     * The explicit authoring-ownership boundary for non-containment references. Entries here are
+     * owned subtrees that the tool mutates/replaces, so their complete content participates in the
+     * hash. Every other non-containment target is an external pointer and contributes identity only.
+     */
+    private static final Set<EReference> CONTENT_HASHED_REFERENCES = Set.of(
+        FormPackage.Literals.DYNAMIC_LIST_EXT_INFO__LIST_SETTINGS);
 
     private DcsHash()
     {
@@ -79,21 +91,30 @@ public final class DcsHash
             appendAttributeValue(digest, object.eGet(attribute));
         }
 
-        // Non-containment references count too. They are modelled, rendered by the reader and
-        // writable (DynamicListExtInfo.mainTable is one), so leaving them out let a concurrent
-        // writer repoint one WITHOUT moving the hash - and the get-edit-verify loop would then
-        // certify a node that had changed under it. Identity only, never a localized
-        // presentation: the fingerprint must not depend on the caller's language.
+        // Non-containment references follow the authoring boundary declared above. Owned targets
+        // contribute their complete raw model content; external targets contribute identity only.
+        // Neither path resolves a localized presentation, so the hash never depends on language.
         for (EReference reference : object.eClass().getEAllReferences())
         {
-            if (reference.isContainment() || reference.isDerived() || reference.isTransient()
-                || !object.eIsSet(reference))
+            // The transient skip stays for every OTHER reference: a transient feature is not
+            // persisted and may be derived or session-scoped, so folding those into the
+            // fingerprint would make it drift on an unchanged model. listSettings is transient
+            // AND authored, and it is admitted by the ownership set above - not by relaxing the
+            // rule for everything.
+            boolean authored = CONTENT_HASHED_REFERENCES.contains(reference);
+            if (reference.isContainment() || reference.isDerived() || !object.eIsSet(reference)
+                || reference.isTransient() && !authored)
             {
                 continue;
             }
             token(digest, "reference"); //$NON-NLS-1$
             token(digest, reference.getName());
             Object value = object.eGet(reference);
+            if (authored)
+            {
+                appendReferenceContent(digest, reference, value);
+                continue;
+            }
             if (value instanceof List<?>)
             {
                 List<?> targets = (List<?>)value;
@@ -137,6 +158,39 @@ public final class DcsHash
             {
                 visit(digest, (EObject)value, reference.getName(), 0);
             }
+        }
+    }
+
+    private static void appendReferenceContent(MessageDigest digest, EReference reference,
+        Object value)
+    {
+        token(digest, "content"); //$NON-NLS-1$
+        if (value instanceof List<?>)
+        {
+            List<?> targets = (List<?>)value;
+            token(digest, "list-size"); //$NON-NLS-1$
+            token(digest, Integer.toString(targets.size()));
+            for (int i = 0; i < targets.size(); i++)
+            {
+                Object target = targets.get(i);
+                if (target instanceof EObject)
+                {
+                    visit(digest, (EObject)target, reference.getName(), i);
+                }
+                else
+                {
+                    token(digest, Integer.toString(i));
+                    token(digest, canonicalValue(target));
+                }
+            }
+        }
+        else if (value instanceof EObject)
+        {
+            visit(digest, (EObject)value, reference.getName(), 0);
+        }
+        else
+        {
+            token(digest, canonicalValue(value));
         }
     }
 

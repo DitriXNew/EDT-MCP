@@ -363,16 +363,49 @@ public class DcsReadProjectionTest
     }
 
     @Test
-    public void testPointerDataSetRendersFullQueryAndCompleteFieldAddress()
+    public void testPointerDataSetAdvertisesPagedQueryAndCompleteFieldAddress()
     {
         DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT\n  Amount"); //$NON-NLS-1$ //$NON-NLS-2$
         DcsAddress address = DcsAddress.parse("Report.Sales#/dataSets/Sales").address(); //$NON-NLS-1$
         DcsReadProjection.Result result = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
             TargetKind.REPORT_MAIN_DCS, schema, address, "dataSet", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(result.isSuccess());
-        assertTrue(result.markdown().contains("```sql\nSELECT\n  Amount\n```")); //$NON-NLS-1$
+        assertFalse(result.markdown().contains("```sql\nSELECT\n  Amount\n```")); //$NON-NLS-1$
+        assertTrue(result.markdown().contains("**Characters:** 15")); //$NON-NLS-1$
+        assertTrue(result.markdown().contains("Report.Sales#/dataSets/Sales/query")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("Report.Sales#/dataSets/Sales")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("Report.Sales#/dataSets/Sales/fields/Amount")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDataSetQueryScalarUsesTheSharedSurrogateSafePager()
+    {
+        String query = "A\uD83D\uDE00BC"; //$NON-NLS-1$
+        DataCompositionSchema schema = schemaWithDataSet("Sales", query); //$NON-NLS-1$
+        String root = "Report.Sales"; //$NON-NLS-1$
+        String address = root + "#/dataSets/Sales/query"; //$NON-NLS-1$
+
+        DcsReadProjection.Result first = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "dataSet", "en", 2, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result second = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "dataSet", "en", 100, 1); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(second.error(), second.isSuccess());
+
+        String firstPage = fencedValue(first.markdown());
+        String secondPage = fencedValue(second.markdown());
+        assertEquals(query, firstPage + secondPage);
+        assertFalse(hasUnpairedSurrogate(firstPage));
+        assertFalse(hasUnpairedSurrogate(secondPage));
+        assertTrue(first.markdown(), first.markdown().contains("**Next offset:** 1")); //$NON-NLS-1$
+
+        DcsReadProjection.Result wrongType = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "userSettings", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(wrongType.isSuccess());
+        assertTrue(wrongType.error(), wrongType.error().contains("its type is 'dataSet'")); //$NON-NLS-1$
     }
 
     @Test
