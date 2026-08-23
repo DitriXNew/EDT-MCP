@@ -570,6 +570,51 @@ def test_union_member_fields_page_prints_addresses_that_resolve_verbatim():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_union_member_data_set_address_updates_query_on_disk():
+    report_name = "E2EDcsUnionMember"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for recursive union-member data-set writes")
+    wait_for_project_ready()
+    old_marker = "OriginalUnionMemberQuery"
+    authored = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "AllSales",
+            "type": "union",
+            "items": [{
+                "name": "Retail",
+                "type": "query",
+                "query": "SELECT 1 AS " + old_marker,
+            }],
+        }],
+    })
+    assert_ok(authored, "author a union with a query member")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the union-member data-set fixture")
+    poll_disk_contains(dcs_rel, old_marker,
+                       ctx="the original union-member query must reach Template.dcs")
+
+    union_page = _get(root + "#/dataSets/AllSales/items", "dataSet")
+    assert_ok(union_page, "read the parent union's member collection")
+    expected = root + "#/dataSets/AllSales/items/Retail"
+    copied = re.search(re.escape(expected), union_page.text)
+    assert copied, "the union page must print its member's canonical address: %s" % union_page.text
+
+    member = _get(copied.group(0), "dataSet")
+    assert_ok(member, "read the union member through its advertised address")
+    new_marker = "EditedUnionMemberQuery"
+    edited = _write(copied.group(0), "update", "dataSet",
+                    {"query": "SELECT 2 AS " + new_marker},
+                    expectedHash=_hash(member))
+    assert_ok(edited, "update a union member through the copied address")
+    poll_disk_contains(dcs_rel, new_marker,
+                       ctx="the recursive data-set edit must reach Template.dcs")
+
+    on_disk = read_disk(dcs_rel)
+    assert new_marker in on_disk and old_marker not in on_disk, \
+        "Template.dcs must contain only the updated union-member query"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_common_template_root():
     root = "CommonTemplate.E2EDcsCommon"
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),

@@ -159,6 +159,58 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testReaderAddressWritesNestedUnionMemberDataSetForEveryAction()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsSchemaWriter.Result seeded = apply(schema, "upsert", "schema", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"dataSets\":[{\"name\":\"AllSales\",\"type\":\"union\",\"items\":[" //$NON-NLS-1$
+                + "{\"name\":\"Retail\",\"type\":\"query\",\"query\":\"SELECT 1\"}," //$NON-NLS-1$
+                + "{\"name\":\"Keep\",\"type\":\"query\",\"query\":\"SELECT 2\"}]}]}"); //$NON-NLS-1$
+        assertTrue(seeded.error(), seeded.isSuccess());
+
+        String copied = "Report.Sales#/dataSets/AllSales/items/Retail"; //$NON-NLS-1$
+        DcsReadProjection.Result page = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            DcsTargetResolver.TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/dataSets/AllSales/items").address(), //$NON-NLS-1$
+            "dataSet", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(page.error(), page.isSuccess());
+        assertTrue(page.markdown(), page.markdown().contains(copied));
+
+        DcsSchemaWriter.Result updated = apply(schema, "update", "dataSet", copied, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"query\":\"SELECT 3\"}"); //$NON-NLS-1$
+        assertTrue(updated.error(), updated.isSuccess());
+        assertEquals("SELECT 3", retail(schema).getQuery()); //$NON-NLS-1$
+
+        DcsSchemaWriter.Result upserted = apply(schema, "upsert", "dataSet", copied, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"query\":\"SELECT 4\"}"); //$NON-NLS-1$
+        assertTrue(upserted.error(), upserted.isSuccess());
+        assertEquals("SELECT 4", retail(schema).getQuery()); //$NON-NLS-1$
+
+        String beforeCollision = DcsHash.compute(schema);
+        DcsSchemaWriter.Result collision = apply(schema, "update", "dataSet", copied, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"name\":\"Keep\"}"); //$NON-NLS-1$
+        assertFalse(collision.isSuccess());
+        assertTrue(collision.error(), collision.error().contains("sibling 'Keep'")); //$NON-NLS-1$
+        assertEquals(beforeCollision, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result replaced = apply(schema, "replace", "dataSet", copied, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"type\":\"object\",\"objectName\":\"Catalog.Products\"}"); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        DataCompositionSchemaDataSetUnion union = (DataCompositionSchemaDataSetUnion)
+            schema.getDataSets().get(0);
+        assertTrue(union.getItems().get(0) instanceof DataCompositionSchemaDataSetObject);
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetObject)union.getItems().get(0)).getObjectName());
+        assertEquals("Keep", union.getItems().get(1).getName()); //$NON-NLS-1$
+
+        DcsSchemaWriter.Result removed = apply(schema, "remove", "dataSet", copied, "{}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(removed.error(), removed.isSuccess());
+        union = (DataCompositionSchemaDataSetUnion)schema.getDataSets().get(0);
+        assertEquals(1, union.getItems().size());
+        assertEquals("Keep", union.getItems().get(0).getName()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testUnionRefusesQueryWithoutMutatingSchema()
     {
         DataCompositionSchema schema = newSchema();

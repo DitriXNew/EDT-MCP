@@ -201,6 +201,7 @@ public final class DcsReadProjection
                 && !(object instanceof DataCompositionSchemaDataSetField)
             || object instanceof StructureItem && !(object instanceof DataCompositionGroup)
                 && !(object instanceof DataCompositionTable)
+            || "additionalProperties".equals(collection) //$NON-NLS-1$
             || "nestedSchemas".equals(collection) || "templates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
@@ -478,10 +479,6 @@ public final class DcsReadProjection
     private static CollectionRef rootCollection(String rootFqn, TargetKind kind, EObject root,
         String type)
     {
-        if (root == null)
-        {
-            return CollectionRef.empty(rootFqn, type);
-        }
         switch (type)
         {
             case "dataSource": //$NON-NLS-1$
@@ -656,18 +653,18 @@ public final class DcsReadProjection
         {
             return unsupportedCollection(rootFqn, type, kind);
         }
-        if (settings == null)
-        {
-            return CollectionRef.success(child(child(settingsAddress, feature), FEATURE_ITEMS),
-                Collections.<NodeRef> emptyList());
-        }
         if ("additionalProperties".equals(feature)) //$NON-NLS-1$
         {
             EObject value = asEObject(featureValue(settings, feature));
             List<NodeRef> one = value == null ? Collections.<NodeRef> emptyList()
                 : Collections.singletonList(new NodeRef(value, child(settingsAddress, feature),
-                    feature, settings, Collections.<NodeRef> emptyList()));
+                feature, settings, Collections.<NodeRef> emptyList()));
             return CollectionRef.success(child(settingsAddress, feature), one);
+        }
+        if (settings == null)
+        {
+            return CollectionRef.success(child(child(settingsAddress, feature), FEATURE_ITEMS),
+                Collections.<NodeRef> emptyList());
         }
         EObject holder = asEObject(featureValue(settings, feature));
         String holderAddress = child(settingsAddress, feature);
@@ -791,15 +788,21 @@ public final class DcsReadProjection
         int offset)
     {
         int total = value.length();
-        int from = Math.min(offset, total);
-        int to = Math.min(from + limit, total);
+        int from = DcsXmlCodec.safeStart(value, Math.min(offset, total));
+        long requestedEnd = (long)from + Math.max(1, limit);
+        int to = DcsXmlCodec.safeEndAtOrBefore(value, from,
+            (int)Math.min(total, requestedEnd));
+        if (to == from && from < total)
+        {
+            to = DcsXmlCodec.nextBoundary(value, from);
+        }
         String page = value.substring(from, to);
         StringBuilder result = new StringBuilder("# DCS value: ").append(type).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Address:** `").append(address).append("`\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Characters:** ").append(total)
             .append(Pagination.truncationNotice(page.length(), total)).append("\n\n") //$NON-NLS-1$
             .append("**Page characters:** ").append(page.length()).append("\n\n") //$NON-NLS-1$
-            .append("**Offset:** ").append(offset).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("**Offset:** ").append(from).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
             .append("**Next offset:** ").append(to < total ? Integer.toString(to) : "none") //$NON-NLS-1$ //$NON-NLS-2$
             .append("\n\n## Value\n\n"); //$NON-NLS-1$
         appendFenced(result, page);
@@ -1649,37 +1652,9 @@ public final class DcsReadProjection
             return new CollectionRef(address, items, null);
         }
 
-        static CollectionRef empty(String rootFqn, String type)
-        {
-            return success(child(rootFqn, collectionName(type)), Collections.<NodeRef> emptyList());
-        }
-
         static CollectionRef failure(String error)
         {
             return new CollectionRef(null, Collections.<NodeRef> emptyList(), error);
-        }
-
-        private static String collectionName(String type)
-        {
-            switch (type)
-            {
-                case "dataSource": //$NON-NLS-1$
-                    return "dataSources"; //$NON-NLS-1$
-                case "dataSet": //$NON-NLS-1$
-                    return "dataSets"; //$NON-NLS-1$
-                case "field": //$NON-NLS-1$
-                    return "fields"; //$NON-NLS-1$
-                case "parameter": //$NON-NLS-1$
-                    return "parameters"; //$NON-NLS-1$
-                case "calculatedField": //$NON-NLS-1$
-                    return "calculatedFields"; //$NON-NLS-1$
-                case "totalField": //$NON-NLS-1$
-                    return "totalFields"; //$NON-NLS-1$
-                case "variant": //$NON-NLS-1$
-                    return FEATURE_VARIANTS;
-                default:
-                    return type;
-            }
         }
     }
 }

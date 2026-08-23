@@ -481,6 +481,36 @@ public class DcsWriterTest
     }
 
     @Test
+    public void testMalformedDataSetAutoFillBooleanIsError()
+    {
+        Result result = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT 1\",\"autoFillFields\":{}}]}"), null); //$NON-NLS-1$
+
+        assertTrue(result.hasError());
+        assertTrue(result.error, result.error.contains("autoFillFields")); //$NON-NLS-1$
+        assertTrue(result.error, result.error.contains("true or false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMalformedDataSetLinkBooleansAreErrors()
+    {
+        String prefix = "{\"dataSetLinks\":[{\"sourceDataSet\":\"A\"," //$NON-NLS-1$
+            + "\"destinationDataSet\":\"B\",\"sourceExpression\":\"Key\"," //$NON-NLS-1$
+            + "\"destinationExpression\":\"Key\","; //$NON-NLS-1$
+
+        Result parameterList = DcsWriter.apply(newSchema(),
+            json(prefix + "\"parameterListAllowed\":{}}]}"), null); //$NON-NLS-1$
+        assertTrue(parameterList.hasError());
+        assertTrue(parameterList.error, parameterList.error.contains("parameterListAllowed")); //$NON-NLS-1$
+
+        Result required = DcsWriter.apply(newSchema(),
+            json(prefix + "\"required\":\"sometimes\"}]}"), null); //$NON-NLS-1$
+        assertTrue(required.hasError());
+        assertTrue(required.error, required.error.contains("required")); //$NON-NLS-1$
+        assertTrue(required.error, required.error.contains("true or false")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testEmptyRoleIsError()
     {
         Result r = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"query\"," //$NON-NLS-1$

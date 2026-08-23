@@ -1573,6 +1573,11 @@ public final class DcsWriter
                 + "under 'items'."); //$NON-NLS-1$
         String dataSource = nonEmptyString(entry, KEY_DATA_SOURCE);
         Boolean autoFill = boolMember(entry, KEY_AUTO_FILL);
+        if (entry.has(KEY_AUTO_FILL) && autoFill == null)
+        {
+            return DataSetParseResult.failed(ERR_DATA_SET + where + ") '" + KEY_AUTO_FILL //$NON-NLS-1$
+                + "' must be true or false."); //$NON-NLS-1$
+        }
 
         List<JsonObject> fieldEntries = objectArray(entry, KEY_FIELDS);
         if (fieldEntries == null)
@@ -1636,10 +1641,22 @@ public final class DcsWriter
                     + "destinationDataSet, sourceExpression, and destinationExpression. Add the " //$NON-NLS-1$
                     + "missing member and retry."; //$NON-NLS-1$
             }
+            Boolean parameterListAllowed = boolMember(entry, KEY_PARAMETER_LIST_ALLOWED);
+            if (entry.has(KEY_PARAMETER_LIST_ALLOWED) && parameterListAllowed == null)
+            {
+                return "Data-set link '" + where + "' member '" + KEY_PARAMETER_LIST_ALLOWED //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' must be true or false."; //$NON-NLS-1$
+            }
+            Boolean required = boolMember(entry, KEY_REQUIRED);
+            if (entry.has(KEY_REQUIRED) && required == null)
+            {
+                return "Data-set link '" + where + "' member '" + KEY_REQUIRED //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' must be true or false."; //$NON-NLS-1$
+            }
             plan.dataSetLinks.add(new DataSetLinkPlan(source, destination, sourceExpression,
                 destinationExpression, stringMember(entry, KEY_PARAMETER),
-                boolMember(entry, KEY_PARAMETER_LIST_ALLOWED), stringMember(entry, KEY_LINK_CONDITION),
-                stringMember(entry, KEY_START_EXPRESSION), boolMember(entry, KEY_REQUIRED)));
+                parameterListAllowed, stringMember(entry, KEY_LINK_CONDITION),
+                stringMember(entry, KEY_START_EXPRESSION), required));
         }
         return null;
     }

@@ -49,6 +49,42 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testNullSchemaCollectionsUseMaterializedCanonicalAddresses()
+    {
+        String root = "Report.Empty"; //$NON-NLS-1$
+        DataCompositionSchema materialized =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchema();
+        materialized.setDefaultSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings());
+        String[][] cases = {
+            {"dataSource", "#/dataSources"}, {"dataSet", "#/dataSets"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"field", "#/dataSets"}, {"parameter", "#/parameters"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"calculatedField", "#/calculatedFields"}, {"totalField", "#/totalFields"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"variant", "#/variants"}, {"grouping", "#/defaultSettings/items"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"table", "#/defaultSettings/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"selection", "#/defaultSettings/selection/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"filter", "#/defaultSettings/filter/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"dataParameter", "#/defaultSettings/dataParameters/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"order", "#/defaultSettings/order/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"conditionalAppearance", "#/defaultSettings/conditionalAppearance/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"userField", "#/defaultSettings/userFields/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"outputParameter", "#/defaultSettings/outputParameters/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"userSettings", "#/defaultSettings/additionalProperties"} //$NON-NLS-1$ //$NON-NLS-2$
+        };
+
+        for (String[] one : cases)
+        {
+            DcsReadProjection.Result absent = render(null, root, one[0]);
+            DcsReadProjection.Result present = render(materialized, root, one[0]);
+            String address = "**Address:** `" + root + one[1] + "`"; //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(one[0] + ": " + absent.error(), absent.isSuccess()); //$NON-NLS-1$
+            assertTrue(one[0] + ": " + present.error(), present.isSuccess()); //$NON-NLS-1$
+            assertTrue(one[0] + ": " + absent.markdown(), absent.markdown().contains(address)); //$NON-NLS-1$
+            assertTrue(one[0] + ": " + present.markdown(), present.markdown().contains(address)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testDynamicListSummaryAdvertisesPagedByteExactQueryText()
     {
         DynamicListExtInfo list = FormFactory.eINSTANCE.createDynamicListExtInfo();
@@ -75,6 +111,31 @@ public class DcsReadProjectionTest
         assertTrue(first.markdown(), first.markdown().contains("**Page characters:** 12")); //$NON-NLS-1$
         assertTrue(first.markdown(), first.markdown().contains("**Next offset:** 12")); //$NON-NLS-1$
         assertTrue(second.markdown(), second.markdown().contains("**Next offset:** none")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDynamicListScalarPagesNeverSplitSurrogatePairs()
+    {
+        DynamicListExtInfo list = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        String query = "A\uD83D\uDE00BC"; //$NON-NLS-1$
+        list.eSet(list.eClass().getEStructuralFeature("queryText"), query); //$NON-NLS-1$
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        String address = root + "#/queryText"; //$NON-NLS-1$
+
+        DcsReadProjection.Result first = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            list, DcsAddress.parse(address).address(), "dynamicList", "en", 2, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result second = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            list, DcsAddress.parse(address).address(), "dynamicList", "en", 100, 1); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(second.error(), second.isSuccess());
+
+        String firstPage = fencedValue(first.markdown());
+        String secondPage = fencedValue(second.markdown());
+        assertEquals(query, firstPage + secondPage);
+        assertFalse(hasUnpairedSurrogate(firstPage));
+        assertFalse(hasUnpairedSurrogate(secondPage));
+        assertTrue(first.markdown(), first.markdown().contains("**Next offset:** 1")); //$NON-NLS-1$
+        assertTrue(second.markdown(), second.markdown().contains("**Offset:** 1")); //$NON-NLS-1$
     }
 
     @Test
@@ -405,5 +466,26 @@ public class DcsReadProjectionTest
         int start = markdown.indexOf(opening) + opening.length();
         int end = markdown.lastIndexOf("\n```"); //$NON-NLS-1$
         return markdown.substring(start, end);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value)
+    {
+        for (int i = 0; i < value.length(); i++)
+        {
+            char current = value.charAt(i);
+            if (Character.isHighSurrogate(current))
+            {
+                if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1)))
+                {
+                    return true;
+                }
+                i++;
+            }
+            else if (Character.isLowSurrogate(current))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

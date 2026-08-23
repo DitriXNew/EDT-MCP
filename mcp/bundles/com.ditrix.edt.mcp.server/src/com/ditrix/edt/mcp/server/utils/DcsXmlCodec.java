@@ -219,7 +219,7 @@ public final class DcsXmlCodec
         return GsonProvider.toJson(result);
     }
 
-    private static int safeStart(String value, int offset)
+    static int safeStart(String value, int offset)
     {
         if (offset > 0 && offset < value.length()
             && Character.isHighSurrogate(value.charAt(offset - 1))
@@ -230,7 +230,7 @@ public final class DcsXmlCodec
         return offset;
     }
 
-    private static int safeEndAtOrBefore(String value, int start, int end)
+    static int safeEndAtOrBefore(String value, int start, int end)
     {
         int bounded = Math.max(start, Math.min(end, value.length()));
         if (bounded > start && bounded < value.length()
@@ -242,7 +242,7 @@ public final class DcsXmlCodec
         return bounded;
     }
 
-    private static int nextBoundary(String value, int start)
+    static int nextBoundary(String value, int start)
     {
         if (start < value.length() - 1 && Character.isHighSurrogate(value.charAt(start))
             && Character.isLowSurrogate(value.charAt(start + 1)))

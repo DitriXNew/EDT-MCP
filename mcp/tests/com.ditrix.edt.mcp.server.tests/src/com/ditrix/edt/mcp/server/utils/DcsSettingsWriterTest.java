@@ -35,7 +35,9 @@ import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
+import com._1c.g5.v8.dt.mcore.Structure;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -673,6 +675,37 @@ public class DcsSettingsWriterTest
             json("{}"), LANGUAGES); //$NON-NLS-1$
         assertTrue(bareSelection.error(), bareSelection.isSuccess());
         assertNull(bareSelection.settings().getSelection());
+    }
+
+    @Test
+    public void testSettingsRootReplaceRefusesAdditionalPropertiesAndSupportedRootStillReplaces()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = plan(settingsBody());
+        Structure additionalProperties = McoreFactory.eINSTANCE.createStructure();
+        settings.setAdditionalProperties(additionalProperties);
+        schema.setDefaultSettings(settings);
+        DcsAddress target = address("Report.Sales#/defaultSettings"); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(schema);
+
+        String refusal = DcsMutationGuard.replaceError(schema, target);
+
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("additionalProperties")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains(additionalProperties.eClass().getName()));
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DataCompositionSchema supported = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        supported.setDefaultSettings(plan(settingsBody()));
+        assertNull(DcsMutationGuard.replaceError(supported, target));
+        DcsSettingsWriter.SchemaResult replaced = DcsSettingsWriter.planSchema(supported,
+            "replace", "userSettings", target, //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"selection\":{\"items\":[]}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        replaced.plan().commit(supported);
+        assertNotNull(supported.getDefaultSettings().getSelection());
+        assertNull(supported.getDefaultSettings().getFilter());
+        assertNull(supported.getDefaultSettings().getOrder());
     }
 
     private static DataCompositionSettings plan(JsonObject body)
