@@ -27,6 +27,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -1064,6 +1065,142 @@ public class DcsSchemaWriterTest
         assertEquals(1, ((DataCompositionSchemaDataSetUnion)schema.getDataSets().get(0)).getItems().size());
     }
 
+    @Test
+    public void testNumericSelectorUsesNaturalKeyFirstThenIndexAndRefusesCollision()
+    {
+        DataCompositionSchema unnamed = newSchema();
+        unnamed.getParameters().add(DcsFactory.eINSTANCE.createDataCompositionSchemaParameter());
+        DcsReadProjection.Result unnamedPage = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, unnamed, address("Report.Sales"), "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "en", 100, 0); //$NON-NLS-1$
+        assertTrue(unnamedPage.error(), unnamedPage.isSuccess());
+        assertTrue(unnamedPage.markdown(), unnamedPage.markdown().contains(
+            "Report.Sales#/parameters/0")); //$NON-NLS-1$
+        DcsSchemaWriter.Result unnamedRemoved = apply(unnamed, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/0", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(unnamedRemoved.error(), unnamedRemoved.isSuccess());
+        assertTrue(unnamed.getParameters().isEmpty());
+
+        DataCompositionSchema named = newSchema();
+        DataCompositionSchemaParameter zero = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        zero.setName("0"); //$NON-NLS-1$
+        named.getParameters().add(zero);
+        DcsReadProjection.Result namedPage = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, named, address("Report.Sales"), "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "en", 100, 0); //$NON-NLS-1$
+        assertTrue(namedPage.error(), namedPage.isSuccess());
+        assertTrue(namedPage.markdown(), namedPage.markdown().contains(
+            "Report.Sales#/parameters/0")); //$NON-NLS-1$
+        DcsSchemaWriter.Result namedRemoved = apply(named, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/0", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(namedRemoved.error(), namedRemoved.isSuccess());
+        assertTrue(named.getParameters().isEmpty());
+
+        DataCompositionSchema conflicting = newSchema();
+        conflicting.getParameters().add(DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter());
+        DataCompositionSchemaParameter namedZero = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        namedZero.setName("0"); //$NON-NLS-1$
+        conflicting.getParameters().add(namedZero);
+        String beforeHash = DcsHash.compute(conflicting);
+        DcsReadProjection.Result conflictPage = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, conflicting, address("Report.Sales"), "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "en", 100, 0); //$NON-NLS-1$
+        assertTrue(conflictPage.error(), conflictPage.isSuccess());
+        assertTrue(conflictPage.markdown(), conflictPage.markdown().contains(
+            "Report.Sales#/parameters/0")); //$NON-NLS-1$
+        DcsSchemaWriter.Result refused = apply(conflicting, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/0", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(refused.isSuccess());
+        assertTrue(refused.error(), refused.error().contains("selector '0' identifies 2")); //$NON-NLS-1$
+        assertTrue(refused.error(), refused.error().contains("address is ambiguous")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(conflicting));
+    }
+
+    @Test
+    public void testExactDataSetLinkCanBeUpdatedAndAuthoritativelyReplaced()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("A", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(dataSet("B", "SELECT 2")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetLink link = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("A"); //$NON-NLS-1$
+        link.setDestinationDataSet("B"); //$NON-NLS-1$
+        link.setSourceExpression("OldSource"); //$NON-NLS-1$
+        link.setDestinationExpression("OldDestination"); //$NON-NLS-1$
+        link.setRequired(true);
+        schema.getDataSetLinks().add(link);
+
+        DcsSchemaWriter.Result updated = apply(schema, "update", "schema", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSetLinks/0", //$NON-NLS-1$
+            "{\"destinationExpression\":\"UpdatedDestination\"}"); //$NON-NLS-1$
+        assertTrue(updated.error(), updated.isSuccess());
+        assertEquals(1, schema.getDataSetLinks().size());
+        DataCompositionSchemaDataSetLink updatedLink = schema.getDataSetLinks().get(0);
+        assertEquals("OldSource", updatedLink.getSourceExpression()); //$NON-NLS-1$
+        assertEquals("UpdatedDestination", updatedLink.getDestinationExpression()); //$NON-NLS-1$
+        assertTrue(updatedLink.isRequired());
+        assertFalse(updatedLink.eIsSet(updatedLink.eClass()
+            .getEStructuralFeature("parameterListAllowed"))); //$NON-NLS-1$
+
+        DcsSchemaWriter.Result replaced = apply(schema, "replace", "schema", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSetLinks/0", //$NON-NLS-1$
+            "{\"sourceDataSet\":\"B\",\"destinationDataSet\":\"A\"," //$NON-NLS-1$
+                + "\"sourceExpression\":\"NewSource\"," //$NON-NLS-1$
+                + "\"destinationExpression\":\"NewDestination\"}"); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertEquals(1, schema.getDataSetLinks().size());
+        DataCompositionSchemaDataSetLink replacedLink = schema.getDataSetLinks().get(0);
+        DataCompositionSchemaDataSetLink defaults = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        assertEquals("B", replacedLink.getSourceDataSet()); //$NON-NLS-1$
+        assertEquals("A", replacedLink.getDestinationDataSet()); //$NON-NLS-1$
+        assertEquals(defaults.isRequired(), replacedLink.isRequired());
+        assertEquals(defaults.isParameterListAllowed(), replacedLink.isParameterListAllowed());
+    }
+
+    @Test
+    public void testDataSetUpdateRefusesDeclaredSubtypeChangeForEveryExistingKind()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("Query", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetObject object = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetObject();
+        object.setName("Object"); //$NON-NLS-1$
+        object.setObjectName("Catalog.Products"); //$NON-NLS-1$
+        schema.getDataSets().add(object);
+        DataCompositionSchemaDataSetUnion union = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetUnion();
+        union.setName("Union"); //$NON-NLS-1$
+        schema.getDataSets().add(union);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result query = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Query", "{\"type\":\"object\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result objectResult = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Object", "{\"type\":\"union\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result unionResult = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Union", "{\"type\":\"query\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (DcsSchemaWriter.Result result : Arrays.asList(query, objectResult, unionResult))
+        {
+            assertFalse(result.isSuccess());
+            assertTrue(result.error(), result.error().contains("action='update'")); //$NON-NLS-1$
+            assertTrue(result.error(), result.error().contains("subtype")); //$NON-NLS-1$
+            assertTrue(result.error(), result.error().contains("action='replace'")); //$NON-NLS-1$
+        }
+        assertTrue(query.error(), query.error().contains("'query'")); //$NON-NLS-1$
+        assertTrue(query.error(), query.error().contains("'object'")); //$NON-NLS-1$
+        assertTrue(objectResult.error(), objectResult.error().contains("'object'")); //$NON-NLS-1$
+        assertTrue(objectResult.error(), objectResult.error().contains("'union'")); //$NON-NLS-1$
+        assertTrue(unionResult.error(), unionResult.error().contains("'union'")); //$NON-NLS-1$
+        assertTrue(unionResult.error(), unionResult.error().contains("'query'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
     private static DcsSchemaWriter.Result apply(DataCompositionSchema schema, String action, String type,
         String address, String body)
     {
@@ -1086,6 +1223,13 @@ public class DcsSchemaWriterTest
     private static JsonObject json(String value)
     {
         return JsonParser.parseString(value).getAsJsonObject();
+    }
+
+    private static DcsAddress address(String value)
+    {
+        DcsAddress.ParseResult parsed = DcsAddress.parse(value);
+        assertTrue(parsed.failure() == null ? value : parsed.failure().message(), parsed.isSuccess());
+        return parsed.address();
     }
 
     private static void assertAmbiguousRename(DcsSchemaWriter.Result result, String type)

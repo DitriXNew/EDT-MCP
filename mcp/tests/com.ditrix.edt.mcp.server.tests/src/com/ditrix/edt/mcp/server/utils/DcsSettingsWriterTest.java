@@ -935,6 +935,110 @@ public class DcsSettingsWriterTest
         assertTrue(unique.getSettingsVariants().isEmpty());
     }
 
+    @Test
+    public void testVariantNumericSelectorUsesNaturalKeyBeforeIndexFallback()
+    {
+        DataCompositionSchema unnamed = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        unnamed.getSettingsVariants().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant());
+        DcsSettingsWriter.SchemaResult unnamedRemoved = DcsSettingsWriter.planSchema(unnamed,
+            "remove", "variant", address("Report.Sales#/variants/0"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(unnamedRemoved.error(), unnamedRemoved.isSuccess());
+        unnamedRemoved.plan().commit(unnamed);
+        assertTrue(unnamed.getSettingsVariants().isEmpty());
+
+        DataCompositionSchema named = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        SettingsVariant zero = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        zero.setName("0"); //$NON-NLS-1$
+        named.getSettingsVariants().add(zero);
+        DcsSettingsWriter.SchemaResult namedRemoved = DcsSettingsWriter.planSchema(named,
+            "remove", "variant", address("Report.Sales#/variants/0"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(namedRemoved.error(), namedRemoved.isSuccess());
+        namedRemoved.plan().commit(named);
+        assertTrue(named.getSettingsVariants().isEmpty());
+
+        DataCompositionSchema conflicting = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        conflicting.getSettingsVariants().add(
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createSettingsVariant());
+        SettingsVariant namedZero = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        namedZero.setName("0"); //$NON-NLS-1$
+        conflicting.getSettingsVariants().add(namedZero);
+        String beforeHash = DcsHash.compute(conflicting);
+        DcsSettingsWriter.SchemaResult refused = DcsSettingsWriter.planSchema(conflicting,
+            "remove", "variant", address("Report.Sales#/variants/0"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse(refused.isSuccess());
+        assertTrue(refused.error(), refused.error().contains("selector '0' identifies 2")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(conflicting));
+    }
+
+    @Test
+    public void testWholeSettingsUpdateRefusesCreatingEveryMissingHolder()
+    {
+        DataCompositionSettings settings = plan(json("{}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+        String[] holders = {"selection", "filter", "order", "conditionalAppearance", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "dataParameters", "outputParameters", "userFields"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String holder : holders)
+        {
+            DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(settings,
+                java.util.Collections.emptyList(), "update", "userSettings", //$NON-NLS-1$ //$NON-NLS-2$
+                json("{\"" + holder + "\":{}}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(holder, result.isSuccess());
+            assertTrue(result.error(), result.error().contains("body." + holder)); //$NON-NLS-1$
+            assertTrue(result.error(), result.error().contains("action='upsert'")); //$NON-NLS-1$
+            assertEquals(beforeHash, DcsHash.compute(settings));
+        }
+
+        DataCompositionSchema reportSchema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        reportSchema.setDefaultSettings(settings);
+        DcsSettingsWriter.SchemaResult report = DcsSettingsWriter.planSchema(
+            reportSchema, "update", "userSettings", //$NON-NLS-1$ //$NON-NLS-2$
+            address("Report.Sales#/defaultSettings"), json("{\"selection\":{}}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(report.isSuccess());
+        assertTrue(report.error(), report.error().contains("body.selection")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult dynamic = DcsSettingsWriter.planDynamicList(settings,
+            "update", "userSettings", //$NON-NLS-1$ //$NON-NLS-2$
+            address("Catalog.Products.Form.List.Attribute.List#/listSettings"), //$NON-NLS-1$
+            json("{\"filter\":{}}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(dynamic.isSuccess());
+        assertTrue(dynamic.error(), dynamic.error().contains("body.filter")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExactConditionalAppearanceSelectionFieldCanBeUpdatedAndReplaced()
+    {
+        DataCompositionSettings settings = plan(json("{\"conditionalAppearance\":{\"items\":[" //$NON-NLS-1$
+            + "{\"selection\":{\"items\":[{\"use\":false,\"field\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"Old\"}}]}}]}}")); //$NON-NLS-1$
+        java.util.List<String> path = Arrays.asList("conditionalAppearance", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "selection", "items", "0"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        DcsSettingsWriter.SettingsResult updated = DcsSettingsWriter.planSettings(settings, path,
+            "update", "conditionalAppearance", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"field\":{\"kind\":\"field\",\"value\":\"Updated\"}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(updated.error(), updated.isSuccess());
+        DataCompositionConditionalAppearanceItem rule = updated.settings()
+            .getConditionalAppearance().getItems().get(0);
+        DataCompositionAppearanceField updatedField = (DataCompositionAppearanceField)
+            rule.getSelection().getItems().get(0);
+        assertEquals("Updated", updatedField.getField().getValue()); //$NON-NLS-1$
+        assertFalse(updatedField.isUse());
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(updated.settings(),
+            path, "replace", "conditionalAppearance", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"field\":{\"kind\":\"field\",\"value\":\"Replaced\"}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(replaced.error(), replaced.isSuccess());
+        DataCompositionAppearanceField replacedField = (DataCompositionAppearanceField)replaced
+            .settings().getConditionalAppearance().getItems().get(0).getSelection().getItems().get(0);
+        DataCompositionAppearanceField defaults = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionAppearanceField();
+        assertEquals("Replaced", replacedField.getField().getValue()); //$NON-NLS-1$
+        assertEquals(defaults.isUse(), replacedField.isUse());
+    }
+
     private static DataCompositionSettings plan(JsonObject body)
     {
         DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,

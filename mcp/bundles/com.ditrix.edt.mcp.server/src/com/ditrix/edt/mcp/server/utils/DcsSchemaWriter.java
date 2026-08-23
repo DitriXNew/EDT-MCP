@@ -65,6 +65,7 @@ public final class DcsSchemaWriter
     private static final String KEY_TYPE = "type"; //$NON-NLS-1$
     private static final String KEY_OBJECT_NAME = "objectName"; //$NON-NLS-1$
     private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
+    private static final String KEY_DATA_SET_LINKS = "dataSetLinks"; //$NON-NLS-1$
 
     private DcsSchemaWriter()
     {
@@ -118,12 +119,19 @@ public final class DcsSchemaWriter
             String refusal = DcsMutationGuard.replaceError(schema, request.address);
             if (refusal != null) return Result.failure(refusal);
         }
+        String selectorError = selectorAmbiguityError(schema, request);
+        if (selectorError != null) return Result.failure(selectorError);
         String referenceError = identityReferenceError(schema, request);
         if (referenceError != null) return Result.failure(referenceError);
 
         DataCompositionSchema working = EcoreUtil.copy(schema);
         String renameError = renameForUpdate(working, request);
         if (renameError != null) return Result.failure(renameError);
+        if ((ACTION_UPDATE.equals(request.action) || ACTION_REPLACE.equals(request.action))
+            && isDataSetLinkPath(request.type, request.address.segments()))
+        {
+            return applyDataSetLinkMutation(schema, working, request, resolver);
+        }
         if (ACTION_REMOVE.equals(request.action))
         {
             String error = remove(working, request);
@@ -156,6 +164,102 @@ public final class DcsSchemaWriter
         if (assembledError != null) return Result.failure(assembledError);
         commitSchemaLayer(schema, working);
         return Result.success(applied);
+    }
+
+    private static Result applyDataSetLinkMutation(DataCompositionSchema schema,
+        DataCompositionSchema working, Request request, DcsWriter.TypeResolver resolver)
+    {
+        String selector = request.address.segments().get(1);
+        if (!DcsAddress.isZeroBasedIndex(selector))
+        {
+            return Result.failure("Data-set link selector '" + selector //$NON-NLS-1$
+                + "' must be a zero-based index copied from get."); //$NON-NLS-1$
+        }
+        int index = Integer.parseInt(selector);
+        if (index >= working.getDataSetLinks().size())
+        {
+            return Result.failure("Data-set link index '" + selector //$NON-NLS-1$
+                + "' is out of range. Re-run get."); //$NON-NLS-1$
+        }
+        JsonObject entry = request.body.deepCopy();
+        DataCompositionSchemaDataSetLink existing = working.getDataSetLinks().get(index);
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            mergeDataSetLinkDefaults(entry, existing);
+        }
+        int previousSize = working.getDataSetLinks().size();
+        DcsWriter.Result applied = DcsWriter.apply(working, wrap(KEY_DATA_SET_LINKS, entry),
+            resolver, request.languages);
+        if (applied.hasError()) return Result.failureJson(applied.error);
+        DataCompositionSchemaDataSetLink replacement = working.getDataSetLinks()
+            .remove(previousSize);
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            restoreUnsetDataSetLinkFeatures(request.body, existing, replacement);
+        }
+        working.getDataSetLinks().set(index, replacement);
+        String assembledError = assembledReferenceError(working, request.address.rootFqn());
+        if (assembledError != null) return Result.failure(assembledError);
+        commitSchemaLayer(schema, working);
+        return Result.success(applied);
+    }
+
+    private static void mergeDataSetLinkDefaults(JsonObject body,
+        DataCompositionSchemaDataSetLink link)
+    {
+        addMissingFeature(body, "sourceDataSet", link, "sourceDataSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "destinationDataSet", link, "destinationDataSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "sourceExpression", link, "sourceExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "destinationExpression", link, "destinationExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "parameter", link, "parameter"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "parameterListAllowed", link, "parameterListAllowed"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "linkCondition", link, "linkConditionExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "startExpression", link, "startExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "required", link, "required"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void restoreUnsetDataSetLinkFeatures(JsonObject requested,
+        DataCompositionSchemaDataSetLink existing, DataCompositionSchemaDataSetLink replacement)
+    {
+        restoreUnsetFeature(requested, "parameter", existing, replacement, "parameter"); //$NON-NLS-1$ //$NON-NLS-2$
+        restoreUnsetFeature(requested, "parameterListAllowed", existing, replacement, //$NON-NLS-1$
+            "parameterListAllowed"); //$NON-NLS-1$
+        restoreUnsetFeature(requested, "linkCondition", existing, replacement, //$NON-NLS-1$
+            "linkConditionExpression"); //$NON-NLS-1$
+        restoreUnsetFeature(requested, "startExpression", existing, replacement, //$NON-NLS-1$
+            "startExpression"); //$NON-NLS-1$
+        restoreUnsetFeature(requested, "required", existing, replacement, "required"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void restoreUnsetFeature(JsonObject requested, String member, EObject existing,
+        EObject replacement, String featureName)
+    {
+        org.eclipse.emf.ecore.EStructuralFeature existingFeature = existing.eClass()
+            .getEStructuralFeature(featureName);
+        org.eclipse.emf.ecore.EStructuralFeature replacementFeature = replacement.eClass()
+            .getEStructuralFeature(featureName);
+        if (!requested.has(member) && existingFeature != null && replacementFeature != null
+            && !existing.eIsSet(existingFeature))
+        {
+            replacement.eUnset(replacementFeature);
+        }
+    }
+
+    private static void addMissingFeature(JsonObject body, String member, EObject object,
+        String featureName)
+    {
+        if (body.has(member)) return;
+        org.eclipse.emf.ecore.EStructuralFeature feature = object.eClass()
+            .getEStructuralFeature(featureName);
+        Object value = feature == null ? null : object.eGet(feature);
+        if (value instanceof Boolean)
+        {
+            body.addProperty(member, (Boolean)value);
+        }
+        else if (value instanceof String)
+        {
+            body.addProperty(member, (String)value);
+        }
     }
 
     private static String identityReferenceError(DataCompositionSchema schema, Request request)
@@ -321,6 +425,74 @@ public final class DcsSchemaWriter
             + "designer first, re-run get, and retry."; //$NON-NLS-1$
     }
 
+    private static String ambiguousSelector(Request request, String operation, String selector,
+        int count)
+    {
+        return "Cannot " + operation + " " + request.type + " '" + selector + "' at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + request.address + "' because selector '" + selector + "' identifies " + count //$NON-NLS-1$ //$NON-NLS-2$
+            + " existing nodes. The address is ambiguous; disambiguate the conflicting natural " //$NON-NLS-1$
+            + "key and index fallback in the DCS designer first, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static String selectorAmbiguityError(DataCompositionSchema schema, Request request)
+    {
+        List<String> path = request.address.segments();
+        if (TYPE_DATA_SET.equals(request.type) && isDataSetPath(path))
+        {
+            return dataSetSelectorAmbiguityError(schema, request, path);
+        }
+        if (TYPE_FIELD.equals(request.type) && isFieldPath(path, true))
+        {
+            FieldTarget parent = resolveFieldTarget(schema, path);
+            if (parent.error != null) return parent.error.contains("address is ambiguous") //$NON-NLS-1$
+                ? parent.error : null;
+            NodeSelector selected = resolveSelector(parent.dataSet.getFields(),
+                path.get(path.size() - 1), KEY_DATA_PATH);
+            return selected.ambiguous()
+                ? selectorAmbiguity(request, path.get(path.size() - 1), selected)
+                : null;
+        }
+        String collection = collection(request.type);
+        if (collection == null || path.size() != 2 || !collection.equals(path.get(0))) return null;
+        NodeSelector selected = resolveSelector(identityItems(schema, request.type), path.get(1),
+            keyMember(request.type));
+        return selected.ambiguous()
+            ? selectorAmbiguity(request, path.get(1), selected) : null;
+    }
+
+    private static String dataSetSelectorAmbiguityError(DataCompositionSchema schema,
+        Request request, List<String> path)
+    {
+        List<DataSet> level = schema.getDataSets();
+        for (int selectorIndex = 1; selectorIndex < path.size(); selectorIndex += 2)
+        {
+            String selector = path.get(selectorIndex);
+            NodeSelector selected = resolveSelector(level, selector, KEY_NAME);
+            if (selected.ambiguous()) return selectorAmbiguity(request, selector, selected);
+            if (!(selected.target instanceof DataSet)) return null;
+            if (selectorIndex + 2 < path.size())
+            {
+                if (!(selected.target instanceof DataCompositionSchemaDataSetUnion)) return null;
+                level = ((DataCompositionSchemaDataSetUnion)selected.target).getItems();
+            }
+        }
+        return null;
+    }
+
+    private static String selectorAmbiguity(Request request, String selector,
+        NodeSelector selected)
+    {
+        String operation = request.action;
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            String replacement = string(request.body, keyMember(request.type));
+            if (replacement != null && !selector.equals(replacement)) operation = "rename"; //$NON-NLS-1$
+        }
+        return selected.naturalCount > 1
+            ? ambiguousIdentity(request, operation, selector, selected.naturalCount)
+            : ambiguousSelector(request, operation, selector, selected.count);
+    }
+
     private static String unsupportedField(Request request, String key, DataSetField field)
     {
         return "Field '" + key + "' at '" + request.address //$NON-NLS-1$ //$NON-NLS-2$
@@ -357,41 +529,36 @@ public final class DcsSchemaWriter
         String key)
     {
         List<EObject> result = new ArrayList<>();
+        for (EObject item : identityItems(schema, type))
+        {
+            org.eclipse.emf.ecore.EStructuralFeature feature = item.eClass()
+                .getEStructuralFeature(keyMember(type));
+            Object value = feature == null ? null : item.eGet(feature);
+            if (key.equals(value)) result.add(item);
+        }
+        return result;
+    }
+
+    private static List<EObject> identityItems(DataCompositionSchema schema, String type)
+    {
+        List<EObject> result = new ArrayList<>();
         if (TYPE_DATA_SOURCE.equals(type))
         {
-            for (DataCompositionSchemaDataSource item : schema.getDataSources())
-            {
-                if (key.equals(item.getName())) result.add(item);
-            }
+            result.addAll(schema.getDataSources());
         }
         else if (TYPE_DATA_SET.equals(type))
         {
-            for (DataSet item : schema.getDataSets())
-            {
-                if (key.equals(item.getName())) result.add(item);
-            }
+            result.addAll(schema.getDataSets());
         }
         else if (TYPE_PARAMETER.equals(type))
         {
-            for (DataCompositionSchemaParameter item : schema.getParameters())
-            {
-                if (key.equals(item.getName())) result.add(item);
-            }
+            result.addAll(schema.getParameters());
         }
         else if (TYPE_CALCULATED_FIELD.equals(type))
         {
-            for (DataCompositionSchemaCalculatedField item : schema.getCalculatedFields())
-            {
-                if (key.equals(item.getDataPath())) result.add(item);
-            }
+            result.addAll(schema.getCalculatedFields());
         }
-        else if (TYPE_TOTAL_FIELD.equals(type))
-        {
-            for (DataCompositionSchemaTotalField item : schema.getTotalFields())
-            {
-                if (key.equals(item.getDataPath())) result.add(item);
-            }
-        }
+        else if (TYPE_TOTAL_FIELD.equals(type)) result.addAll(schema.getTotalFields());
         return result;
     }
 
@@ -541,12 +708,6 @@ public final class DcsSchemaWriter
             DataSetTarget target = resolveDataSetTarget(schema, path, false);
             if (target.error != null) return target.error;
             DataSet existing = target.dataSet;
-            String key = path.get(path.size() - 1);
-            List<DataSet> matches = matchingDataSets(target.owner, key);
-            if (matches.size() != 1)
-            {
-                return ambiguousIdentity(request, "replace", key, matches.size()); //$NON-NLS-1$
-            }
             String kind = string(request.body, KEY_TYPE);
             if (kind == null)
             {
@@ -597,8 +758,7 @@ public final class DcsSchemaWriter
         List<String> path = request.address.segments();
         if (path.isEmpty())
             return "action='remove' refuses the bare DCS root. Address exactly one '#/...' node."; //$NON-NLS-1$
-        if (TYPE_SCHEMA.equals(request.type) && path.size() == 2
-            && "dataSetLinks".equals(path.get(0))) //$NON-NLS-1$
+        if (isDataSetLinkPath(request.type, path))
         {
             if (!DcsAddress.isZeroBasedIndex(path.get(1))) return "Data-set link selector '" //$NON-NLS-1$
                 + path.get(1) + "' must be a zero-based index copied from get."; //$NON-NLS-1$
@@ -613,15 +773,16 @@ public final class DcsSchemaWriter
             FieldTarget target = resolveFieldTarget(schema, path);
             if (target.error != null) return target.error;
             String fieldKey = path.get(path.size() - 1);
-            List<DataSetField> matches = dataSetFields(target.dataSet, fieldKey);
-            if (matches.isEmpty()) return "Field '" + fieldKey + "' was not found in data set '" //$NON-NLS-1$ //$NON-NLS-2$
-                + target.dataSet.getName() + "'. Re-run get."; //$NON-NLS-1$
-            if (matches.size() != 1)
+            NodeSelector selected = resolveSelector(target.dataSet.getFields(), fieldKey,
+                KEY_DATA_PATH);
+            if (selected.ambiguous())
             {
-                return ambiguousIdentity(request, removeOperation(request), fieldKey,
-                    matches.size());
+                return ambiguousSelector(request, removeOperation(request), fieldKey,
+                    selected.count);
             }
-            DataSetField field = matches.get(0);
+            if (selected.target == null) return "Field '" + fieldKey + "' was not found in data set '" //$NON-NLS-1$ //$NON-NLS-2$
+                + target.dataSet.getName() + "'. Re-run get."; //$NON-NLS-1$
+            DataSetField field = (DataSetField)selected.target;
             if (!(field instanceof DataCompositionSchemaDataSetField))
             {
                 return unsupportedField(request, fieldKey, field);
@@ -633,13 +794,7 @@ public final class DcsSchemaWriter
         {
             DataSetTarget target = resolveDataSetTarget(schema, path, false);
             if (target.error != null) return target.error;
-            String key = path.get(path.size() - 1);
-            List<DataSet> matches = matchingDataSets(target.owner, key);
-            if (matches.size() != 1)
-            {
-                return ambiguousIdentity(request, removeOperation(request), key, matches.size());
-            }
-            target.owner.remove(matches.get(0));
+            target.owner.remove(target.dataSet);
             return null;
         }
         String collection = collection(request.type);
@@ -647,18 +802,19 @@ public final class DcsSchemaWriter
             return "action='remove' for type='" + request.type //$NON-NLS-1$
                 + "' needs one exact canonical node address; got '" + request.address + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         String key = path.get(1);
-        List<EObject> matches = identityMatches(schema, request.type, key);
-        if (matches.isEmpty())
+        NodeSelector selected = resolveSelector(identityItems(schema, request.type), key,
+            keyMember(request.type));
+        if (selected.ambiguous())
+        {
+            return ambiguousSelector(request, removeOperation(request), key, selected.count);
+        }
+        if (selected.target == null)
         {
             return "No " + request.type + " named '" + key //$NON-NLS-1$ //$NON-NLS-2$
                 + "' exists at '" + request.address //$NON-NLS-1$
                 + "'. Re-run get and copy an existing address."; //$NON-NLS-1$
         }
-        if (matches.size() != 1)
-        {
-            return ambiguousIdentity(request, removeOperation(request), key, matches.size());
-        }
-        EObject target = matches.get(0);
+        EObject target = selected.target;
         if (target instanceof DataCompositionSchemaDataSource)
             schema.getDataSources().remove(target);
         else if (target instanceof DataSet) schema.getDataSets().remove(target);
@@ -943,6 +1099,18 @@ public final class DcsSchemaWriter
     private static String nestedDataSetUpdateError(Request request, DataSet existing,
         JsonObject body, String address)
     {
+        String declaredType = string(body, KEY_TYPE);
+        if (declaredType != null)
+        {
+            String existingType = dataSetKind(existing);
+            if (!existingType.equals(declaredType.toLowerCase(Locale.ROOT)))
+            {
+                return "action='update' cannot change data set '" + existing.getName() //$NON-NLS-1$
+                    + "' at '" + address + "' from subtype '" + existingType //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' to subtype '" + declaredType + "'. Use action='replace' at the exact " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "data-set address to change its subtype."; //$NON-NLS-1$
+            }
+        }
         if (body.has(KEY_FIELDS) && body.get(KEY_FIELDS).isJsonArray())
         {
             for (JsonObject field : objects(body.getAsJsonArray(KEY_FIELDS)))
@@ -1182,6 +1350,7 @@ public final class DcsSchemaWriter
 
     private static boolean isExactNode(String type, List<String> segments)
     {
+        if (isDataSetLinkPath(type, segments)) return true;
         if (TYPE_FIELD.equals(type))
         {
             return isFieldPath(segments, true);
@@ -1192,6 +1361,12 @@ public final class DcsSchemaWriter
         }
         String collection = collection(type);
         return collection != null && segments.size() == 2 && collection.equals(segments.get(0));
+    }
+
+    private static boolean isDataSetLinkPath(String type, List<String> segments)
+    {
+        return TYPE_SCHEMA.equals(type) && segments.size() == 2
+            && KEY_DATA_SET_LINKS.equals(segments.get(0));
     }
 
     private static String collection(String type)
@@ -1310,7 +1485,15 @@ public final class DcsSchemaWriter
         for (int selectorIndex = 1; selectorIndex < path.size(); selectorIndex += 2)
         {
             String selector = path.get(selectorIndex);
-            DataSet dataSet = findDataSetBySelector(level, selector);
+            NodeSelector selected = resolveSelector(level, selector, KEY_NAME);
+            if (selected.ambiguous())
+            {
+                return DataSetTarget.failure("Data set selector '" + selector //$NON-NLS-1$
+                    + "' identifies " + selected.count + " existing nodes at one address level. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "The address is ambiguous; disambiguate the conflicting natural key and " //$NON-NLS-1$
+                    + "index fallback in the DCS designer first, re-run get, and retry."); //$NON-NLS-1$
+            }
+            DataSet dataSet = (DataSet)selected.target;
             if (dataSet == null)
             {
                 if (allowMissingLeaf && selectorIndex == path.size() - 1)
@@ -1338,13 +1521,29 @@ public final class DcsSchemaWriter
             resolved.isEmpty() ? null : resolved.get(resolved.size() - 1));
     }
 
-    private static DataSet findDataSetBySelector(List<DataSet> dataSets, String selector)
+    private static NodeSelector resolveSelector(List<? extends EObject> items, String selector,
+        String featureName)
     {
-        DataSet named = findDataSet(dataSets, selector);
-        if (named != null) return named;
-        if (!DcsAddress.isZeroBasedIndex(selector)) return null;
-        int index = Integer.parseInt(selector);
-        return index < dataSets.size() ? dataSets.get(index) : null;
+        List<EObject> named = new ArrayList<>();
+        for (EObject item : items)
+        {
+            org.eclipse.emf.ecore.EStructuralFeature feature = item.eClass()
+                .getEStructuralFeature(featureName);
+            Object value = feature == null ? null : item.eGet(feature);
+            if (selector.equals(value)) named.add(item);
+        }
+        EObject indexed = null;
+        if (DcsAddress.isZeroBasedIndex(selector))
+        {
+            int index = Integer.parseInt(selector);
+            if (index < items.size()) indexed = items.get(index);
+        }
+        Set<EObject> candidates = new LinkedHashSet<>(named);
+        if (indexed != null) candidates.add(indexed);
+        if (candidates.size() > 1)
+            return NodeSelector.ambiguous(candidates.size(), named.size());
+        if (!named.isEmpty()) return NodeSelector.success(named.get(0), named.size());
+        return NodeSelector.success(indexed, 0);
     }
 
     private static List<String> dataSetKeys(List<DataSet> dataSets)
@@ -1580,6 +1779,35 @@ public final class DcsSchemaWriter
             + request.address + "'. Existing keys at that level: " + display(existing) //$NON-NLS-1$
             + ". Copy one of those addresses from dcs action='get', or use action='upsert' to create '" //$NON-NLS-1$
             + key + "'."; //$NON-NLS-1$
+    }
+
+    private static final class NodeSelector
+    {
+        final EObject target;
+        final int count;
+        final int naturalCount;
+
+        private NodeSelector(EObject target, int count, int naturalCount)
+        {
+            this.target = target;
+            this.count = count;
+            this.naturalCount = naturalCount;
+        }
+
+        static NodeSelector success(EObject target, int naturalCount)
+        {
+            return new NodeSelector(target, target == null ? 0 : 1, naturalCount);
+        }
+
+        static NodeSelector ambiguous(int count, int naturalCount)
+        {
+            return new NodeSelector(null, count, naturalCount);
+        }
+
+        boolean ambiguous()
+        {
+            return count > 1;
+        }
     }
 
     private static final class FieldTarget

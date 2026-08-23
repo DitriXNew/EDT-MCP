@@ -1176,6 +1176,57 @@ def test_settings_write_refuses_type_mismatch_without_touching_disk():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_conditional_appearance_field_address_copied_from_read_updates_disk():
+    report_name = "E2EDcsAppearanceFieldAddress"
+    root = _seed_report(report_name)
+    old_field = "OldAppearanceField"
+    new_field = "NewAppearanceField"
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "conditionalAppearance": {
+                "items": [{
+                    "selection": {
+                        "items": [{
+                            "use": True,
+                            "field": {"kind": "field", "value": old_field},
+                        }],
+                    },
+                }],
+            },
+        },
+    })
+    assert_ok(authored, "author a conditional-appearance selection field")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the appearance-field address fixture")
+    poll_disk_contains(dcs_rel, old_field,
+                       ctx="the original appearance field must reach Template.dcs")
+
+    holder = _get(root + "#/defaultSettings/conditionalAppearance",
+                  "conditionalAppearance")
+    assert_ok(holder, "read the appearance holder advertising its selection-field address")
+    expected_address = (root + "#/defaultSettings/conditionalAppearance/items/0/"
+                        "selection/items/0")
+    copied = re.search(re.escape(expected_address), holder.text)
+    assert copied, "the appearance read must print the exact field address: %s" % holder.text
+
+    before = _get(copied.group(0), "conditionalAppearance")
+    assert_ok(before, "read the appearance field through the copied address")
+    updated = _write(copied.group(0), "update", "conditionalAppearance", {
+        "field": {"kind": "field", "value": new_field},
+    }, expectedHash=_hash(before))
+    assert_ok(updated, "update the appearance field through its copied address")
+
+    after = _get(copied.group(0), "conditionalAppearance")
+    assert_ok(after, "read back the updated appearance field")
+    assert new_field in after.text and old_field not in after.text
+    poll_disk_contains(dcs_rel, new_field,
+                       ctx="the appearance-field update must reach Template.dcs")
+    poll_disk_lacks(dcs_rel, old_field,
+                    ctx="the old appearance field must leave Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert new_field in on_disk and old_field not in on_disk
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_default_settings_remove_refuses_mismatched_type_without_touching_disk():
     report_name = "E2EDcsSettingsRootRemoveGuard"
     root = _seed_report(report_name)

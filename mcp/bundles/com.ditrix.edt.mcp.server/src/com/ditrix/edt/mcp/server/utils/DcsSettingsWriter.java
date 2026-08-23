@@ -323,10 +323,16 @@ public final class DcsSettingsWriter
             }
             if (pointerName != null)
             {
-                List<Integer> matches = findVariants(variants, pointerName);
-                if (matches.size() > 1)
+                List<Integer> naturalMatches = findVariants(variants, pointerName);
+                if (naturalMatches.size() > 1)
                 {
                     return SchemaResult.failure(ambiguousVariant(action, pointerName,
+                        address.toString(), naturalMatches.size()));
+                }
+                List<Integer> matches = findVariantSelectors(variants, pointerName);
+                if (matches.size() > 1)
+                {
+                    return SchemaResult.failure(ambiguousVariantSelector(action, pointerName,
                         address.toString(), matches.size()));
                 }
             }
@@ -337,7 +343,8 @@ public final class DcsSettingsWriter
                     return SchemaResult.failure("action='remove' needs an exact '#/variants/<name>' " //$NON-NLS-1$
                         + "address copied from get."); //$NON-NLS-1$
                 }
-                int index = findVariant(variants, pointerName);
+                List<Integer> matches = findVariantSelectors(variants, pointerName);
+                int index = matches.isEmpty() ? -1 : matches.get(0).intValue();
                 if (index < 0)
                 {
                     return SchemaResult.failure("Variant '" + pointerName //$NON-NLS-1$
@@ -549,10 +556,16 @@ public final class DcsSettingsWriter
             && "settings".equals(segments.get(2))) //$NON-NLS-1$
         {
             String name = segments.get(1);
-            List<Integer> matches = findVariants(variants, name);
-            if (matches.size() > 1)
+            List<Integer> naturalMatches = findVariants(variants, name);
+            if (naturalMatches.size() > 1)
             {
                 return SettingsLocation.failure(ambiguousVariant(action, name, address.toString(),
+                    naturalMatches.size()));
+            }
+            List<Integer> matches = findVariantSelectors(variants, name);
+            if (matches.size() > 1)
+            {
+                return SettingsLocation.failure(ambiguousVariantSelector(action, name, address.toString(),
                     matches.size()));
             }
             int index = matches.isEmpty() ? -1 : matches.get(0).intValue();
@@ -741,6 +754,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getSelection(),
+                path + ".selection"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionSelectedFields holder = copy(settings.getSelection());
             if (holder == null)
             {
@@ -760,6 +776,8 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getFilter(), path + ".filter"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionFilter holder = copy(settings.getFilter());
             if (holder == null)
             {
@@ -779,6 +797,8 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getOrder(), path + ".order"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionOrder holder = copy(settings.getOrder());
             if (holder == null)
             {
@@ -798,6 +818,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getConditionalAppearance(),
+                path + ".conditionalAppearance"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionConditionalAppearance holder = copy(settings.getConditionalAppearance());
             if (holder == null)
             {
@@ -818,6 +841,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getDataParameters(),
+                path + ".dataParameters"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionDataParameterValues holder = copy(settings.getDataParameters());
             if (holder == null)
             {
@@ -838,6 +864,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getOutputParameters(),
+                path + ".outputParameters"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionOutputParameterValues holder = copy(settings.getOutputParameters());
             if (holder == null)
             {
@@ -858,6 +887,9 @@ public final class DcsSettingsWriter
             {
                 return objectError;
             }
+            String missing = missingHolderUpdate(action, settings.getUserFields(),
+                path + ".userFields"); //$NON-NLS-1$
+            if (missing != null) return missing;
             DataCompositionUserFields holder = ACTION_REPLACE.equals(action) ? null
                 : copy(settings.getUserFields());
             if (holder == null)
@@ -873,6 +905,13 @@ public final class DcsSettingsWriter
             settings.setUserFields(holder);
         }
         return null;
+    }
+
+    private static String missingHolderUpdate(String action, EObject holder, String path)
+    {
+        if (!ACTION_UPDATE.equals(action) || holder != null) return null;
+        return "action='update' cannot find the existing holder at '" + path //$NON-NLS-1$
+            + "'. Use action='upsert' to create it."; //$NON-NLS-1$
     }
 
     // ---- structure groups -------------------------------------------------------------------
@@ -2672,7 +2711,7 @@ public final class DcsSettingsWriter
             error = applyConditionalAppearance(holder, body, action, languages, version,
                 "conditionalAppearance"); //$NON-NLS-1$
         }
-        else if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
+        else if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), "conditionalAppearance/items"); //$NON-NLS-1$
             if (indexError != null)
@@ -2680,18 +2719,44 @@ public final class DcsSettingsWriter
                 return indexError;
             }
             DataCompositionConditionalAppearanceItem item = holder.getItems().get(selected);
-            if (ACTION_REPLACE.equals(action))
+            if (path.size() == 2)
             {
-                item = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearanceItem();
-                holder.getItems().set(selected, item);
+                if (ACTION_REPLACE.equals(action))
+                {
+                    item = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearanceItem();
+                    holder.getItems().set(selected, item);
+                }
+                error = applyConditionalAppearanceItem(item, body, action,
+                    languages, version, "conditionalAppearance/items/" + path.get(1)); //$NON-NLS-1$
             }
-            error = applyConditionalAppearanceItem(item, body, action,
-                languages, version, "conditionalAppearance/items/" + path.get(1)); //$NON-NLS-1$
+            else if ("selection".equals(path.get(2))) //$NON-NLS-1$
+            {
+                DataCompositionAppearanceFields fields = copy(item.getSelection());
+                if (fields == null)
+                {
+                    if (ACTION_UPDATE.equals(action))
+                    {
+                        return "action='update' cannot find conditional-appearance selection at '" //$NON-NLS-1$
+                            + "conditionalAppearance/items/" + path.get(1) //$NON-NLS-1$
+                            + "/selection'. Use action='upsert' to create it."; //$NON-NLS-1$
+                    }
+                    fields = DcsFactory.eINSTANCE.createDataCompositionAppearanceFields();
+                }
+                error = applyAppearanceFieldsPath(fields, path.subList(3, path.size()), body,
+                    action, "conditionalAppearance/items/" + path.get(1) + "/selection"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (error == null) item.setSelection(fields);
+            }
+            else
+            {
+                return "Conditional-appearance item address must continue through selection/items/" //$NON-NLS-1$
+                    + "<index>. Copy the canonical address from get."; //$NON-NLS-1$
+            }
         }
         else
         {
-            return "Conditional-appearance address must end at conditionalAppearance or " //$NON-NLS-1$
-                + "conditionalAppearance/items/<index>. Copy the canonical address from get."; //$NON-NLS-1$
+            return "Conditional-appearance address must end at conditionalAppearance, " //$NON-NLS-1$
+                + "conditionalAppearance/items/<index>, or an exact selection/items/<index> " //$NON-NLS-1$
+                + "below a rule. Copy the canonical address from get."; //$NON-NLS-1$
         }
         if (error == null)
         {
@@ -2834,19 +2899,51 @@ public final class DcsSettingsWriter
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
             if (itemBody == null) return arrayObjectError;
-            String itemMembers = checkMembers(itemBody, path + ".items[" + i + "]", KEY_USE, KEY_FIELD); //$NON-NLS-1$ //$NON-NLS-2$
-            if (itemMembers != null) return itemMembers;
             DataCompositionAppearanceField field = DcsFactory.eINSTANCE.createDataCompositionAppearanceField();
-            if (itemBody.has(KEY_USE))
-            {
-                Boolean use = bool(itemBody, KEY_USE, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (use == null) return booleanError;
-                field.setUse(use.booleanValue());
-            }
-            FieldResult value = fieldValue(itemBody.get(KEY_FIELD), path + ".items[" + i + "].field"); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = applyAppearanceField(field, itemBody,
+                path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+            fields.getItems().add(field);
+        }
+        return null;
+    }
+
+    private static String applyAppearanceFieldsPath(DataCompositionAppearanceFields fields,
+        List<String> path, JsonObject body, String action, String holderPath)
+    {
+        if (path.isEmpty()) return applyAppearanceFields(fields, body, action, holderPath);
+        if (path.size() != 2 || !KEY_ITEMS.equals(path.get(0)))
+        {
+            return "Appearance-field address must end at '" + holderPath //$NON-NLS-1$
+                + "' or '" + holderPath + "/items/<index>'. Copy the canonical address from get."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        int selected = index(path.get(1), fields.getItems().size(), holderPath + "/items"); //$NON-NLS-1$
+        if (indexError != null) return indexError;
+        DataCompositionAppearanceField field = fields.getItems().get(selected);
+        if (ACTION_REPLACE.equals(action))
+        {
+            field = DcsFactory.eINSTANCE.createDataCompositionAppearanceField();
+            fields.getItems().set(selected, field);
+        }
+        return applyAppearanceField(field, body, holderPath + "/items/" + path.get(1)); //$NON-NLS-1$
+    }
+
+    private static String applyAppearanceField(DataCompositionAppearanceField field, JsonObject body,
+        String path)
+    {
+        String members = checkMembers(body, path, KEY_USE, KEY_FIELD);
+        if (members != null) return members;
+        if (body.has(KEY_USE))
+        {
+            Boolean use = bool(body, KEY_USE, path);
+            if (use == null) return booleanError;
+            field.setUse(use.booleanValue());
+        }
+        if (body.has(KEY_FIELD))
+        {
+            FieldResult value = fieldValue(body.get(KEY_FIELD), path + ".field"); //$NON-NLS-1$
             if (value.error != null) return value.error;
             field.setField(value.value);
-            fields.getItems().add(field);
         }
         return null;
     }
@@ -4544,12 +4641,6 @@ public final class DcsSettingsWriter
         return result.isEmpty() ? "(none)" : String.join(", ", result); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private static int findVariant(List<SettingsVariant> variants, String name)
-    {
-        List<Integer> matches = findVariants(variants, name);
-        return matches.isEmpty() ? -1 : matches.get(0).intValue();
-    }
-
     private static List<Integer> findVariants(List<SettingsVariant> variants, String name)
     {
         List<Integer> result = new ArrayList<>();
@@ -4563,12 +4654,32 @@ public final class DcsSettingsWriter
         return result;
     }
 
+    private static List<Integer> findVariantSelectors(List<SettingsVariant> variants, String selector)
+    {
+        Set<Integer> result = new LinkedHashSet<>(findVariants(variants, selector));
+        if (DcsAddress.isZeroBasedIndex(selector))
+        {
+            int index = Integer.parseInt(selector);
+            if (index < variants.size()) result.add(Integer.valueOf(index));
+        }
+        return new ArrayList<>(result);
+    }
+
     private static String ambiguousVariant(String action, String name, String address, int count)
     {
         return "Cannot " + action + " variant '" + name + "' at '" + address //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' because natural key '" + name + "' matches " + count //$NON-NLS-1$ //$NON-NLS-2$
             + " existing nodes. The address is ambiguous; disambiguate the duplicates in the DCS " //$NON-NLS-1$
             + "designer first, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static String ambiguousVariantSelector(String action, String selector, String address,
+        int count)
+    {
+        return "Cannot " + action + " variant '" + selector + "' at '" + address //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' because selector '" + selector + "' identifies " + count //$NON-NLS-1$ //$NON-NLS-2$
+            + " existing nodes. The address is ambiguous; disambiguate the conflicting natural " //$NON-NLS-1$
+            + "key and index fallback in the DCS designer first, re-run get, and retry."; //$NON-NLS-1$
     }
 
     private static String variantNames(List<SettingsVariant> variants)
