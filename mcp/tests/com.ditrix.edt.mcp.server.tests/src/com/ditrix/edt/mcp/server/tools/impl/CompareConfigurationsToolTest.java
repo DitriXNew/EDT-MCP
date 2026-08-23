@@ -86,6 +86,14 @@ public class CompareConfigurationsToolTest
     private static final Pattern JOB_ID_ROW =
         Pattern.compile("(?m)^\\| jobId \\| ([^|]+) \\|$"); //$NON-NLS-1$
 
+    /**
+     * The one sentence the starting-budget outcome may print about a cancellation - and only where
+     * the hand-back's owner WITHHELD the hand-back, which is the only state in which anything
+     * observed that the comparison was not cancelled.
+     */
+    private static final String NOT_CANCELLED_CLAIM =
+        "The comparison was NOT cancelled and this is NOT its result."; //$NON-NLS-1$
+
     private BackgroundJobs jobs;
     private StubBackend backend;
     private CompareConfigurationsTool tool;
@@ -2554,6 +2562,294 @@ public class CompareConfigurationsToolTest
         assertContains(String.valueOf(rendered), "# Comparison: TestConfiguration"); //$NON-NLS-1$
         assertEquals("a queued comparison must not be cancelled for not having started yet", 0, //$NON-NLS-1$
             backend.handBacks());
+    }
+
+    /**
+     * The defect, and it is the whole branch's own defect mirrored: EDT accepted the batch and its
+     * scheduled job had still not been listed once when the starting budget ran out, so the call
+     * ended with a FAILURE. But the comparison is not ended by that branch and must not be -
+     * cancelling a batch that is still waiting to run removes the Eclipse job before the
+     * platform's own "the slot is free" step ever executes, and EDT then reports a comparison as
+     * active until it is restarted, which is precisely why the hand-back's owner withholds it. So
+     * the caller was told nothing came of a comparison that then started, took EDT's single slot
+     * under the very id it had been told led nowhere, and refused its next launch.
+     */
+    @Test
+    public void testAStartingBudgetThatRanOutIsAnOutcomeWithAnIdNotAFailure() throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        // What the registry answers for a comparison EDT has not begun: nothing was asked of the
+        // platform and the record is KEPT.
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_STARTED_YET);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        String text = String.valueOf(rendered);
+        assertContains(text, "**Not started:**"); //$NON-NLS-1$
+        assertContains(text, backend.lastComparisonId());
+    }
+
+    /**
+     * The half the caller ACTS on: the id is only useful with a way to use it, and the way out is
+     * the hand-back's own sentence rather than a second wording of it here.
+     */
+    @Test
+    public void testAStartingBudgetThatRanOutHandsBackTheWayToFreeTheSlot() throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_STARTED_YET);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        assertContains(String.valueOf(rendered), "releaseComparisonId"); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own test and its own literal: the ending must not be dressed up as a stop either. The
+     * hand-back was WITHHELD, so claiming the comparison was cancelled would be the same defect
+     * pointing the other way.
+     */
+    @Test
+    public void testAStartingBudgetThatRanOutClaimsNoCancellation() throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_STARTED_YET);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        String text = String.valueOf(rendered);
+        assertFalse("a comparison nobody ended must not be reported as stopped:\n" + text, //$NON-NLS-1$
+            text.contains("**Cancelled:**")); //$NON-NLS-1$
+        assertFalse(text.contains("was stopped before it finished")); //$NON-NLS-1$
+    }
+
+    /**
+     * The positive control for the pair below, and its own literal: when the hand-back's owner
+     * DID withhold - the one verdict that means EDT had not begun the comparison, so nothing was
+     * asked of the platform - "not cancelled" is a reading and must still be published. Without
+     * this pin, a branch that had simply stopped making the claim in every case would pass.
+     */
+    @Test
+    public void testAStartingBudgetWhoseHandBackWasWithheldStatesTheComparisonWasNotCancelled()
+        throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_STARTED_YET);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        assertContains(String.valueOf(rendered),
+            "The comparison was NOT cancelled and this is NOT its result."); //$NON-NLS-1$
+    }
+
+    /**
+     * The defect, and it is this branch's own defect pointing the other way. The hand-back is
+     * requested with {@link Ending#CANCELLED} like every other early ending, and EDT can begin the
+     * comparison inside the one poll interval between the last STARTING answer and that request.
+     * When it does, the hand-back really cancels it and answers FREED - and the wording that
+     * claimed "the comparison was NOT cancelled" unconditionally then stood immediately before the
+     * hand-back's own sentence saying the comparison had been ended and the slot released. One
+     * answer, two halves, contradicting each other.
+     *
+     * <p>Pinned as an ABSENCE, because the defect is a claim that must not be made: a test that
+     * only checked for the neutral wording would be passed by a branch that printed both.</p>
+     */
+    @Test
+    public void testAStartingBudgetWhoseHandBackEndedTheComparisonClaimsNoAbsenceOfCancellation()
+        throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        // EDT began it in the race window, so the hand-back it was asked for CANCELLED it.
+        backend.answerHandBackWith(SlotHandback.Verdict.FREED);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        String text = String.valueOf(rendered);
+        assertFalse("the hand-back ended the comparison, so 'NOT cancelled' is a claim nothing " //$NON-NLS-1$
+            + "observed - and it contradicts the sentence right after it:\n" + text, //$NON-NLS-1$
+            text.contains("NOT cancelled")); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal: dropping the claim must not drop the ANSWER. What became of the comparison
+     * is the hand-back's own sentence, and the outcome still has to publish it verbatim - a branch
+     * that fell silent would pass the absence pin above and tell the caller nothing.
+     */
+    @Test
+    public void testAStartingBudgetWhoseHandBackEndedTheComparisonPublishesWhatItDid()
+        throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.FREED);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        assertContains(String.valueOf(rendered),
+            "was ended and its temporary workspace released"); //$NON-NLS-1$
+    }
+
+    /**
+     * And its own literal for the other half: the outcome is still NOT a result, whichever way the
+     * hand-back went. That is the fact the whole branch exists to carry, and it is not the fact
+     * the fix removed.
+     */
+    @Test
+    public void testAStartingBudgetWhoseHandBackEndedTheComparisonStillClaimsNoResult()
+        throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.FREED);
+
+        Object rendered = quickTool().runComparison(launchRequest(), reporter(120_000L),
+            new Launch());
+
+        String text = String.valueOf(rendered);
+        assertContains(text, "**Not started:**"); //$NON-NLS-1$
+        assertContains(text, "This is NOT its result"); //$NON-NLS-1$
+    }
+
+    /**
+     * The fork itself, asked of EVERY verdict rather than of the two that happened to be written
+     * down. Pinning {@code NOT_STARTED_YET} and {@code FREED} alone leaves six verdicts unpinned,
+     * and an implementation that neutralised the wording for {@code FREED} only - the shape the
+     * pair above describes - keeps answering "the comparison was NOT cancelled" for
+     * {@code ALREADY_FREE}, {@code NOT_REGISTERED}, {@code NOT_FREED}, {@code LAUNCH_REFUSED},
+     * {@code NEVER_STARTED} and {@code UNREACHABLE}, and passes both.
+     * <p>
+     * The claim is a READING, and exactly one verdict is that reading: the one that means nothing
+     * was asked of the platform BECAUSE EDT had not begun the comparison. The expectation is
+     * therefore taken from {@link SlotHandback#platformHasNotBegun()} itself rather than from a
+     * verdict name copied beside it - and the count is pinned too, so widening that predicate
+     * cannot quietly widen this claim with it.
+     * <p>
+     * Every verdict IS reachable here: the value the branch reads comes from the hand-back's owner,
+     * and the stub answers as the owner does, so none of the eight has to be declared unreachable.
+     */
+    @Test
+    public void testTheNotCancelledClaimIsMadeForTheWITHHELDVerdictAndNoOther() throws Exception
+    {
+        List<String> wrong = new ArrayList<>();
+        int readings = 0;
+        for (SlotHandback.Verdict verdict : SlotHandback.Verdict.values())
+        {
+            backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+            backend.answerHandBackWith(verdict);
+
+            String text = String.valueOf(quickTool().runComparison(launchRequest(),
+                reporter(120_000L), new Launch()));
+
+            boolean withheld = SlotHandbacks.of(verdict, "probe").platformHasNotBegun(); //$NON-NLS-1$
+            readings += withheld ? 1 : 0;
+            if (text.contains(NOT_CANCELLED_CLAIM) != withheld)
+            {
+                wrong.add(verdict + (withheld ? " must claim it and does not" //$NON-NLS-1$
+                    : " claims it and nothing observed it")); //$NON-NLS-1$
+            }
+        }
+
+        assertEquals("exactly one verdict is a reading of 'not cancelled'; if that changed, this " //$NON-NLS-1$
+            + "test's expectation moved with it and is no longer pinning anything", 1, readings); //$NON-NLS-1$
+        assertTrue("'" + NOT_CANCELLED_CLAIM + "' may stand only where the hand-back was " //$NON-NLS-1$ //$NON-NLS-2$
+            + "WITHHELD: " + wrong, wrong.isEmpty()); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal, over the same eight: dropping the claim must never drop the ANSWER. What
+     * became of the comparison is the hand-back's own sentence, and the branch publishes it
+     * verbatim for every verdict - a wording that fell silent on the six that were unpinned would
+     * leave the caller holding an id and no account of it.
+     */
+    @Test
+    public void testEveryHandBackVerdictHasItsOwnAnswerPublishedVerbatim() throws Exception
+    {
+        List<String> silent = new ArrayList<>();
+        for (SlotHandback.Verdict verdict : SlotHandback.Verdict.values())
+        {
+            backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+            backend.answerHandBackWith(verdict);
+
+            String text = String.valueOf(quickTool().runComparison(launchRequest(),
+                reporter(120_000L), new Launch()));
+
+            String sentence = SlotHandbacks.of(verdict, backend.lastHandedBack()).sentence();
+            if (!text.contains(sentence))
+            {
+                silent.add(verdict.name());
+            }
+        }
+
+        assertTrue("the slot half of the answer is the hand-back's own sentence, published as it " //$NON-NLS-1$
+            + "stands, and these verdicts lost it: " + silent, silent.isEmpty()); //$NON-NLS-1$
+    }
+
+    /**
+     * The owner is still ASKED - the branch withholds nothing itself. Without this pin the fix
+     * would also be passed by a branch that stopped consulting the hand-back at all, which is how
+     * a comparison EDT had begun in the meantime would be left running with nobody accounting for
+     * it.
+     */
+    @Test
+    public void testAStartingBudgetThatRanOutStillAsksTheHandBackOwner() throws Exception
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_STARTED_YET);
+
+        quickTool().runComparison(launchRequest(), reporter(120_000L), new Launch());
+
+        assertEquals(1, backend.handBacks());
+    }
+
+    /**
+     * How {@code get_job_status} reads it, which is the question the outcome exists to answer: the
+     * job is DONE rather than FAILED, and its result is neither a comparison report nor an error.
+     */
+    @Test
+    public void testAStartingBudgetThatRanOutCompletesTheJobWithoutClaimingAReport()
+    {
+        backend.queuePollAnswers(startingTicks(CompareConfigurationsTool.MAX_STARTING_TICKS));
+        backend.answerHandBackWith(SlotHandback.Verdict.NOT_STARTED_YET);
+        backend.setReport("# Comparison: TestConfiguration"); //$NON-NLS-1$
+
+        String rendered = quickTool().execute(request(Map.of("waitSeconds", "20"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(rendered, "# Background job: done"); //$NON-NLS-1$
+        assertContains(rendered, "**Not started:**"); //$NON-NLS-1$
+        assertFalse("the job did not fail, so it must not be rendered as failed:\n" + rendered, //$NON-NLS-1$
+            rendered.contains("# Background job: failed")); //$NON-NLS-1$
+        assertFalse("nothing was compared, so no report may be claimed:\n" + rendered, //$NON-NLS-1$
+            rendered.contains("# Comparison: TestConfiguration")); //$NON-NLS-1$
+    }
+
+    /**
+     * The tool with the poll interval shortened, so the one-minute starting budget is reached in
+     * milliseconds. Everything else - the tick counts, the endings, the sentences - is production.
+     *
+     * @return the tool under test
+     */
+    private CompareConfigurationsTool quickTool()
+    {
+        return new CompareConfigurationsTool(backend, jobs, 1L);
+    }
+
+    /**
+     * @param count how many ticks to answer
+     * @return that many "EDT has accepted it and has not listed it yet" answers
+     */
+    private static Progress[] startingTicks(int count)
+    {
+        Progress[] answers = new Progress[count];
+        for (int tick = 0; tick < count; tick++)
+        {
+            answers[tick] = Progress.starting("EDT has accepted the comparison and has not " //$NON-NLS-1$
+                + "listed it yet, so it answers no status for it"); //$NON-NLS-1$
+        }
+        return answers;
     }
 
     /**

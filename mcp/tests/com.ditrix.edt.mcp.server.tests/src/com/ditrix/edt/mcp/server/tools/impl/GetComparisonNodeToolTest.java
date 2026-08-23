@@ -364,6 +364,132 @@ public class GetComparisonNodeToolTest
         assertTrue("the lookup must have been retried, not asked once", source.lookups > 1); //$NON-NLS-1$
     }
 
+    /**
+     * The defect: an address that resolves to nothing in a FINISHED tree is an ordinary way to
+     * call this tool - a mistyped FQN, a node id from another comparison, an object outside the
+     * scope - and the loop retried it every 200 ms until the whole of {@code waitSeconds} was
+     * gone, to produce the answer it already had on the first look. A finished tree builds no
+     * further nodes, so nothing about the answer could change.
+     */
+    @Test
+    public void testAMissingAddressInAFinishedTreeIsSettledByOneLook()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        call(source, args("comparisonId", "cmp-1", "objectFqn", "Catalog.Nonexistent", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "waitSeconds", "5")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("a finished tree cannot produce the node later, so looking again is waiting " //$NON-NLS-1$
+            + "for nothing", 1, source.lookups); //$NON-NLS-1$
+    }
+
+    /** Its own literal: stopping early must not change WHAT is answered, only how long it takes. */
+    @Test
+    public void testAMissingAddressInAFinishedTreeStillGetsTheAbsentAnswer()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Nonexistent", "waitSeconds", "5"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("a finished tree gives a definitive answer: " + message, //$NON-NLS-1$
+            message.contains("may not exist on that side")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control, and the distinction the fix must not blur: "the tree is finished" and "this
+     * node is not built yet" are different readings. A node that never surfaces inside an
+     * UNFINISHED tree is still waited for - that wait is the whole reason the retry exists, and a
+     * fix that ended the loop on any miss would have deleted it.
+     */
+    @Test
+    public void testAMissingAddressInAnUnfinishedTreeIsStillWaitedFor()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.UNFINISHED;
+
+        call(source, args("comparisonId", "cmp-1", "objectFqn", "Catalog.Products", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "waitSeconds", "1")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a tree still being built may yet produce the node: " + source.lookups, //$NON-NLS-1$
+            source.lookups > 1);
+    }
+
+    /**
+     * The defect: {@code attemptLocate} read the absence and the tree status in ONE boundary, and
+     * then only the absence left the method - so the refusal opened a SECOND boundary and asked
+     * the tree status again. The verdict, which is the whole point of the pair, was therefore
+     * assembled out of two instants.
+     *
+     * <p>The counterexample, and it is ordinary rather than exotic: the last look sees "no node,
+     * tree UNFINISHED", the engine then builds that very node and finishes the tree, and the
+     * second read sees FINISHED. The caller was told the object does not exist - about a node that
+     * by then does. Answering from the snapshot says "still being built", which is what was
+     * actually observed.</p>
+     */
+    @Test
+    public void testATreeThatFinishesWhileTheRefusalIsWordedDoesNotTurnItIntoAnAbsence()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        // First boundary: not built yet. Second boundary, if anyone opens one: finished.
+        source.treeStatuses.add(ComparisonNodeStatus.UNFINISHED);
+        source.treeStatuses.add(ComparisonNodeStatus.FINISHED);
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("the refusal must report the tree the look actually saw: " + message, //$NON-NLS-1$
+            message.contains("still being built")); //$NON-NLS-1$
+        assertFalse("a node absent from an unfinished tree is not a node that does not exist: " //$NON-NLS-1$
+            + message, message.contains("may not exist on that side")); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal, and the pin that makes the one above impossible to satisfy by luck: the
+     * whole refusal costs exactly ONE read boundary. Counting lookups cannot see this - a second
+     * {@code source.read} that asks only for the tree status performs no lookup at all - which is
+     * how the second boundary lived beside a lookup pin that stayed green.
+     */
+    @Test
+    public void testAnAddressThatResolvedToNothingIsJudgedInsideOneBoundary()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        call(source, args("comparisonId", "cmp-1", "objectFqn", "Catalog.Nonexistent", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "waitSeconds", "0")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the absence and the tree status are one observation, so the verdict they " //$NON-NLS-1$
+            + "produce must cost one boundary", 1, source.reads); //$NON-NLS-1$
+        assertEquals("and the tree status must be read once, inside it", 1, //$NON-NLS-1$
+            source.treeStatusCalls);
+    }
+
+    /**
+     * The control: on a tree that really is FINISHED the answer is unchanged. Without it the two
+     * pins above would also be passed by a refusal that had simply stopped saying "does not exist".
+     */
+    @Test
+    public void testASnapshotOfAFinishedTreeStillGivesTheDefinitiveAnswer()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatuses.add(ComparisonNodeStatus.FINISHED);
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Nonexistent", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("a finished tree gives a definitive answer: " + message, //$NON-NLS-1$
+            message.contains("may not exist on that side")); //$NON-NLS-1$
+    }
+
     // ==================== The read boundary ====================
 
     /**
@@ -730,6 +856,9 @@ public class GetComparisonNodeToolTest
         private final List<ComparisonNodeStatus> statuses = new ArrayList<>();
         private ComparisonNode node;
         private ComparisonNodeStatus treeStatus = ComparisonNodeStatus.FINISHED;
+        /** Tree statuses answered in order, the last one repeating; empty falls back to the field. */
+        private final List<ComparisonNodeStatus> treeStatuses = new ArrayList<>();
+        private int treeStatusCalls;
         private int nodeVisibleAfterLookups;
         private int lookups;
         private RuntimeException readFailure;
@@ -789,6 +918,22 @@ public class GetComparisonNodeToolTest
         {
             lookups++;
             return lookups > nodeVisibleAfterLookups ? node : null;
+        }
+
+        /**
+         * The TREE's status, answered from a script so it can differ between two boundaries - which
+         * is the only way to reproduce a node that appears while a refusal is being worded.
+         *
+         * @return the status this reading sees
+         */
+        ComparisonNodeStatus nextTreeStatus()
+        {
+            treeStatusCalls++;
+            if (treeStatuses.isEmpty())
+            {
+                return treeStatus;
+            }
+            return treeStatuses.get(Math.min(treeStatusCalls - 1, treeStatuses.size() - 1));
         }
 
         /** Answers the scripted status, recording whether the read boundary was open at the time. */
@@ -851,7 +996,7 @@ public class GetComparisonNodeToolTest
             // Deliberately NOT routed through nextStatus(): the tree's own status is a different
             // question from the addressed node's, and folding them together would make the
             // boundary-counting pins above measure something other than the wait.
-            return source.treeStatus;
+            return source.nextTreeStatus();
         }
 
         @Override

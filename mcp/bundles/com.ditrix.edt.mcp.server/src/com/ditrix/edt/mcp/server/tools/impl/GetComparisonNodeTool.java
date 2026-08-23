@@ -395,11 +395,14 @@ public class GetComparisonNodeTool implements IMcpTool
         // runs out, because an address that resolves to nothing RIGHT AFTER a launch usually means
         // the engine has not built that node yet - and answering "no such object" to that is a
         // verdict about the caller's address that nothing observed supports.
-        Located located = locateWithin(comparisonId, symlink, explicitNodeId, side, deadline);
-        if (located == null)
+        Attempt attempt = locateWithin(comparisonId, symlink, explicitNodeId, side, deadline);
+        if (attempt.located == null)
         {
-            return notLocatedError(comparisonId, objectFqn, symlink, explicitNodeId);
+            // The refusal is built from the SNAPSHOT, never from a fresh look: see notLocatedError.
+            return notLocatedError(attempt.treeStatus, comparisonId, objectFqn, symlink,
+                explicitNodeId);
         }
+        Located located = attempt.located;
 
         // Waited on, and the result deliberately NOT carried into the render: it is a reading taken
         // in a boundary that has since closed. See below.
@@ -430,44 +433,95 @@ public class GetComparisonNodeTool implements IMcpTool
     }
 
     /**
-     * Resolves the caller's address, retrying until it resolves or the budget runs out.
+     * Resolves the caller's address, retrying while retrying can still change the answer.
+     *
+     * <h2>Why it does not simply spend the budget</h2>
+     * Retrying is for ONE reason: the tree is built lazily, so an address that answers nothing
+     * right after a launch is usually a node the engine has not reached yet. Once the tree reports
+     * itself FINISHED there is no later node - a wrong FQN, a node id from another comparison, an
+     * address outside the scope, all of which are ordinary ways to call this tool - and the loop
+     * was still sleeping out the whole of {@code waitSeconds} to produce the answer it already
+     * had. A refusal is not worth more for being slow.
+     *
+     * <h2>The two states this must not confuse</h2>
+     * "The tree is finished" and "this node is not built yet" are different readings, and only the
+     * first one is final: a node still being built inside an UNFINISHED tree is exactly what the
+     * wait exists for, and that case is untouched. Both readings are taken in ONE boundary, so the
+     * absence and the tree status are the same observation - reading them in two boundaries would
+     * let a node appear between them and turn a tree that had just finished building it into a
+     * final "no such node".
      *
      * @param comparisonId the comparison id
      * @param symlink the canonical symlink, or {@code null} when addressing by node id
      * @param explicitNodeId the node id, or {@code null} when addressing by FQN
      * @param side the addressed side
      * @param deadline the wall-clock millisecond deadline shared with the node wait
-     * @return the resolved ids, or {@code null} when nothing answered to the address in time
+     * @return the LAST look, whole: the resolved ids, or their absence together with the tree
+     *     status read beside it in the same boundary
      * @throws InterruptedException when the wait is interrupted
      */
-    private Located locateWithin(String comparisonId, String symlink, Long explicitNodeId,
+    private Attempt locateWithin(String comparisonId, String symlink, Long explicitNodeId,
         ComparisonSide side, long deadline) throws InterruptedException
     {
-        Located located = source.read(comparisonId,
-            access -> locate(access, symlink, explicitNodeId, side));
-        while (located == null && System.currentTimeMillis() < deadline)
+        Attempt attempt = attemptLocate(comparisonId, symlink, explicitNodeId, side);
+        while (attempt.located == null && attempt.treeStatus != ComparisonNodeStatus.FINISHED
+            && System.currentTimeMillis() < deadline)
         {
             Thread.sleep(POLL_INTERVAL_MILLIS);
-            located = source.read(comparisonId,
-                access -> locate(access, symlink, explicitNodeId, side));
+            attempt = attemptLocate(comparisonId, symlink, explicitNodeId, side);
         }
-        return located;
+        // The WHOLE attempt leaves this method. Handing back only the Located threw the other half
+        // of the pair away, and the refusal below then re-read the tree status in a NEW boundary -
+        // so the pin "both readings are one observation" held right up to the point where the
+        // verdict was actually produced, and no further.
+        return attempt;
     }
 
     /**
-     * Says WHY an address resolved to nothing, having first established which of the two reasons
-     * it was.
+     * One look for the address, together with the tree status that decides whether looking again
+     * could answer differently - both read inside the SAME boundary.
      *
+     * @param comparisonId the comparison id
+     * @param symlink the canonical symlink, or {@code null} when addressing by node id
+     * @param explicitNodeId the node id, or {@code null} when addressing by FQN
+     * @param side the addressed side
+     * @return what this look saw; never {@code null}
+     */
+    private Attempt attemptLocate(String comparisonId, String symlink, Long explicitNodeId,
+        ComparisonSide side)
+    {
+        return source.read(comparisonId, access -> {
+            Located found = locate(access, symlink, explicitNodeId, side);
+            if (found != null)
+            {
+                return Attempt.found(found);
+            }
+            return Attempt.missing(access.treeStatus());
+        });
+    }
+
+    /**
+     * Says WHY an address resolved to nothing, from the LAST look's own reading of the tree.
+     *
+     * <h2>Why the status is a parameter and not a read</h2>
+     * This is where the verdict is produced, so this is where the atomicity has to hold. Opening a
+     * second boundary here to ask the tree status again made the refusal an assembly of two
+     * instants, and the losing interleaving is ordinary rather than exotic: the last look sees
+     * "no node, tree UNFINISHED"; the engine then builds that very node and finishes the tree; the
+     * second read sees FINISHED, and the caller is told the object does not exist - about a node
+     * that by then does. Reading the pair once and carrying it is the only shape in which the two
+     * halves of the judgement cannot disagree.
+     *
+     * @param treeStatus the tree status read in the SAME boundary that found nothing
      * @param comparisonId the comparison id
      * @param objectFqn the caller's FQN, or {@code null}
      * @param symlink the canonical symlink that was looked up, or {@code null}
      * @param explicitNodeId the caller's node id, or {@code null}
      * @return the refusal
      */
-    private String notLocatedError(String comparisonId, String objectFqn, String symlink,
-        Long explicitNodeId)
+    private static String notLocatedError(ComparisonNodeStatus treeStatus, String comparisonId,
+        String objectFqn, String symlink, Long explicitNodeId)
     {
-        ComparisonNodeStatus treeStatus = source.read(comparisonId, TreeAccess::treeStatus);
         if (treeStatus != ComparisonNodeStatus.FINISHED)
         {
             return unbuiltTreeError(comparisonId, objectFqn != null
@@ -786,6 +840,58 @@ public class GetComparisonNodeTool implements IMcpTool
         private long nodeId;
         private long statusNodeId;
         private String address;
+    }
+
+    /**
+     * What one address lookup saw: the node, or its absence together with whether the tree can
+     * still produce it.
+     * <p>
+     * The two travel together because they are one reading. Split into two boundaries they are two
+     * readings of a tree that changes between them, and the pair "absent, and finished" - the pair
+     * that ends the wait AND the pair the refusal is decided by - would then be assembled out of
+     * two instants.
+     * <p>
+     * That is why the whole value leaves {@code locateWithin} rather than its {@link #located}
+     * half alone: the WAIT was already atomic, but the verdict was produced further down, out of a
+     * second reading, and the verdict is the only place the atomicity actually had to hold.
+     */
+    private static final class Attempt
+    {
+        private final Located located;
+
+        /**
+         * The tree's own status at the instant the node was not there, or {@code null} when the
+         * node WAS there and the status was therefore never asked for.
+         * <p>
+         * The status itself rather than a boolean, because the refusal QUOTES it: naming the state
+         * the tree is in is the difference between "wait for it" and "it does not exist", and a
+         * boolean threw that wording away one step before the only place it was needed.
+         */
+        private final ComparisonNodeStatus treeStatus;
+
+        private Attempt(Located located, ComparisonNodeStatus treeStatus)
+        {
+            this.located = located;
+            this.treeStatus = treeStatus;
+        }
+
+        /**
+         * @param located the resolved ids
+         * @return the answer; the tree status is not asked for, because the wait is over either way
+         */
+        static Attempt found(Located located)
+        {
+            return new Attempt(located, null);
+        }
+
+        /**
+         * @param treeStatus the tree status as reported in the SAME boundary, never {@code null}
+         * @return the answer
+         */
+        static Attempt missing(ComparisonNodeStatus treeStatus)
+        {
+            return new Attempt(null, treeStatus);
+        }
     }
 
     // ==================== The facade adapter ====================

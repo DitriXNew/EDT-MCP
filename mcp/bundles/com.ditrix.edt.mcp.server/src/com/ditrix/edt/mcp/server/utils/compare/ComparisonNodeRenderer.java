@@ -116,6 +116,40 @@ public final class ComparisonNodeRenderer
             + "read in Russian and two workbenches word the same problem differently. The Node id " //$NON-NLS-1$
             + "column is the locale-free identity of the row."; //$NON-NLS-1$
 
+    /**
+     * How many nodes the module-section walk may VISIT before it stops descending - the bound the
+     * row limit stopped providing.
+     *
+     * <h2>Why it has to exist</h2>
+     * The walk collects only sections but descends through children of ANY type, because
+     * {@code BslModuleSectionComparisonNode.getChildren()} is a BRIDGE into the generic
+     * {@code TopComparisonNode} implementation: it returns {@code topChildren} plus
+     * {@code containmentChildren} with no filtering by type at all, so the narrow element type in
+     * the interface is a generics declaration and nothing more. A node that costs no row costs no
+     * row budget either, so the number of nodes visited is no longer capped by {@code limit}, and
+     * depth alone bounds it at {@code branching} raised to the requested depth - which is not a
+     * bound.
+     *
+     * <h2>Why this number</h2>
+     * 10 000 is twenty times the largest page this table can render (the tool's {@code limit}
+     * caps at 500), so no module whose sections would have fitted in a page can reach it. It
+     * exists for a pathological subtree, and reaching it is REPORTED rather than swallowed - see
+     * {@link #SECTION_WALK_CUT_SHORT}.
+     */
+    static final int MAX_SECTION_WALK_NODES = 10_000;
+
+    /**
+     * What the section table appends when its walk ran into {@link #MAX_SECTION_WALK_NODES}.
+     * <p>
+     * Its own sentence rather than the row-limit notice, because raising {@code limit} would not
+     * widen it: no row was declined, the nodes carrying them were never looked at. Telling a
+     * caller to pass a higher limit for that would be a wrong number in a third direction.
+     */
+    private static final String SECTION_WALK_CUT_SHORT =
+        " (the section walk stopped after " + MAX_SECTION_WALK_NODES + " nodes, so anything " //$NON-NLS-1$ //$NON-NLS-2$
+            + "below that point was never looked at - this is NOT a statement that there are no " //$NON-NLS-1$
+            + "more sections; lower depth, or expand the module's parts one at a time)"; //$NON-NLS-1$
+
     /** Heading of the POTENTIAL-problem section; the word POTENTIAL is part of the contract. */
     private static final String POTENTIAL_HEADING = "## Potential problems\n\n"; //$NON-NLS-1$
 
@@ -517,48 +551,358 @@ public final class ComparisonNodeRenderer
             return;
         }
         sb.append("## Module sections\n\n"); //$NON-NLS-1$
-        List<ComparisonNode> flat = new ArrayList<>();
-        List<Integer> depths = new ArrayList<>();
-        boolean[] truncated = new boolean[1];
-        for (BslModuleSectionComparisonNode section : ((BslModuleComparisonNode)node).getChildren())
+        // Collected as SECTIONS, which is what this table renders. The generic flattening walks
+        // whatever a node's children are and spends the caller's row budget on every one of them,
+        // so at depth > 1 a descendant that is not a section - and this table never renders one -
+        // took a row away from a section that would have been rendered: the table came back
+        // shorter than the limit, and a section that fitted was announced as cut. Everything
+        // collected below IS a row, so the budget counts rendered rows and the cap is raised
+        // exactly when a row was declined - which is how the child outline and the problem table
+        // beside it already work.
+        SectionWalk walk = new SectionWalk();
+        // Read through childrenOf rather than the module's own narrowly typed accessor, for the
+        // same reason the walk below takes a ComparisonNode: that accessor is a bridge into the
+        // generic implementation and its list is not filtered by type at runtime.
+        for (ComparisonNode child : childrenOf(node))
         {
-            flatten(section, 1, request.depth, request.limit, flat, depths, truncated);
+            if (walk.bounds.exhausted())
+            {
+                break;
+            }
+            flattenSections(child, 1, request.depth, request.limit, walk);
         }
-        if (flat.isEmpty())
+        // The phrase is allowed by ONE predicate, and every bound clears it in one place - see
+        // WalkBounds. It used to be guarded by a list of the bounds instead, and the list was one
+        // short: a module whose sections sit under a node that is not one had them hidden by the
+        // DEPTH limit, nothing was collected, no other bound had bitten, and the document answered
+        // "no differences in the module sections" over sections it had never looked at.
+        if (walk.sections.isEmpty() && walk.bounds.complete())
         {
             sb.append('_').append(finished ? NO_DIFFERENCES : NOT_DETERMINED)
                 .append(" in the module sections._\n\n"); //$NON-NLS-1$
             return;
         }
-        // The rows are built FIRST so the count above them is a count of rows actually rendered:
-        // `flat` may carry a node that is not a section, and a header that promised more rows than
-        // the table holds is the same kind of wrong number as a capped count read as a total.
-        StringBuilder rows = new StringBuilder();
-        int shown = 0;
-        for (int i = 0; i < flat.size(); i++)
+        // `flattenSections` raises the flag when a section was DECLINED, and until this line
+        // nothing read it: the table was cut and looked whole, while the child outline and the
+        // problem table beside it both announce the very same cap. A module whose sections were
+        // cut is exactly the case where a reader concludes "that procedure is not in the module".
+        sb.append("**Sections shown:** ").append(walk.sections.size()) //$NON-NLS-1$
+            .append(walk.bounds.notices(request.limit, request.depth))
+            .append("\n\n"); //$NON-NLS-1$
+        if (walk.sections.isEmpty())
         {
-            if (!(flat.get(i) instanceof BslModuleSectionComparisonNode))
-            {
-                continue;
-            }
-            BslModuleSectionComparisonNode section = (BslModuleSectionComparisonNode)flat.get(i);
-            rows.append(MarkdownUtils.tableRow(depths.get(i).toString(),
+            // Nothing to tabulate, and the line above already says what stopped the walk. A table
+            // header over no rows would read as an empty answer rather than as an unfinished one.
+            return;
+        }
+        sb.append(MarkdownUtils.tableHeader("Depth", "Type", "Main", "Other", "Ancestor", "State")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        for (int i = 0; i < walk.sections.size(); i++)
+        {
+            BslModuleSectionComparisonNode section = walk.sections.get(i);
+            sb.append(MarkdownUtils.tableRow(walk.depths.get(i).toString(),
                 sectionType(section), dashIfEmpty(section.getName(ComparisonSide.MAIN)),
                 dashIfEmpty(section.getName(ComparisonSide.OTHER)),
                 dashIfEmpty(section.getName(ComparisonSide.COMMON_ANCESTOR)),
                 stateOf(section, finished)));
-            shown++;
         }
-        // `flatten` raises the flag when a section was DECLINED, and until this line nothing read
-        // it: the table was cut and looked whole, while the child outline and the problem table
-        // beside it both announce the very same cap. A module whose sections were cut is exactly
-        // the case where a reader concludes "that procedure is not in the module".
-        sb.append("**Sections shown:** ").append(shown) //$NON-NLS-1$
-            .append(truncated[0] ? Pagination.limitReachedNotice(request.limit) : "") //$NON-NLS-1$
-            .append("\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Depth", "Type", "Main", "Other", "Ancestor", "State")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-        sb.append(rows);
         sb.append('\n');
+    }
+
+    /**
+     * Depth-first walk of the module's subtree, collecting the SECTIONS in it - bounded by the
+     * requested depth, by the row limit, and by {@link #MAX_SECTION_WALK_NODES}.
+     *
+     * <h2>Walked past, not stopped at</h2>
+     * The difference from {@link #flatten} is what the budget is spent ON. That one collects every
+     * child of every kind, because the table it feeds renders every child. This table renders
+     * sections, so a descendant that is not one costs no row and cannot raise the cap - but it is
+     * still DESCENDED THROUGH, and the parameter is a {@code ComparisonNode} for exactly that
+     * reason. Refusing to descend through it dropped every section beneath it out of the table
+     * while the walk reported itself COMPLETE, because those sections were never visited: rows
+     * vanished, and the document said the page was whole. That is a worse
+     * answer than the wrong counter this walk was written to fix.
+     * <p>
+     * It is reachable rather than theoretical: {@code BslModuleSectionComparisonNodeImpl
+     * .getChildren()} is a bridge method delegating straight into
+     * {@code TopComparisonNodeImpl.getChildren()}, which answers {@code topChildren} plus
+     * {@code containmentChildren} with no filtering by type. The narrow {@code EList} element type
+     * on the interface is a generics declaration, and at runtime the list may carry any
+     * {@code ComparisonNode}.
+     *
+     * <h2>The three ways it can stop short, and they say different things</h2>
+     * {@link WalkBound#ROW_LIMIT} is raised only when a SECTION was actually DECLINED for want of
+     * a row. Draining the row budget exactly is a complete page, and telling a caller to raise the
+     * limit for a page that is already whole is a wrong number in the other direction.
+     * {@link WalkBound#NODE_BUDGET} is the second: the walk stopped LOOKING, so nothing is known
+     * about what lay beyond, and raising the limit would not reveal it.
+     * {@link WalkBound#DEPTH_LIMIT} is the third, and it is the one that can bite while nothing at
+     * all has been collected - see {@link WalkBounds}.
+     *
+     * <h2>The first refusal ends the walk</h2>
+     * A declined row and an exhausted node budget are both GLOBAL: no later node can be collected
+     * either, so everything after them is work whose only possible product is a second warning.
+     * That warning was measurably wrong - a module with more direct sections than the limit
+     * declined a row and then went on to spend the whole node budget, printing "the section walk
+     * stopped after 10 000 nodes" beside it, which tells the caller to lower a depth that had
+     * nothing to do with it. {@link WalkBounds#exhausted()} is checked on entry AND in the sibling
+     * loops, so the DFS unwinds instead of running to the end of the graph.
+     *
+     * @param node the node to walk; collected only when it is a section
+     * @param depth its depth below the module, counted from 1 - counted per LEVEL, so a node the
+     *            table does not render still occupies the level it sits at
+     * @param maxDepth the deepest level the caller asked for
+     * @param limit the largest number of rows the table may hold
+     * @param walk the collected rows and the bounds the walk ran into
+     */
+    private static void flattenSections(ComparisonNode node, int depth, int maxDepth, int limit,
+        SectionWalk walk)
+    {
+        if (node == null || walk.bounds.exhausted())
+        {
+            return;
+        }
+        if (walk.visited >= MAX_SECTION_WALK_NODES)
+        {
+            walk.bounds.stoppedAt(WalkBound.NODE_BUDGET);
+            return;
+        }
+        walk.visited++;
+        if (node instanceof BslModuleSectionComparisonNode)
+        {
+            if (walk.sections.size() >= limit)
+            {
+                walk.bounds.stoppedAt(WalkBound.ROW_LIMIT);
+                return;
+            }
+            walk.sections.add((BslModuleSectionComparisonNode)node);
+            walk.depths.add(Integer.valueOf(depth));
+        }
+        if (depth >= maxDepth)
+        {
+            if (hasWalkableChild(node))
+            {
+                walk.bounds.stoppedAt(WalkBound.DEPTH_LIMIT);
+            }
+            return;
+        }
+        for (ComparisonNode child : childrenOf(node))
+        {
+            if (walk.bounds.exhausted())
+            {
+                return;
+            }
+            flattenSections(child, depth + 1, maxDepth, limit, walk);
+        }
+    }
+
+    /**
+     * A boundary that can stop a bounded walk before it has seen the whole subtree.
+     * <p>
+     * An enum rather than a flag apiece so that {@link WalkBounds#complete()} is a question about
+     * the SET and not a conjunction that has to be extended at every site that reads it. The
+     * defect that produced it was exactly that conjunction being one term short.
+     */
+    private enum WalkBound
+    {
+        /** A row this table renders was DECLINED because the row limit was already full. */
+        ROW_LIMIT,
+        /**
+         * The walk stopped descending because {@link ComparisonNodeRenderer#MAX_SECTION_WALK_NODES}
+         * ran out.
+         */
+        NODE_BUDGET,
+        /** The walk turned back at the caller's {@code depth} with children still below. */
+        DEPTH_LIMIT
+    }
+
+    /**
+     * How much of a subtree a bounded walk actually covered: the ONE predicate any "there is
+     * nothing here" sentence is allowed to depend on.
+     *
+     * <h2>The defect family this ends</h2>
+     * Every bound narrows what was LOOKED AT, and a document that reports a narrowed answer as a
+     * whole one is the same lie in three costumes - "no differences in the module sections", "no
+     * differences in the child nodes", "none reported". Each of them used to name the bounds it
+     * knew about, and each list was written at the site that printed the sentence: the section one
+     * listed the node budget and not the depth limit, so a module whose only sections sat one
+     * level below a node that is not a section reported "no differences" over sections nothing had
+     * visited. Adding the missing term at that site would have produced the same shape again on
+     * the next bound.
+     * <p>
+     * So completeness is not a conjunction any more. A bound is recorded through
+     * {@link #stoppedAt(WalkBound)} - the ONE place completeness is lost - and every sentence that
+     * claims an absence asks {@link #complete()}. A future bound joins {@link WalkBound} and every
+     * such sentence is guarded by it without being touched.
+     */
+    private static final class WalkBounds
+    {
+        private final Set<WalkBound> stops = new LinkedHashSet<>();
+
+        /**
+         * Records that a boundary stopped the walk short. The one place completeness is lost.
+         *
+         * @param bound what stopped it
+         */
+        void stoppedAt(WalkBound bound)
+        {
+            stops.add(bound);
+        }
+
+        /**
+         * @return {@code true} when the walk covered the whole subtree it was pointed at, so a
+         *             statement about what is NOT there is a reading rather than an assumption
+         */
+        boolean complete()
+        {
+            return stops.isEmpty();
+        }
+
+        /**
+         * Whether the walk must UNWIND rather than carry on with the next sibling.
+         * <p>
+         * Only the two GLOBAL bounds count here: after them nothing more can be collected or even
+         * looked at, so continuing produces no row and can only raise a second, wrong warning. The
+         * depth limit is LOCAL - it turned back on one branch and the siblings beside it are still
+         * within the caller's depth.
+         *
+         * @return {@code true} when nothing further can be collected
+         */
+        boolean exhausted()
+        {
+            return stops.contains(WalkBound.ROW_LIMIT)
+                || stops.contains(WalkBound.NODE_BUDGET);
+        }
+
+        /**
+         * Whether ONE bound stopped the walk - private on purpose.
+         * <p>
+         * Asking about a single bound is how every defect in this family started: a sentence
+         * guarded by the one bound its author had in mind, silent about the others. The only
+         * legitimate readers are the two renderings below, which ask about every constant in
+         * turn; a caller outside asks {@link #complete()}.
+         *
+         * @param bound the bound to ask about
+         * @return whether that bound stopped the walk
+         */
+        private boolean hit(WalkBound bound)
+        {
+            return stops.contains(bound);
+        }
+
+        /**
+         * What a COUNT LINE must say beside its number, one clause per bound that bit - the
+         * wording for a table that renders the very nodes the walk collected.
+         * <p>
+         * Enumerated over {@link WalkBound#values()} and worded by a switch EXPRESSION, so this
+         * list cannot go one term short the way the hand-written lists it replaced did: a constant
+         * added to the enum and not answered below fails the COMPILE. The order is the enum's own
+         * and therefore does not move with the order the bounds happened to be recorded in.
+         *
+         * @param limit the row limit the caller passed
+         * @param depth the depth the caller passed
+         * @return the clauses, empty when the walk was complete
+         */
+        String notices(int limit, int depth)
+        {
+            StringBuilder text = new StringBuilder();
+            for (WalkBound bound : WalkBound.values())
+            {
+                if (hit(bound))
+                {
+                    text.append(countNotice(bound, limit, depth));
+                }
+            }
+            return text.toString();
+        }
+
+        /**
+         * The same bounds worded for a SCAN whose product is not the walked list itself - the
+         * potential-problem section, which only reads its rows OFF the nodes the walk collected.
+         * <p>
+         * A second wording, not a second list, and the difference is a fact rather than a style:
+         * for a table that renders the walked nodes a drained row budget is "showing the first N",
+         * while for a scan that merely VISITED them nothing is being shown from that list at all -
+         * and in the empty case nothing is being shown, full stop. Both renderings iterate the
+         * same {@link WalkBound#values()} through the same exhaustive switch, so neither of them
+         * can lose a bound while the other keeps it.
+         *
+         * @param limit the row limit the caller passed
+         * @param depth the depth the caller passed
+         * @return the clauses, each opening with ", and"; empty when the walk was complete
+         */
+        String scopeNotices(int limit, int depth)
+        {
+            StringBuilder text = new StringBuilder();
+            for (WalkBound bound : WalkBound.values())
+            {
+                if (hit(bound))
+                {
+                    text.append(scopeNotice(bound, limit, depth));
+                }
+            }
+            return text.toString();
+        }
+
+        private static String countNotice(WalkBound bound, int limit, int depth)
+        {
+            // A switch EXPRESSION over the enum, with no default: the compiler requires every
+            // constant to be answered, which is what makes "every bound is announced" a property
+            // of the build rather than of somebody remembering to extend a list.
+            return switch (bound)
+            {
+                case ROW_LIMIT -> Pagination.limitReachedNotice(limit);
+                case NODE_BUDGET -> SECTION_WALK_CUT_SHORT;
+                // Its own sentence for the same reason the other two have theirs: this bound is
+                // the caller's own `depth`, so that parameter - and nothing else - is the way to
+                // widen it. It is also the only one of the three that can bite while NOTHING has
+                // been collected, which is exactly when a bare count reads as "there is nothing".
+                case DEPTH_LIMIT -> " (the walk turned back at depth " + depth //$NON-NLS-1$
+                    + ", the deepest level requested, so anything below it was never looked " //$NON-NLS-1$
+                    + "at - this is NOT a statement that there is nothing there; raise " //$NON-NLS-1$
+                    + "depth to widen it)"; //$NON-NLS-1$
+            };
+        }
+
+        private static String scopeNotice(WalkBound bound, int limit, int depth)
+        {
+            return switch (bound)
+            {
+                case ROW_LIMIT -> ", and only the first " + limit //$NON-NLS-1$
+                    + " descendant nodes were examined - the rest were never asked, so this is " //$NON-NLS-1$
+                    + "NOT a statement that the subtree has no problems; raise limit to widen it"; //$NON-NLS-1$
+                // Unreachable from `flatten` today, which has no node budget - and written anyway,
+                // because "today's caps" is what the two lists this replaces were built on.
+                case NODE_BUDGET -> ", and the walk stopped looking after " //$NON-NLS-1$
+                    + MAX_SECTION_WALK_NODES + " nodes, so anything past that point was never " //$NON-NLS-1$
+                    + "asked - this is NOT a statement that the subtree has no problems"; //$NON-NLS-1$
+                case DEPTH_LIMIT -> ", and the scan turned back at depth " + depth //$NON-NLS-1$
+                    + " - nothing deeper was asked, so this is NOT a statement that the subtree " //$NON-NLS-1$
+                    + "has no problems; raise depth to widen it"; //$NON-NLS-1$
+            };
+        }
+    }
+
+    /**
+     * What the section walk collected, and the bounds it ran into.
+     * <p>
+     * One value rather than three out-parameters because the bounds are NOT interchangeable and
+     * were becoming easy to conflate: one says a row was refused, one says a region was never
+     * examined, one says the walk stopped at the level it was told to - and the table prints a
+     * different sentence for each.
+     */
+    private static final class SectionWalk
+    {
+        /** The sections to render, in render order. */
+        final List<BslModuleSectionComparisonNode> sections = new ArrayList<>();
+
+        /** Their depths, paired positionally with {@link #sections}. */
+        final List<Integer> depths = new ArrayList<>();
+
+        /** What stopped the walk short, if anything. */
+        final WalkBounds bounds = new WalkBounds();
+
+        /** Nodes visited so far - sections and walked-past nodes alike. */
+        int visited;
     }
 
     private static String sectionType(BslModuleSectionComparisonNode section)
@@ -579,20 +923,32 @@ public final class ComparisonNodeRenderer
         sb.append("## Children\n\n"); //$NON-NLS-1$
         List<ComparisonNode> flat = new ArrayList<>();
         List<Integer> depths = new ArrayList<>();
-        boolean[] truncated = new boolean[1];
+        WalkBounds bounds = new WalkBounds();
         for (ComparisonNode child : childrenOf(node))
         {
-            flatten(child, 1, request.depth, request.limit, flat, depths, truncated);
+            if (bounds.exhausted())
+            {
+                break;
+            }
+            flatten(child, 1, request.depth, request.limit, flat, depths, bounds);
         }
-        if (flat.isEmpty())
+        // Guarded by the same ONE predicate as the module-section table. Here the phrase happens to
+        // be unreachable while a bound is up - the first child is collected before any bound can
+        // bite - but that is a property of today's caps, not a promise, and stating the rule once
+        // is what keeps the next cap from re-opening the hole it opened there.
+        if (flat.isEmpty() && bounds.complete())
         {
             sb.append('_').append(finished ? NO_DIFFERENCES : NOT_DETERMINED)
                 .append(" in the child nodes._\n\n"); //$NON-NLS-1$
             return;
         }
         sb.append("**Children shown:** ").append(flat.size()) //$NON-NLS-1$
-            .append(truncated[0] ? Pagination.limitReachedNotice(request.limit) : "") //$NON-NLS-1$
+            .append(bounds.notices(request.limit, request.depth))
             .append("\n\n"); //$NON-NLS-1$
+        if (flat.isEmpty())
+        {
+            return;
+        }
         sb.append(MarkdownUtils.tableHeader("Depth", "Node id", "Kind", "Main", "Other", "Ancestor", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             "State")); //$NON-NLS-1$
         for (int i = 0; i < flat.size(); i++)
@@ -611,33 +967,53 @@ public final class ComparisonNodeRenderer
      * Depth-first flattening of the child tree, bounded by BOTH the requested depth and the row
      * limit. Bounded on entry so a pathological subtree cannot be materialised before the cap runs.
      * <p>
-     * {@code truncated[0]} is raised only when a node was actually DECLINED. Draining the budget is
-     * not truncation: a subtree with exactly {@code limit} nodes renders every one of them, and
-     * inferring truncation from an exhausted budget would tell the caller to re-run with a higher
-     * limit for a page that is already complete. Same shape, and the same reason, as
+     * {@link WalkBound#ROW_LIMIT} is raised only when a node was actually DECLINED. Draining the
+     * budget is not truncation: a subtree with exactly {@code limit} nodes renders every one of
+     * them, and inferring truncation from an exhausted budget would tell the caller to re-run with
+     * a higher limit for a page that is already complete. Same shape, and the same reason, as
      * {@code FormStructureReader.renderItems}.
+     * <p>
+     * It shares {@link WalkBounds} with the section walk, and for the reason stated there: what
+     * narrowed the walk is what every "nothing found" sentence downstream has to be guarded by,
+     * and the two walks answer that question the same way or they answer it differently.
+     *
+     * @param node the node to collect and descend from
+     * @param depth its depth below the addressed node, counted from 1
+     * @param maxDepth the deepest level the caller asked for
+     * @param limit the largest number of rows the caller allowed
+     * @param flat the collected nodes, in render order
+     * @param depths their depths, paired positionally with {@code flat}
+     * @param bounds what stopped the walk short, if anything
      */
     private static void flatten(ComparisonNode node, int depth, int maxDepth, int limit,
-        List<ComparisonNode> flat, List<Integer> depths, boolean[] truncated)
+        List<ComparisonNode> flat, List<Integer> depths, WalkBounds bounds)
     {
-        if (node == null)
+        if (node == null || bounds.exhausted())
         {
             return;
         }
         if (flat.size() >= limit)
         {
-            truncated[0] = true;
+            bounds.stoppedAt(WalkBound.ROW_LIMIT);
             return;
         }
         flat.add(node);
         depths.add(Integer.valueOf(depth));
         if (depth >= maxDepth)
         {
+            if (hasWalkableChild(node))
+            {
+                bounds.stoppedAt(WalkBound.DEPTH_LIMIT);
+            }
             return;
         }
         for (ComparisonNode child : childrenOf(node))
         {
-            flatten(child, depth + 1, maxDepth, limit, flat, depths, truncated);
+            if (bounds.exhausted())
+            {
+                return;
+            }
+            flatten(child, depth + 1, maxDepth, limit, flat, depths, bounds);
         }
     }
 
@@ -662,10 +1038,14 @@ public final class ComparisonNodeRenderer
         // prepended afterwards, because problems recorded on it belong to the report too.
         List<ComparisonNode> descendants = new ArrayList<>();
         List<Integer> depths = new ArrayList<>();
-        boolean[] descendantsTruncated = new boolean[1];
+        WalkBounds scopeBounds = new WalkBounds();
         for (ComparisonNode child : childrenOf(node))
         {
-            flatten(child, 1, request.depth, request.limit, descendants, depths, descendantsTruncated);
+            if (scopeBounds.exhausted())
+            {
+                break;
+            }
+            flatten(child, 1, request.depth, request.limit, descendants, depths, scopeBounds);
         }
         List<ComparisonNode> scope = new ArrayList<>(descendants.size() + 1);
         scope.add(node);
@@ -704,15 +1084,26 @@ public final class ComparisonNodeRenderer
         }
         if (count == 0)
         {
-            // "None reported" is a claim about what was LOOKED AT, and two separate things narrow
-            // that. One is the lazy tree, already handled. The other is this section's own row
-            // limit: `flatten` caps the DESCENDANT LIST before a single problem is read off it, so
-            // with depth=1 and limit=2 a problem on the third child is never asked for. Announcing
-            // an absence over nodes nobody visited is the same lie as "no differences" over an
-            // uncompared subtree, and it is announced here instead.
-            sb.append("_(none reported") //$NON-NLS-1$
-                .append(incompleteScanNote(finished, descendantsTruncated[0], request.limit))
-                .append(")_\n\n"); //$NON-NLS-1$
+            // "None reported" is a claim about what was LOOKED AT, so it is allowed by the ONE
+            // predicate every such claim in this class is allowed by, and by nothing else. This
+            // site used to print the phrase unconditionally and merely APPEND the bounds it knew
+            // about, which is the same sentence with a footnote: a reader who takes "none
+            // reported" at its word has already been told the wrong thing, and the list of
+            // footnotes was itself one term short of the bounds that exist.
+            if (scopeBounds.complete())
+            {
+                sb.append("_(none reported").append(notFinishedNote(finished)) //$NON-NLS-1$
+                    .append(")_\n\n"); //$NON-NLS-1$
+            }
+            else
+            {
+                // Not an absence: a statement about the part that was covered, plus the bound
+                // that cut the rest, from the one enumeration.
+                sb.append("_(no problem in the part of the subtree this scan covered") //$NON-NLS-1$
+                    .append(notFinishedNote(finished))
+                    .append(scopeBounds.scopeNotices(request.limit, request.depth))
+                    .append(")_\n\n"); //$NON-NLS-1$
+            }
             return;
         }
         // The count is a rendered-row count, not a subtree total: collection stops at the cap, so
@@ -722,14 +1113,18 @@ public final class ComparisonNodeRenderer
         sb.append("**Potential problems:** ").append(count) //$NON-NLS-1$
             .append(truncated ? Pagination.limitReachedNotice(request.limit) : "") //$NON-NLS-1$
             .append("\n\n"); //$NON-NLS-1$
-        if (descendantsTruncated[0])
+        // A capped ROW list and a narrowed SCOPE are different caps, and only the first is
+        // announced by the notice above. This branch used to ask about the row limit ALONE, so a
+        // problem hidden below the requested depth left "Potential problems: 1" reading as a
+        // total, and a scan cut by BOTH bounds announced only the second. A non-empty answer is
+        // qualified by the same predicate the empty one is, and names every bound through the same
+        // enumeration.
+        if (!scopeBounds.complete())
         {
-            // A capped ROW list and a capped SCOPE are different caps, and only the first one is
-            // announced by the notice above. This one says the count covers the nodes that were
-            // visited rather than the subtree.
-            sb.append("> The scan was partial: only the first ").append(request.limit) //$NON-NLS-1$
-                .append(" descendant nodes were examined, so this count is for those nodes and ") //$NON-NLS-1$
-                .append("not for the whole subtree. Raise limit to widen it.\n\n"); //$NON-NLS-1$
+            sb.append("> The scan was partial, so this count is for the nodes that were visited " //$NON-NLS-1$
+                + "and not for the whole subtree") //$NON-NLS-1$
+                .append(scopeBounds.scopeNotices(request.limit, request.depth))
+                .append(".\n\n"); //$NON-NLS-1$
         }
         // Attached to the TABLE, not to the section: with no rows there is no platform-authored text
         // to disclaim, and a disclaimer printed on every node render regardless would be noise that
@@ -740,55 +1135,75 @@ public final class ComparisonNodeRenderer
     }
 
     /**
-     * What narrows a "nothing found" answer in the problem section, spelled out so the reader is
-     * not left to infer it from a count.
+     * The clause a "nothing found" answer in the problem section carries when the addressed node's
+     * own subtree has not been compared yet.
+     * <p>
+     * The lazy tree is a SECOND narrowing, beside the bounded walk, and it lives here rather than
+     * in {@link WalkBounds} because it is not a bound: no walk stopped at it, {@code stoppedAt}
+     * was never called, and {@link WalkBounds#complete()} has nothing to say about it. What DID
+     * live here - a hand-written list of the bounds - is gone: that list is
+     * {@link WalkBounds#scopeNotices(int, int)}, in the one place the bounds are enumerated.
      *
      * @param finished whether the addressed node's own status is {@code Finished}
-     * @param descendantsTruncated whether the descendant list was cut short before its problems
-     *            were read
-     * @param limit the row limit that cut it
-     * @return the clause to append inside the "(none reported...)" parentheses, possibly empty
+     * @return the clause, empty when the node is finished
      */
-    private static String incompleteScanNote(boolean finished, boolean descendantsTruncated,
-        int limit)
+    private static String notFinishedNote(boolean finished)
     {
-        StringBuilder note = new StringBuilder();
-        if (!finished)
-        {
-            note.append(", and this subtree is not finished, so the list is incomplete"); //$NON-NLS-1$
-        }
-        if (descendantsTruncated)
-        {
-            note.append(", and only the first ").append(limit) //$NON-NLS-1$
-                .append(" descendant nodes were examined - the rest were never asked, so this is ") //$NON-NLS-1$
-                .append("NOT a statement that the subtree has no problems; raise limit to widen it"); //$NON-NLS-1$
-        }
-        return note.toString();
+        return finished ? "" //$NON-NLS-1$
+            : ", and this subtree is not finished, so the list is incomplete"; //$NON-NLS-1$
     }
 
     // ==================== Shared node accessors ====================
 
-    /** Direct children of a node, tolerating a null node and a null child list. */
+    /**
+     * Direct children of a node, tolerating a null node and a null child list.
+     * <p>
+     * <b>The platform's own list, not a copy of it.</b> Copying charged the FULL width of every
+     * level to a walk that is bounded and, past its first refusal, unwinds without reading another
+     * child - a module with 10 001 direct sections and {@code limit=500} paid for all 10 001 twice
+     * over before the walk had collected 500. Every caller is a {@code flatten*} that tolerates a
+     * null element on entry, which is what the copy was buying.
+     *
+     * @param node the node to read
+     * @return the live child list, or an empty one; elements may be {@code null}
+     */
     private static List<ComparisonNode> childrenOf(ComparisonNode node)
     {
         if (node == null)
         {
             return Collections.emptyList();
         }
-        List<ComparisonNode> result = new ArrayList<>();
         List<ComparisonNode> children = node.<ComparisonNode> getChildren();
-        if (children == null)
-        {
-            return result;
-        }
-        for (ComparisonNode child : children)
+        return children == null ? Collections.emptyList() : children;
+    }
+
+    /**
+     * Whether a node has a child a walk could actually descend INTO - asked lazily, so a wide
+     * level costs one element rather than a copy of the list.
+     * <p>
+     * "The list is not empty" was the wrong question, and it became wrong the moment
+     * {@link #childrenOf(ComparisonNode)} stopped copying: what comes back is the PLATFORM's own
+     * list, and its elements may be {@code null}. Every walk here tolerates that by returning on
+     * entry, so a node whose only child is {@code null} has nothing below it - yet an emptiness
+     * test called the level occupied and recorded {@link WalkBound#DEPTH_LIMIT}. One such flag
+     * suppresses the honest {@link #NO_DIFFERENCES} phrase, adds a "raise depth" clause to a walk
+     * that had covered everything, and does the same again in the problem section beside it. A
+     * bound is the statement that something was NOT looked at, so it may only be raised for a
+     * child that is there to look at.
+     *
+     * @param node the node to read
+     * @return {@code true} when at least one child is non-{@code null}
+     */
+    private static boolean hasWalkableChild(ComparisonNode node)
+    {
+        for (ComparisonNode child : childrenOf(node))
         {
             if (child != null)
             {
-                result.add(child);
+                return true;
             }
         }
-        return result;
+        return false;
     }
 
     private static long nodeId(ComparisonNode node)

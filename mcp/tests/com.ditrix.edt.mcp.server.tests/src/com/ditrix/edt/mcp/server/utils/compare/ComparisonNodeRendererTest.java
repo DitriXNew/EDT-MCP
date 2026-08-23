@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils.compare;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -18,6 +19,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.EList;
@@ -430,6 +432,307 @@ public class ComparisonNodeRendererTest
             text.contains("**Sections shown:** 2")); //$NON-NLS-1$
     }
 
+    /**
+     * The defect: the row budget was spent by the TRAVERSAL, not by the table. At depth > 1 a
+     * descendant that is not a section - which this table never renders - still took a slot of
+     * {@code limit}, so the section it pushed out was declined: the table came back with fewer
+     * rows than the caller allowed, and a page that fitted was reported as cut.
+     */
+    @Test
+    public void testADescendantThatIsNoRowDoesNotPushOutOneThatIs()
+    {
+        BslModuleSectionComparisonNode first = section("Section0"); //$NON-NLS-1$
+        withChildren(first, childNode(77L));
+
+        String text = sectionOf(render(moduleOf(first, section("Section1")), //$NON-NLS-1$
+            ComparisonNodeStatus.FINISHED, access(null), 2, 2), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("a node this table never renders must not cost it a row: " + text, //$NON-NLS-1$
+            text.contains("Section1")); //$NON-NLS-1$
+    }
+
+    /** Its own literal: a cap announced over a page that is whole sends the caller after nothing. */
+    @Test
+    public void testADescendantThatIsNoRowDoesNotRaiseTheCap()
+    {
+        BslModuleSectionComparisonNode first = section("Section0"); //$NON-NLS-1$
+        withChildren(first, childNode(77L));
+
+        String text = sectionOf(render(moduleOf(first, section("Section1")), //$NON-NLS-1$
+            ComparisonNodeStatus.FINISHED, access(null), 2, 2), "## Module sections"); //$NON-NLS-1$
+
+        assertFalse("both sections fitted, so nothing was declined: " + text, //$NON-NLS-1$
+            text.contains("limit reached")); //$NON-NLS-1$
+    }
+
+    /** And the count is the number of rows the table holds, which is now the same number. */
+    @Test
+    public void testTheSectionCountCountsRowsAndNotVisitedNodes()
+    {
+        BslModuleSectionComparisonNode first = section("Section0"); //$NON-NLS-1$
+        withChildren(first, childNode(77L));
+
+        String text = sectionOf(render(moduleOf(first, section("Section1")), //$NON-NLS-1$
+            ComparisonNodeStatus.FINISHED, access(null), 2, 2), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("the header must count the rows the table actually holds: " + text, //$NON-NLS-1$
+            text.contains("**Sections shown:** 2")); //$NON-NLS-1$
+    }
+
+    /**
+     * The defect: "walked PAST rather than collected" was the promise, and the code descended only
+     * into children that were themselves sections - so a node that is not one did not cost a row,
+     * it TRUNCATED its whole branch. Everything below it disappeared out of the table, and
+     * {@code truncated} stayed false because those sections were never visited: rows vanished and
+     * the document said the page was whole.
+     *
+     * <p>Reachable rather than theoretical. {@code BslModuleSectionComparisonNodeImpl
+     * .getChildren()} is a bridge method delegating straight into
+     * {@code TopComparisonNodeImpl.getChildren()}, which answers {@code topChildren} plus
+     * {@code containmentChildren} with no filtering by type, so the narrow element type on the
+     * interface is a generics declaration and the runtime list may carry any node.</p>
+     */
+    @Test
+    public void testASectionBelowANonSectionIsStillCollected()
+    {
+        BslModuleSectionComparisonNode outer = section("Outer"); //$NON-NLS-1$
+        ComparisonNode bridge = childNode(77L);
+        withChildren(outer, bridge);
+        withChildren(bridge, section("Inner")); //$NON-NLS-1$
+
+        String text = sectionOf(render(moduleOf(outer), ComparisonNodeStatus.FINISHED,
+            access(null), 10, 3), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("a node this table does not render must be walked THROUGH, not stopped at: " //$NON-NLS-1$
+            + text, text.contains("Inner")); //$NON-NLS-1$
+    }
+
+    /** Its own literal: the header must count the row that was nearly lost. */
+    @Test
+    public void testASectionBelowANonSectionIsCounted()
+    {
+        BslModuleSectionComparisonNode outer = section("Outer"); //$NON-NLS-1$
+        ComparisonNode bridge = childNode(77L);
+        withChildren(outer, bridge);
+        withChildren(bridge, section("Inner")); //$NON-NLS-1$
+
+        String text = sectionOf(render(moduleOf(outer), ComparisonNodeStatus.FINISHED,
+            access(null), 10, 3), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("both sections are rows: " + text, text.contains("**Sections shown:** 2")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * And its own literal for the Depth column: depth counts LEVELS, not sections. The node walked
+     * past occupies the level it sits at, so the section under it is at 3 - reporting it as 2
+     * would place it where nothing is.
+     */
+    @Test
+    public void testTheDepthOfASectionBelowANonSectionCountsTheLevelWalkedPast()
+    {
+        BslModuleSectionComparisonNode outer = section("Outer"); //$NON-NLS-1$
+        ComparisonNode bridge = childNode(77L);
+        withChildren(outer, bridge);
+        withChildren(bridge, section("Inner")); //$NON-NLS-1$
+
+        String text = sectionOf(render(moduleOf(outer), ComparisonNodeStatus.FINISHED,
+            access(null), 10, 3), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("the walked-past level still counts: " + text, //$NON-NLS-1$
+            text.contains("| 3 | " + BslModuleSectionType.PROCEDURE.getName() + " | Inner |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The control that keeps the fix from paying for itself with a false alarm: a node walked past
+     * costs no row, so a page that fitted is still reported as whole.
+     */
+    @Test
+    public void testASectionBelowANonSectionRaisesNoCap()
+    {
+        BslModuleSectionComparisonNode outer = section("Outer"); //$NON-NLS-1$
+        ComparisonNode bridge = childNode(77L);
+        withChildren(outer, bridge);
+        withChildren(bridge, section("Inner")); //$NON-NLS-1$
+
+        String text = sectionOf(render(moduleOf(outer), ComparisonNodeStatus.FINISHED,
+            access(null), 10, 3), "## Module sections"); //$NON-NLS-1$
+
+        assertFalse("nothing was declined and nothing was skipped: " + text, //$NON-NLS-1$
+            text.contains("limit reached")); //$NON-NLS-1$
+        assertFalse("and the walk ran to the end: " + text, //$NON-NLS-1$
+            text.contains("the section walk stopped")); //$NON-NLS-1$
+    }
+
+    /**
+     * The bound the row limit stopped providing. Now that a walked-past node costs no row, the row
+     * budget no longer caps how many nodes are VISITED, and depth alone bounds that at the
+     * branching factor raised to the requested depth. The walk carries its own budget for exactly
+     * that, and running into it is announced rather than swallowed - a walk that stopped LOOKING
+     * knows nothing about what lay beyond, and reporting the page as whole would be the very
+     * defect this test's neighbours are about.
+     */
+    @Test
+    public void testAPathologicalSubtreeStopsTheWalkAndSaysSo()
+    {
+        BslModuleSectionComparisonNode outer = section("Outer"); //$NON-NLS-1$
+        // Ten children, each of them the same node again: 10 + 100 + 1000 + 10000 nodes over the
+        // four levels below the section, which passes the walk budget without passing the row one.
+        ComparisonNode bridge = childNode(77L);
+        withChildren(bridge, bridge, bridge, bridge, bridge, bridge, bridge, bridge, bridge, bridge,
+            bridge);
+        withChildren(outer, bridge, bridge, bridge, bridge, bridge, bridge, bridge, bridge, bridge,
+            bridge);
+
+        String text = sectionOf(render(moduleOf(outer), ComparisonNodeStatus.FINISHED,
+            access(null), 500, 5), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("the walk must stop and say where it stopped: " + text, //$NON-NLS-1$
+            text.contains("the section walk stopped after " //$NON-NLS-1$
+                + ComparisonNodeRenderer.MAX_SECTION_WALK_NODES + " nodes")); //$NON-NLS-1$
+        assertFalse("no row was declined, so the row notice would send the caller after nothing: " //$NON-NLS-1$
+            + text, text.contains("limit reached")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: a NESTED SECTION is a row of this table, so it does spend the budget and the
+     * section it pushes out is still declined and still announced. Without this the fix above
+     * would also be passed by a table that had stopped counting anything at all.
+     */
+    @Test
+    public void testANestedSectionIsARowAndStillReachesTheCap()
+    {
+        BslModuleSectionComparisonNode first = section("Section0"); //$NON-NLS-1$
+        withChildren(first, section("Nested")); //$NON-NLS-1$
+
+        String text = sectionOf(render(moduleOf(first, section("Section1")), //$NON-NLS-1$
+            ComparisonNodeStatus.FINISHED, access(null), 2, 2), "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("a nested section is rendered, so the walk must still descend: " + text, //$NON-NLS-1$
+            text.contains("Nested")); //$NON-NLS-1$
+        assertTrue("and the section it pushed out must be announced: " + text, //$NON-NLS-1$
+            text.contains(Pagination.limitReachedNotice(2)));
+    }
+
+    /**
+     * The defect, and it was introduced by the fix above. Guarding the "no differences" phrase on
+     * a LIST of the bounds - the node budget, and only it - left the DEPTH limit out, and the depth
+     * limit is the one bound that bites while nothing at all has been collected. A module whose
+     * sections sit under a child that is not a section has them at level 2, so at the default
+     * {@code depth=1} the walk turns back with an empty list, no other bound has bitten, and the
+     * document answers "no differences in the module sections" about a section it never looked at.
+     * <p>
+     * A false "nothing differs" out of a comparison tool is the worst answer it can give, and the
+     * code before the fix did not give it: its list was non-empty, so it went to the table.
+     */
+    @Test
+    public void testSectionsHiddenByTheDepthLimitAreNotReportedAsNoDifferences()
+    {
+        ComparisonNode bridge = childNode(77L);
+        withChildren(bridge, section("Hidden")); //$NON-NLS-1$
+        BslModuleComparisonNode module = moduleOf();
+        withChildren(module, bridge);
+
+        String text = sectionOf(render(module, ComparisonNodeStatus.FINISHED, access(null), 100, 1),
+            "## Module sections"); //$NON-NLS-1$
+
+        assertFalse("the walk never reached the section, so it may not be called absent: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NO_DIFFERENCES + " in the module sections")); //$NON-NLS-1$
+    }
+
+    /** Its own literal: refusing to lie is not enough, the reader has to be told what to change. */
+    @Test
+    public void testSectionsHiddenByTheDepthLimitAreReportedWithTheReason()
+    {
+        ComparisonNode bridge = childNode(77L);
+        withChildren(bridge, section("Hidden")); //$NON-NLS-1$
+        BslModuleComparisonNode module = moduleOf();
+        withChildren(module, bridge);
+
+        String text = sectionOf(render(module, ComparisonNodeStatus.FINISHED, access(null), 100, 1),
+            "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("an empty table must still say what stopped the walk: " + text, //$NON-NLS-1$
+            text.contains("**Sections shown:** 0")); //$NON-NLS-1$
+        assertTrue("and name the bound the caller can raise: " + text, //$NON-NLS-1$
+            text.contains("turned back at depth 1")); //$NON-NLS-1$
+        assertTrue("with the way to widen it: " + text, text.contains("raise depth")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The positive control for the pair above: a walk that ran to the END of the module still says
+     * "no differences". Without it, a renderer that had simply dropped the phrase would pass both.
+     */
+    @Test
+    public void testAModuleWalkedToItsEndStillSaysNoDifferences()
+    {
+        // A child that is not a section and has nothing under it: the walk turns back at depth 1
+        // having seen everything there is, so nothing narrowed the answer.
+        BslModuleComparisonNode module = moduleOf();
+        withChildren(module, childNode(77L));
+
+        String text = sectionOf(render(module, ComparisonNodeStatus.FINISHED, access(null), 100, 1),
+            "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("a complete walk that found no section says so plainly: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NO_DIFFERENCES + " in the module sections")); //$NON-NLS-1$
+    }
+
+    /**
+     * The second half of the same defect: the bounds did not stop the WALK, only the collecting.
+     * After a row was declined the outer loops went on offering siblings, so a module with more
+     * direct sections than the limit declined a row and then spent the entire node budget on the
+     * subtree beside it - printing the node-budget sentence next to the row-limit one. That second
+     * warning tells the caller to lower a depth that had nothing to do with anything, and it is
+     * produced entirely by work that could not have added a row.
+     */
+    @Test
+    public void testADeclinedRowDoesNotAlsoRaiseTheNodeBudgetWarning()
+    {
+        // Ten children, each of them the same node again: 10 + 100 + 1000 + 10000 nodes over the
+        // four levels below it, which passes the walk budget on its own.
+        ComparisonNode pathological = childNode(77L);
+        withChildren(pathological, pathological, pathological, pathological, pathological,
+            pathological, pathological, pathological, pathological, pathological, pathological);
+        BslModuleComparisonNode module = moduleOf();
+        withChildren(module, section("Section0"), section("Section1"), pathological); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = sectionOf(render(module, ComparisonNodeStatus.FINISHED, access(null), 1, 5),
+            "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("the row that was refused must be announced: " + text, //$NON-NLS-1$
+            text.contains(Pagination.limitReachedNotice(1)));
+        assertFalse("nothing was left to look for, so the walk must not go on and then report " //$NON-NLS-1$
+            + "having run out of nodes: " + text, //$NON-NLS-1$
+            text.contains("the section walk stopped")); //$NON-NLS-1$
+    }
+
+    /**
+     * And its own test, counting WORK rather than words: the neighbouring test would also be
+     * passed by a walk that still visited the whole graph and merely suppressed the second
+     * sentence. What is counted is how many times a node BEYOND the refusal is asked for its
+     * children - the walk's only way of going further.
+     */
+    @Test
+    public void testTheWalkStopsAskingForChildrenOnceARowIsDeclined()
+    {
+        AtomicInteger asked = new AtomicInteger();
+        ComparisonNode beyond = mock(ComparisonNode.class);
+        when(beyond.eClass()).thenReturn(MODEL.nodeClass("ChildMdObjectComparisonNode")); //$NON-NLS-1$
+        when(beyond.<ComparisonNode> getChildren()).thenAnswer(invocation -> {
+            asked.incrementAndGet();
+            return new BasicEList<ComparisonNode>();
+        });
+        BslModuleComparisonNode module = moduleOf();
+        // Two sections for a limit of one - the second is refused - and three nodes after it that
+        // the walk has no reason left to open.
+        withChildren(module, section("Section0"), section("Section1"), beyond, beyond, beyond); //$NON-NLS-1$ //$NON-NLS-2$
+
+        render(module, ComparisonNodeStatus.FINISHED, access(null), 1, 2);
+
+        assertEquals("no row can be collected any more, so nothing past the refusal may be " //$NON-NLS-1$
+            + "opened", 0, asked.get()); //$NON-NLS-1$
+    }
+
     // ==================== Support state ====================
 
     @Test
@@ -632,11 +935,19 @@ public class ComparisonNodeRendererTest
         access.byNode.put(Long.valueOf(13L), Collections.singletonList(
             new PotentialMergeProblemDescription("third-child", "third-child details"))); //$NON-NLS-1$ //$NON-NLS-2$
 
-        String text = render(node, ComparisonNodeStatus.FINISHED, access, 2);
+        // Scoped to the ONE section under test, so an assertion about this table cannot be
+        // satisfied by a sentence printed under another heading.
+        String text = sectionOf(render(node, ComparisonNodeStatus.FINISHED, access, 2),
+            "## Potential problems"); //$NON-NLS-1$
 
         assertFalse("the third child was never visited, so its problem cannot be rendered: " + text, //$NON-NLS-1$
             text.contains("third-child")); //$NON-NLS-1$
-        assertTrue("and the section must say the scan was partial, not assert an absence: " + text, //$NON-NLS-1$
+        // The ABSENCE of the phrase, not the presence of a caveat beside it: a renderer that
+        // printed "none reported" and then explained the cap would satisfy an assertion about the
+        // explanation alone, which is exactly what this pair of tests used to do.
+        assertFalse("an absence may not be ASSERTED over nodes nobody visited: " + text, //$NON-NLS-1$
+            text.contains("none reported")); //$NON-NLS-1$
+        assertTrue("and the section must name the bound that narrowed the scan: " + text, //$NON-NLS-1$
             text.contains("only the first 2 descendant nodes were examined")); //$NON-NLS-1$
     }
 
@@ -657,6 +968,165 @@ public class ComparisonNodeRendererTest
             text.contains("_(none reported)_")); //$NON-NLS-1$
         assertFalse("a complete scan must not claim it was cut short: " + text, //$NON-NLS-1$
             text.contains("descendant nodes were examined")); //$NON-NLS-1$
+    }
+
+    /**
+     * The THIRD place the same defect lived, and it is closed by the same construction rather than
+     * by a third list of caveats: the scope of this scan is the same bounded walk the child
+     * outline renders, so the DEPTH limit narrows it exactly as the row limit does. A problem on a
+     * grandchild is outside a {@code depth=1} scan, and "(none reported)" over it asserts an
+     * absence about a node nobody asked.
+     */
+    @Test
+    public void testAProblemBelowTheRequestedDepthIsNotReportedAsNone()
+    {
+        ComparisonNode grandchild = childNode(12L);
+        ComparisonNode child = childNode(11L);
+        withChildren(child, grandchild);
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.bmGetId()).thenReturn(Long.valueOf(10L));
+        withChildren(node, child);
+        StubAccess access = access(null);
+        access.byNode.put(Long.valueOf(12L), Collections.singletonList(
+            new PotentialMergeProblemDescription("grandchild", "grandchild details"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Scoped to the ONE section under test: the child outline beside it names the same bound,
+        // and an assertion over the whole document would be satisfied by that one instead.
+        String text = sectionOf(render(node, ComparisonNodeStatus.FINISHED, access, 100, 1),
+            "## Potential problems"); //$NON-NLS-1$
+
+        assertFalse("the grandchild is below the requested depth, so it was never asked: " + text, //$NON-NLS-1$
+            text.contains("grandchild details")); //$NON-NLS-1$
+        // The pin that makes this test about the phrase rather than about the footnote under it.
+        // It passed on a renderer that printed "none reported" and merely appended the reason,
+        // because it only ever asked for the reason.
+        assertFalse("an absence may not be ASSERTED over a level nobody descended to: " + text, //$NON-NLS-1$
+            text.contains("none reported")); //$NON-NLS-1$
+        assertTrue("and the bound that caused it must be named: " + text, //$NON-NLS-1$
+            text.contains("turned back at depth 1")); //$NON-NLS-1$
+    }
+
+    // ============ A non-empty table is qualified by the same predicate as an empty one ============
+
+    /**
+     * The other half of the same claim. A count line qualified by the ROW limit alone reported a
+     * walk the DEPTH limit had cut as a whole one: with one problem on a child and another on a
+     * grandchild below the requested depth, the section read "Potential problems: 1" and nothing
+     * beside it said the scan had turned back - a capped number read as a subtree total.
+     */
+    @Test
+    public void testANonEmptyTableCutByTheDepthLimitSaysTheScanWasPartial()
+    {
+        String text = renderProblemsCutByDepth();
+
+        assertTrue("the problem inside the scan is rendered: " + text, //$NON-NLS-1$
+            text.contains("visible details")); //$NON-NLS-1$
+        assertFalse("the one below the requested depth was never asked: " + text, //$NON-NLS-1$
+            text.contains("hidden details")); //$NON-NLS-1$
+        assertTrue("so the count covers what was visited, and must not read as a total: " + text, //$NON-NLS-1$
+            text.contains("The scan was partial")); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal: saying the scan was partial is not enough, the bound the caller can raise
+     * has to be named - and the row limit, which is what this branch used to ask about, is not it.
+     */
+    @Test
+    public void testANonEmptyTableCutByTheDepthLimitNamesThatBound()
+    {
+        String text = renderProblemsCutByDepth();
+
+        assertTrue("the caller can only widen a bound that is named: " + text, //$NON-NLS-1$
+            text.contains("turned back at depth 1")); //$NON-NLS-1$
+    }
+
+    /**
+     * Two bounds at once, which is where a site that unpacks ONE of them shows: the row limit caps
+     * the descendant list at the third child while the depth limit turns the walk back inside the
+     * first. Announcing only the row limit sent the caller after a number that was not the whole
+     * story, and it is the shape the shared enumeration exists to make impossible.
+     */
+    @Test
+    public void testACountCutByBothBoundsAnnouncesTheRowLimit()
+    {
+        String text = renderProblemsCutByBothBounds();
+
+        assertTrue("the row limit narrowed the scope and must be named: " + text, //$NON-NLS-1$
+            text.contains("only the first 2 descendant nodes were examined")); //$NON-NLS-1$
+    }
+
+    /** Its own literal, because the defect is precisely that the SECOND clause went missing. */
+    @Test
+    public void testACountCutByBothBoundsAlsoAnnouncesTheDepthLimit()
+    {
+        String text = renderProblemsCutByBothBounds();
+
+        assertTrue("the depth limit cut the same scan and must be named beside it: " + text, //$NON-NLS-1$
+            text.contains("turned back at depth 1")); //$NON-NLS-1$
+    }
+
+    // ==================== A null child is not something below the level ====================
+
+    /**
+     * {@code childrenOf} hands back the PLATFORM's list rather than a copy of it, and that list may
+     * carry {@code null} elements. Every walk here tolerates them by returning on entry, so a node
+     * whose only child is {@code null} has nothing below it - but the depth gate asked whether the
+     * LIST was empty, called the level occupied and recorded the depth bound over a walk that had
+     * in fact covered everything.
+     */
+    @Test
+    public void testAChildListHoldingOnlyNullRaisesNoDepthBoundInTheOutline()
+    {
+        ComparisonNode child = childNode(11L);
+        withNullOnlyChild(child);
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.bmGetId()).thenReturn(Long.valueOf(10L));
+        withChildren(node, child);
+
+        String text = sectionOf(render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1),
+            "## Children"); //$NON-NLS-1$
+
+        assertTrue("the child itself is still rendered: " + text, //$NON-NLS-1$
+            text.contains("**Children shown:** 1")); //$NON-NLS-1$
+        assertFalse("nothing was hidden, so no bound may be announced: " + text, //$NON-NLS-1$
+            text.contains("turned back at depth")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same list seen from the sentence a false bound SILENCES: one spurious
+     * {@code DEPTH_LIMIT} is enough to withdraw the honest "No differences", which is the answer a
+     * complete walk owes the caller.
+     */
+    @Test
+    public void testAChildListHoldingOnlyNullDoesNotSuppressTheModuleSectionPhrase()
+    {
+        ComparisonNode bridge = childNode(77L);
+        withNullOnlyChild(bridge);
+        BslModuleComparisonNode module = moduleOf();
+        withChildren(module, bridge);
+
+        String text = sectionOf(render(module, ComparisonNodeStatus.FINISHED, access(null), 100, 1),
+            "## Module sections"); //$NON-NLS-1$
+
+        assertTrue("the walk saw everything there was, so the phrase must survive: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NO_DIFFERENCES + " in the module sections")); //$NON-NLS-1$
+    }
+
+    /** The positive control: a REAL child below the level still raises the bound it always did. */
+    @Test
+    public void testARealChildBelowTheLevelStillRaisesTheDepthBound()
+    {
+        ComparisonNode child = childNode(11L);
+        withChildren(child, childNode(12L));
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.bmGetId()).thenReturn(Long.valueOf(10L));
+        withChildren(node, child);
+
+        String text = sectionOf(render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1),
+            "## Children"); //$NON-NLS-1$
+
+        assertTrue("a level that really has something below it is still announced: " + text, //$NON-NLS-1$
+            text.contains("turned back at depth 1")); //$NON-NLS-1$
     }
 
     // ==================== Truncation is a declined row, not an exhausted budget ====================
@@ -701,9 +1171,35 @@ public class ComparisonNodeRendererTest
     private static String render(ComparisonNode node, ComparisonNodeStatus status,
         ComparisonNodeRenderer.NodeAccess access, int limit)
     {
+        return render(node, status, access, limit, 1);
+    }
+
+    private static String render(ComparisonNode node, ComparisonNodeStatus status,
+        ComparisonNodeRenderer.NodeAccess access, int limit, int depth)
+    {
         ComparisonNodeRenderer.Request request = new ComparisonNodeRenderer.Request("cmp-1", //$NON-NLS-1$
-            "Catalog.Products", ComparisonSide.MAIN, status, 1, limit, null); //$NON-NLS-1$
+            "Catalog.Products", ComparisonSide.MAIN, status, depth, limit, null); //$NON-NLS-1$
         return ComparisonNodeRenderer.render(request, node, access);
+    }
+
+    /** One module section, named so a dropped or displaced row is identifiable. */
+    private static BslModuleSectionComparisonNode section(String name)
+    {
+        BslModuleSectionComparisonNode section = mock(BslModuleSectionComparisonNode.class);
+        when(section.getSectionType()).thenReturn(BslModuleSectionType.PROCEDURE);
+        when(section.getName(ComparisonSide.MAIN)).thenReturn(name);
+        return section;
+    }
+
+    /** A module carrying exactly these sections, in this order. */
+    private static BslModuleComparisonNode moduleOf(BslModuleSectionComparisonNode... sections)
+    {
+        BslModuleComparisonNode module = mock(BslModuleComparisonNode.class);
+        when(module.eClass()).thenReturn(MODEL.moduleNodeClass);
+        EList<BslModuleSectionComparisonNode> list = new BasicEList<>();
+        list.addAll(Arrays.asList(sections));
+        when(module.getChildren()).thenReturn(list);
+        return module;
     }
 
     /** A mocked top node with a real EClass, so the rendered "kind" is deterministic. */
@@ -740,6 +1236,65 @@ public class ComparisonNodeRendererTest
         EList<ComparisonNode> list = new BasicEList<>();
         list.addAll(Arrays.asList(children));
         when(parent.<ComparisonNode> getChildren()).thenReturn(list);
+    }
+
+    /**
+     * A child list whose single element is {@code null} - the shape the platform's own list can
+     * take, and the one the renderer sees now that it no longer copies that list.
+     *
+     * @param parent the node to give the list to
+     */
+    private static void withNullOnlyChild(ComparisonNode parent)
+    {
+        EList<ComparisonNode> list = new BasicEList<>();
+        list.add(null);
+        when(parent.<ComparisonNode> getChildren()).thenReturn(list);
+    }
+
+    /**
+     * A problem the scan reaches and a problem one level below the requested depth, rendered at
+     * {@code depth=1} with room to spare in the row budget - so the DEPTH limit, and only it, cut
+     * the scan.
+     *
+     * @return the text of the potential-problem section
+     */
+    private static String renderProblemsCutByDepth()
+    {
+        ComparisonNode grandchild = childNode(12L);
+        ComparisonNode child = childNode(11L);
+        withChildren(child, grandchild);
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.bmGetId()).thenReturn(Long.valueOf(10L));
+        withChildren(node, child);
+        StubAccess access = access(null);
+        access.byNode.put(Long.valueOf(11L), Collections.singletonList(
+            new PotentialMergeProblemDescription("visible", "visible details"))); //$NON-NLS-1$ //$NON-NLS-2$
+        access.byNode.put(Long.valueOf(12L), Collections.singletonList(
+            new PotentialMergeProblemDescription("hidden", "hidden details"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        return sectionOf(render(node, ComparisonNodeStatus.FINISHED, access, 100, 1),
+            "## Potential problems"); //$NON-NLS-1$
+    }
+
+    /**
+     * A scan cut by BOTH bounds: three children for a limit of two decline the third, and the
+     * first child holds a grandchild the requested depth of one turns the walk back at.
+     *
+     * @return the text of the potential-problem section
+     */
+    private static String renderProblemsCutByBothBounds()
+    {
+        ComparisonNode first = childNode(11L);
+        withChildren(first, childNode(21L));
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.bmGetId()).thenReturn(Long.valueOf(10L));
+        withChildren(node, first, childNode(12L), childNode(13L));
+        StubAccess access = access(null);
+        access.byNode.put(Long.valueOf(11L), Collections.singletonList(
+            new PotentialMergeProblemDescription("visible", "visible details"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        return sectionOf(render(node, ComparisonNodeStatus.FINISHED, access, 2, 1),
+            "## Potential problems"); //$NON-NLS-1$
     }
 
     /** Renders a FORM node whose main side carries {@code form}, at {@code limit} rows per table. */

@@ -9,9 +9,11 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * In-memory model of EDT's merge-settings ("merge rules") file - the document a comparison
@@ -253,12 +255,10 @@ public final class MergeRulesDocument
      */
     public Element mergeSettings()
     {
-        for (Element child : settings.children())
+        Element existing = findContainer(settings);
+        if (existing != null)
         {
-            if (TAG_MERGE_SETTINGS.equals(child.tag()))
-            {
-                return child;
-            }
+            return existing;
         }
         Element created = new Element(TAG_MERGE_SETTINGS);
         settings.children().add(created);
@@ -273,7 +273,7 @@ public final class MergeRulesDocument
     public Element root()
     {
         Element container = mergeSettings();
-        Element rootNode = findNode(container, ROOT_KEY);
+        Element rootNode = findRoot(container);
         if (rootNode == null)
         {
             rootNode = new Element(TAG_NODE);
@@ -284,22 +284,50 @@ public final class MergeRulesDocument
     }
 
     /**
-     * Every decision the file carries, in document order. A decision is a node with a
-     * {@link #ATTR_MERGE_RULE} attribute - the file being sparse, that is exactly the set of
-     * choices somebody made.
+     * Every decision the file carries AT AN ADDRESS, in document order. A decision is a node with
+     * a {@link #ATTR_MERGE_RULE} attribute - the file being sparse, that is exactly the set of
+     * choices somebody made - and it is reached the way every other read here reaches a node:
+     * {@link #findContainer(Element)} for the container, {@link #findRoot(Element)} for the one
+     * address that container exposes, then {@link #findNode(Element, String)} down the keys.
+     * <p>
+     * <b>A rule that lies OUTSIDE that tree is not returned at all.</b> It used to be: the walk
+     * started at every {@code Node} in the container and recursed through {@code children()}
+     * directly, so a rule on a {@code Node} sitting BESIDE the root came back as a decision at
+     * depth 0 - the root's own level - and two such siblings came back as two decisions at ONE
+     * address, a shape the codec's duplicate-key refusal deliberately does not judge because no
+     * request can reach it. The same held under a keyless node, whose missing key contributed an
+     * empty path segment that {@link #findNode(Element, String)} can match on nothing.
+     * <p>
+     * <b>Why nothing rather than a second shape.</b> Reporting such a rule under a made-up address
+     * is the failure - {@code MergeRulesTool} prints that address as a level it is not, and
+     * validates it against a comparison, while {@link #mergeRuleAt(List)} and
+     * {@link #setMergeRule(List, String)} could never follow it. Reporting it under a truthful
+     * address is impossible, because it has none. Returning it in a separately named shape was the
+     * other option and is declined: every consumer of this list answers one question - what will
+     * the platform apply - and for an unreachable rule the answer is "nothing", exactly as for a
+     * rule that is not in the file. What does NOT change is that the file keeps it: a rewrite
+     * carries the element through verbatim, as it carries any other payload this plugin does not
+     * interpret.
      *
      * @return the decisions, never {@code null}
      */
     public List<Decision> decisions()
     {
-        List<Decision> collected = new ArrayList<>();
-        for (Element child : mergeSettings().children())
+        Element container = findContainer(settings);
+        if (container == null)
         {
-            if (TAG_NODE.equals(child.tag()))
-            {
-                collect(child, new ArrayList<>(), collected);
-            }
+            // No container is no node tree, so there is no address a decision could sit at.
+            return Collections.emptyList();
         }
+        Element rootNode = findRoot(container);
+        if (rootNode == null)
+        {
+            // The container exposes exactly one address and the file does not carry it: nothing
+            // in it is reachable, so nothing in it is a decision at an address.
+            return Collections.emptyList();
+        }
+        List<Decision> collected = new ArrayList<>();
+        collect(rootNode, List.of(ROOT_KEY), collected);
         return collected;
     }
 
@@ -337,6 +365,51 @@ public final class MergeRulesDocument
             }
         }
         return count;
+    }
+
+    /**
+     * Number of merge rules the file carries on nodes ADDRESSING CANNOT REACH, counted over the
+     * whole node tree.
+     * <p>
+     * Reachable means here what it means everywhere else in this class: the container
+     * {@link #findContainer(Element)} picks, entered at the one address it exposes
+     * ({@link #findRoot(Element)}), then walked down by {@link #findNode(Element, String)} on each
+     * key. Three shapes fall outside it - a {@code Node} sitting BESIDE the root, a node carrying
+     * no {@link #ATTR_KEY} (a lookup matches on tag AND key, so no path comes to rest on it and
+     * nothing below it is reachable either), and a keyed node a lookup does not LAND on because an
+     * earlier sibling carries the same key.
+     * <p>
+     * <b>Counted because otherwise nothing mentions such a rule at all.</b> {@link #decisions()}
+     * deliberately does not return one - it has no address to return it under - and
+     * {@link #preservedSectionCount()} does not count it either, because a {@code Node} is tree,
+     * not a preserved block. Left unreported, a file whose only rules are unreachable reads as a
+     * file with no rule in it, which is the same false claim of absence this model refuses to make
+     * anywhere else. What is NOT claimed is that the file loses them: a rewrite carries the
+     * elements through verbatim, as it carries any other payload this plugin does not interpret.
+     *
+     * @return the count of rules sitting at unreachable nodes
+     */
+    public int unreachableRuleCount()
+    {
+        Element container = findContainer(settings);
+        if (container == null)
+        {
+            // No container is no node tree at all: a Node elsewhere in the file sits inside some
+            // other block, and preservedSectionCount already reports that block as preserved.
+            return 0;
+        }
+        Element rootNode = findRoot(container);
+        int count = 0;
+        for (Element child : nodeChildren(container))
+        {
+            if (child != rootNode)
+            {
+                // The container exposes exactly one address, so every other node under it - and
+                // everything below that node - is addressed by nothing.
+                count += rulesInSubtree(child);
+            }
+        }
+        return rootNode == null ? count : count + unreachableRulesBelow(rootNode);
     }
 
     /**
@@ -531,11 +604,30 @@ public final class MergeRulesDocument
         return count;
     }
 
-    private static Element findNode(Element parent, String key)
+    // The four primitives below ARE the addressing, and they are package-scoped rather than
+    // private because a second reader needs the same answers. MergeRulesCodec refuses a file whose
+    // node tree says two things about one address, and a scan that answers "which element is the
+    // container", "where does addressing enter it" or "which child does a key land on" in its OWN
+    // way is a REPLICA of this class - one that drifted twice already, first judging a container
+    // no lookup reads, then judging keyed nodes no lookup can reach. Each of those questions is
+    // answered here, once, and the scan takes its answers from these methods; all it adds is the
+    // one question addressing cannot ask, namely whether a pick had a SECOND candidate.
+
+    /**
+     * The {@code MergeSettings} element this document READS - the FIRST one, and the only one any
+     * lookup, decision or write here ever touches.
+     * <p>
+     * Unlike {@link #mergeSettings()} it creates nothing, so a reader that must not change the
+     * document asks the same question and gets the same element.
+     *
+     * @param settings the {@code Settings} root
+     * @return the container, or {@code null} when the document has none
+     */
+    static Element findContainer(Element settings)
     {
-        for (Element child : parent.children())
+        for (Element child : settings.children())
         {
-            if (TAG_NODE.equals(child.tag()) && key.equals(child.attribute(ATTR_KEY)))
+            if (TAG_MERGE_SETTINGS.equals(child.tag()))
             {
                 return child;
             }
@@ -543,23 +635,141 @@ public final class MergeRulesDocument
         return null;
     }
 
-    private static void collect(Element node, List<String> path, List<Decision> collected)
+    /**
+     * The node addressing ENTERS a container at.
+     * <p>
+     * A container exposes exactly ONE address - {@link #ROOT_KEY} - and every path this document
+     * reads or writes starts there ({@link #root()}, {@link #mergeRuleAt(List)},
+     * {@link #setMergeRule(List, String)}). A {@code Node} that sits beside the root under its own
+     * key is reachable by nothing.
+     * <p>
+     * Unlike {@link #root()} it creates nothing.
+     *
+     * @param container the {@code MergeSettings} element
+     * @return the root node, or {@code null} when the container has none
+     */
+    static Element findRoot(Element container)
     {
-        String key = node.attribute(ATTR_KEY);
-        List<String> here = new ArrayList<>(path);
-        here.add(key == null ? "" : key); //$NON-NLS-1$
-        String rule = node.attribute(ATTR_MERGE_RULE);
-        if (rule != null)
-        {
-            collected.add(new Decision(here, rule, node.attribute(ATTR_ORDER_SIDE)));
-        }
-        for (Element child : node.children())
+        return findNode(container, ROOT_KEY);
+    }
+
+    /**
+     * The {@code Node} children of an element, in document order - the list every lookup scans,
+     * and therefore the definition of what counts as a node of the tree.
+     *
+     * @param parent the element to read
+     * @return the node children, never {@code null}
+     */
+    static List<Element> nodeChildren(Element parent)
+    {
+        List<Element> nodes = new ArrayList<>();
+        for (Element child : parent.children())
         {
             if (TAG_NODE.equals(child.tag()))
             {
-                collect(child, here, collected);
+                nodes.add(child);
             }
         }
+        return nodes;
+    }
+
+    /**
+     * The child a lookup for {@code key} LANDS ON: the FIRST {@code Node} child carrying it, which
+     * is also how EDT itself resolves a node.
+     *
+     * @param parent the element to look in
+     * @param key the key to match
+     * @return the child, or {@code null} when no node carries the key
+     */
+    static Element findNode(Element parent, String key)
+    {
+        for (Element child : nodeChildren(parent))
+        {
+            if (key.equals(child.attribute(ATTR_KEY)))
+            {
+                return child;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * One level of the decision walk: the node's own rule, then the levels below it.
+     * <p>
+     * The descent goes through {@link #findNode(Element, String)} on each DISTINCT key rather than
+     * through the child the loop happens to hold, so what is walked is by construction the element
+     * a lookup for that key would land on - the same rule the codec's duplicate-key scan follows.
+     * A child without a key is skipped entirely: {@code findNode} matches on tag AND key, so no
+     * path can come to rest on it and nothing below it is reachable by any request either.
+     *
+     * @param node the node to read; its rule, if any, is a decision at {@code path}
+     * @param path the key chain that addresses {@code node}, starting at {@link #ROOT_KEY}
+     * @param collected the decisions found so far
+     */
+    private static void collect(Element node, List<String> path, List<Decision> collected)
+    {
+        String rule = node.attribute(ATTR_MERGE_RULE);
+        if (rule != null)
+        {
+            collected.add(new Decision(path, rule, node.attribute(ATTR_ORDER_SIDE)));
+        }
+        Set<String> keys = new LinkedHashSet<>();
+        for (Element child : nodeChildren(node))
+        {
+            String key = child.attribute(ATTR_KEY);
+            if (key != null)
+            {
+                keys.add(key);
+            }
+        }
+        for (String key : keys)
+        {
+            List<String> here = new ArrayList<>(path);
+            here.add(key);
+            collect(findNode(node, key), here, collected);
+        }
+    }
+
+    /**
+     * Rules held below a node addressing DOES reach, on children it does not.
+     *
+     * @param reachable a node some key chain lands on
+     * @return the count of rules under it that no key chain lands on
+     */
+    private static int unreachableRulesBelow(Element reachable)
+    {
+        int count = 0;
+        for (Element child : nodeChildren(reachable))
+        {
+            String key = child.attribute(ATTR_KEY);
+            if (key != null && findNode(reachable, key) == child)
+            {
+                count += unreachableRulesBelow(child);
+            }
+            else
+            {
+                // Either the child carries no key, or a lookup for its key lands on an earlier
+                // sibling. Either way nothing addresses it, and nothing addresses its subtree.
+                count += rulesInSubtree(child);
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Rules on a node and on every node below it, addressable or not.
+     *
+     * @param node the subtree root
+     * @return the count
+     */
+    private static int rulesInSubtree(Element node)
+    {
+        int count = node.attribute(ATTR_MERGE_RULE) == null ? 0 : 1;
+        for (Element child : nodeChildren(node))
+        {
+            count += rulesInSubtree(child);
+        }
+        return count;
     }
 
     private static int countNonNodeElements(Element element)

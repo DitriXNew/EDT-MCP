@@ -118,7 +118,7 @@ public class CompareConfigurationsTool implements IMcpTool
     static final long JOB_TIMEOUT_MS = TimeUnit.HOURS.toMillis(2);
 
     /** How often the job asks the engine for its status and failure cause. */
-    private static final long POLL_INTERVAL_MS = 500L;
+    static final long POLL_INTERVAL_MS = 500L;
 
     /** How often the job writes a progress line, in poll ticks. */
     private static final int PROGRESS_EVERY_TICKS = 20;
@@ -164,6 +164,7 @@ public class CompareConfigurationsTool implements IMcpTool
 
     private final Backend backend;
     private final BackgroundJobs jobs;
+    private final long pollIntervalMs;
 
     /** Production wiring: the read-only engine facade and the shared job registry. */
     public CompareConfigurationsTool()
@@ -177,8 +178,27 @@ public class CompareConfigurationsTool implements IMcpTool
      */
     CompareConfigurationsTool(Backend backend, BackgroundJobs jobs)
     {
+        this(backend, jobs, POLL_INTERVAL_MS);
+    }
+
+    /**
+     * The same seam {@code ComparisonSessionRegistry} takes for its own pause, and for the same
+     * reason: {@link #MAX_STARTING_TICKS} is a minute at the production interval, so the ending it
+     * governs could otherwise only be reached by a test that slept for one.
+     * <p>
+     * It shortens the WAIT and nothing else - the tick counts, the endings and the sentences are
+     * the production ones - and the interval is what the reported budget is computed from, so a
+     * shortened run reports the budget it actually spent rather than the one it did not.
+     *
+     * @param backend the comparison backend (a stub in tests)
+     * @param jobs the background-job registry
+     * @param pollIntervalMs how long the poll loop sleeps between two ticks
+     */
+    CompareConfigurationsTool(Backend backend, BackgroundJobs jobs, long pollIntervalMs)
+    {
         this.backend = backend;
         this.jobs = jobs;
+        this.pollIntervalMs = pollIntervalMs;
     }
 
     @Override
@@ -971,7 +991,7 @@ public class CompareConfigurationsTool implements IMcpTool
                 // observed instead.
                 progress.add(progressLine(state));
             }
-            Thread.sleep(POLL_INTERVAL_MS);
+            Thread.sleep(pollIntervalMs);
         }
     }
 
@@ -999,11 +1019,16 @@ public class CompareConfigurationsTool implements IMcpTool
      * unkept while the slot stayed taken under an id the caller believes is closing.
      *
      * <h2>The slot goes back by default</h2>
-     * Exactly one ending keeps the comparison open - a FINISHED one nobody asked to cancel -
-     * because its tree is what {@code get_comparison_node} reads and its nodeIds are in the report
-     * being returned. Every other ending hands the slot back, and the wording of what that
-     * achieved comes from {@link SlotHandback#sentence()} rather than from this method, so no
+     * Exactly one ending keeps the comparison open by DECISION - a FINISHED one nobody asked to
+     * cancel - because its tree is what {@code get_comparison_node} reads and its nodeIds are in
+     * the report being returned. Every other ending hands the slot back, and the wording of what
+     * that achieved comes from {@link SlotHandback#sentence()} rather than from this method, so no
      * ending can be described here as a stop that did not happen.
+     * <p>
+     * A comparison EDT has not BEGUN is the case where asking and achieving come apart: the
+     * hand-back is asked for like every other ending, and its owner withholds it, because ending a
+     * batch that is still waiting to run costs EDT its comparison support until it restarts. That
+     * is why NEVER_STARTED is answered rather than thrown - see the branch's own note.
      *
      * @param request the validated request
      * @param progress the job's reporter
@@ -1064,11 +1089,31 @@ public class CompareConfigurationsTool implements IMcpTool
                     + " Check the revisions with list_git_branches and the project state with " //$NON-NLS-1$
                     + "get_project_errors, then start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
             case NEVER_STARTED:
-                throw new ComparisonException("Comparison '" + id + "' was accepted by EDT but " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "never started: EDT has not listed it once in " //$NON-NLS-1$
-                    + TimeUnit.MILLISECONDS.toSeconds(MAX_STARTING_TICKS * POLL_INTERVAL_MS)
-                    + " seconds (" + conclusion.detail() + "). " + handback.sentence() //$NON-NLS-1$ //$NON-NLS-2$
-                    + " Check EDT for a stuck background task, then start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
+                // NOT a failure, and this is the one ending where saying "it did not happen"
+                // would be the same defect the rest of this class is about, only mirrored. What
+                // was observed is that EDT has not BEGUN the comparison - and a comparison it has
+                // not begun cannot be ended either, because cancelling a batch that is still
+                // waiting to run removes the job before the platform's own "the slot is free"
+                // step ever executes, and EDT then reports a comparison as active until it is
+                // restarted (see SlotHandback.Verdict.NOT_STARTED_YET). So the hand-back is
+                // WITHHELD by its owner, this comparison stays registered, and it may still start
+                // and take EDT's single slot. Calling that a failure told the caller nothing
+                // came of an id that is about to hold the platform's only comparison - and the
+                // caller's NEXT launch was then refused by a comparison it had been told it never
+                // made. The id is handed back instead, and the slot half of the sentence is the
+                // hand-back's own, which already names releaseComparisonId as the way out.
+                //
+                // Withholding is what happens USUALLY, not always: the hand-back is asked for with
+                // Ending.CANCELLED, and EDT can begin the comparison inside the one poll interval
+                // between the last STARTING answer and that request - in which case it really is
+                // cancelled and the verdict is FREED. Which of the two happened is read off the
+                // verdict by startingBudgetClaim; nothing is asserted here.
+                return "**Not started:** EDT accepted comparison `" + id + "` and has not begun " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "it in " + TimeUnit.MILLISECONDS.toSeconds( //$NON-NLS-1$
+                        MAX_STARTING_TICKS * pollIntervalMs)
+                    + " seconds (" + conclusion.detail() + "), so this job stopped waiting for " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "it. " + startingBudgetClaim(handback) + ' ' + handback.sentence() //$NON-NLS-1$
+                    + " Check EDT for a stuck background task that is holding up the scheduler."; //$NON-NLS-1$
             case UNREADABLE:
                 throw new ComparisonException("Comparison '" + id + "' could not be read: EDT " //$NON-NLS-1$ //$NON-NLS-2$
                     + "gave no status for " + MAX_UNREADABLE_TICKS + " polls in a row (" //$NON-NLS-1$ //$NON-NLS-2$
@@ -1082,6 +1127,40 @@ public class CompareConfigurationsTool implements IMcpTool
                     + " Narrow the comparison with scope, or check EDT for a stuck background " //$NON-NLS-1$
                     + "task, and start " + NAME + " again."); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    /**
+     * What may be claimed about a comparison whose STARTING budget ran out - decided by what the
+     * hand-back ANSWERED, never by what it was asked for.
+     *
+     * <h2>The defect this exists to prevent is this branch's own defect, mirrored</h2>
+     * The hand-back above is requested with {@link Ending#CANCELLED}, like every other early
+     * ending. Between the last STARTING poll and that request - a window one poll interval wide -
+     * EDT can begin the comparison, and when it does the hand-back really does cancel it and
+     * answers {@link SlotHandback.Verdict#FREED}. An unconditional "the comparison was NOT
+     * cancelled" then stood immediately before {@link SlotHandback#sentence()} saying the
+     * comparison had been ended and the slot released: one answer, two halves, contradicting each
+     * other, and nothing to tell the caller which half looked.
+     *
+     * <h2>So the claim is made only where it was observed</h2>
+     * {@link SlotHandback#platformHasNotBegun()} is true for exactly one verdict - the one that
+     * means nothing was asked of the platform BECAUSE EDT had not begun the comparison - and that
+     * is the only state in which "not cancelled" is a reading rather than an assumption. Every
+     * other verdict gets wording that claims nothing about the cancellation and leaves the answer
+     * to {@link SlotHandback#sentence()}, which is the only thing here that actually looked.
+     *
+     * @param handback what the hand-back's owner answered
+     * @return the sentence that stands between the budget and the slot half
+     */
+    private static String startingBudgetClaim(SlotHandback handback)
+    {
+        if (handback.platformHasNotBegun())
+        {
+            return "The comparison was NOT cancelled and this is NOT its result."; //$NON-NLS-1$
+        }
+        return "This is NOT its result - this job never saw EDT begin it. A stop WAS asked for " //$NON-NLS-1$
+            + "when the wait ended, so EDT may have begun the comparison in that window and the " //$NON-NLS-1$
+            + "stop may have ended it; what came of it is the next sentence."; //$NON-NLS-1$
     }
 
     /**
@@ -1559,7 +1638,16 @@ public class CompareConfigurationsTool implements IMcpTool
             CANCELLED(false),
             /** The session is no longer registered here. */
             VANISHED(false),
-            /** EDT accepted the batch and never listed the handle; this job ends it. */
+            /**
+             * EDT accepted the batch and has not listed the handle once within the starting
+             * budget, so this job stops waiting for it.
+             * <p>
+             * It asks for the hand-back like every other early ending - the flag below picks only
+             * which of EDT's two verbs a hand-back that DOES reach the platform is recorded under,
+             * and a comparison that began in the window between the last poll and the hand-back is
+             * one this job ended early. When EDT has not begun it, the hand-back's owner withholds
+             * it and the comparison stays registered; the caller is told so, with its id.
+             */
             NEVER_STARTED(true),
             /** EDT gave no status for the whole unreadable budget; this job ends it. */
             UNREADABLE(true),

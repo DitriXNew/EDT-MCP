@@ -90,6 +90,14 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
  * honest, silently mangling one is not - and the lossless promise on {@link MergeRulesDocument}
  * holds BECAUSE of this refusal. Modelling prefixes is a different job of a different size, and
  * no legitimate file of this format needs it. See {@code rejectNamespaceUse}.
+ * <p>
+ * <b>A document in which two SIBLING {@code <Node>} elements carry the same {@code Key} is
+ * REFUSED too</b>, and for the same reason the namespace case is: it cannot be carried honestly.
+ * EDT matches nodes by string equality, so of two siblings under one key only the first is ever
+ * found - a rule written to that address updates the first and leaves the second in the file with
+ * a rule of its own, and the rewrite then hands back a document that says two different things
+ * about one node. The tool already refuses two decisions addressing one node in its own request;
+ * this is that same question asked of the file. See {@code rejectDuplicateNodeKeys}.
  */
 public final class MergeRulesCodec
 {
@@ -973,6 +981,7 @@ public final class MergeRulesCodec
                     + ". This tool reads version '" + MergeRulesDocument.SUPPORTED_FORMAT_VERSION //$NON-NLS-1$
                     + "', which is also the only version EDT's own reader accepts."); //$NON-NLS-1$
             }
+            rejectDuplicateNodeKeys(rootElement);
             return MergeRulesDocument.of(rootElement, tree.prolog, tree.epilog);
         }
         catch (XMLStreamException e)
@@ -1067,6 +1076,168 @@ public final class MergeRulesCodec
             }
         }
         return tree;
+    }
+
+    /**
+     * Refuses a document in which two SIBLING {@code <Node>} elements carry the same {@code Key}.
+     *
+     * <h2>Why it is a refusal and not a merge</h2>
+     * The node tree is a map addressed by key, and such a document says two things about one
+     * address. Reading it means picking one, and the pick is invisible: EDT resolves a node by
+     * string equality and stops at the first match, so the first sibling is the one every reader
+     * sees, while the second sits in the file with a rule of its own that nothing will ever apply
+     * and nothing will ever report. A rewrite would carry both forward, which is the one thing
+     * this codec promises NOT to do quietly - and dropping one instead would delete a decision
+     * somebody wrote. Neither is ours to choose, so the file goes back to the person who edited
+     * it, in the same shape as every other grammar refusal here.
+     *
+     * <h2>The scan does not follow the addressing, it IS the addressing</h2>
+     * Twice already this scan judged a shape no request can reach, and both times because it
+     * answered a question {@link MergeRulesDocument} answers too - and answered it differently.
+     * It judged every {@code MergeSettings} element while the document reads the first one; then
+     * it treated every keyed {@code Node} in the container as a way in, while the document enters
+     * at {@link MergeRulesDocument#ROOT_KEY} and nowhere else. A third wording would have been a
+     * third instance, so the wording is gone: the container, the entry and the pick are asked of
+     * {@code MergeRulesDocument} itself - {@code findContainer}, {@code findRoot},
+     * {@code nodeChildren} and {@code findNode} - and this scan cannot address anything the
+     * document cannot, because it does not know how to.
+     * <p>
+     * What it adds is the ONE question addressing cannot ask: a lookup picks the FIRST candidate
+     * and can never see that there was a second, so the scan looks for that second candidate at
+     * every element a lookup can stand on. Two consequences follow from the entry rule and are
+     * worth naming, because each of them used to go the other way:
+     * <ul>
+     *   <li>a second {@code <Node Key="$$Root$$">} in the container IS refused - a rule written to
+     *       the root updates the first one and everything under the second is addressed by
+     *       nothing;</li>
+     *   <li>a {@code <Node>} that sits BESIDE the root under any other key is not an entry at all,
+     *       so neither it nor anything below it is judged. Refusing there named a pair no request
+     *       can reach, at a level and under a path that do not exist.</li>
+     * </ul>
+     * A payload section this plugin does not interpret is likewise not walked: {@code nodeChildren}
+     * answers the children of ONE element, so an element named {@code Node} inside a
+     * {@code Properties} block is somebody else's content and is never reached.
+     *
+     * <h2>What it deliberately does NOT refuse</h2>
+     * Two sibling {@code <Node>} elements that BOTH lack a {@code Key}. They are not two spellings
+     * of one address - they have no address, so no rule can ever be written to them and no lookup
+     * can confuse one for the other. That is a different question, it is pre-existing, and
+     * answering it here would refuse files over a shape this refusal is not about.
+     *
+     * @param settings the parsed {@code Settings} root
+     * @throws MergeRulesFormatException when two sibling nodes share a key
+     */
+    private static void rejectDuplicateNodeKeys(Element settings) throws MergeRulesFormatException
+    {
+        Element container = MergeRulesDocument.findContainer(settings);
+        if (container == null)
+        {
+            // No container is no node tree, so there is no address to be ambiguous about.
+            return;
+        }
+        rejectDuplicateRoots(container);
+        Element root = MergeRulesDocument.findRoot(container);
+        if (root == null)
+        {
+            // The container exposes exactly one address and the file does not carry it: nothing
+            // below is reachable, so nothing below is judged.
+            return;
+        }
+        rejectDuplicateSiblingKeys(root, List.of(MergeRulesDocument.ROOT_KEY));
+    }
+
+    /**
+     * Level 0: the container, where the only address is the root.
+     * <p>
+     * {@code findRoot} picks the FIRST node carrying {@link MergeRulesDocument#ROOT_KEY}, so a
+     * second one holds a subtree that every lookup, decision and write walks straight past. Every
+     * other node here is not an address at all and is not counted - two of them sharing a key is
+     * two unreachable nodes, not two spellings of one reachable address.
+     *
+     * @param container the {@code MergeSettings} element the document reads
+     * @throws MergeRulesFormatException when the container carries the root key twice
+     */
+    private static void rejectDuplicateRoots(Element container) throws MergeRulesFormatException
+    {
+        boolean seen = false;
+        for (Element node : MergeRulesDocument.nodeChildren(container))
+        {
+            if (!MergeRulesDocument.ROOT_KEY.equals(node.attribute(MergeRulesDocument.ATTR_KEY)))
+            {
+                continue;
+            }
+            if (seen)
+            {
+                throw new MergeRulesFormatException(
+                    duplicateNodeKey(MergeRulesDocument.ROOT_KEY, List.of()));
+            }
+            seen = true;
+        }
+    }
+
+    /**
+     * One level of the scan, below the root: the siblings here first, then each of them in turn.
+     * <p>
+     * Breadth before depth on purpose - the shallowest collision is the one a reader can act on,
+     * and reporting a deep one first would name a node whose own ancestor is already ambiguous.
+     * <p>
+     * The descent goes through {@code MergeRulesDocument.findNode} rather than through the child
+     * the loop above happens to hold: what is walked is then, by construction, the element a
+     * lookup for that key would land on.
+     *
+     * @param parent the element whose {@code Node} children are this level
+     * @param path the keys of the ancestors, starting at {@link MergeRulesDocument#ROOT_KEY}
+     * @throws MergeRulesFormatException when two sibling nodes share a key
+     */
+    private static void rejectDuplicateSiblingKeys(Element parent, List<String> path)
+        throws MergeRulesFormatException
+    {
+        Set<String> keys = new LinkedHashSet<>();
+        for (Element child : MergeRulesDocument.nodeChildren(parent))
+        {
+            String key = child.attribute(MergeRulesDocument.ATTR_KEY);
+            if (key == null)
+            {
+                // Unaddressable, so it is not a PARENT either: findNode matches a child on tag AND
+                // key, so no lookup can stand on this node and nothing below it is reachable by
+                // any request. Whatever it holds is already outside the addressing this refusal is
+                // about.
+                continue;
+            }
+            if (!keys.add(key))
+            {
+                throw new MergeRulesFormatException(duplicateNodeKey(key, path));
+            }
+        }
+        for (String key : keys)
+        {
+            List<String> here = new ArrayList<>(path);
+            here.add(key);
+            rejectDuplicateSiblingKeys(MergeRulesDocument.findNode(parent, key), here);
+        }
+    }
+
+    /**
+     * @param key the key two siblings share
+     * @param path the keys of their ancestors, starting at {@link MergeRulesDocument#ROOT_KEY};
+     *            empty when the pair IS the root
+     * @return the refusal, naming the key AND the level it sits at
+     */
+    private static String duplicateNodeKey(String key, List<String> path)
+    {
+        String where = path.isEmpty()
+            ? "directly under '<" + MergeRulesDocument.TAG_MERGE_SETTINGS //$NON-NLS-1$ //$NON-NLS-2$
+                + ">', where the only address is the '" + MergeRulesDocument.ROOT_KEY //$NON-NLS-1$
+                + "' node itself" //$NON-NLS-1$
+            : "under '" + String.join(" / ", path) + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "Malformed merge-settings file: two '<" + MergeRulesDocument.TAG_NODE //$NON-NLS-1$
+            + ">' elements carry the same " + MergeRulesDocument.ATTR_KEY + " '" + key //$NON-NLS-1$ //$NON-NLS-2$
+            + "' as siblings at level " + path.size() + " (" + where + "). Level 0 is the '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + MergeRulesDocument.ROOT_KEY + "' node, 1 a feature collection, 2 a top object. EDT " //$NON-NLS-1$
+            + "matches nodes by string equality and stops at the first one, so only that one is " //$NON-NLS-1$
+            + "ever found and the other holds a rule nothing will apply and nothing will report. " //$NON-NLS-1$
+            + "Open the file, merge the two elements into one keeping the rule you want, and run " //$NON-NLS-1$
+            + "this again."; //$NON-NLS-1$
     }
 
     /**

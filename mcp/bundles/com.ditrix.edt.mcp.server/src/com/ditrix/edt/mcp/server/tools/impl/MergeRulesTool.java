@@ -319,6 +319,7 @@ public class MergeRulesTool implements IMcpTool
     private String renderRead(MergeRulesDocument document, int limit)
     {
         List<Decision> decisions = document.decisions();
+        int unreachable = document.unreachableRuleCount();
         StringBuilder out = new StringBuilder("# Merge rules: ").append(document.sourceLabel()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         out.append("- Format version: ").append(document.formatVersion()).append('\n'); //$NON-NLS-1$
         out.append("- Decisions: ").append(decisions.size()).append('\n'); //$NON-NLS-1$
@@ -327,6 +328,14 @@ public class MergeRulesTool implements IMcpTool
             .append(" (kept verbatim by a rewrite)\n\n"); //$NON-NLS-1$
         if (decisions.isEmpty())
         {
+            if (unreachable > 0)
+            {
+                // Saying "no merge rule" here would claim an absence the file
+                // contradicts: the rules ARE in it, they just sit where no address
+                // reaches them.
+                out.append(unreachableRuleClause(unreachable));
+                return out.toString();
+            }
             out.append("The file records no merge rule. A merge-rules file is SPARSE - it holds only " //$NON-NLS-1$
                 + "the decisions somebody made, so an empty one leaves every node on EDT's own " //$NON-NLS-1$
                 + "default.\n"); //$NON-NLS-1$
@@ -348,11 +357,47 @@ public class MergeRulesTool implements IMcpTool
         {
             out.append('\n').append(Pagination.truncationNotice(shown, decisions.size())).append('\n');
         }
+        if (unreachable > 0)
+        {
+            out.append('\n').append(unreachableRuleClause(unreachable));
+        }
         out.append("\n> Levels: `root` = the whole configuration, `collection` = every object of one " //$NON-NLS-1$
             + "kind, `object` = one object keyed by its name on the three sides ('NONE' = absent " //$NON-NLS-1$
             + "there), `member` = below the object, where the platform keys nodes by a computed " //$NON-NLS-1$
             + "POSITION that shifts when other rules change - reported here, never authored.\n"); //$NON-NLS-1$
         return out.toString();
+    }
+
+    /**
+     * What the report says about the merge rules a file carries at nodes no address reaches.
+     * <p>
+     * Emitted ONLY when there are such rules, so an ordinary file reads exactly as before.
+     * The sentence it replaces - "the file records no merge rule" - would be a false claim of
+     * absence here: {@code decisions()} has no address to report such a rule under and the
+     * preserved-section count does not cover it either, so without this the file would be
+     * reported as holding nothing while holding a rule somebody wrote.
+     *
+     * @param count how many such rules the file carries, always positive
+     * @return the clause, ending in a newline
+     */
+    private static String unreachableRuleClause(int count)
+    {
+        // The two shapes the counter actually sees. A third - a node shadowed by an earlier
+        // sibling carrying the same key - is defended against in the counter but cannot occur in
+        // a document that got this far: duplicate sibling keys inside the addressable tree are
+        // refused while parsing. Naming it here would describe a state this tool never loads.
+        boolean one = count == 1;
+        return "The file carries " + count + " merge rule" + (one ? "" : "s") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " in a part of the node tree addressing never enters: anything outside the subtree " //$NON-NLS-1$
+            + "of the '" + MergeRulesDocument.ROOT_KEY + "' marker, and anything below a node " //$NON-NLS-1$ //$NON-NLS-2$
+            + "that carries no 'Key'. EDT resolves a node by its key chain from that marker, so " //$NON-NLS-1$
+            + (one ? "that rule applies" : "those rules apply") //$NON-NLS-1$ //$NON-NLS-2$
+            + " to nothing and no request here can address " //$NON-NLS-1$
+            + (one ? "it" : "them") + ", which is why " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + (one ? "it is not counted as a decision" : "they are not counted as decisions") //$NON-NLS-1$ //$NON-NLS-2$
+            + " above. A rewrite still carries " + (one ? "it" : "them") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " through verbatim, as it carries any other payload this tool does not " //$NON-NLS-1$
+            + "interpret.\n"; //$NON-NLS-1$
     }
 
     private static String level(Decision decision)
@@ -800,13 +845,6 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
-     * Parses and validates one requested decision.
-     *
-     * @param raw the decision object as sent
-     * @param position its 1-based position, for the error message
-     * @return the parsed decision, or the refusal explaining why it is not usable
-     */
-    /**
      * Refuses a {@code decisions} array that carries an element which is not a JSON object.
      *
      * @param params the call arguments
@@ -848,6 +886,13 @@ public class MergeRulesTool implements IMcpTool
         return null;
     }
 
+    /**
+     * Parses and validates one requested decision.
+     *
+     * @param raw the decision object as sent
+     * @param position its 1-based position, for the error message
+     * @return the parsed decision, or the refusal explaining why it is not usable
+     */
     private ParsedDecision parseDecision(JsonObject raw, int position)
     {
         JsonElement ruleElement = raw.get(FIELD_RULE);

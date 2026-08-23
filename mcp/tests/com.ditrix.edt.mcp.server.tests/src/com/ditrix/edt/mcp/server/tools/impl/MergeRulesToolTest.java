@@ -120,6 +120,66 @@ public class MergeRulesToolTest
     private static final String CATALOGS_RU =
         "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A\u0438"; //$NON-NLS-1$
 
+    /**
+     * The sentence a report may only say about a file that carries NO merge rule at all.
+     * Pinned as a literal because what the tests below assert about it is its ABSENCE.
+     */
+    /** The XML attribute delimiter, kept out of the fixtures so they stay readable. */
+    private static final String QUOTE = String.valueOf((char)34);
+
+    private static final String CLAIMS_NO_RULE = "The file records no merge rule"; //$NON-NLS-1$
+
+    /** A rule on a {@code Node} sitting BESIDE the root: in the file, at no address. */
+    private static final String RULE_BESIDE_THE_ROOT =
+        "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\"/>" //$NON-NLS-1$
+            + "<Node Key=\"orphan\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+            + "</MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** The same one level down: a keyless node no path can come to rest on. */
+    private static final String RULE_UNDER_A_KEYLESS_NODE =
+        "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node><Node Key=\"x\" MergeRule=\"DoNotMerge\"/></Node>" //$NON-NLS-1$
+            + "</Node></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** A file that genuinely records nothing - the skeleton and not one rule. */
+    private static final String NO_RULE_AT_ALL =
+        "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\"/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** One rule at an address and one at none, so a report has to carry both facts. */
+    private static final String A_RULE_ON_EITHER_SIDE_OF_THE_ADDRESSING =
+        "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+            + "<Node Key=\"orphan\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+            + "</MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** A rule DEEP under a keyed node beside the root - the shape a shallow wording misses. */
+    private static final String RULE_DEEP_BESIDE_THE_ROOT =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + "><MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "$$Root$$" + QUOTE + "/>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "orphan" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "deep" + QUOTE + " MergeRule=" + QUOTE + "GetFromOther" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + QUOTE + "/></Node>" //$NON-NLS-1$
+            + "</MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** No root marker at all: addressing enters nowhere, so every rule in the file is outside. */
+    private static final String RULE_WITH_NO_ROOT_MARKER =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + "><MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "a" + QUOTE + " MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** Two of them, so the sentence has to agree in number with what it counted. */
+    private static final String TWO_UNREACHABLE_RULES =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + "><MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "$$Root$$" + QUOTE + "/>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "one" + QUOTE + " MergeRule=" + QUOTE + "GetFromOther" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + QUOTE + "/>" //$NON-NLS-1$
+            + "<Node Key=" + QUOTE + "two" + QUOTE + " MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "/></MergeSettings></Settings>"; //$NON-NLS-1$
+
     private Path workDir;
 
     @Before
@@ -387,6 +447,147 @@ public class MergeRulesToolTest
         Path file = file("other.xml"); //$NON-NLS-1$
         Files.write(file, "<Configuration Name=\"X\"/>".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
         assertErrorNaming(call(params("mode", "read", "filePath", file.toString())), "Settings"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    // ============ a rule at no address is still a rule the file carries ============
+    //
+    // decisions() stopped returning a rule that sits outside the addressable tree, which is
+    // right - there is no address to report it under. The report then said the file records
+    // NO merge rule, and the preserved-section count does not cover a Node either, so the
+    // rule went unmentioned everywhere: an absence claimed about a file that contradicts it.
+
+    /**
+     * A rule two levels out, under a KEYED node beside the root. The wording used to name only
+     * "a node beside the marker", which is not where this one sits - and the counter has always
+     * counted it, so the sentence was narrower than the number it introduced.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testARuleDeepUnderANodeBesideTheRootIsReportedToo() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("deep-beside-root.xml", RULE_DEEP_BESIDE_THE_ROOT).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to count it: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+    }
+
+    /**
+     * A file with no root marker at all. Addressing enters nowhere, so every rule in it is
+     * outside - the shape the old wording could not describe, because it spoke of nodes standing
+     * BESIDE a marker this file does not have.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAFileWithNoRootMarkerStillReportsTheRuleItCarries() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("no-root.xml", RULE_WITH_NO_ROOT_MARKER).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to count it: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+    }
+
+    /**
+     * Two of them. The sentence introduces a number, so it has to agree with it: a plural count
+     * under singular prose reads as a report about one rule and leaves the second unaccounted.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTwoUnreachableRulesAreWordedInThePlural() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("two-unreachable.xml", TWO_UNREACHABLE_RULES).toString())); //$NON-NLS-1$
+
+        assertTrue("both have to be counted: " + result, //$NON-NLS-1$
+            result.contains("2 merge rules in a part of the node tree addressing never enters")); //$NON-NLS-1$
+        assertTrue("and spoken of in the plural: " + result, //$NON-NLS-1$
+            result.contains("those rules apply")); //$NON-NLS-1$
+        assertFalse("never in the singular, which would describe only one of them:\n" + result, //$NON-NLS-1$
+            result.contains("that rule applies")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAReadDoesNotClaimNoRuleWhenOneSitsBesideTheRoot() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("beside-root.xml", RULE_BESIDE_THE_ROOT).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to say what it does carry: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+        assertTrue("naming the marker addressing enters at: " + result, //$NON-NLS-1$
+            result.contains("$$Root$$")); //$NON-NLS-1$
+        assertTrue("and that a rewrite keeps it: " + result, //$NON-NLS-1$
+            result.contains("carries it through verbatim")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAReadDoesNotClaimNoRuleWhenOneSitsUnderAKeylessNode() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("keyless.xml", RULE_UNDER_A_KEYLESS_NODE).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to say what it does carry: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+        assertTrue("naming the reason a path cannot rest there: " + result, //$NON-NLS-1$
+            result.contains("carries no 'Key'")); //$NON-NLS-1$
+    }
+
+    /**
+     * The clause is an ADDITION to the report, not a replacement for it: a file that holds
+     * both kinds of rule has to have both reported.
+     */
+    @Test
+    public void testAReadReportsAnUnreachableRuleAlongsideTheDecisionsItDoesHave()
+        throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("both.xml", A_RULE_ON_EITHER_SIDE_OF_THE_ADDRESSING).toString())); //$NON-NLS-1$
+
+        assertTrue("the addressable rule is a decision and belongs in the table: " + result, //$NON-NLS-1$
+            result.contains("| collection |")); //$NON-NLS-1$
+        assertTrue("and the one at no address still has to be named: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that keeps the three above from being passed by a report that always says
+     * it: an ordinary file gains nothing.
+     */
+    @Test
+    public void testAnOrdinaryReadIsUnchangedByTheUnreachableClause() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", seedFixture().toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("nothing in this file is unaddressable, so the report must not say so:\n" //$NON-NLS-1$
+            + result, result.contains("no address reaches")); //$NON-NLS-1$
+    }
+
+    /**
+     * The other control: the sentence about a file that records nothing is still said about a
+     * file that records nothing.
+     */
+    @Test
+    public void testAFileWithNoRuleAtAllIsStillReportedAsRecordingNone() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("empty.xml", NO_RULE_AT_ALL).toString())); //$NON-NLS-1$
+
+        assertTrue("an empty file records no rule, and the report says so: " + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertFalse("and there is no unreachable rule to mention: " + result, //$NON-NLS-1$
+            result.contains("no address reaches")); //$NON-NLS-1$
     }
 
     // ==================== write, no live comparison ====================
@@ -1829,6 +2030,21 @@ public class MergeRulesToolTest
     {
         Path file = file("seeded.xml"); //$NON-NLS-1$
         Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        return file;
+    }
+
+    /**
+     * Writes a merge-rules document into the work directory.
+     *
+     * @param name the file name
+     * @param xml the document text
+     * @return the file
+     * @throws IOException when the file cannot be written
+     */
+    private Path seed(String name, String xml) throws IOException
+    {
+        Path file = file(name);
+        Files.write(file, xml.getBytes(StandardCharsets.UTF_8));
         return file;
     }
 

@@ -91,6 +91,18 @@ public class MergeRulesCodecTest
         + "  </MergeSettings>\n" //$NON-NLS-1$
         + "</Settings>\n"; //$NON-NLS-1$
 
+    /**
+     * One rule inside the reachable tree and two on {@code Node}s beside the root - the shape the
+     * duplicate-key refusal deliberately lets through, because no request can address it.
+     */
+    private static final String RULE_BESIDE_THE_ROOT =
+        "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\" MergeRule=\"MergePrioritizingMain\"/></Node>" //$NON-NLS-1$
+            + "<Node Key=\"orphan\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+            + "<Node Key=\"orphan\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+            + "</MergeSettings></Settings>"; //$NON-NLS-1$
+
     /** The payload block the reader does not interpret and must never drop. */
     private static final String PROPERTIES_BLOCK = "      <Properties>\n" //$NON-NLS-1$
         + "        <SkipUnchanged>true</SkipUnchanged>\n" //$NON-NLS-1$
@@ -488,6 +500,416 @@ public class MergeRulesCodecTest
                 e.getMessage().contains("Configuration")); //$NON-NLS-1$
             assertTrue("and what was expected", e.getMessage().contains("Settings")); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    /**
+     * The defect: a hand-edited file could carry two sibling {@code <Node>} elements under one
+     * {@code Key}, and the document was read as if it addressed one node. Every lookup stops at
+     * the first match, so a rule written to that address updated the first and left the second in
+     * the file holding a rule of its own - reported as recorded, applied by nothing. The tool
+     * already refuses two decisions addressing one node in ONE request; this is the same question
+     * asked of the file it starts from.
+     */
+    @Test
+    public void testParseRefusesTwoSiblingNodesUnderOneKey()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+                + "<Node Key=\"commonModules\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("a document that says two things about one node must not be read"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the key: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("commonModules")); //$NON-NLS-1$
+        }
+    }
+
+    /** Its own literal: naming the key alone leaves the reader hunting through a nested file. */
+    @Test
+    public void testTheDuplicateKeyRefusalNamesTheLevel()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"commonModules\">" //$NON-NLS-1$
+                + "<Node Key=\"A:B:C\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+                + "<Node Key=\"A:B:C\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+                + "</Node></Node></MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("a duplicate top-object key must be refused too"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("a top object sits at level 2: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("level 2")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Its own literal, because JUnit stops a method at its first failed assertion: a level number
+     * with no ancestors still leaves the reader searching a nested file for which branch it is.
+     */
+    @Test
+    public void testTheDuplicateKeyRefusalNamesTheAncestorsThatLeadToIt()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"commonModules\">" //$NON-NLS-1$
+                + "<Node Key=\"A:B:C\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+                + "<Node Key=\"A:B:C\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+                + "</Node></Node></MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("a duplicate top-object key must be refused too"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the path to the pair must be named: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("$$Root$$ / commonModules")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The control that keeps the refusal from being about the KEY rather than about the pair: the
+     * same key at two different levels is two different addresses, and the platform's own path
+     * generators produce exactly that (a feature collection and a top object can share a spelling).
+     */
+    @Test
+    public void testTheSameKeyAtTwoDifferentLevelsIsNotADuplicate() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"same\"><Node Key=\"same\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        assertEquals("GetFromOther", //$NON-NLS-1$
+            document.mergeRuleAt(List.of("same", "same")).orElse(null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The defect: the scan descended through a {@code <Node>} that carries no {@code Key}, but
+     * {@code findNode} matches a child on tag AND key, so no lookup can ever come to rest on such
+     * a node and nothing below it is reachable by any request. A file was refused over a pair the
+     * document can never reach - and the refusal named it at a level and under a path that do not
+     * exist, because the keyless ancestor contributed an empty segment to both.
+     */
+    @Test
+    public void testTwoNodesUnderAKeylessNodeAreNotADuplicate() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node><Node Key=\"x\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+                + "<Node Key=\"x\" MergeRule=\"DoNotMerge\"/></Node>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        assertNotNull("a pair no lookup can reach is not an ambiguous address", document); //$NON-NLS-1$
+        assertTrue("and the shape must survive the round trip it is not judged by", //$NON-NLS-1$
+            MergeRulesCodec.serialize(document).contains("Key=\"x\"")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that keeps the test above from being passed by a scan that stopped descending
+     * at all: the same file with a {@code Key} on the middle node is an addressable path, and the
+     * pair at the end of it is still refused.
+     */
+    @Test
+    public void testTheSamePairUnderAKEYEDNodeIsStillRefused()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"reachable\"><Node Key=\"x\"/><Node Key=\"x\"/></Node>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("an addressable pair must still be refused"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the key: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("'x'")); //$NON-NLS-1$
+            assertTrue("and the path that leads to it: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("$$Root$$ / reachable")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The THIRD instance of the same defect, and the reason the scan now takes its container, its
+     * entry and its pick from {@link MergeRulesDocument} instead of restating them: a
+     * {@code <Node>} sitting BESIDE the root, under a key of its own, was treated as an address.
+     * It is not one. {@code MergeRulesDocument.root()} enters the container at {@code $$Root$$}
+     * and nowhere else, so no request can reach such a node - and a whole file was refused over a
+     * pair nothing can address, at "level 0", which the refusal describes as the root's own level.
+     */
+    @Test
+    public void testTwoNodesBesideTheRootUnderOneKeyAreNotADuplicate() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "<Node Key=\"orphan\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+                + "<Node Key=\"orphan\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+
+        assertEquals("the tree the document reads is unambiguous", "GetFromOther", //$NON-NLS-1$ //$NON-NLS-2$
+            document.mergeRuleAt(List.of("commonModules")).orElse(null)); //$NON-NLS-1$
+        assertTrue("and the shape it is not judged by must survive the round trip", //$NON-NLS-1$
+            MergeRulesCodec.serialize(document).contains("Key=\"orphan\"")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same instance one level down: descending THROUGH a node beside the root judged a subtree
+     * that is equally unreachable, and named the pair under a path - {@code orphan / ...} - that
+     * no lookup ever walks.
+     */
+    @Test
+    public void testADuplicateUnderANodeBesideTheRootIsNotRefused() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"/>" //$NON-NLS-1$
+                + "<Node Key=\"orphan\"><Node Key=\"x\"/><Node Key=\"x\"/></Node>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+
+        assertNotNull("a pair below an unreachable node is not an ambiguous address", document); //$NON-NLS-1$
+        assertTrue("and the shape must survive the round trip it is not judged by", //$NON-NLS-1$
+            MergeRulesCodec.serialize(document).contains("Key=\"x\"")); //$NON-NLS-1$
+    }
+
+    // ============ decisions() reads the same tree the lookups do, and no other ============
+
+    /**
+     * The shape above with a RULE on it, which is where the second reader was still going its own
+     * way. {@code decisions()} used to start at every {@code Node} in the container and recurse
+     * through the child list, so a rule beside the root came back as a decision at depth 0 - the
+     * ROOT's own level - and the pair came back TWICE under one path that
+     * {@code mergeRuleAt} / {@code setMergeRule} can never walk. The duplicate-key refusal
+     * deliberately does not judge this shape, so nothing else caught it: the tool printed both as
+     * root-level decisions and validated a path the comparison has no node for.
+     */
+    @Test
+    public void testARuleBesideTheRootIsNotADecisionAtAnAddress() throws Exception
+    {
+        List<Decision> decisions = MergeRulesCodec.parse(RULE_BESIDE_THE_ROOT).decisions();
+
+        assertEquals("a rule nothing can address is not a decision at one: " //$NON-NLS-1$
+            + describe(decisions), List.of(),
+            decisions.stream().filter(decision -> "orphan".equals(decision.key())).toList()); //$NON-NLS-1$
+    }
+
+    /** Its own literal: not reporting it is not the same as dropping it. */
+    @Test
+    public void testARuleBesideTheRootStillSurvivesTheRewrite() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(RULE_BESIDE_THE_ROOT);
+
+        assertTrue("the rewrite carries what it does not interpret, verbatim", //$NON-NLS-1$
+            MergeRulesCodec.serialize(document)
+                .contains("<Node Key=\"orphan\" MergeRule=\"GetFromOther\"/>")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same rule under a KEYLESS node. {@code findNode} matches a child on tag AND key, so a
+     * node without one is not a place any path can come to rest and neither is anything below it -
+     * yet the old walk gave it the empty string as a key and reported the rule under an address
+     * whose middle segment matches nothing in any comparison.
+     */
+    @Test
+    public void testARuleUnderAKeylessNodeIsNotADecisionAtAnAddress() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node><Node Key=\"x\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        assertTrue("no path can rest on a keyless node, so nothing below it has an address: " //$NON-NLS-1$
+            + describe(document.decisions()), document.decisions().isEmpty());
+    }
+
+    /**
+     * The control that keeps the three above from being passed by a {@code decisions()} that
+     * returns nothing at all: the SAME file's reachable branch still yields its decision, at its
+     * real address and its real depth.
+     */
+    @Test
+    public void testARuleInsideTheReachableTreeIsStillADecision() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(RULE_BESIDE_THE_ROOT);
+
+        assertEquals(List.of(List.of("$$Root$$", "commonModules")), //$NON-NLS-1$ //$NON-NLS-2$
+            document.decisions().stream().map(Decision::path).toList());
+    }
+
+    // ============ what decisions() cannot report, the document still COUNTS ============
+    //
+    // Not returning an unreachable rule is right - it has no address to be returned under -
+    // but it left the rule named nowhere at all: preservedSectionCount does not cover a Node
+    // either, because a Node is tree rather than a preserved block. A reader was then told a
+    // file with a rule in it records none, which is a false claim of absence.
+
+    /**
+     * The two rules beside the root in {@code RULE_BESIDE_THE_ROOT}: unreachable, and counted
+     * as such.
+     */
+    @Test
+    public void testARuleBesideTheRootIsCountedAsUnreachable() throws Exception
+    {
+        assertEquals("both rules beside the root are addressed by nothing", 2, //$NON-NLS-1$
+            MergeRulesCodec.parse(RULE_BESIDE_THE_ROOT).unreachableRuleCount());
+    }
+
+    /**
+     * The same one level down: {@code findNode} matches on tag AND key, so a keyless node is
+     * not a place a path can rest and neither is anything below it.
+     */
+    @Test
+    public void testARuleUnderAKeylessNodeIsCountedAsUnreachable() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node><Node Key=\"x\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        assertEquals("a rule below a keyless node is addressed by nothing", 1, //$NON-NLS-1$
+            document.unreachableRuleCount());
+    }
+
+    /**
+     * The control that keeps the two above from being passed by a counter that counts every
+     * rule in the file: the fixture's four rules all sit at addresses, so none of them is one.
+     */
+    @Test
+    public void testARuleAtAnAddressIsNotCountedAsUnreachable() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+
+        assertEquals("the fixture holds four rules, all of them addressable", 4, //$NON-NLS-1$
+            document.decisions().size());
+        assertEquals("so the file carries no rule at an unreachable node", 0, //$NON-NLS-1$
+            document.unreachableRuleCount());
+    }
+
+    /**
+     * The control that keeps the two above from becoming "judge nothing in the container": the ONE
+     * address the container does expose is the root, and a second node carrying that key is the
+     * very collision this refusal is about - {@code findRoot} stops at the first, so everything
+     * under the second is addressed by nothing while holding rules of its own.
+     */
+    @Test
+    public void testTwoRootNodesAreRefused()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"><Node Key=\"a\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"><Node Key=\"b\" MergeRule=\"DoNotMerge\"/></Node>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("two roots are two answers to the one address the container exposes"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the key: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(MergeRulesDocument.ROOT_KEY));
+        }
+    }
+
+    /**
+     * Its own literal: the level the refusal reports has to be the level under the NEW definition
+     * of what is addressable. Level 0 is the container, and the only thing that can collide there
+     * is the root itself - so the refusal says so rather than leaving "directly under
+     * MergeSettings" to be read as "any node you put there".
+     */
+    @Test
+    public void testTheDuplicateRootRefusalNamesTheContainerLevel()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"/><Node Key=\"$$Root$$\"/>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+            fail("two roots must be refused"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the root sits at level 0: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("level 0")); //$NON-NLS-1$
+            assertTrue("and level 0 holds exactly one address: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("where the only address is the '" //$NON-NLS-1$
+                    + MergeRulesDocument.ROOT_KEY + "' node itself")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The second half of the same defect: the scan judged EVERY {@code MergeSettings} element,
+     * while {@link MergeRulesDocument#mergeSettings()} returns the FIRST one and never looks past
+     * it. A duplicate in a second container is addressed by nothing - it is carried through the
+     * round trip untouched - so refusing the file over it judges a structure this codec only
+     * preserves.
+     */
+    @Test
+    public void testADuplicateInASecondMergeSettingsElementIsNotRefused() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\">" //$NON-NLS-1$
+                + "<MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "</MergeSettings>" //$NON-NLS-1$
+                + "<MergeSettings><Node Key=\"dup\"/><Node Key=\"dup\"/></MergeSettings>" //$NON-NLS-1$
+                + "</Settings>"); //$NON-NLS-1$
+
+        assertEquals("the document reads the FIRST container, and that one is unambiguous", //$NON-NLS-1$
+            "GetFromOther", //$NON-NLS-1$
+            document.mergeRuleAt(List.of("commonModules")).orElse(null)); //$NON-NLS-1$
+    }
+
+    /**
+     * Its control, and the one that keeps the fix from becoming "scan nothing": the container the
+     * document DOES read is still judged, even when another one follows it.
+     */
+    @Test
+    public void testADuplicateInTheFirstMergeSettingsElementIsStillRefused()
+    {
+        try
+        {
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\">" //$NON-NLS-1$
+                + "<MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node Key=\"dup\"/><Node Key=\"dup\"/></Node></MergeSettings>" //$NON-NLS-1$
+                + "<MergeSettings/></Settings>"); //$NON-NLS-1$
+            fail("the container every lookup reads must still be judged"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the key: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("'dup'")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The other control: a payload section this plugin does not interpret is not the node tree.
+     * An element named {@code Node} inside one is somebody else's content, and refusing a file
+     * over it would be a judgement about a structure this codec carries rather than reads.
+     */
+    @Test
+    public void testTwoIdenticalNodesInsideAPreservedSectionAreNotADuplicate() throws Exception
+    {
+        String xml = "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Properties><Node Key=\"x\"/><Node Key=\"x\"/></Properties>" //$NON-NLS-1$
+            + "</Node></MergeSettings></Settings>"; //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(xml);
+
+        assertTrue("the payload must survive the parse it is not judged by", //$NON-NLS-1$
+            MergeRulesCodec.serialize(document).contains("<Properties>")); //$NON-NLS-1$
     }
 
     @Test

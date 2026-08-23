@@ -110,6 +110,18 @@ EDT runs exactly ONE comparison per workbench. A second `compare_configurations`
 one is live is refused with an error naming the live comparison — it is never queued, so
 a refusal means nothing was started.
 
+**A job can also end with `**Not started:**`, and that is not a failure.** EDT schedules a
+comparison rather than running it inline, so a workbench busy with a build or an index can
+take longer than a minute to get to it. The job stops waiting at that point and answers with
+the `comparisonId` — and with a sentence saying what became of the slot. **Read that sentence
+rather than assuming:** usually EDT still has not begun the batch, and ending one in that state
+costs that workbench its comparison support until restart, so nothing is ended and the
+comparison may still start and take the single slot under that id. But the wait can also run
+out in the very instant EDT starts it, and the stop asked for at that point then really does
+end it — the answer says which happened. Poll for it by starting the next comparison (the
+refusal names the occupant), or give the slot back with `releaseComparisonId` once it is under
+way.
+
 A FINISHED comparison is still live: its session is what `get_comparison_node` reads, so
 it deliberately outlives the job that produced the report. That also means it still holds
 the single slot. **When you are done reading it, release it:**
