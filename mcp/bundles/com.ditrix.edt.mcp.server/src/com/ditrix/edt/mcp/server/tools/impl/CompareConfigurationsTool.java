@@ -33,6 +33,7 @@ import com._1c.g5.v8.dt.compare.datasource.GitComparisonDataSourceDescriptor;
 import com._1c.g5.v8.dt.compare.datasource.V8ProjectComparisonDataSourceDescriptor;
 import com._1c.g5.v8.dt.compare.matching.MatchingStrategy;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
+import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
@@ -2035,7 +2036,8 @@ public class CompareConfigurationsTool implements IMcpTool
      *
      * @param comparisonId this plugin's id for the comparison
      * @param request the request, carrying both the expressions and what they resolved to
-     * @param state the comparison's own reported state
+     * @param state the comparison's own reported state, read in the same boundary that read the
+     *     tree it describes - see {@link EngineBackend#walkAndDescribeState}
      * @param globalScope the SESSION's own answer to whether this run covered the whole
      *     configuration, read off the live session rather than recomputed from the scope object -
      *     the engine extends that object while the run proceeds, and the report describes the
@@ -2716,10 +2718,11 @@ public class CompareConfigurationsTool implements IMcpTool
         {
             ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(
                 request.getLimit(), request.isChangedOnly());
-            // Deliberately without an initialiser: the compiler then refuses a path that renders
-            // the report without having read the session's answer, instead of quietly rendering
-            // the scoped caveat - or omitting it - on a default nobody observed.
+            // Both deliberately without an initialiser: the compiler then refuses a path that
+            // renders the report without having read the session's answers, instead of quietly
+            // rendering the scoped caveat - or the state - on a default nobody observed.
             boolean globalScope;
+            String state;
             try
             {
                 PlatformAnswer<ComparisonView> answer = engine.view(handle);
@@ -2732,10 +2735,8 @@ public class CompareConfigurationsTool implements IMcpTool
                 // Read through the comparison's OWN transaction: the nodes are objects of the
                 // comparison's private BM store, and BmTransactions.read(project, ...) would open
                 // a transaction on a different store entirely (CLAUDE.md don't #1).
-                engine.read(view, "Read comparison tree", (transaction, monitor) -> { //$NON-NLS-1$
-                    collectTopNodes(view.rootNode(), collector);
-                    return null;
-                });
+                state = engine.read(view, "Read comparison tree", //$NON-NLS-1$
+                    (transaction, monitor) -> walkAndDescribeState(view, collector));
                 // The SESSION's own answer, computed once in its constructor and kept there. The
                 // scope object cannot answer this after the fact: the engine extends it as it
                 // pulls dependencies in, so asking it here would call a whole-configuration run
@@ -2747,9 +2748,74 @@ public class CompareConfigurationsTool implements IMcpTool
                 throw new ComparisonException(
                     messageOf(ComparisonFailures.failed("reading the comparison tree", e)), e); //$NON-NLS-1$
             }
-            return ComparisonTreeReport.render(
-                headerFor(comparisonId, request, "finished", globalScope), handle.getFullScope(), //$NON-NLS-1$
-                collector);
+            return ComparisonTreeReport.render(headerFor(comparisonId, request, state, globalScope),
+                handle.getFullScope(), collector);
+        }
+
+        /**
+         * Walks the tree and reads HOW FAR IT HAD GOT, both inside the one boundary, and answers
+         * what the report may call the run.
+         *
+         * <h2>Why the poll's answer is not that word</h2>
+         * The poll loop's FINISHED is a reading taken before this one, and the comparison does not
+         * stand still between them: EDT rebuilds a subtree of its own accord, so the tick that saw
+         * FINISHED can be followed by a tree that is being built again. The walk then collects a
+         * partial tree while the header, taken from the earlier tick, publishes it as the finished
+         * comparison's terminal result - rows reading "not compared yet" under a heading saying
+         * the opposite, and no later poll can correct it, because the job that would answer one
+         * has already ended.
+         * <p>
+         * So the completeness is read HERE, beside the nodes it describes, exactly as
+         * {@code get_comparison_node} reads a node and its status together: a pair assembled from
+         * two moments states something neither moment observed.
+         *
+         * @param view the leased comparison
+         * @param collector the report being accumulated
+         * @return the state to print; never {@code null}
+         */
+        static String walkAndDescribeState(ComparisonView view,
+            ComparisonTreeReport.Collector collector)
+        {
+            ComparisonNode root = view.rootNode();
+            collectTopNodes(root, collector);
+            if (root == null)
+            {
+                // Nothing was walked, and there is nothing to ask for a status. Said as itself
+                // rather than borrowed from the poll: the poll looked at a tree this read did not
+                // find.
+                return "no root node when the tree was read"; //$NON-NLS-1$
+            }
+            // Read AFTER the walk, not before it. Inside one boundary the order does not change
+            // what is observed - the boundary is what makes the two readings one - but taken
+            // second the status also covers everything the rows above were copied from, which is
+            // the direction that stays true if that boundary is ever weakened.
+            return describeState(view.topNodeStatus(root.bmGetId()));
+        }
+
+        /**
+         * Turns the tree's own status into the state the report prints.
+         *
+         * @param treeStatus the root's status as THIS read saw it, or {@code null} when the
+         *     platform answered none
+         * @return the state; {@code "finished"} for a finished tree and for no other
+         */
+        static String describeState(ComparisonNodeStatus treeStatus)
+        {
+            if (treeStatus == ComparisonNodeStatus.FINISHED)
+            {
+                return "finished"; //$NON-NLS-1$
+            }
+            if (treeStatus == null)
+            {
+                // The root exists and answered nothing. That is not the same as having no root,
+                // and it is not a state either: what is reported is that the question got no
+                // answer.
+                return "the tree reported no status when it was read"; //$NON-NLS-1$
+            }
+            // The platform's own literal, so the caller sees WHICH unfinished state it was; the
+            // sentence around it says when the reading was taken, because that is what separates
+            // it from the poll's.
+            return "still building when the tree was read (" + treeStatus.getLiteral() + ')'; //$NON-NLS-1$
         }
 
         /**

@@ -1004,8 +1004,8 @@ public class MergeRulesTool implements IMcpTool
             .append(requested.size() - replaced).append(" new, ").append(replaced).append(" replaced)\n"); //$NON-NLS-1$ //$NON-NLS-2$
         if (isSet(basedOn))
         {
-            out.append("- Based on: ").append(document.sourceLabel()).append(" (") //$NON-NLS-1$ //$NON-NLS-2$
-                .append(existingDecisions).append(" decisions it already held were kept)\n"); //$NON-NLS-1$
+            out.append("- Based on: ").append(document.sourceLabel()) //$NON-NLS-1$
+                .append(carriedOverClause(existingDecisions, replaced));
         }
         out.append("- Decisions in the file now: ").append(document.decisions().size()).append('\n'); //$NON-NLS-1$
         out.append("- Preserved sections this tool does not interpret: ") //$NON-NLS-1$
@@ -1036,6 +1036,40 @@ public class MergeRulesTool implements IMcpTool
         out.append("\n> Launch a comparison with this file to apply the decisions; the merge itself " //$NON-NLS-1$
             + "stays a human action in the comparison window.\n"); //$NON-NLS-1$
         return out.toString();
+    }
+
+    /**
+     * What became of the decisions the {@code basedOn} document already held.
+     *
+     * <h2>Why the count is split rather than printed whole</h2>
+     * A decision this call writes at a path the starting document already carried OVERWRITES the
+     * rule that was there - that is what the {@code replaced} counter one line above counts - so
+     * the rule that arrived in the document is not the rule that leaves it. Printing the whole
+     * count as "kept" reported a file of ten carried-in decisions, one of them just overwritten,
+     * as "1 replaced" and "10 decisions it already held were kept" in the same breath: an audit of
+     * what was really carried over cannot be taken from that, because the two numbers describe
+     * overlapping sets and the report never says which.
+     * <p>
+     * <b>Kept means the RULE, not the address.</b> The number below counts the decisions that
+     * leave this write carrying the rule they arrived with. A replaced one keeps its address - it
+     * is still a decision on that node, and it is still counted in "Decisions in the file now" -
+     * but the rule at it is this call's, which is exactly what an audit of the starting document
+     * must not be told was preserved. The replaced ones are named on the same line so neither
+     * number has to be read as the other's complement.
+     *
+     * @param existingDecisions how many addressable decisions the starting document held
+     * @param replaced how many of them this call wrote over
+     * @return the parenthesised clause, newline-terminated
+     */
+    private static String carriedOverClause(int existingDecisions, int replaced)
+    {
+        if (replaced == 0)
+        {
+            return " (" + existingDecisions + " decisions it already held were kept)\n"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return " (of the " + existingDecisions + " decisions it already held, " //$NON-NLS-1$ //$NON-NLS-2$
+            + (existingDecisions - replaced) + " kept the rule they arrived with; this call " //$NON-NLS-1$
+            + "replaced " + replaced + ")\n"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String renderPath(List<String> path)

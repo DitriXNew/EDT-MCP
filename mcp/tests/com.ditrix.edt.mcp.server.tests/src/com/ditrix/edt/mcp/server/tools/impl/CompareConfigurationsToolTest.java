@@ -40,14 +40,18 @@ import org.junit.Test;
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.EList;
 
+import com._1c.g5.v8.bm.integration.IBmTask;
 import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessSettings;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessStatus;
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.core.IComparisonManager;
+import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.matching.MatchingStrategy;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
+import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
+import com._1c.g5.v8.dt.compare.model.RootComparisonNode;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
@@ -66,6 +70,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.ditrix.edt.mcp.server.utils.compare.SlotClaim;
@@ -975,6 +980,147 @@ public class CompareConfigurationsToolTest
         CompareConfigurationsTool.EngineBackend.collectTopNodes(root, collector);
 
         assertEquals(1, collector.getTotal());
+    }
+
+    // ======== The state is READ, not carried over from the poll that ended the wait ========
+
+    /** The root's id, so a status read against any other id is visibly a different reading. */
+    private static final long ROOT_NODE_ID = 7L;
+
+    /** The cell the summary table renders for a comparison the report calls finished. */
+    private static final String FINISHED_STATE_ROW = "| state | finished |"; //$NON-NLS-1$
+
+    /**
+     * The finding: the poll loop saw FINISHED, and the report was labelled from THAT observation
+     * while the tree was walked later. In between EDT can start rebuilding, so the walk collects a
+     * partial tree and the header publishes it as the finished comparison's terminal result - the
+     * rows say "not compared yet" under a heading that says the opposite, and the job that would
+     * answer a further poll has already ended.
+     * <p>
+     * Here the snapshot is UNFINISHED at the moment the tree is read. The report may not carry the
+     * earlier word.
+     *
+     * @throws Exception never; the tree is readable in this fixture
+     */
+    @Test
+    public void testATreeStillBeingBuiltWhenItWasReadIsNotPublishedAsFinished() throws Exception
+    {
+        String report = reportOverTreeStatus(ComparisonNodeStatus.UNFINISHED);
+
+        // The NEGATIVE pin, and it is on the whole cell rather than on the word: the platform's
+        // own literal for this state is 'Unfinished', which CONTAINS "finished" - a substring
+        // assertion would pass on the very output it is meant to refuse.
+        assertFalse("a tree still being built must not be published as finished:\n" + report, //$NON-NLS-1$
+            report.contains(FINISHED_STATE_ROW));
+        assertContains(report, "still building when the tree was read"); //$NON-NLS-1$
+        // The platform's own literal, so the caller can tell which unfinished state it was.
+        assertContains(report, ComparisonNodeStatus.UNFINISHED.getLiteral());
+    }
+
+    /**
+     * The control: an ordinary finished run is unchanged, heading included. Without it the fix
+     * could be "never say finished", which is the same defect mirrored.
+     *
+     * @throws Exception never; the tree is readable in this fixture
+     */
+    @Test
+    public void testAFinishedTreeIsStillPublishedAsFinished() throws Exception
+    {
+        String report = reportOverTreeStatus(ComparisonNodeStatus.FINISHED);
+
+        assertContains(report, FINISHED_STATE_ROW);
+        assertFalse("a finished tree must not be described as still building:\n" + report, //$NON-NLS-1$
+            report.contains("still building")); //$NON-NLS-1$
+    }
+
+    /**
+     * The walk still happens on the unfinished path: the state is the only thing that changed.
+     * A fix that refused to read the tree at all would satisfy the two tests above and lose the
+     * report.
+     *
+     * @throws Exception never; the tree is readable in this fixture
+     */
+    @Test
+    public void testTheTreeIsStillWalkedWhenTheSnapshotWasNotFinished() throws Exception
+    {
+        assertContains(reportOverTreeStatus(ComparisonNodeStatus.UNFINISHED), "## Top objects"); //$NON-NLS-1$
+    }
+
+    /**
+     * A status the platform answered nothing for is a third case: the root is there, the question
+     * was asked, and nothing came back. Reporting that as either of the other two would state
+     * something nobody observed.
+     */
+    @Test
+    public void testARootThatAnswersNoStatusIsReportedAsAnsweringNone()
+    {
+        String state = CompareConfigurationsTool.EngineBackend.describeState(null);
+
+        assertEquals("the tree reported no status when it was read", state); //$NON-NLS-1$
+    }
+
+    /**
+     * And a tree with no root at all is not a status reading either - nothing was walked, so
+     * there was nothing to ask.
+     */
+    @Test
+    public void testATreeWithNoRootIsReportedAsHavingNone()
+    {
+        IComparisonSession session = mock(IComparisonSession.class);
+        // Deliberately NOT stubbed to any status: a walk that reached the status read at all
+        // would have to invent a node id to read it against.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(100, false);
+
+        String state = CompareConfigurationsTool.EngineBackend.walkAndDescribeState(
+            new ComparisonView(null, session), collector);
+
+        assertEquals("no root node when the tree was read", state); //$NON-NLS-1$
+        assertEquals("nothing was walked either", 0, collector.getTotal()); //$NON-NLS-1$
+    }
+
+    /**
+     * Drives the production report path over a scripted session whose tree answers
+     * {@code treeStatus} at the moment the tree is read.
+     *
+     * @param treeStatus what the root's status says inside the read boundary
+     * @return the rendered report
+     * @throws ComparisonException never in this fixture; the session answers a readable tree
+     */
+    private static String reportOverTreeStatus(ComparisonNodeStatus treeStatus)
+        throws ComparisonException
+    {
+        IComparisonSession session = mock(IComparisonSession.class);
+        RootComparisonNode root = mock(RootComparisonNode.class);
+        withChildren(root, mock(TopComparisonNode.class));
+        when(root.bmGetId()).thenReturn(Long.valueOf(ROOT_NODE_ID));
+        when(session.getRootNode()).thenReturn(root);
+        // Stubbed against the ROOT's id and no other: a read that asked about some other node
+        // gets Mockito's unstubbed null and lands in the "answered no status" branch, so the two
+        // are told apart by the answer rather than by inspection.
+        when(session.getTopNodeStatus(ROOT_NODE_ID)).thenReturn(treeStatus);
+        when(session.isGlobalScope()).thenReturn(Boolean.TRUE);
+        // The read boundary, scripted to actually RUN the task: everything this test is about
+        // happens inside it.
+        when(session.runComparisonTreeReadonlyTask(any())).thenAnswer(invocation -> {
+            IBmTask<?> task = invocation.getArgument(0);
+            return task.execute(null, null);
+        });
+        IComparisonManager manager = mock(IComparisonManager.class);
+        when(manager.getComparisonSession(any())).thenReturn(session);
+
+        ComparisonEngine.install(() -> manager);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+            return new CompareConfigurationsTool.EngineBackend().report(comparisonId,
+                new LaunchRequest("TestConfiguration", "origin/main", "v1.0", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    false));
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
     }
 
     // ======== The report names the COMMIT, not only the expression that named it ========

@@ -1133,6 +1133,148 @@ public class MergeRulesCodecTest
         }
     }
 
+    // ============ the bound applies to what this codec WRITES, not only to what it reads ============
+    //
+    // MAX_DOCUMENT_BYTES used to be a rule about sources alone. A document that arrives just under
+    // it and grows - one more decision, or the canonical printing expanding a compact source -
+    // serialised past it, landed on disk, and was reported as written; the next read of that file,
+    // and every in-place update after it, then refused this tool's OWN output as too large. So the
+    // serialised bytes are measured before the target is touched, against the same number and by
+    // the same count the reader uses.
+
+    @Test
+    public void testADocumentSerialisingPastTheBoundIsRefusedInsteadOfWritten() throws Exception
+    {
+        Path file = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+
+        try
+        {
+            MergeRulesCodec.write(file, oversizedDocument(), MergeRulesCodec.Target.MAY_BE_REPLACED);
+            fail("a document this codec could not read back must not be written"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal must name the bound it met: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("past the 16 MB")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The pin that matters most: the refusal is not merely worded, the file that was already there
+     * still holds what it held. A check made after the temporary had been moved would satisfy the
+     * message assertion above and destroy the caller's rules.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testTheFileAlreadyOnThePathIsUntouchedByTheRefusal() throws Exception
+    {
+        Path file = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(file, FIXTURE.getBytes(StandardCharsets.UTF_8));
+
+        try
+        {
+            MergeRulesCodec.write(file, oversizedDocument(), MergeRulesCodec.Target.MAY_BE_REPLACED);
+            fail("expected the write to be refused"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal must say the existing file survived: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("left exactly as it was")); //$NON-NLS-1$
+        }
+
+        assertEquals("the decisions that were on the path must still be on it", FIXTURE, //$NON-NLS-1$
+            new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("and nothing else was created either - no temporary, no reservation", //$NON-NLS-1$
+                List.of(file), list.toList());
+        }
+    }
+
+    /**
+     * A zip is measured by what its ENTRY expands to, which is what {@code readZip} counts - not by
+     * the archive. A merge-settings document compresses by orders of magnitude, so an archive-sized
+     * check would wave through exactly the files that cannot be read back.
+     *
+     * @throws Exception when the fixture cannot be written
+     */
+    @Test
+    public void testAZipIsMeasuredByTheEntryItExpandsToAndNotByTheArchive() throws Exception
+    {
+        Path file = workDir.resolve("rules.zip"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.writeZip(file, oversizedDocument(),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, "Main_Other_Ancestor"); //$NON-NLS-1$
+            fail("the entry runs past the bound, so the archive must not be written"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal must say which of the two was measured: " //$NON-NLS-1$
+                + expected.getMessage(), expected.getMessage().contains("as it EXPANDS")); //$NON-NLS-1$
+            assertTrue("and that the path was left free: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("nothing was created on the path")); //$NON-NLS-1$
+        }
+
+        assertFalse("the reservation must not survive a refused write", Files.exists(file)); //$NON-NLS-1$
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("nor a temporary beside it", List.of(), list.toList()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The control, and it is the boundary itself: a document that serialises to EXACTLY the bound
+     * is written, and this codec reads its own output back. Without it the fix could be an
+     * off-by-one that refuses a document the reader would have accepted.
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testADocumentExactlyAtTheBoundIsWrittenAndReadsBack() throws Exception
+    {
+        Path file = workDir.resolve("at-the-bound.xml"); //$NON-NLS-1$
+        MergeRulesDocument document = documentSerialisingTo(MergeRulesCodec.MAX_DOCUMENT_BYTES);
+
+        MergeRulesCodec.write(file, document, MergeRulesCodec.Target.MAY_BE_REPLACED);
+
+        assertEquals("the file must be exactly the bound, not one byte over", //$NON-NLS-1$
+            MergeRulesCodec.MAX_DOCUMENT_BYTES, Files.size(file));
+        assertEquals("and this codec must read its own output back", 5, //$NON-NLS-1$
+            MergeRulesCodec.read(file).decisions().size());
+    }
+
+    /** @return a document whose serialisation runs one byte past {@link MergeRulesCodec#MAX_DOCUMENT_BYTES} */
+    private static MergeRulesDocument oversizedDocument() throws Exception
+    {
+        return documentSerialisingTo(MergeRulesCodec.MAX_DOCUMENT_BYTES + 1);
+    }
+
+    /**
+     * Builds a document that serialises to EXACTLY {@code bytes}, by padding one node key.
+     * <p>
+     * The padding is plain ASCII, so a character is a byte and nothing in the serializer escapes
+     * it - the length is arithmetic rather than a guess, and the size assertions above can be
+     * exact instead of "roughly".
+     *
+     * @param bytes the wanted serialised length
+     * @return the document
+     * @throws Exception when the fixture cannot be parsed
+     */
+    private static MergeRulesDocument documentSerialisingTo(int bytes) throws Exception
+    {
+        MergeRulesDocument probe = MergeRulesCodec.parse(FIXTURE);
+        probe.setMergeRule(List.of("a"), "GetFromOther"); //$NON-NLS-1$ //$NON-NLS-2$
+        int withoutTheKey = MergeRulesCodec.serialize(probe).getBytes(StandardCharsets.UTF_8).length - 1;
+
+        MergeRulesDocument document = MergeRulesCodec.parse(FIXTURE);
+        document.setMergeRule(List.of("a".repeat(bytes - withoutTheKey)), "GetFromOther"); //$NON-NLS-1$ //$NON-NLS-2$
+        return document;
+    }
+
     // ==================== helpers ====================
 
     private static Decision decisionFor(String key) throws Exception

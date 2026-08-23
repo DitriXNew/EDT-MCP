@@ -776,6 +776,77 @@ public class MergeRulesToolTest
             + result, result.contains(UNREACHABLE_CLAUSE_MARK));
     }
 
+    // ======== "kept" counts the RULES that survived, not the addresses that were there ========
+    //
+    // A decision written at a path the starting document already carried OVERWRITES the rule that
+    // was there, and the line above already counts it as replaced. The carried-over count was
+    // printed whole regardless, so a write that replaced one of four reported "1 replaced" and
+    // "4 decisions it already held were kept" in the same breath - two numbers over overlapping
+    // sets, with nothing saying which, and no audit of what was really carried forward available
+    // from either.
+
+    /** What the report used to say about a starting document of four whatever happened to it. */
+    private static final String WHOLE_COUNT_KEPT = "4 decisions it already held were kept"; //$NON-NLS-1$
+
+    @Test
+    public void testADecisionThatOverwroteAnExistingRuleIsNotAlsoCountedAsKept() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The NEGATIVE pin: the sentence that counted the replaced one as kept must be gone, not
+        // merely joined by a second sentence saying otherwise.
+        assertFalse("a replaced decision may not be reported as kept as well:\n" + result, //$NON-NLS-1$
+            result.contains(WHOLE_COUNT_KEPT));
+        assertTrue("the two numbers have to add up to what arrived:\n" + result, //$NON-NLS-1$
+            result.contains("of the 4 decisions it already held, 3 kept the rule they arrived " //$NON-NLS-1$
+                + "with; this call replaced 1")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the replaced count it has to agree with is still printed, so the report cannot be read
+     * as describing two different starting documents.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheReplacedCountTheKeptCountAgreesWithIsStillReported() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the recorded line still says what this call did:\n" + result, //$NON-NLS-1$
+            result.contains("Decisions recorded: 1 (0 new, 1 replaced)")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: a write that overwrites nothing still reports every carried decision as kept,
+     * in the words it always used. Without it the fix could be "never say kept".
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAWriteThatOverwroteNothingStillReportsEveryCarriedDecisionAsKept()
+        throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("nothing was replaced, so all four were kept:\n" + result, //$NON-NLS-1$
+            result.contains(WHOLE_COUNT_KEPT));
+        assertFalse("and the split wording belongs to the replacing case alone:\n" + result, //$NON-NLS-1$
+            result.contains("kept the rule they arrived with")); //$NON-NLS-1$
+    }
+
     // ==================== write, no live comparison ====================
 
     @Test

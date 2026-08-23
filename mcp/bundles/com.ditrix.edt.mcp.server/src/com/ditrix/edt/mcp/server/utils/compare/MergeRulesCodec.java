@@ -140,8 +140,11 @@ public final class MergeRulesCodec
      * the heap is spent by the PARSE, and a plain {@code .xml} reaches the same parser by the
      * shorter route. Bounding only the zip left the whole defence resting on the caller having
      * chosen the container that is checked.
+     * <p>
+     * Package-scoped rather than private so the tests can build a document AT the bound instead of
+     * restating the number: a test carrying its own copy of it would keep passing if this one moved.
      */
-    private static final int MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
+    static final int MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 
     /** Working buffer size for the bounded read. */
     private static final int READ_CHUNK_BYTES = 64 * 1024;
@@ -478,6 +481,12 @@ public final class MergeRulesCodec
     private static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId)
         throws IOException
     {
+        // FIRST, and before a single filesystem step - not even the parent directories. This is
+        // the one refusal that has to leave the path exactly as it found it, and a check made
+        // after the reservation or after the temporary would already have created something to
+        // clean up. Nothing below this line can be reached by a document this codec could not
+        // read back.
+        byte[] body = bodyOf(document, zipEntryId, target);
         Path resolved = followSymbolicLink(file.toAbsolutePath());
         Path parent = resolved.getParent();
         if (parent == null)
@@ -512,7 +521,7 @@ public final class MergeRulesCodec
             // own name so a leftover is traceable to the write that left it.
             temporary = Files.createTempFile(parent, resolved.getFileName().toString() + '.',
                 ".tmp"); //$NON-NLS-1$
-            Files.write(temporary, bodyOf(document, zipEntryId));
+            Files.write(temporary, body);
             // Before the move, never after: after it there is a window in which the file on the
             // caller's path is readable by its owner alone, and a reader that lost the race gets a
             // permission error on a file that is about to be perfectly readable.
@@ -553,14 +562,36 @@ public final class MergeRulesCodec
      * more copy of a document this class bounds at {@link #MAX_DOCUMENT_BYTES} on the way in -
      * against a partially written archive if the assembly threw half way through the file.
      *
+     * <h2>The bound is enforced on the way OUT as well</h2>
+     * {@link #MAX_DOCUMENT_BYTES} used to be a rule about sources this codec accepts, and nothing
+     * checked what it produced. A document that arrives just under the bound and grows - one more
+     * decision, or simply the canonical printing expanding a compact source - serialises past it,
+     * lands on disk, and is reported as written; the next {@link #read(Path)} of that file, and
+     * every in-place update after it, then refuses this tool's OWN output as too large. So the
+     * serialised bytes are measured here, against the same number and by the same count the
+     * reader uses, and an oversized document is refused instead of written.
+     * <p>
+     * <b>For a zip it is the ENTRY that is measured, not the archive.</b> {@link #readZip(Path)}
+     * bounds what the entry EXPANDS to, so these very bytes are what the next read will count -
+     * and a merge-settings document is repetitive enough to compress by orders of magnitude, so
+     * measuring the archive would wave through exactly the files that cannot be read back.
+     *
      * @param document the document to write
      * @param zipEntryId the zip entry's name without its extension, or {@code null} for bare xml
+     * @param target what the caller has established about a file already on the path, so the
+     *     refusal can say what became of it
      * @return the file's content
-     * @throws IOException when the archive cannot be assembled
+     * @throws IOException when the archive cannot be assembled, or when the document serialises
+     *     past {@link #MAX_DOCUMENT_BYTES} - in which case nothing has been written
      */
-    private static byte[] bodyOf(MergeRulesDocument document, String zipEntryId) throws IOException
+    private static byte[] bodyOf(MergeRulesDocument document, String zipEntryId, Target target)
+        throws IOException
     {
         byte[] xml = serialize(document).getBytes(StandardCharsets.UTF_8);
+        if (xml.length > MAX_DOCUMENT_BYTES)
+        {
+            throw new IOException(tooLargeToWrite(xml.length, zipEntryId, target));
+        }
         if (zipEntryId == null)
         {
             return xml;
@@ -1185,6 +1216,38 @@ public final class MergeRulesCodec
             + " MB and was not read. A merge-settings file records one line per decision somebody " //$NON-NLS-1$
             + "made, so a real one is orders of magnitude smaller; something this large is not " //$NON-NLS-1$
             + "one, and parsing it would spend the workbench's heap on it. " + advice; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for a document whose OWN serialisation runs past {@link #MAX_DOCUMENT_BYTES}.
+     * <p>
+     * Kept apart from {@link #tooLarge(String, String)} because the two say different things: that
+     * one reports a source that was not read, this one reports a file that was not written - and
+     * what the caller most needs to know here is that whatever was already on the path is still
+     * there, untouched, which a reading refusal has no occasion to state.
+     *
+     * @param bytes what the document serialised to
+     * @param zipEntryId the zip entry's name, or {@code null} when a bare xml file was being
+     *     written - it decides only whether the entry/archive distinction is worth stating
+     * @param target what the caller had established about the path, which is what decides whether
+     *     there was a file to leave alone
+     * @return the message
+     */
+    private static String tooLargeToWrite(int bytes, String zipEntryId, Target target)
+    {
+        return "the merge-settings document this call would write runs to " + bytes //$NON-NLS-1$
+            + " bytes, past the " + (MAX_DOCUMENT_BYTES / (1024 * 1024)) //$NON-NLS-1$
+            + " MB this codec reads back" //$NON-NLS-1$
+            + (zipEntryId == null ? "" //$NON-NLS-1$
+                : " - which is measured on the entry as it EXPANDS, these same bytes, and not on " //$NON-NLS-1$
+                    + "the compressed archive") //$NON-NLS-1$
+            + ", so the file would be one this tool could not read again and could not update in " //$NON-NLS-1$
+            + "place. Nothing was written, and " //$NON-NLS-1$
+            + (target == Target.MAY_BE_REPLACED
+                ? "the file already on the path was left exactly as it was." //$NON-NLS-1$
+                : "nothing was created on the path.") //$NON-NLS-1$
+            + " A real merge-settings file records one line per decision somebody made, so check " //$NON-NLS-1$
+            + "what the document this write started from actually holds."; //$NON-NLS-1$
     }
 
     /**

@@ -103,6 +103,15 @@ everywhere.
 **Counters.** Total top nodes, how many differ, how many are conflicts, and how many are
 still being compared.
 
+**`state` says what the TREE said when it was read, not what the poll said earlier.** The
+job waits for EDT to report the comparison finished, and EDT can start rebuilding after
+that; the report's `state` is therefore taken beside the nodes, inside the same read. A
+value other than `finished` - `still building when the tree was read (<status>)`, or a
+tree that had no root or answered no status - means the rows below it are a partial
+picture, and the job that produced them has already ended, so polling it again will not
+fill them in. Start a new comparison, or expand the objects you care about with
+`get_comparison_node`, which reads the live tree.
+
 **The table.** One row per top object:
 
 | Column | Meaning |
