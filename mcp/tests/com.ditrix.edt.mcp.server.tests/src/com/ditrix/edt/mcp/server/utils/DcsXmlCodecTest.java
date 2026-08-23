@@ -16,10 +16,13 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.util.DcsV8Serializer;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
+import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -82,6 +85,35 @@ public class DcsXmlCodecTest
     }
 
     @Test
+    public void testImportedDanglingLinkIsRefusedBeforeAttachedRootReplacement()
+    {
+        DataCompositionSchema target = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSchemaDataSetQuery original = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetQuery();
+        original.setName("Original"); //$NON-NLS-1$
+        target.getDataSets().add(original);
+        String beforeHash = DcsHash.compute(target);
+
+        DataCompositionSchema imported = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSchemaDataSetQuery source = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetQuery();
+        source.setName("Source"); //$NON-NLS-1$
+        imported.getDataSets().add(source);
+        DataCompositionSchemaDataSetLink link = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("Source"); //$NON-NLS-1$
+        link.setDestinationDataSet("Missing"); //$NON-NLS-1$
+        imported.getDataSetLinks().add(link);
+
+        String error = DcsSchemaWriter.validateAssembledReferences(imported, "Report.Sales"); //$NON-NLS-1$
+
+        assertTrue(error, error.contains("dangling destinationDataSet 'Missing'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Report.Sales#/dataSetLinks/0")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(target));
+        assertEquals("Original", target.getDataSets().get(0).getName()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testPageEnvelopeUsesExactChunkBoundariesAndNextOffsetArithmetic()
     {
         JsonObject first = page("0123456789", 2, 4); //$NON-NLS-1$
@@ -140,6 +172,26 @@ public class DcsXmlCodecTest
         assertSame("the central guard must have nothing left to trim", //$NON-NLS-1$
             envelope, OutputSizeGuard.cap(envelope));
         assertFalse(envelope.contains("so the response stays under the size cap.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMaximumXmlPageFitsGuardAfterWorstCaseUserSignalAugmentation()
+    {
+        String xml = "<".repeat(OutputSizeGuard.MAX_CONTENT_CHARS * 2); //$NON-NLS-1$
+        String envelope = DcsXmlCodec.serializePageEnvelope(xml, HASH, 0, xml.length());
+        JsonObject augmented = JsonParser.parseString(envelope).getAsJsonObject();
+        JsonObject signal = new JsonObject();
+        signal.addProperty("type", "BACKGROUND"); //$NON-NLS-1$ //$NON-NLS-2$
+        signal.addProperty("message", "\u0000".repeat( //$NON-NLS-1$ //$NON-NLS-2$
+            McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS));
+        augmented.add("userSignal", signal); //$NON-NLS-1$
+        String serialized = GsonProvider.toJson(augmented);
+
+        assertEquals(McpProtocolHandler.MAX_USER_SIGNAL_JSON_AUGMENTATION_CHARS,
+            serialized.length() - envelope.length());
+        assertTrue(serialized.length() <= OutputSizeGuard.MAX_CONTENT_CHARS);
+        assertSame("the central guard must not trim the worst-case augmented XML page", //$NON-NLS-1$
+            serialized, OutputSizeGuard.cap(serialized));
     }
 
     @Test

@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.dcs.util.DcsV8Serializer;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
+import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.google.gson.JsonObject;
 
 /** Lossless XML serialization and detached-schema import through EDT's native DCS serializer. */
@@ -35,6 +36,15 @@ public final class DcsXmlCodec
 {
     /** Default raw XML characters requested per page; the serialized envelope is measured separately. */
     public static final int DEFAULT_CHUNK_CHARS = 40_000;
+
+    /**
+     * The protocol may append a bounded userSignal after this envelope is measured. Its maximum
+     * serialized growth is 48 fixed characters plus 512 message characters times the six-character
+     * worst-case JSON escape, or 3,120 characters; reserve that exact amount so the augmented text
+     * fallback remains within {@link OutputSizeGuard#MAX_CONTENT_CHARS}.
+     */
+    private static final int MAX_XML_PAGE_ENVELOPE_CHARS = OutputSizeGuard.MAX_CONTENT_CHARS
+        - McpProtocolHandler.MAX_USER_SIGNAL_JSON_AUGMENTATION_CHARS;
 
     private static final String LINE_SEPARATOR = "\n"; //$NON-NLS-1$
 
@@ -115,7 +125,7 @@ public final class DcsXmlCodec
      */
     public static String serializePageEnvelope(String xml, String hash, int offset, int limit)
     {
-        return serializePageEnvelope(xml, hash, offset, limit, OutputSizeGuard.MAX_CONTENT_CHARS);
+        return serializePageEnvelope(xml, hash, offset, limit, MAX_XML_PAGE_ENVELOPE_CHARS);
     }
 
     static String serializePageEnvelope(String xml, String hash, int offset, int limit, int maxSerializedChars)

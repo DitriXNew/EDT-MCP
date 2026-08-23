@@ -565,6 +565,12 @@ public class DcsTool implements IMcpTool
                     return ToolResult.error(decoded.error()).toJson();
                 }
                 importedSchema = decoded.schema();
+                String referenceError = DcsSchemaWriter.validateAssembledReferences(importedSchema,
+                    target.normalizedRootFqn());
+                if (referenceError != null)
+                {
+                    return ToolResult.error(referenceError).toJson();
+                }
             }
             com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema detachedImport = importedSchema;
             String schemaMembersError = detachedImport == null && "schema".equals(type) && body != null //$NON-NLS-1$

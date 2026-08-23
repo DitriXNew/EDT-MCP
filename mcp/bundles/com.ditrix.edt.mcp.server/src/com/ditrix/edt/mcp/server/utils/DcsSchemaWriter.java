@@ -378,6 +378,12 @@ public final class DcsSchemaWriter
         return result;
     }
 
+    /** Returns an actionable error when a complete assembled or imported schema has dangling references. */
+    public static String validateAssembledReferences(DataCompositionSchema schema, String rootFqn)
+    {
+        return assembledReferenceError(schema, rootFqn);
+    }
+
     private static String assembledReferenceError(DataCompositionSchema schema, String rootFqn)
     {
         Set<String> dataSetNames = new LinkedHashSet<>();

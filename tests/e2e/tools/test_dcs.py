@@ -282,6 +282,19 @@ def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk
                 "field": "Amount",
                 "title": {"en": "Amount", "ru": "\u0421\u0443\u043c\u043c\u0430"},
             }],
+        }, {
+            "name": "Archive",
+            "type": "query",
+            "dataSource": "DataSource1",
+            "query": "SELECT 1 AS Customer",
+            "autoFillFields": False,
+            "fields": [{"dataPath": "Customer", "field": "Customer"}],
+        }],
+        "dataSetLinks": [{
+            "sourceDataSet": "Sales",
+            "destinationDataSet": "Archive",
+            "sourceExpression": "Customer",
+            "destinationExpression": "Customer",
         }],
         "parameters": [{
             "name": "Period",
@@ -360,6 +373,25 @@ def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk
         "the copied small schema must still fit in one XML chunk"
     assert _xml_structure(target_xml) == _xml_structure(source_xml), \
         "the target model must contain the complete source schema after wholesale replacement"
+
+    before_invalid_replace = read_disk(target_rel)
+    current = _get(target_root, "schema")
+    assert_ok(current, "read the target hash before the invalid wholesale replacement")
+    invalid_xml, replacements = re.subn(
+        r"(<[^>]*destinationDataSet[^>]*>)Archive(</[^>]*destinationDataSet>)",
+        r"\1MissingDataSet\2", source_xml, count=1)
+    assert replacements == 1, \
+        "the serialized fixture must expose its link destination for corruption"
+
+    refused = _write(target_root, "replace", "schema", {"xml": invalid_xml},
+                     expectedHash=_hash(current))
+    refusal = assert_error(refused, "replace schema XML with a dangling link destination")
+    assert_error_quality(refusal,
+                         names=["MissingDataSet", target_root + "#/dataSetLinks/0"],
+                         suggests=["Add or keep", "data set"],
+                         ctx="wholesale XML replacement names the dangling link endpoint")
+    assert read_disk(target_rel) == before_invalid_replace, \
+        "a refused wholesale XML replacement must leave Template.dcs byte-for-byte unchanged"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")

@@ -16,6 +16,8 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.UserSignal;
+import com.ditrix.edt.mcp.server.UserSignal.SignalType;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
@@ -48,6 +50,52 @@ public class McpProtocolHandlerTest
     public void tearDown()
     {
         registry.clear();
+    }
+
+    @Test
+    public void testJsonUserSignalMessageIsTruncatedToTheBound()
+    {
+        String message = "x".repeat(McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS + 100); //$NON-NLS-1$
+
+        JsonObject augmented = JsonParser.parseString(handler.addUserSignalToJson("{\"value\":1}", //$NON-NLS-1$
+            new UserSignal(SignalType.CUSTOM, message))).getAsJsonObject();
+        String retained = augmented.getAsJsonObject("userSignal").get("message").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS, retained.length());
+        assertTrue(retained, retained.endsWith("\u2026")); //$NON-NLS-1$
+        assertEquals(message.substring(0, McpProtocolHandler.MAX_USER_SIGNAL_MESSAGE_CHARS - 1)
+            + "\u2026", retained); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJsonUserSignalPreservesRawHtmlSensitiveCharacters()
+    {
+        String original = "{\"xml\":\"<root>A&B</root>\",\"comparison\":\"x > y\"}"; //$NON-NLS-1$
+
+        String augmented = handler.addUserSignalToJson(original,
+            new UserSignal(SignalType.CUSTOM, "continue")); //$NON-NLS-1$
+
+        assertTrue(augmented, augmented.contains("<root>A&B</root>")); //$NON-NLS-1$
+        assertTrue(augmented, augmented.contains("x > y")); //$NON-NLS-1$
+        assertFalse(augmented, augmented.contains("\\u003c")); //$NON-NLS-1$
+        assertFalse(augmented, augmented.contains("\\u003e")); //$NON-NLS-1$
+        assertFalse(augmented, augmented.contains("\\u0026")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJsonUserSignalChangesNoExistingParsedMembers()
+    {
+        String original = "{\"success\":true,\"xml\":\"<root>A&B</root>\"," //$NON-NLS-1$
+            + "\"nested\":{\"items\":[1,2,3]}}"; //$NON-NLS-1$
+        JsonObject expected = JsonParser.parseString(original).getAsJsonObject();
+
+        JsonObject augmented = JsonParser.parseString(handler.addUserSignalToJson(original,
+            new UserSignal(SignalType.BACKGROUND, "still running"))).getAsJsonObject(); //$NON-NLS-1$
+        JsonObject signal = augmented.remove("userSignal").getAsJsonObject(); //$NON-NLS-1$
+
+        assertEquals(expected, augmented);
+        assertEquals("BACKGROUND", signal.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("still running", signal.get("message").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // === Initialize ===
