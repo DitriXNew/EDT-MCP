@@ -48,6 +48,25 @@ written to the project, and nothing is ever merged.
   a set of decisions prepared in advance is already in place when a human opens the
   comparison in EDT. The file is read, never written, and the path is checked before
   anything is launched. Use `merge_rules` to read or write one.
+  A `.zip` of merge settings is a BAG of them, keyed by an entry NAME, and EDT restores
+  only the entry called `<main>_<other>_<ancestor>` — the three project names of the
+  comparison being launched, joined by `_` in that order. A zip whose entries spell
+  something else addresses nothing here and the platform would apply none of it while
+  saying nothing; such a zip fails the job before the comparison is started, naming the
+  entry that was looked for and what the archive holds instead. Two mirrors of that are
+  worth knowing. A zip saved over the SAME three projects is restored whatever revisions
+  it was saved from, so an old file re-applies old decisions rather than being ignored.
+  And the name is a plain concatenation over `_`, which is itself legal in a project
+  name, so different triples can spell the same entry (main `A_B` with other `C` spells
+  what main `A` with other `B_C` spells) — the file is addressed, not owned, and nothing
+  here promises that only one comparison can restore it. A `.xml` written by
+  `merge_rules` carries no address, so any comparison reads it — but only on
+  **EDT 2026.1**. EDT 2026.2 reads merge settings from a `.zip` alone and fails the
+  launch with `Can read merge settings from a zip file`, so on 2026.2 write the rules
+  with `merge_rules`, giving it a `.zip` filePath and this comparison's id: the
+  container comes from that path, and the id both addresses the entry and gets every
+  rule checked. Either way the extension of THIS parameter must be lower case — EDT
+  opens the file itself and compares the extension exactly.
 - `waitSeconds` — how long THIS call may wait before returning its job snapshot;
   0 to 25, default 5. It never extends the job's own budget. A real configuration takes
   minutes, so the normal answer is `Pending` plus the `jobId`.
@@ -70,6 +89,16 @@ engine ADDED on its own (a comparison pulls in objects the ones you named depend
 The reasons the engine gives for each addition are listed underneath. These are two
 different facts and the report never merges them: an object in the second column is one
 the engine chose, not one you asked for.
+
+**A scope narrows what is COMPARED, not just what is listed.** With a scope, EDT compares
+an object's own features — module text, form and template content, every plain property —
+only for the objects in the scope, and excludes those features everywhere else. The
+exclusion is applied per FEATURE and spares an object's containment-many collections of
+metadata objects, so an object outside the scope is still matched, still reported as added
+or deleted, and can still have nodes built under it. What `identical` does NOT establish
+for such a node is that the excluded features were compared. A scoped report says this
+under the scope table; a whole-configuration run has no such limit and compares content
+everywhere.
 
 **Counters.** Total top nodes, how many differ, how many are conflicts, and how many are
 still being compared.
@@ -94,7 +123,7 @@ still being compared.
 | `changed on main` / `changed on other` | one side moved away from the ancestor |
 | `changed on both sides` | both did, without the platform calling it a conflict |
 | `differs between main and other` | the two sides differ, with no ancestor verdict |
-| `identical` | compared, and equal |
+| `identical` | compared, and equal — with a scope, see **Scope**: outside it the object's own features were excluded from the comparison |
 | `not reported by the engine` | the engine attached no verdict to this node at all |
 | `not compared yet` | the tree is lazy and has not reached this node |
 

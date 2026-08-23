@@ -72,10 +72,17 @@ public final class ComparisonView
     private final IComparisonSession session;
 
     /**
+     * Public, and that gives nothing away: what this class withholds is the session, and the only
+     * way to call this is to hold one already. {@link #session()} - the accessor that would hand it
+     * on - stays package-scoped, which is where the guarantee actually lives, and
+     * {@code NoMergeStarterRatchetTest} still fails the build if any file outside the facade and
+     * this one names {@code IComparisonSession}. It is public so a test can wrap a scripted session
+     * and drive the readers that depend on this view, {@code get_comparison_node}'s among them.
+     *
      * @param handle the process handle this view belongs to
      * @param session the live session (never escapes this class)
      */
-    ComparisonView(ComparisonProcessHandle handle, IComparisonSession session)
+    public ComparisonView(ComparisonProcessHandle handle, IComparisonSession session)
     {
         this.handle = handle;
         this.session = session;
@@ -242,8 +249,21 @@ public final class ComparisonView
      * Whether a node is inside the scope the engine ACTUALLY compared. This is the extended scope:
      * it can be wider than what the caller asked for, because the engine pulls in what it needs.
      *
+     * <h2>It is NOT the predicate that decides whether an object's content was compared</h2>
+     * Read off the bytecode of {@code ComparisonSession} 29.0.0, this answers {@code false} for
+     * every node that is not a {@code SymlinkComparisonNode}, and for one that IS it calls
+     * {@code ComparisonUtils.isSubsymlinkOf} in BOTH directions, so a scope entry's ANCESTORS
+     * count as in scope as well. The content exclusion is decided by
+     * {@code MdCompareUtils.isObjectAndContentInScope}, which tests the compared object's
+     * qualified name against {@code handle.getScope(side)} in ONE direction (at or UNDER an
+     * entry) and is applied per FEATURE. Using this method for that question was a defect: with a
+     * scope of {@code Catalog.Products.Form.X} it calls the parent {@code Catalog.Products} in
+     * scope although EDT excluded its own features, and it calls every non-symlink member of a
+     * genuinely compared object out of scope. See
+     * {@code ComparisonNodeRenderer.ContentCoverage} for what is reported instead.
+     *
      * @param node the node to test
-     * @return {@code true} when the node is in the effective scope
+     * @return {@code true} when the node is in the effective scope, by the session's own rule
      */
     public boolean inScope(ComparisonNode node)
     {

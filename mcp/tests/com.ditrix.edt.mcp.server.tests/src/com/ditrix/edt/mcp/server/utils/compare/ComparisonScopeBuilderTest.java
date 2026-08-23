@@ -222,4 +222,96 @@ public class ComparisonScopeBuilderTest
             // could make the report claim a scope that was never sent to the engine.
         }
     }
+
+    // ==================== the platform's own "compare everything" predicate ====================
+    //
+    // ComparisonSession.computeIsGlobalScope answers true exactly when every side's list is
+    // null-or-empty, and several participants branch on it - most importantly the one that
+    // decides whether an object's own features are compared at all. A caller settling a comparison
+    // SETTING before the session exists has to be able to ask the same question of the scope it is
+    // about to hand over, and get the same answer.
+
+    @Test
+    public void testNoScopeObjectAtAllIsTheGlobalScope()
+    {
+        // How this builder spells the whole-configuration case: Scoping.GLOBAL carries no scope.
+        assertTrue(ComparisonScopeBuilder.isGlobalScope(null));
+        assertNull("the fixture must really be the no-scope case", //$NON-NLS-1$
+            ComparisonScopeBuilder.build(null).scope());
+    }
+
+    @Test
+    public void testAnEmptyScopeObjectIsTheGlobalScope()
+    {
+        assertTrue(ComparisonScopeBuilder.isGlobalScope(new ComparisonScope(
+            Collections.emptyList(), Collections.emptyList(), Collections.emptyList())));
+    }
+
+    @Test
+    public void testASuppliedScopeIsNotTheGlobalScope()
+    {
+        Scoping scoping = ComparisonScopeBuilder.build(Collections.singletonList("Catalog.Products")); //$NON-NLS-1$
+
+        assertFalse(ComparisonScopeBuilder.isGlobalScope(scoping.scope()));
+    }
+
+    @Test
+    public void testASingleNonEmptySideIsEnoughToMakeAScopeNotGlobal()
+    {
+        // Every side is asked, not just the main one: the platform's own loop runs over
+        // ComparisonSide.values(), and a check that stopped at the first side would call a scope
+        // global that the session does not.
+        List<String> named = Collections.singletonList("Catalog.Products"); //$NON-NLS-1$
+        List<String> none = Collections.emptyList();
+
+        assertFalse("main alone", //$NON-NLS-1$
+            ComparisonScopeBuilder.isGlobalScope(new ComparisonScope(named, none, none)));
+        assertFalse("other alone", //$NON-NLS-1$
+            ComparisonScopeBuilder.isGlobalScope(new ComparisonScope(none, named, none)));
+        assertFalse("ancestor alone", //$NON-NLS-1$
+            ComparisonScopeBuilder.isGlobalScope(new ComparisonScope(none, none, named)));
+    }
+
+    @Test
+    public void testAnExtendedScopeAnswersWhatTheSessionWouldAnswer()
+    {
+        // The predicate reproduces ComparisonSession.computeIsGlobalScope, which reads getScope -
+        // so this must too. It used to read getInputScope instead, which is the same list only
+        // while nothing has been extended: an empty scope extended BEFORE the session is
+        // constructed was called global here and scoped by the platform, and the
+        // mergeObjectsContent setting derived from it came out the wrong way round for the whole
+        // run. The order is safe at today's call site, which is exactly why a test had to pin the
+        // predicate rather than the call site.
+        ComparisonScope scope = new ComparisonScope(Collections.emptyList(),
+            Collections.emptyList(), Collections.emptyList());
+        scope.extendScope("Catalog.PulledIn", "referenced by a compared object", //$NON-NLS-1$ //$NON-NLS-2$
+            ComparisonSide.MAIN);
+
+        assertFalse("the fixture must really have been extended", //$NON-NLS-1$
+            scope.getScope(ComparisonSide.MAIN).isEmpty());
+        assertTrue("the input scope is untouched - the two accessors really do disagree here", //$NON-NLS-1$
+            scope.getInputScope(ComparisonSide.MAIN).isEmpty());
+        assertFalse("the platform reads getScope, so this predicate must give the same answer", //$NON-NLS-1$
+            ComparisonScopeBuilder.isGlobalScope(scope));
+    }
+
+    @Test
+    public void testAFinishedRunIsNotDescribedByAskingThisPredicateAgain()
+    {
+        // The consequence of the fix, stated as a pin so nobody "restores" the old reading to make
+        // a report easier: after the engine has pulled a dependency in, this predicate no longer
+        // describes the run that was launched. Whoever needs that answer later reads the value the
+        // SESSION saved (ComparisonView.isGlobalScope), which is what ComparisonTreeReport.Header
+        // now carries - see ComparisonTreeReportTest.
+        ComparisonScope launchedGlobal = new ComparisonScope(Collections.emptyList(),
+            Collections.emptyList(), Collections.emptyList());
+        assertTrue("at launch it is global", //$NON-NLS-1$
+            ComparisonScopeBuilder.isGlobalScope(launchedGlobal));
+
+        launchedGlobal.extendScope("Catalog.PulledIn", "referenced by a compared object", //$NON-NLS-1$ //$NON-NLS-2$
+            ComparisonSide.MAIN);
+
+        assertFalse("and after the engine extended it, the same object no longer answers that", //$NON-NLS-1$
+            ComparisonScopeBuilder.isGlobalScope(launchedGlobal));
+    }
 }

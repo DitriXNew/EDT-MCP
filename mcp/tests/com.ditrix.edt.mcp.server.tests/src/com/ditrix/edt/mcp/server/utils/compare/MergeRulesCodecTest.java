@@ -30,6 +30,7 @@ import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +40,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 import org.junit.After;
@@ -971,6 +973,141 @@ public class MergeRulesCodecTest
             assertTrue("the refusal must name the entries: " + e.getMessage(), //$NON-NLS-1$
                 e.getMessage().contains("A_B_C.xml") && e.getMessage().contains("D_E_F.xml")); //$NON-NLS-1$ //$NON-NLS-2$
         }
+    }
+
+    // ============ Which entry of a zip a comparison would actually restore ============
+
+    /**
+     * A zip of merge settings is a bag of documents, one per comparison, and EDT restores the ONE
+     * whose name (minus its extension) is the comparison's own id. The platform answers an archive
+     * with no such entry by logging a warning and restoring nothing, so this lookup is what lets a
+     * caller be told instead of being left with a comparison that quietly ignored their file.
+     * <p>
+     * Each form the platform's {@code removeExtension} accepts is pinned in its own test: JUnit
+     * stops a method at its first failed assertion, so one method holding all of them would only
+     * ever exercise the first.
+     */
+    @Test
+    public void testLookUpEntryFindsTheEntryNamedAfterTheComparison() throws Exception
+    {
+        Path zip = workDir.resolve("saved.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("A_B_C.xml")); //$NON-NLS-1$
+
+        assertTrue("the entry the comparison is named after is the one EDT restores", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryFindsAnEntryInsideADirectory() throws Exception
+    {
+        // The platform takes the part after the last separator, so an archive that nests its
+        // entries still addresses the comparison. Refusing this one would be a FALSE refusal.
+        Path zip = workDir.resolve("nested.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("settings/A_B_C.xml")); //$NON-NLS-1$
+
+        assertTrue("removeExtension drops the directory, so this entry matches", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryFindsAnEntryThatCarriesNoExtension() throws Exception
+    {
+        Path zip = workDir.resolve("bare.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("A_B_C")); //$NON-NLS-1$
+
+        assertTrue("a name with no dot is returned unchanged and still matches", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryDropsOnlyTheLastExtension() throws Exception
+    {
+        // Only the LAST dot goes, so 'A_B_C.old.xml' reduces to 'A_B_C.old' - a renamed copy is
+        // NOT the entry EDT looks for, and saying it was would be the silence this replaces.
+        Path zip = workDir.resolve("renamed.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("A_B_C.old.xml")); //$NON-NLS-1$
+
+        assertFalse("a second extension is part of the name the platform compares", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryMatchesCaseSensitively() throws Exception
+    {
+        // The platform compares with String.equals. A case-insensitive lookup here would report
+        // "found" for an entry EDT then fails to find, which is worse than the defect.
+        Path zip = workDir.resolve("cased.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("a_b_c.xml")); //$NON-NLS-1$
+
+        assertFalse("equals is case-sensitive and this lookup must be too", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryNamesWhatTheArchiveHoldsInstead() throws Exception
+    {
+        Path zip = workDir.resolve("foreign.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("X_Y_Z.xml", "Q_W_E.xml")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        MergeRulesCodec.ZipEntryLookup lookup = MergeRulesCodec.lookUpEntry(zip, "A_B_C"); //$NON-NLS-1$
+
+        assertFalse("no entry is named after this comparison", lookup.found()); //$NON-NLS-1$
+        assertEquals("naming what IS there is what separates 'somebody else's comparison' from " //$NON-NLS-1$
+            + "'not a merge-settings archive at all'", "X_Y_Z.xml, Q_W_E.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            lookup.describeContents());
+    }
+
+    @Test
+    public void testLookUpEntrySaysAnEmptyArchiveIsEmpty() throws Exception
+    {
+        Path zip = workDir.resolve("empty.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of());
+
+        MergeRulesCodec.ZipEntryLookup lookup = MergeRulesCodec.lookUpEntry(zip, "A_B_C"); //$NON-NLS-1$
+
+        assertFalse("an empty archive holds nothing for anybody", lookup.found()); //$NON-NLS-1$
+        assertEquals("it is empty", lookup.describeContents()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryCountsTheNamesItDoesNotPrint() throws Exception
+    {
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < 25; i++)
+        {
+            names.add("P" + i + "_Q_R.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        Path zip = workDir.resolve("swarm-lookup.zip"); //$NON-NLS-1$
+        writeZip(zip, names);
+
+        MergeRulesCodec.ZipEntryLookup lookup = MergeRulesCodec.lookUpEntry(zip, "A_B_C"); //$NON-NLS-1$
+
+        assertFalse(lookup.found());
+        String described = lookup.describeContents();
+        assertTrue("the first names are printed: " + described, //$NON-NLS-1$
+            described.startsWith("P0_Q_R.xml, P1_Q_R.xml")); //$NON-NLS-1$
+        assertTrue("the rest are counted, not printed: " + described, //$NON-NLS-1$
+            described.endsWith(" and 5 more")); //$NON-NLS-1$
+        assertFalse("the twenty-first name must not be printed: " + described, //$NON-NLS-1$
+            described.contains("P20_Q_R.xml")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLookUpEntryWalksPastTheListingBoundToFindTheEntry() throws Exception
+    {
+        // The bound is on what is PRINTED, never on what is looked at: the platform walks every
+        // entry, so a lookup that stopped at the twentieth would refuse an archive EDT accepts.
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < 40; i++)
+        {
+            names.add("P" + i + "_Q_R.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        names.add("A_B_C.xml"); //$NON-NLS-1$
+        Path zip = workDir.resolve("late-entry.zip"); //$NON-NLS-1$
+        writeZip(zip, names);
+
+        assertTrue("the entry sits past the listing bound and is still found", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
     }
 
     @Test
@@ -2202,9 +2339,31 @@ public class MergeRulesCodecTest
     }
 
     @Test
-    public void testTheReaderExtensionRuleIsCaseInsensitive()
+    public void testTheReaderExtensionRuleIsCaseSENSITIVE()
     {
-        assertTrue(MergeRulesCodec.hasReadableExtension(Paths.get("C:", "RULES.XML"))); //$NON-NLS-1$ //$NON-NLS-2$
+        // The platform's own test is String.equals: EDT 2026.2 asserts
+        // "zip".equals(FileUtil.getExtension(path)) and 2026.1 branches the same way, so a name
+        // spelled in upper case is one NEITHER version reads. Accepting it here produced a
+        // perfectly valid archive that the launch it was written for then refused - a file
+        // reported as written and usable while being neither.
+        assertFalse("no supported EDT reads 'RULES.XML'", //$NON-NLS-1$
+            MergeRulesCodec.hasReadableExtension(Paths.get("C:", "RULES.XML"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor 'rules.ZIP'", //$NON-NLS-1$
+            MergeRulesCodec.hasReadableExtension(Paths.get("C:", "rules.ZIP"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor a mixed spelling", //$NON-NLS-1$
+            MergeRulesCodec.hasReadableExtension(Paths.get("C:", "rules.Zip"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testOurOwnZipReaderStaysCaseInsensitive()
+    {
+        // The other half of the split, and the reason it is a split at all: deciding how to OPEN a
+        // file somebody already has is not the same question as deciding what the platform will
+        // accept. Reading a renamed archive costs nothing; writing one costs a launch.
+        assertTrue("we open 'RULES.ZIP' as the zip it is", //$NON-NLS-1$
+            MergeRulesCodec.isZip(Paths.get("C:", "RULES.ZIP"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("but the platform's reader will not take that name", //$NON-NLS-1$
+            MergeRulesCodec.hasReadableExtension(Paths.get("C:", "RULES.ZIP"))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -2688,5 +2847,150 @@ public class MergeRulesCodecTest
         assertEquals(4, document.decisions().size());
         assertEquals("a file the format allows must round-trip byte for byte as it always did", //$NON-NLS-1$
             FIXTURE, MergeRulesCodec.serialize(document));
+    }
+
+    // ==== writeZip: the container every supported EDT reads, addressed by project names ====
+    //
+    // EDT 2026.2 reads merge settings from a zip alone (2026.1 reads either), and a zip is a BAG
+    // of settings addressed by entry name: the launch restores the entry whose name minus its
+    // extension equals its own '<main>_<other>_<ancestor>' and SKIPS the archive otherwise, with
+    // a log warning and no decisions applied. So the name is not decoration - it is the whole
+    // difference between a file that works and a file that is reported as written and does
+    // nothing. These pin the two halves that have to agree: what the writer names, and what the
+    // lookup the launch uses will find.
+
+    @Test
+    public void testWriteZipNamesTheSingleEntryAfterTheComparisonItIsFor() throws Exception
+    {
+        Path target = workDir.resolve("rules.zip"); //$NON-NLS-1$
+
+        MergeRulesCodec.writeZip(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST, "MainCfg_VendorCfg_BaseCfg"); //$NON-NLS-1$
+
+        assertEquals("one entry, named after the comparison, exactly as EDT's own serializer " //$NON-NLS-1$
+            + "names it", List.of("MainCfg_VendorCfg_BaseCfg.xml"), entryNamesIn(target)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheEntryWriteZipProducesIsTheOneALaunchLooksFor() throws Exception
+    {
+        Path target = workDir.resolve("rules.zip"); //$NON-NLS-1$
+
+        MergeRulesCodec.writeZip(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST, "MainCfg_VendorCfg_BaseCfg"); //$NON-NLS-1$
+
+        // The writer and the platform's own matching rule have to agree, or this codec writes
+        // files its own launch check would call unaddressed.
+        assertTrue("the comparison it was written for must find it", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(target, "MainCfg_VendorCfg_BaseCfg").found()); //$NON-NLS-1$
+        assertFalse("and no other comparison may", //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(target, "MainCfg_VendorCfg_NONE").found()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAZipThisCodecWroteReadsBackAsTheSameDocument() throws Exception
+    {
+        Path target = workDir.resolve("rules.zip"); //$NON-NLS-1$
+
+        MergeRulesCodec.writeZip(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST, "A_B_C"); //$NON-NLS-1$
+
+        assertEquals("the archive must carry the document, not a truncated or re-laid-out one", //$NON-NLS-1$
+            FIXTURE, MergeRulesCodec.serialize(MergeRulesCodec.read(target)));
+    }
+
+    @Test
+    public void testWriteZipRefusesToInventAnEntryNameWhenNoneIsGiven() throws Exception
+    {
+        Path target = workDir.resolve("rules.zip"); //$NON-NLS-1$
+        try
+        {
+            MergeRulesCodec.writeZip(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null);
+            fail("a zip named after nothing is skipped by EDT and reported as written"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue("the refusal must say what is missing: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("entry name")); //$NON-NLS-1$
+        }
+        assertFalse("nothing may be left on the path", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWriteZipRefusesABlankEntryName() throws Exception
+    {
+        // The mirror of the null case, and not the same input: a blank string reaches the entry
+        // constructor perfectly happily and produces an archive holding '.xml', which matches the
+        // empty id and nothing else.
+        Path target = workDir.resolve("rules.zip"); //$NON-NLS-1$
+        try
+        {
+            MergeRulesCodec.writeZip(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, "   "); //$NON-NLS-1$
+            fail("a blank id names no comparison either"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue("the refusal must say what is missing: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("entry name")); //$NON-NLS-1$
+        }
+        assertFalse("nothing may be left on the path", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWriteStillProducesABareXmlFileAndNotAnArchive() throws Exception
+    {
+        // The control for the split: the xml form is what EDT 2026.1 reads directly, and adding a
+        // container to it would break every caller that has one.
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST);
+
+        assertEquals(FIXTURE, new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void testWriteZipTakesTheSameReservationEveryOtherWriteTakes() throws Exception
+    {
+        // The zip path must not be a second, weaker write: MUST_NOT_EXIST is what keeps one
+        // caller's decisions from being replaced by another's.
+        Path target = workDir.resolve("rules.zip"); //$NON-NLS-1$
+        Files.write(target, "somebody else's rules".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.writeZip(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, "A_B_C"); //$NON-NLS-1$
+            fail("an occupied path must be refused, not replaced"); //$NON-NLS-1$
+        }
+        catch (FileAlreadyExistsException expected)
+        {
+            // The contract of Target.MUST_NOT_EXIST.
+        }
+        assertEquals("the file that was there must be untouched", "somebody else's rules", //$NON-NLS-1$ //$NON-NLS-2$
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Every entry name in an archive, in the order the directory lists them.
+     *
+     * @param zip the archive
+     * @return the names
+     * @throws IOException when the archive cannot be read
+     */
+    private static List<String> entryNamesIn(Path zip) throws IOException
+    {
+        List<String> names = new ArrayList<>();
+        try (ZipFile file = new ZipFile(zip.toFile()))
+        {
+            Enumeration<? extends ZipEntry> entries = file.entries();
+            while (entries.hasMoreElements())
+            {
+                names.add(entries.nextElement().getName());
+            }
+        }
+        return names;
     }
 }

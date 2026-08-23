@@ -42,9 +42,11 @@ import org.eclipse.emf.common.util.EList;
 
 import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
+import com._1c.g5.v8.dt.compare.core.ComparisonProcessSettings;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessStatus;
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.core.IComparisonManager;
+import com._1c.g5.v8.dt.compare.matching.MatchingStrategy;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -61,6 +63,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonTreeReport;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec;
@@ -530,9 +533,13 @@ public class CompareConfigurationsToolTest
     // Files.isReadable answers one question - may this process open it - and two things that are
     // not merge-rules files answer it with "yes": a directory, and a file with any extension at
     // all. Both used to pass and be handed to the platform, whose own deserializeMergeSettings
-    // takes a name ending in '.xml' or '.zip' and nothing else. The comparison then failed deep
-    // inside the launch, holding EDT's single comparison slot, over a file the caller had been
-    // told was checked.
+    // reads no other name - '.xml' or '.zip' on EDT 2026.1, '.zip' alone on 2026.2. The
+    // comparison then failed deep inside the launch, holding EDT's single comparison slot, over a
+    // file the caller had been told was checked.
+    //
+    // The accepted set stays the UNION of the two versions. Narrowing it to '.zip' would refuse,
+    // on every EDT, a file half of them read perfectly well, and an '.xml' handed to a 2026.2
+    // launch fails there with the platform's own assertion, which names the file.
 
     @Test
     public void testAReadableDirectoryIsNotAMergeRulesFile() throws Exception
@@ -621,6 +628,111 @@ public class CompareConfigurationsToolTest
         {
             Files.deleteIfExists(notRules);
         }
+    }
+
+    @Test
+    public void testTheExtensionRefusalNamesWhichEdtReadsWhich() throws Exception
+    {
+        // The claim this message used to make - "EDT's own merge-settings reader accepts those
+        // two names" - stopped being true when 2026.2 dropped the xml branch. A caller who reads
+        // it and renames a file to '.xml' has been sent to a container their EDT will refuse.
+        Path notRules = Files.createTempFile("compare-rules", ".rules"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            String result = tool.execute(request(Map.of("mergeRulesFile", //$NON-NLS-1$
+                notRules.toString())));
+
+            assertContains(result, "EDT 2026.2 reads a zip alone"); //$NON-NLS-1$
+        }
+        finally
+        {
+            Files.deleteIfExists(notRules);
+        }
+    }
+
+    // ============ mergeObjectsContent is a scope filter, not a "compare more" switch ============
+    //
+    // Measured from com._1c.g5.v8.dt.md.compare (16.0.0 on EDT 2026.1.2 and 16.0.1 on 2026.2.0,
+    // identical here): MdCompareUtils.isExcludeObjectsContentFeature EXCLUDES a feature from the
+    // comparison when the setting is on and neither compared object's qualified name is under an
+    // entry of the scope. An empty scope has no entries, so with the setting on a
+    // whole-configuration run drops every plain feature of every object - module text, forms,
+    // templates - and reports each top object as identical. The setting therefore follows the
+    // scope instead of being pinned on.
+
+    /**
+     * The guide is the caller-facing half of the same claim the report prints, and it drifted the
+     * same way: it said a node outside the scope "was never compared feature by feature". The
+     * predicate spares a containment-many collection of {@code MdObject}s and is applied per
+     * feature, so such a node WAS compared - on everything it left in.
+     */
+    @Test
+    public void testTheGuideDoesNotSayAScopedNodeWasNeverComparedFeatureByFeature()
+    {
+        assertFalse("the guide may not deny a comparison that did take place", //$NON-NLS-1$
+            tool.getGuide().contains("never compared feature by feature")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGuideNamesTheCarveOutTheExclusionIsBoundedBy()
+    {
+        // The positive half: without it the pin above would pass on a guide that had simply
+        // dropped the paragraph, which would take the caveat away instead of narrowing it.
+        assertTrue("the guide has to say WHICH features can be excluded", //$NON-NLS-1$
+            tool.getGuide().contains("spares an object's containment-many collections of")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWholeConfigurationComparisonDoesNotSetMergeObjectsContent()
+    {
+        ComparisonProcessSettings settings =
+            CompareConfigurationsTool.EngineBackend.settingsFor(wholeConfigurationScope());
+
+        assertFalse("with an empty scope this setting excludes every object's own features, so " //$NON-NLS-1$
+            + "the comparison would report identical for objects it never looked inside", //$NON-NLS-1$
+            settings.isMergeObjectsContent());
+    }
+
+    @Test
+    public void testAScopedComparisonSetsMergeObjectsContent()
+    {
+        ComparisonScope scoped =
+            ComparisonScopeBuilder.build(List.of("Catalog.Products")).scope(); //$NON-NLS-1$
+
+        assertTrue("a scoped run is what the setting was written for: the tree still spans the " //$NON-NLS-1$
+            + "whole configuration, and only the named objects are compared with their content", //$NON-NLS-1$
+            CompareConfigurationsTool.EngineBackend.settingsFor(scoped).isMergeObjectsContent());
+    }
+
+    @Test
+    public void testTheScopeMovesThatOneSettingAndNothingElse()
+    {
+        // Everything else in the settings is fixed, and a change that moved one of them with the
+        // scope would be invisible to the two assertions above.
+        for (ComparisonScope scope : List.of(wholeConfigurationScope(),
+            ComparisonScopeBuilder.build(List.of("Catalog.Products")).scope())) //$NON-NLS-1$
+        {
+            ComparisonProcessSettings settings =
+                CompareConfigurationsTool.EngineBackend.settingsFor(scope);
+
+            assertEquals(MatchingStrategy.UUID_THEN_NAME, settings.getMatchingStrategy());
+            assertTrue("BSL module structure is parsed either way", //$NON-NLS-1$
+                settings.isParseBslModuleStructure());
+            assertTrue("nobody is at the keyboard to answer an external merge tool's window", //$NON-NLS-1$
+                settings.isAvoidExternalMergeToolSupport());
+        }
+    }
+
+    /**
+     * The scope object a whole-configuration launch hands the handle - empty on every side, and a
+     * FRESH instance rather than the shared mutable {@code ComparisonScope.EMPTY_SCOPE}.
+     *
+     * @return the scope
+     */
+    private static ComparisonScope wholeConfigurationScope()
+    {
+        return new ComparisonScope(Collections.emptyList(), Collections.emptyList(),
+            Collections.emptyList());
     }
 
     @Test
@@ -935,7 +1047,7 @@ public class CompareConfigurationsToolTest
         request.recordResolvedRevisions(OTHER_COMMIT, ANCESTOR_COMMIT);
 
         String report = ComparisonTreeReport.render(
-            CompareConfigurationsTool.headerFor("cmp-1", request, "finished"), //$NON-NLS-1$ //$NON-NLS-2$
+            CompareConfigurationsTool.headerFor("cmp-1", request, "finished", true), //$NON-NLS-1$ //$NON-NLS-2$
             new ComparisonScope(Collections.emptyList(), Collections.emptyList(),
                 Collections.emptyList()),
             new ComparisonTreeReport.Collector(100, false));

@@ -641,13 +641,40 @@ public class CompareConfigurationsTool implements IMcpTool
      * {@code Files.isReadable} answers one question - may this process open it - and two things
      * that are not merge-rules files answer it with "yes". A DIRECTORY is readable, and so is a
      * file with any extension at all. Both used to pass and be handed to the platform, whose own
-     * {@code deserializeMergeSettings} accepts a name ending in {@code .xml} or {@code .zip} and
-     * nothing else: the comparison then failed deep inside the launch, holding EDT's single
-     * comparison slot, with a message about a file the caller believed had been checked.
+     * {@code deserializeMergeSettings} reads no other name: the comparison then failed deep
+     * inside the launch, holding EDT's single comparison slot, with a message about a file the
+     * caller believed had been checked.
      * <p>
      * The extension question is asked of {@link MergeRulesCodec#hasReadableExtension}, not
      * answered again here: the rule belongs to the platform's reader, {@code merge_rules} already
      * lives next to it, and a second copy of somebody else's rule is the copy that goes stale.
+     * <p>
+     * <b>What that check deliberately does NOT decide is the VERSION question.</b> The platform's
+     * reader accepts {@code .xml} or {@code .zip} on EDT 2026.1 and {@code .zip} alone on 2026.2,
+     * and the check answers the union of the two. Narrowing it to {@code .zip} here would refuse,
+     * on every EDT, a file that half of them read perfectly well; passing an {@code .xml} to a
+     * 2026.2 launch fails it with the platform's own assertion, which names the file and is not
+     * silent. The one thing a wrong guess here would cost - a slot taken by a launch that was
+     * always going to fail - is what the pre-flight exists to prevent, and it is prevented for
+     * every name that NO supported version reads.
+     * <p>
+     * The SPELLING question it does decide, because the platform decides it the same way:
+     * {@code "zip".equals(FileUtil.getExtension(path))} is an exact comparison, so
+     * {@code rules.ZIP} is a name no version reads and refusing it here costs a rename instead of
+     * a slot.
+     *
+     * <h2>What this check cannot answer, and where the rest is answered</h2>
+     * A {@code .zip} of merge settings is addressed by the STRING
+     * {@code <main>_<other>_<ancestor>} over the comparison's project names - EDT restores the
+     * entry spelled that way and ignores every other entry - and those names exist only once the
+     * descriptors are built. It is not addressed to one comparison RUN: any later comparison over
+     * the same three projects restores the same entry, so the risk a stale zip carries is old
+     * decisions applied again rather than decisions silently dropped. Nor is the string a unique
+     * identity - {@code _} is legal inside a project name, so different triples can spell it (see
+     * {@code ComparisonEngine#mergeRulesEntryId}) - which is why nothing here promises that only
+     * this comparison can restore the file. Whether a
+     * zip holds an entry for THIS comparison is therefore asked in the launch, by
+     * {@code ComparisonEngine.restoreMergeSettings}, and still before anything is handed to EDT.
      *
      * @param mergeRulesFile the caller's path, or {@code null}
      * @return an error result, or {@code null} when the path is usable
@@ -702,14 +729,18 @@ public class CompareConfigurationsTool implements IMcpTool
         if (!MergeRulesCodec.hasReadableExtension(path))
         {
             return ToolResult.error(KEY_MERGE_RULES_FILE + " must end in '" //$NON-NLS-1$
-                + MergeRulesCodec.XML_EXTENSION + "' or '" + MergeRulesCodec.ZIP_EXTENSION //$NON-NLS-1$
-                + "', but is '" + mergeRulesFile //$NON-NLS-1$
-                + "'. EDT's own merge-settings reader accepts those two names and refuses " //$NON-NLS-1$
-                + "everything else, so a file with any other extension would fail inside the " //$NON-NLS-1$
-                + "launch after it had taken the single comparison slot. Write one with " //$NON-NLS-1$
-                + "merge_rules (mode 'write' produces '" + MergeRulesCodec.XML_EXTENSION //$NON-NLS-1$
-                + "'), rename the file you have, or omit the parameter to compare without " //$NON-NLS-1$
-                + "pre-set rules.").toJson(); //$NON-NLS-1$
+                + MergeRulesCodec.ZIP_EXTENSION + "' or '" + MergeRulesCodec.XML_EXTENSION //$NON-NLS-1$
+                + "', spelled in lower case, but is '" + mergeRulesFile //$NON-NLS-1$
+                + "'. EDT's own merge-settings reader takes no other name - EDT 2026.2 reads a " //$NON-NLS-1$
+                + "zip alone, EDT 2026.1 reads either, and both compare the extension exactly - " //$NON-NLS-1$
+                + "so a file named otherwise would fail inside the launch after it had taken the " //$NON-NLS-1$
+                + "single comparison slot. Write one with merge_rules, where the container is " //$NON-NLS-1$
+                + "chosen by the filePath you give it: name it '" //$NON-NLS-1$
+                + MergeRulesCodec.ZIP_EXTENSION + "' (which needs a live comparison, because the " //$NON-NLS-1$
+                + "entry inside is named after its three projects) or '" //$NON-NLS-1$
+                + MergeRulesCodec.XML_EXTENSION //$NON-NLS-1$
+                + "' (which needs none, and which EDT 2026.2 will not read). Or rename the file " //$NON-NLS-1$
+                + "you have, or omit the parameter to compare without pre-set rules.").toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -2005,13 +2036,17 @@ public class CompareConfigurationsTool implements IMcpTool
      * @param comparisonId this plugin's id for the comparison
      * @param request the request, carrying both the expressions and what they resolved to
      * @param state the comparison's own reported state
+     * @param globalScope the SESSION's own answer to whether this run covered the whole
+     *     configuration, read off the live session rather than recomputed from the scope object -
+     *     the engine extends that object while the run proceeds, and the report describes the
+     *     setting the launch chose, not the scope the run ended up with
      * @return the header
      */
     static ComparisonTreeReport.Header headerFor(String comparisonId, LaunchRequest request,
-        String state)
+        String state, boolean globalScope)
     {
         return new ComparisonTreeReport.Header(comparisonId, request.getProjectName(),
-            request.otherRevisionLabel(), request.ancestorRevisionLabel(), state);
+            request.otherRevisionLabel(), request.ancestorRevisionLabel(), state, globalScope);
     }
 
     /** One poll tick's answer: what the comparison is doing, and why it stopped. */
@@ -2424,6 +2459,55 @@ public class CompareConfigurationsTool implements IMcpTool
         }
 
         /**
+         * The process settings one launch runs under. Everything in them is fixed except one
+         * switch, and that one is decided by the SCOPE.
+         *
+         * <h2>{@code mergeObjectsContent} is not a "compare more" switch - it is a scope filter</h2>
+         * Measured from the bytecode of {@code com._1c.g5.v8.dt.md.compare} - 16.0.0 (EDT 2026.1.2)
+         * and 16.0.1 (EDT 2026.2.0), byte for byte the same here:
+         * {@code MdCompareUtils.isExcludeObjectsContentFeature} EXCLUDES a feature from the
+         * comparison when the setting is on, the feature is not a containment-many collection of
+         * {@code MdObject}s, and neither compared object's qualified name is under an entry of
+         * {@code handle.getScope(side)}. An empty scope has no entries, so with the setting on a
+         * WHOLE-CONFIGURATION comparison drops every plain feature of every object - module text,
+         * form and template content, every property - builds no child node for any of them, and
+         * reports the top object as {@code identical}. Measured live on one object: an empty scope
+         * gave {@code identical} with no children, a scope naming that object gave
+         * {@code changed on both sides} with 107.
+         *
+         * <h2>What else reads the setting was checked, not assumed</h2>
+         * Six classes in each version, and none of them argues for pinning it on. Four sites in
+         * {@code MdObjectComparisonParticipant} are additionally gated on {@code !isGlobalScope()}
+         * and so cannot fire on a global run at all;
+         * {@code AbstractMdObjectMatcher.fillOrderChangedFlag} suppresses the order-changed flag
+         * for every node not in scope, which on a global run is every node;
+         * {@code alwaysRecalculateClassFeatures} and {@code getDefaultMustBeMerged} move merge
+         * DEFAULTS, which this plugin never reads and could not act on, since it cannot merge;
+         * the sixth is the settings object itself. Turning the setting off for a global comparison
+         * adds what the run was asked for and takes nothing away.
+         *
+         * <h2>It stays ON for a scoped run, and the report says what that costs</h2>
+         * That is the case it was written for: the tree still spans the whole configuration, and
+         * comparing the content of everything the engine touches would make a two-object request
+         * pay for the entire configuration. The price is stated rather than hidden - a scoped
+         * report says that a node outside the scope was compared without its content, see
+         * {@code ComparisonTreeReport}.
+         *
+         * @param scope the scope this comparison will run with
+         * @return the settings, with no restored merge rules yet
+         */
+        static ComparisonProcessSettings settingsFor(ComparisonScope scope)
+        {
+            return ComparisonProcessSettings.builder(MatchingStrategy.UUID_THEN_NAME)
+                .mergeObjectsContent(!ComparisonScopeBuilder.isGlobalScope(scope))
+                .parseBslModuleStructure(true)
+                // No external tool: nobody is at the keyboard to answer the window one would
+                // open, and this feature never merges anyway.
+                .avoidExternalMergeToolSupport(true)
+                .build();
+        }
+
+        /**
          * Builds the batch and hands it to the engine, registering the session first so nothing
          * can be started without something owning it.
          *
@@ -2461,19 +2545,20 @@ public class CompareConfigurationsTool implements IMcpTool
                     sides.projectPath()),
                 scope);
 
-            ComparisonProcessSettings settings =
-                ComparisonProcessSettings.builder(MatchingStrategy.UUID_THEN_NAME)
-                    .mergeObjectsContent(true)
-                    .parseBslModuleStructure(true)
-                    // No external tool: nobody is at the keyboard to answer the window one would
-                    // open, and this feature never merges anyway.
-                    .avoidExternalMergeToolSupport(true)
-                    .build();
+            ComparisonProcessSettings settings = settingsFor(scope);
             if (request.getMergeRulesFile() != null)
             {
                 // Applied BEFORE the launch, which is the whole point of the parameter: the
                 // decisions are already in place when the comparison opens, instead of being
                 // answered one dialog at a time afterwards.
+                //
+                // And read HERE rather than in execute(), because the file cannot be judged
+                // without the handle: a zip of merge settings is addressed by the three PROJECT
+                // NAMES in the descriptors above - any comparison over those same three restores
+                // the entry, this run or a later one - and EDT silently applies nothing when the
+                // archive holds no entry under them. The facade refuses that case, and
+                // this is still ahead of the batch below - nothing has reached EDT, so the claim
+                // is withdrawn and the single comparison slot was never taken.
                 try
                 {
                     settings.setRestoredMergeSettings(
@@ -2631,6 +2716,10 @@ public class CompareConfigurationsTool implements IMcpTool
         {
             ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(
                 request.getLimit(), request.isChangedOnly());
+            // Deliberately without an initialiser: the compiler then refuses a path that renders
+            // the report without having read the session's answer, instead of quietly rendering
+            // the scoped caveat - or omitting it - on a default nobody observed.
+            boolean globalScope;
             try
             {
                 PlatformAnswer<ComparisonView> answer = engine.view(handle);
@@ -2647,14 +2736,20 @@ public class CompareConfigurationsTool implements IMcpTool
                     collectTopNodes(view.rootNode(), collector);
                     return null;
                 });
+                // The SESSION's own answer, computed once in its constructor and kept there. The
+                // scope object cannot answer this after the fact: the engine extends it as it
+                // pulls dependencies in, so asking it here would call a whole-configuration run
+                // scoped the moment one name had been added.
+                globalScope = view.isGlobalScope();
             }
             catch (RuntimeException e)
             {
                 throw new ComparisonException(
                     messageOf(ComparisonFailures.failed("reading the comparison tree", e)), e); //$NON-NLS-1$
             }
-            return ComparisonTreeReport.render(headerFor(comparisonId, request, "finished"), //$NON-NLS-1$
-                handle.getFullScope(), collector);
+            return ComparisonTreeReport.render(
+                headerFor(comparisonId, request, "finished", globalScope), handle.getFullScope(), //$NON-NLS-1$
+                collector);
         }
 
         /**

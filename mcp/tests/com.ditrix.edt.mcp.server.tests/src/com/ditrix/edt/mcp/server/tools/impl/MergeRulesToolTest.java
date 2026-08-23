@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +33,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 import org.eclipse.emf.common.util.BasicEList;
 import org.eclipse.emf.common.util.EList;
@@ -180,6 +184,13 @@ public class MergeRulesToolTest
             + "<Node Key=" + QUOTE + "two" + QUOTE + " MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "/></MergeSettings></Settings>"; //$NON-NLS-1$
 
+    /**
+     * The entry name the stub authorities answer with - the shape
+     * {@code <mainProject>_<otherProject>_<ancestorProject>} the platform builds, and the name a
+     * zip this tool writes has to carry.
+     */
+    private static final String ENTRY_ID = "MainCfg_VendorCfg_BaseCfg"; //$NON-NLS-1$
+
     private Path workDir;
 
     @Before
@@ -281,6 +292,62 @@ public class MergeRulesToolTest
         JsonElement required = JsonParser.parseString(new MergeRulesTool().getInputSchema())
             .getAsJsonObject().get("required"); //$NON-NLS-1$
         assertEquals("[\"mode\",\"filePath\"]", required.toString()); //$NON-NLS-1$
+    }
+
+    /**
+     * The contract on the wire has to carry all THREE validation outcomes, because the middle one
+     * - a comparison that answers while its tree cannot be read - is the one a caller cannot
+     * guess: it addresses a zip without checking a single rule, and it REFUSES when the caller
+     * named the comparison. The description said "with a live comparison every rule is checked",
+     * which describes a state this tool can be in and calls it the only one.
+     */
+    @Test
+    public void testTheDescriptionNamesAllThreeValidationOutcomes()
+    {
+        String description = new MergeRulesTool().getDescription();
+
+        assertTrue("the count itself is the part a reader keys on: " + description, //$NON-NLS-1$
+            description.contains("THREE outcomes")); //$NON-NLS-1$
+        assertTrue("a FINISHED tree is what a checked file needs: " + description, //$NON-NLS-1$
+            description.contains("FINISHED")); //$NON-NLS-1$
+        assertTrue("the middle outcome must be named as itself: " + description, //$NON-NLS-1$
+            description.contains("cannot be read yet")); //$NON-NLS-1$
+        assertTrue("including that naming comparisonId turns it into a refusal: " + description, //$NON-NLS-1$
+            description.contains("refused outright when you passed comparisonId")); //$NON-NLS-1$
+    }
+
+    /**
+     * The lower-case rule belongs to the WRITE target alone - reading is this server's own and is
+     * case-insensitive. Stating it as a property of {@code filePath} made the parameter's own
+     * prose contradict {@code mode: "read"}, which reads {@code .ZIP} perfectly well.
+     */
+    @Test
+    public void testTheFilePathSchemaScopesTheLowerCaseRuleToWrites()
+    {
+        String prose = schemaProperties().getAsJsonObject("filePath") //$NON-NLS-1$
+            .get("description").getAsString(); //$NON-NLS-1$
+
+        assertTrue("reading is explicitly lenient: " + prose, //$NON-NLS-1$
+            prose.contains("CASE does not matter")); //$NON-NLS-1$
+        assertTrue("and writing is explicitly not: " + prose, //$NON-NLS-1$
+            prose.contains("must be spelled in LOWER CASE")); //$NON-NLS-1$
+        assertFalse("the old wording made the rule unconditional: " + prose, //$NON-NLS-1$
+            prose.contains("with a LOWER-CASE extension")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the parameter that asks for validation says what naming it costs: a comparison whose
+     * tree cannot be read is refused, not silently downgraded to an unchecked write.
+     */
+    @Test
+    public void testTheComparisonIdSchemaSaysAnUnreadableTreeIsRefused()
+    {
+        String prose = schemaProperties().getAsJsonObject("comparisonId") //$NON-NLS-1$
+            .get("description").getAsString(); //$NON-NLS-1$
+
+        assertTrue("validation needs a finished tree: " + prose, prose.contains("FINISHED")); //$NON-NLS-1$
+        assertTrue("and the consequence of naming one anyway: " + prose, //$NON-NLS-1$
+            prose.contains("REFUSED")); //$NON-NLS-1$
     }
 
     @Test
@@ -431,6 +498,38 @@ public class MergeRulesToolTest
             result.contains("| member |")); //$NON-NLS-1$
         assertTrue("the payload the tool does not interpret must be accounted for: " + result, //$NON-NLS-1$
             result.contains("Preserved sections this tool does not interpret: 1")); //$NON-NLS-1$
+    }
+
+    /**
+     * {@code mode: "read"} does not check the extension's CASE, and that is the contract rather
+     * than an oversight.
+     * <p>
+     * {@code hasReadableExtension} answers what the PLATFORM will accept, and reading is the one
+     * path that never hands the file to the platform: {@code MergeRulesCodec.read} decides how to
+     * open the file with the case-INSENSITIVE {@code isZip}. So {@code RULES.ZIP} - a name EDT
+     * itself would refuse - reads here. The tool description, the schema, the guide and the README
+     * all used to state the lower-case rule as if it governed reading too; this pins the
+     * behaviour they now describe.
+     */
+    @Test
+    public void testAnUpperCaseZipIsReadRatherThanRefused() throws IOException
+    {
+        Path zipped = file("RULES.ZIP"); //$NON-NLS-1$
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zipped)))
+        {
+            out.putNextEntry(new ZipEntry("Main_Other_Ancestor.xml")); //$NON-NLS-1$
+            out.write(FIXTURE.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        String result = call(params("mode", "read", "filePath", zipped.toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("an upper-case name is still a zip this server can open: " + result, //$NON-NLS-1$
+            result.trim().startsWith("{")); //$NON-NLS-1$
+        assertTrue("and the entry that was read is named: " + result, //$NON-NLS-1$
+            result.contains("Main_Other_Ancestor.xml")); //$NON-NLS-1$
+        assertTrue("the decisions of the archived document are reported: " + result, //$NON-NLS-1$
+            result.contains("| Alpha | Beta | Gamma |")); //$NON-NLS-1$
     }
 
     @Test
@@ -692,12 +791,317 @@ public class MergeRulesToolTest
             "decisions", "GetFromOther"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ the container: '.zip' is ADDRESSED, '.xml' is version-limited ============
+    //
+    // EDT 2026.2 reads merge settings from a zip alone; 2026.1 reads either. A zip is addressed
+    // by its entry name - the launching comparison's own '<main>_<other>_<ancestor>' - and EDT
+    // SKIPS an archive whose ENTRY is named anything else, applying nothing and saying nothing
+    // (the archive's own file name is never matched against anything). So this tool
+    // writes a zip only when a live comparison can name the entry, refuses one when nothing can,
+    // and states in the report which container was written and which EDT reads it.
+
     @Test
-    public void testWriteRefusesAZipTargetBecauseEdtWouldIgnoreIt()
+    public void testAZipTargetIsRefusedWhenNothingCanNameItsEntry()
     {
-        String result = call(params("mode", "write", "filePath", file("r.zip").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Path target = file("r.zip"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertErrorNaming(result, ".zip", ".xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Nothing was written", ".zip", "compare_configurations", ".xml"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a zip nobody can address must not reach the disk: EDT would ignore it and " //$NON-NLS-1$
+            + "the caller would be told the decisions were recorded", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAZipTargetIsWrittenUnderTheEntryTheLiveComparisonNames() throws Exception
+    {
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the entry has to be the comparison's own id - any other name is skipped by " //$NON-NLS-1$
+            + "EDT", List.of(ENTRY_ID + ".xml"), zipEntryNames(target)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAZipTargetHoldsTheDecisionsItReports() throws Exception
+    {
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Read back through the tool's own reader, which is the reader a caller would use.
+        String read = call(params("mode", "read", "filePath", target.toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("the archive must carry the rule that was reported:\n" + read, //$NON-NLS-1$
+            read.contains("DoNotMerge")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheReportOfAZipNamesTheEntryItIsAddressedTo()
+    {
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the report must name the container and the entry:\n" + result, //$NON-NLS-1$
+            result.contains("Container: '.zip', entry `" + ENTRY_ID + ".xml`")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheReportOfAnXmlSaysEdt20262DoesNotReadIt()
+    {
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the report must name the container it wrote:\n" + result, //$NON-NLS-1$
+            result.contains("Container: '.xml'")); //$NON-NLS-1$
+        assertTrue("and the version that will not read it - discovering that inside the launch " //$NON-NLS-1$
+            + "this file was prepared for is the failure this sentence exists to prevent:\n" //$NON-NLS-1$
+            + result, result.contains("EDT 2026.2 does not read it")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnXmlReportDoesNotClaimToBeAZip()
+    {
+        // Pins the ABSENCE: a container clause that always printed the zip sentence would satisfy
+        // every "the report says which container" assertion above and still be wrong here.
+        String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("an xml file is addressed to nobody and must not be described as addressed:\n" //$NON-NLS-1$
+            + result, result.contains("Container: '.zip'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAZipReportDoesNotCarryTheXmlVersionCaveat() throws Exception
+    {
+        // The mirror of the pin above: the zip IS read by both versions, so repeating the 2026.2
+        // warning there would describe a limit this file does not have.
+        //
+        // The absence is asserted LAST, and only after the write has been shown to have happened.
+        // On its own it is satisfied by a refusal - or by any other failure - because a refusal
+        // does not carry the xml caveat either, so a regression that stopped writing zips at all
+        // would have left this test green.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("the write must have succeeded before an absence in its report means " //$NON-NLS-1$
+            + "anything - a refusal carries no xml caveat either:\n" + result, //$NON-NLS-1$
+            result.trim().startsWith("{")); //$NON-NLS-1$
+        assertTrue("and the file must be there:\n" + result, Files.exists(target)); //$NON-NLS-1$
+        assertTrue("as the addressed container this test is about:\n" + result, //$NON-NLS-1$
+            result.contains("Container: '.zip', entry `" + ENTRY_ID + ".xml`")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("holding the entry EDT will look for", //$NON-NLS-1$
+            zipEntryNames(target).contains(ENTRY_ID + ".xml")); //$NON-NLS-1$
+        assertFalse("a zip is read by every supported EDT:\n" + result, //$NON-NLS-1$
+            result.contains("EDT 2026.2 does not read it")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATargetThatIsNeitherXmlNorZipIsRefusedNamingBoth()
+    {
+        Path target = file("r.txt"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, ".zip", ".xml", "r.txt"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(Files.exists(target));
+    }
+
+    @Test
+    public void testANamedComparisonThatDoesNotAnswerIsReportedAsThatEvenForAZip()
+    {
+        // Two refusals could fire here, and the more specific one has to win: the caller named a
+        // comparison, so "nothing answered for that id" is what they can act on. Reporting "no
+        // comparison could name the entry" would describe a state they did not create.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty());
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "comparisonId", "cmp-9", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "cmp-9", "nothing answered for it"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(Files.exists(target));
+    }
+
+    // ======== the ADDRESS survives a comparison that cannot answer about rules ========
+    //
+    // The two are different questions of the same session: the zip entry name is the three
+    // project names off the handle, the rule verdict needs a FINISHED tree. Computing the name
+    // only on the path that had already proved the tree finished threw a KNOWN name away, and a
+    // zip write was then refused telling the caller to start the very comparison that was already
+    // holding EDT's single slot - which it would have refused to start.
+
+    @Test
+    public void testAZipIsWrittenAddressedButUnvalidatedWhenTheTreeCannotAnswer() throws Exception
+    {
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a comparison that cannot answer about rules can still name the entry:\n" //$NON-NLS-1$
+            + result, result.trim().startsWith("{")); //$NON-NLS-1$
+        assertTrue("the file must exist", Files.exists(target)); //$NON-NLS-1$
+        assertTrue("addressed with the live comparison's own entry name", //$NON-NLS-1$
+            zipEntryNames(target).contains(ENTRY_ID + ".xml")); //$NON-NLS-1$
+        assertTrue("and reported as unchecked, naming the comparison that answered:\n" + result, //$NON-NLS-1$
+            result.contains("NOT VALIDATED") && result.contains("cmp-7")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nothing here was validated:\n" + result, //$NON-NLS-1$
+            result.contains("Validated against comparison")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANamedComparisonWhoseTreeCannotAnswerIsRefusedAsThatAndNotAsMissing()
+    {
+        // The caller asked for validation, so the write is still refused - but the refusal has to
+        // describe what was observed. "Nothing answered for that id" would send them hunting for
+        // a live id they already have; the tree is what is missing, and it arrives by itself.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "comparisonId", "cmp-7", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "cmp-7", "it is registered", "tree could not be read"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("the id is live, so the refusal must not say it answered nothing", //$NON-NLS-1$
+            result.contains("nothing answered for it")); //$NON-NLS-1$
+        assertFalse("and a refused write writes nothing", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    // ======== the platform compares the extension EXACTLY, so a write must too ========
+
+    @Test
+    public void testAnUpperCaseZipTargetIsRefusedNamingTheCase()
+    {
+        // EDT 2026.2 asserts "zip".equals(FileUtil.getExtension(path)) and 2026.1 branches the
+        // same way, so 'r.ZIP' is a name NEITHER reads. Accepting it produced a valid archive the
+        // launch it was written for then refused - a file reported as written and usable while
+        // being neither.
+        Path target = file("r.ZIP"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, ".ZIP", "lower case"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nothing may be written under a name the platform will not read", //$NON-NLS-1$
+            Files.exists(target));
+    }
+
+    @Test
+    public void testAnUpperCaseXmlTargetIsRefusedNamingTheCase()
+    {
+        Path target = file("r.XML"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, ".XML", "lower case"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(Files.exists(target));
+    }
+
+    @Test
+    public void testALowerCaseTargetIsStillWritten() throws Exception
+    {
+        // The control: the refusal above is about the CASE, not about the tool having stopped
+        // writing zips.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.trim().startsWith("{")); //$NON-NLS-1$
+        assertTrue(Files.exists(target));
+    }
+
+    // ======== a zip is addressed by PROJECT NAMES, not by one comparison run ========
+
+    @Test
+    public void testTheZipContainerLineNamesTheProjectsRatherThanTheRun()
+    {
+        // What the entry name is made of is the whole risk: another comparison over the same three
+        // projects - a later run, other revisions - restores this very entry and applies these
+        // decisions again. A report that said "another comparison applies nothing" described the
+        // opposite of the danger.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the address is the entry STRING, spelled from the project names:\n" + result, //$NON-NLS-1$
+            result.contains("ADDRESSED BY THAT EXACT STRING")); //$NON-NLS-1$
+        assertTrue("and re-use over the same projects is the risk to state:\n" + result, //$NON-NLS-1$
+            result.contains("a later one over other revisions")); //$NON-NLS-1$
+        assertFalse("the file's OWN name is the caller's to choose, and saying otherwise sent " //$NON-NLS-1$
+            + "people renaming archives:\n" + result, //$NON-NLS-1$
+            result.contains("Another comparison launched with this file applies nothing")); //$NON-NLS-1$
+    }
+
+    /**
+     * The entry name is a concatenation over {@code _}, which is legal inside a project name, so
+     * different triples spell the same entry - see
+     * {@code ComparisonEngineTest#mergeRulesEntryIdCollidesBetweenTwoDifferentProjectTriples}. The
+     * report used to close the paragraph with "a comparison over a different set of projects finds
+     * no entry of its own here", which is the converse and is false. Two pins, because the two
+     * halves fail differently: the withdrawn claim must be gone, and the property that replaced it
+     * must be stated rather than merely omitted.
+     */
+    @Test
+    public void testTheZipContainerLineDoesNotPromiseThatNoOtherComparisonCanFindTheFile()
+    {
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a DIFFERENT set of projects can spell the SAME entry:\n" + result, //$NON-NLS-1$
+            result.contains("A comparison over a different set of projects")); //$NON-NLS-1$
+        assertTrue("the separator's ambiguity is the fact the caller needs:\n" + result, //$NON-NLS-1$
+            result.contains("not one-to-one")); //$NON-NLS-1$
+        assertTrue("and only the safe direction may be asserted:\n" + result, //$NON-NLS-1$
+            result.contains("spell a DIFFERENT string finds no")); //$NON-NLS-1$
+    }
+
+    /** The order is part of the address, so the line may not describe it as a set. */
+    @Test
+    public void testTheZipContainerLineSaysTheThreeNamesArePositional()
+    {
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("swapping main and other spells another entry, and the line says so:\n" //$NON-NLS-1$
+            + result, result.contains("It is a string, not a set")); //$NON-NLS-1$
     }
 
     // ==================== refused rules and addresses ====================
@@ -878,6 +1282,12 @@ public class MergeRulesToolTest
             }
 
             @Override
+            public String mergeRulesEntryId()
+            {
+                return ENTRY_ID;
+            }
+
+            @Override
             public Optional<List<String>> availableRules(List<String> nodePath)
             {
                 return Optional.empty();
@@ -975,18 +1385,21 @@ public class MergeRulesToolTest
     @Test
     public void testTheRefusalDoesNotClaimNoComparisonIsRunning()
     {
-        // "Nothing answered for this id" has two causes and the refusal may not pick one: the
-        // comparison may be gone, or its tree may still be building - the authority stays silent
-        // on an unfinished tree on purpose. Telling the caller to START one is the reading that
-        // cannot be acted on: EDT runs a single comparison per instance, so a second launch is
-        // refused while the first is still building.
+        // Telling the caller to START one is the reading that cannot be acted on: EDT runs a
+        // single comparison per instance, so a second launch is refused while the first is still
+        // there. This refusal is for the id that ANSWERED NOTHING - the unfinished tree has its
+        // own refusal now, because the address it can still give makes the two different
+        // situations with different actions.
         String result = call(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "comparisonId", "cmp-4", //$NON-NLS-1$ //$NON-NLS-2$
             "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertErrorNaming(result, "cmp-4", "not finished"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorNaming(result, "cmp-4", "nothing answered for it"); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("the refusal must not send the caller to start a comparison that may already " //$NON-NLS-1$
             + "be running: " + result, result.contains("Start one")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("and it must not attribute a cause it did not observe - an unfinished tree " //$NON-NLS-1$
+            + "reaches the other branch, which names itself: " + result, //$NON-NLS-1$
+            result.contains("its tree is not finished")); //$NON-NLS-1$
     }
 
     @Test
@@ -1002,6 +1415,12 @@ public class MergeRulesToolTest
             public String comparisonId()
             {
                 return "cmp-9"; //$NON-NLS-1$
+            }
+
+            @Override
+            public String mergeRulesEntryId()
+            {
+                return ENTRY_ID;
             }
 
             @Override
@@ -1177,11 +1596,262 @@ public class MergeRulesToolTest
         String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertErrorNaming(result, "Retry once the comparison answers", //$NON-NLS-1$
-            "get_comparison_node", "no comparison answers at all"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertErrorNaming(result, "Retry once the comparison answers", "get_comparison_node"); //$NON-NLS-1$ //$NON-NLS-2$
         // The literal, not the constant: what is pinned is the sentence that reaches the caller.
         assertFalse("the refusal must not offer dropping the parameter as the way out: " + result, //$NON-NLS-1$
             result.contains("omit comparisonId")); //$NON-NLS-1$
+    }
+
+    // ======== NOT VALIDATED is TWO states, and no sentence may collapse it to one ========
+    //
+    // EngineRuleAuthority#resolve reads ComparisonSessionRegistry#activeComparisonId whenever the
+    // caller named no id, so an omitted comparisonId does NOT mean "no comparison": it means
+    // "whichever one is running". And the write reports NOT VALIDATED in two different states -
+    // comparison.isEmpty(), and a comparison that answered while answersRules() is false. Every
+    // sentence that named one of the two as the whole of it described a mode the tool lacks.
+    //
+    // One literal per @Test: JUnit abandons a method at its first failed assertion, so a single
+    // method carrying them all would only ever hold the first one down.
+
+    @Test
+    public void testTheFailedCheckRefusalDoesNotSayNotValidatedNeedsNoComparisonAtAll()
+    {
+        MergeRulesTool tool = new MergeRulesTool(new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        }));
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("an unreadable tree also reports NOT VALIDATED, so naming the absence of a " //$NON-NLS-1$
+            + "comparison as the only state it covers is false: " + result, //$NON-NLS-1$
+            result.contains("no comparison answers at all")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheFailedCheckRefusalNamesBothNotValidatedStates()
+    {
+        // The positive half. Without it the pin above would pass on a refusal that had simply
+        // stopped mentioning NOT VALIDATED, leaving the caller with no account of it at all.
+        MergeRulesTool tool = new MergeRulesTool(new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        }));
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the count itself is the fact: " + result, //$NON-NLS-1$
+            result.contains("written in two")); //$NON-NLS-1$
+        assertTrue("state one - nothing answered: " + result, //$NON-NLS-1$
+            result.contains("nothing answered at all")); //$NON-NLS-1$
+        assertTrue("state two - answered, tree unreadable: " + result, //$NON-NLS-1$
+            result.contains("a comparison answered while its tree could not be read")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheFailedCheckRefusalSaysAnOmittedIdResolvesTheRunningComparison()
+    {
+        MergeRulesTool tool = new MergeRulesTool(new EngineRuleAuthority(id -> {
+            throw new IllegalStateException("the comparison tree could not be polled"); //$NON-NLS-1$
+        }));
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("resolve(null) asks the registry for the ACTIVE comparison, and the refusal " //$NON-NLS-1$
+            + "has to say so: " + result, //$NON-NLS-1$
+            result.contains("resolves whichever comparison is RUNNING")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheUnreadableTreeRefusalDoesNotOfferAuthoringFromNamesAlone()
+    {
+        // Dropping the id here lands on the SAME comparison through activeComparisonId - the
+        // write proceeds unvalidated, it does not switch to a names-only mode.
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.zip").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "comparisonId", "cmp-7", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("omitting the id does not author from names alone: " + result, //$NON-NLS-1$
+            result.contains("to author the file from names alone")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheUnreadableTreeRefusalSaysWhatOmittingTheIdActuallyDoes()
+    {
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.zip").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "comparisonId", "cmp-7", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("it writes without validation against the RUNNING comparison: " + result, //$NON-NLS-1$
+            result.contains("resolves whichever comparison is RUNNING")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheMissingIdRefusalDoesNotOfferAuthoringFromNamesAlone()
+    {
+        // Here the named id answered nothing - but another comparison may hold EDT's single slot,
+        // and dropping the id resolves THAT one. "From names alone" is a mode the caller cannot
+        // reach by removing a parameter.
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty());
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "comparisonId", "cmp-gone", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("dropping the id is not a switch into a names-only mode: " + result, //$NON-NLS-1$
+            result.contains("to author the file from names alone")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheMissingIdRefusalSaysAnOmittedIdMayLandOnAnotherComparison()
+    {
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty());
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "comparisonId", "cmp-gone", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the id the registry answers with need not be the one that just failed: " //$NON-NLS-1$
+            + result, result.contains("may be a different one")); //$NON-NLS-1$
+    }
+
+    // ======== the zip entry is addressed by the ENTRY name, not by the file name ========
+
+    @Test
+    public void testTheZipRefusalDoesNotPutTheAddressOnTheFileName()
+    {
+        // EDT reads the ENTRY name; the archive's own file name never reaches the comparison. The
+        // refusal said EDT "IGNORES an archive named anything else", which sends a caller to
+        // rename the file - a change that cannot affect the outcome.
+        String result = call(params("mode", "write", "filePath", file("r.zip").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("the archive's own name is not what EDT matches: " + result, //$NON-NLS-1$
+            result.contains("IGNORES an archive named anything else")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheZipRefusalPutsTheAddressOnTheEntryAndFreesTheFileName()
+    {
+        String result = call(params("mode", "write", "filePath", file("r.zip").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("what is matched is the ENTRY: " + result, //$NON-NLS-1$
+            result.contains("IGNORES an archive whose ENTRY is named anything else")); //$NON-NLS-1$
+        assertTrue("and the file name is explicitly freed, so nobody renames it hoping: " //$NON-NLS-1$
+            + result, result.contains("the name of the FILE itself is yours to choose")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheZipRefusalDoesNotPromiseCheckedRulesWithoutAFinishedTree()
+    {
+        // "re-send this write (naming it with comparisonId if you want the rules checked too)"
+        // promised a checked file for an act that is REFUSED while the tree is still building.
+        String result = call(params("mode", "write", "filePath", file("r.zip").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("naming the id is not on its own enough to get the rules checked: " + result, //$NON-NLS-1$
+            result.contains("if you want the rules checked too")); //$NON-NLS-1$
+        assertTrue("the condition the check actually has is named: " + result, //$NON-NLS-1$
+            result.contains("needs its tree to have FINISHED")); //$NON-NLS-1$
+    }
+
+    // ======== the address-only report claims an address only where one exists ========
+
+    @Test
+    public void testTheAddressOnlyReportOfAnXmlDoesNotClaimItNamedTheFilesAddress()
+    {
+        // An '.xml' document carries no address - the Container line in the very same report says
+        // so, and that is what lets any comparison read it. zipEntryId is null here, so the
+        // sentence about a named address had nothing to name.
+        Path target = file("degraded.xml"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the write still happens, unvalidated: " + result, //$NON-NLS-1$
+            result.contains("NOT VALIDATED")); //$NON-NLS-1$
+        assertFalse("an xml has no address for the comparison to have named: " + result, //$NON-NLS-1$
+            result.contains("It named this file's")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAddressOnlyReportOfAnXmlDoesNotContradictItsOwnContainerLine()
+    {
+        Path target = file("degraded2.xml"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the container line says the document carries no address: " + result, //$NON-NLS-1$
+            result.contains("the document carries no")); //$NON-NLS-1$
+        assertTrue("so the validation line says what was really missing: " + result, //$NON-NLS-1$
+            result.contains("Not one rule was checked against it")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAddressOnlyReportOfAZipStillSaysItGotAnEntry()
+    {
+        // The positive control that keeps the two pins above from passing on a report that had
+        // simply dropped the sentence: a zip DOES get an address, and still says so.
+        Path target = file("addressed.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(addressOnly("cmp-7"))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a zip is addressed by the comparison that answered: " + result, //$NON-NLS-1$
+            result.contains("It named this file's entry, and nothing else")); //$NON-NLS-1$
+    }
+
+    // ======== every promise of checked rules names the FINISHED tree it needs ========
+
+    @Test
+    public void testTheNamesOnlyReportDoesNotPromiseChecksFromAMerelyStartedComparison()
+    {
+        Path target = file("names.xml"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty());
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("starting a comparison is not enough - its tree has to finish: " + result, //$NON-NLS-1$
+            result.contains("Start one with compare_configurations and re-run this write")); //$NON-NLS-1$
+        assertTrue("the wait is part of the instruction: " + result, //$NON-NLS-1$
+            result.contains("wait until get_comparison_node reports its tree finished")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGuideExamplesDoNotOfferValidationWithoutAFinishedTree()
+    {
+        // The guide BODY already carries the three outcomes and the wait; its Examples section did
+        // not, and an example is what a caller copies. The class javadoc's two-run recipe had the
+        // same gap, and a source scan is the only instrument that reaches a javadoc.
+        String guide = new MergeRulesTool().getGuide();
+
+        assertFalse("the example must not offer validation as a bare add-the-id step: " + guide, //$NON-NLS-1$
+            guide.contains("- Validate against a running comparison: add")); //$NON-NLS-1$
+        assertTrue("it names the state validation needs: " + guide, //$NON-NLS-1$
+            guide.contains("Validate against a running comparison whose tree has FINISHED")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheClassJavadocTwoRunRecipeWaitsForAFinishedTree() throws IOException
+    {
+        String source = new String(Files.readAllBytes(sourceFile("tools/impl/MergeRulesTool.java")), //$NON-NLS-1$
+            StandardCharsets.UTF_8);
+
+        assertFalse("the recipe must not go from 'start a comparison' straight to its id", //$NON-NLS-1$
+            source.contains("start a comparison, take its id")); //$NON-NLS-1$
+        assertTrue("it has to name the wait that stands between them", //$NON-NLS-1$
+            source.contains("WAIT until its tree")); //$NON-NLS-1$
     }
 
     // ==================== a key chain addresses the node the platform keys the same way ====================
@@ -1367,6 +2037,12 @@ public class MergeRulesToolTest
         }
 
         @Override
+        public String mergeRulesEntryId()
+        {
+            return ENTRY_ID;
+        }
+
+        @Override
         public Optional<List<String>> availableRules(List<String> nodePath)
         {
             reads++;
@@ -1388,6 +2064,46 @@ public class MergeRulesToolTest
         }
     }
 
+    /**
+     * A comparison that names itself and cannot answer about rules - the shape the production
+     * supplier hands back while the tree is still being built, or while EDT's comparison service
+     * is momentarily away.
+     *
+     * @param id the comparison id
+     * @return the authority
+     */
+    private static MergeRuleAuthority addressOnly(String id)
+    {
+        return new MergeRuleAuthority()
+        {
+            @Override
+            public String comparisonId()
+            {
+                return id;
+            }
+
+            @Override
+            public String mergeRulesEntryId()
+            {
+                return ENTRY_ID;
+            }
+
+            @Override
+            public boolean answersRules()
+            {
+                return false;
+            }
+
+            @Override
+            public Optional<List<String>> availableRules(List<String> nodePath)
+            {
+                // Never consulted; answering empty keeps a caller that lost the guard on the
+                // refusing side rather than on the writing one.
+                return Optional.empty();
+            }
+        };
+    }
+
     private static MergeRuleAuthority authority(String id, List<String> allowed)
     {
         return new MergeRuleAuthority()
@@ -1399,11 +2115,38 @@ public class MergeRulesToolTest
             }
 
             @Override
+            public String mergeRulesEntryId()
+            {
+                return ENTRY_ID;
+            }
+
+            @Override
             public Optional<List<String>> availableRules(List<String> nodePath)
             {
                 return Optional.of(allowed);
             }
         };
+    }
+
+    /**
+     * Every entry name in an archive, in the order its directory lists them.
+     *
+     * @param zip the archive
+     * @return the names
+     * @throws IOException when the archive cannot be read
+     */
+    private static List<String> zipEntryNames(Path zip) throws IOException
+    {
+        List<String> names = new ArrayList<>();
+        try (ZipFile file = new ZipFile(zip.toFile()))
+        {
+            Enumeration<? extends ZipEntry> entries = file.entries();
+            while (entries.hasMoreElements())
+            {
+                names.add(entries.nextElement().getName());
+            }
+        }
+        return names;
     }
 
     private void assertRefusedRule(String rule)

@@ -194,6 +194,26 @@ public class GetComparisonNodeTool implements IMcpTool
         ComparisonNodeStatus topNodeStatus(long topNodeId);
 
         /**
+         * Whether this comparison covers the WHOLE configuration rather than a scope.
+         * <p>
+         * It exists because the scope's exclusion is INVISIBLE from a node - the flags of an
+         * object whose features were never compared read exactly like the flags of one that was
+         * compared and found equal - so a document that did not carry this fact reported the
+         * second when it had observed the first. What is carried is the RUN's own answer and
+         * nothing narrower: no reading of the tree reproduces the platform's per-object exclusion
+         * predicate, see {@link ComparisonNodeRenderer.ContentCoverage}. The classification into
+         * the rendered coverage is done by the TOOL, from this boolean, so that it is exercised by
+         * the tool's own tests rather than supplied ready-made by a fake.
+         * <p>
+         * It sits on this interface for the same reason {@link #topNodeStatus(long)} does: it is
+         * asked of the session inside the boundary that renders, so the document describes one
+         * comparison at one moment.
+         *
+         * @return {@code true} when the run compared the whole configuration
+         */
+        boolean wholeConfigurationRun();
+
+        /**
          * The status of the WHOLE tree, read off its root node.
          * <p>
          * It exists for exactly one question, and it is a question about evidence: when an address
@@ -421,8 +441,11 @@ public class GetComparisonNodeTool implements IMcpTool
             {
                 return null;
             }
+            // Read in the SAME boundary as the node and its status, so the three cannot describe
+            // different moments of the same comparison.
             ComparisonNodeRenderer.Request request = new ComparisonNodeRenderer.Request(comparisonId,
-                address, side, access.topNodeStatus(located.statusNodeId), depth, limit, null);
+                address, side, access.topNodeStatus(located.statusNodeId), depth, limit, null,
+                ComparisonNodeRenderer.ContentCoverage.ofRun(access.wholeConfigurationRun()));
             return ComparisonNodeRenderer.render(request, node, access);
         });
         if (markdown == null)
@@ -438,8 +461,9 @@ public class GetComparisonNodeTool implements IMcpTool
      * <h2>Why it does not simply spend the budget</h2>
      * Retrying is for ONE reason: the tree is built lazily, so an address that answers nothing
      * right after a launch is usually a node the engine has not reached yet. Once the tree reports
-     * itself FINISHED there is no later node - a wrong FQN, a node id from another comparison, an
-     * address outside the scope, all of which are ordinary ways to call this tool - and the loop
+     * itself FINISHED there is no later node - a wrong FQN, a node id from another comparison, a
+     * name that exists only on the other side, all of which are ordinary ways to call this tool -
+     * and the loop
      * was still sleeping out the whole of {@code waitSeconds} to produce the answer it already
      * had. A refusal is not worth more for being slow.
      *
@@ -795,14 +819,47 @@ public class GetComparisonNodeTool implements IMcpTool
         return ComparisonFailures.noKnownComparisonsText(source.edtHasActiveComparison());
     }
 
+    /**
+     * The refusal for an address the comparison MATCHED nothing under.
+     *
+     * <h2>Why the scope is not offered as the reason</h2>
+     * It used to lead with "the object may be outside the comparison scope", and that contradicts
+     * what this tool now promises: a scope does not narrow the TREE, so an object outside it is
+     * still matched and still answered - with the run's coverage notice on top. Absence therefore
+     * means the comparison has no MATCHED node under this name on this side, and the reasons that
+     * really produce it are the addressed side and the spelling. The one scope-shaped case left is
+     * a node the engine builds only under an object whose content was compared, and it is named as
+     * that - a node BELOW an object - rather than generalised to any object outside the scope.
+     *
+     * <h2>What the report it sends the caller to actually lists</h2>
+     * TOP-level nodes, and only as many of them as its own parameters let through:
+     * {@code ComparisonTreeReport} accepts a {@code TopComparisonNode} alone, {@code changedOnly}
+     * drops the identical ones and {@code limit} cuts the rest. So the sentence names that, and
+     * does not offer it as a full index of everything the run compared - an address absent from a
+     * filtered page is not an address the comparison lacks, and a refusal that implied otherwise
+     * would turn its own advice into a second false verdict.
+     *
+     * @param comparisonId the comparison id
+     * @param objectFqn the address as the caller spelled it
+     * @param symlink the canonicalised address, when it differs
+     * @return the refusal
+     */
     private static String unknownObjectError(String comparisonId, String objectFqn, String symlink)
     {
         String canonicalNote = symlink != null && !symlink.equals(objectFqn)
             ? " (canonicalised to '" + symlink + "')" : ""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        return ToolResult.error("Comparison '" + comparisonId + "' has no node for objectFqn '" //$NON-NLS-1$ //$NON-NLS-2$
-            + objectFqn + "'" + canonicalNote + ". The object may be outside the comparison scope, " //$NON-NLS-1$ //$NON-NLS-2$
-            + "may not exist on that side, or the FQN may be misspelled. The compare_configurations " //$NON-NLS-1$
-            + "report lists every node it compared, with its nodeId.").toJson(); //$NON-NLS-1$
+        return ToolResult.error("Comparison '" + comparisonId //$NON-NLS-1$
+            + "' has no matched node under objectFqn '" + objectFqn + "'" + canonicalNote //$NON-NLS-1$ //$NON-NLS-2$
+            + " on the addressed side. The object may not exist on that side - try the other " //$NON-NLS-1$
+            + "`side`, since a renamed object is reachable under its own side's name - or the FQN " //$NON-NLS-1$
+            + "may be misspelled. Being outside a `scope` is NOT a reason: a scoped run still " //$NON-NLS-1$
+            + "matches every object and this tool still answers for it, saying that the run " //$NON-NLS-1$
+            + "excluded content outside the scope. What a scope does remove is the nodes BELOW " //$NON-NLS-1$
+            + "such an object that the engine builds only from compared content. The " //$NON-NLS-1$
+            + "compare_configurations report lists the TOP-level nodes with their nodeId, as " //$NON-NLS-1$
+            + "far as its own `changedOnly` and `limit` let through - it is not a full index of " //$NON-NLS-1$
+            + "what the run compared.") //$NON-NLS-1$
+            .toJson();
     }
 
     /**
@@ -1102,8 +1159,15 @@ public class GetComparisonNodeTool implements IMcpTool
      * and it IS released when that read ends - see {@link GetComparisonNodeTool#runThenRelease},
      * which records why closing this particular context cannot reach the boundary's own
      * transaction.</p>
+     *
+     * <p>Package-visible so a test can build one over a scripted {@link ComparisonView}. It was
+     * private, and a mutation measured what that cost: replacing
+     * {@link #wholeConfigurationRun()}'s body with {@code return true} - which makes every scoped
+     * comparison report that content was compared everywhere - left the whole suite green, because
+     * nothing could reach this class to exercise it. The classification it feeds is covered
+     * elsewhere; this is the link that carries the platform's answer INTO it.</p>
      */
-    private static final class ViewTreeAccess
+    static final class ViewTreeAccess
         implements TreeAccess
     {
         private final ComparisonView view;
@@ -1131,6 +1195,18 @@ public class GetComparisonNodeTool implements IMcpTool
         public ComparisonNodeStatus topNodeStatus(long topNodeId)
         {
             return view.topNodeStatus(topNodeId);
+        }
+
+        @Override
+        public boolean wholeConfigurationRun()
+        {
+            // The session's OWN saved answer, computed once in its constructor - the same value
+            // that decided mergeObjectsContent at launch. It used to ask view.inScope(node) as
+            // well, to narrow the claim to this node; that predicate answers a DIFFERENT question
+            // from the one the exclusion is decided by and was wrong in both directions, so the
+            // node is no longer consulted at all. The reasoning is in
+            // ComparisonNodeRenderer.ContentCoverage.
+            return view.isGlobalScope();
         }
 
         @Override

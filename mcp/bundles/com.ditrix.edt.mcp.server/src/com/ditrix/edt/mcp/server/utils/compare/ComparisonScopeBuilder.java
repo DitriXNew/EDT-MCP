@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Set;
 
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
+import com._1c.g5.v8.dt.compare.model.ComparisonSide;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -203,6 +204,55 @@ public final class ComparisonScopeBuilder
         ComparisonScope scope = new ComparisonScope(new ArrayList<>(symlinks), new ArrayList<>(symlinks),
             new ArrayList<>(symlinks));
         return new Scoping(scope, symlinks, null);
+    }
+
+    /**
+     * Whether a scope object is the one the engine would read as COMPARE EVERYTHING - asked
+     * BEFORE the comparison session is constructed.
+     *
+     * <h2>The predicate is the platform's, and so is the accessor</h2>
+     * Reproduced from {@code ComparisonSession.computeIsGlobalScope}: true exactly when every
+     * {@link ComparisonSide}'s list is null or empty, read through {@code ComparisonScope.getScope}
+     * - the same accessor the session reads. It used to ask {@code getInputScope} instead, which
+     * is the same list only while {@code extendScope} has not been called: a scope built empty and
+     * then extended before the session existed would be called global here and scoped by the
+     * platform, and the {@code mergeObjectsContent} setting derived from it would be the opposite
+     * of what the run needed. Answering through the platform's own accessor removes the
+     * disagreement instead of documenting it.
+     *
+     * <h2>PRECONDITION: ask it before the launch, then REMEMBER the answer</h2>
+     * {@code getScope} grows while the comparison runs - the engine pulls dependencies in through
+     * {@code extendScope} - so this predicate is not stable across a run, and it is not the
+     * question a report asks afterwards. The session computes its own answer ONCE, in its
+     * constructor, and keeps it; a report must read THAT saved value
+     * ({@code ComparisonView.isGlobalScope}) rather than recompute from the scope object, or a
+     * whole-configuration run whose scope the engine extended would be described as a scoped one.
+     * This method is therefore a PRE-LAUNCH predicate only.
+     *
+     * <h2>Not the same question as {@link Scoping#isGlobal()}</h2>
+     * That one says the CALLER supplied no scope; this one says the ENGINE will compare
+     * everything. They agree today, because a supplied scope is never built empty (see the class
+     * javadoc), and they are still different facts about different objects.
+     *
+     * @param scope the scope about to be handed to a comparison handle; {@code null} is how this
+     *     builder spells the whole-configuration case, so it answers {@code true}
+     * @return {@code true} when the comparison covers the whole configuration
+     */
+    public static boolean isGlobalScope(ComparisonScope scope)
+    {
+        if (scope == null)
+        {
+            return true;
+        }
+        for (ComparisonSide side : ComparisonSide.values())
+        {
+            List<String> effective = scope.getScope(side);
+            if (effective != null && !effective.isEmpty())
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

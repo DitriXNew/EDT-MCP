@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamConstants;
@@ -43,15 +44,23 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
 /**
  * Reads and writes EDT's merge-settings file into / out of {@link MergeRulesDocument}.
  * <p>
- * <b>Reading accepts both containers the platform accepts.</b>
- * {@code IComparisonManager.deserializeMergeSettings} asserts the name ends in {@code .xml} or
- * {@code .zip}; the xml form is parsed directly, and the zip form is a container the comparison
- * editor saves, one entry per comparison. NOTE the trap measured in that same method: the
- * platform picks the zip entry whose name (minus extension) equals
+ * <b>WHICH CONTAINER THE PLATFORM READS DEPENDS ON THE EDT VERSION, and only the zip is read by
+ * both.</b> Measured from the bytecode of {@code ComparisonManager.deserializeMergeSettings}: in
+ * {@code com._1c.g5.v8.dt.compare} 28.0.1 (EDT 2026.1.2) it opens with the assertion
+ * {@code May read merge settings from a xml-file or zip-file} and then branches on the extension;
+ * in 29.0.0 (EDT 2026.2.0) the xml branch is GONE - the method opens with
+ * {@code Assert.isTrue("zip".equals(FileUtil.getExtension(path)), "Can read merge settings from a zip file")}
+ * and the whole class carries no {@code .xml} literal any more. So a {@code .xml} rules file is
+ * read by 2026.1 and refused outright by 2026.2, while a {@code .zip} is read by both. READING
+ * here accepts either, because either is a file somebody's EDT wrote.
+ * <p>
+ * <b>Writing a zip needs the comparison's own id, and this codec never invents one.</b> The
+ * platform picks the entry whose name (minus its extension) equals
  * {@code <mainProject>_<otherProject>_<ancestorProject>} and merely LOGS A WARNING when no entry
- * matches - i.e. a zip whose entry is named anything else is silently ignored by EDT. That is
- * why this codec reads a zip but writes only xml: an entry name that would actually be picked up
- * is knowable only from a live comparison.
+ * matches - a zip whose entry is named anything else is silently ignored by EDT, decisions and
+ * all. {@link #writeZip} therefore takes that id as an ARGUMENT: it is knowable only from a live
+ * comparison ({@code ComparisonEngine.mergeRulesEntryId}), so a caller that cannot supply it has
+ * to write {@code .xml} or refuse - never guess. {@link #write} writes the bare xml document.
  * <p>
  * <b>Writing is canonical and total.</b> The serializer emits every element, attribute and text
  * value the document holds, in the order it holds them, with a fixed layout (UTF-8, LF, two-space
@@ -352,7 +361,12 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Writes a document as UTF-8 xml, creating the parent directories when needed.
+     * Writes a document as a bare UTF-8 xml file, creating the parent directories when needed.
+     * <p>
+     * <b>That container is read by EDT 2026.1 and refused by 2026.2</b>, which reads a zip alone;
+     * {@link #writeZip} produces the one both read. Which to write is the caller's decision,
+     * because only the caller knows whether the comparison the file is for can be named at all -
+     * see this class's javadoc.
      * <p>
      * The bytes land in a sibling temporary file that is then moved over the target, so an
      * update-in-place (reading a file and writing it back) cannot leave a half-written file
@@ -408,6 +422,62 @@ public final class MergeRulesCodec
     public static void write(Path file, MergeRulesDocument document, Target target)
         throws IOException
     {
+        write(file, document, target, null);
+    }
+
+    /**
+     * Writes a document as the single-entry zip EDT restores ONE comparison's decisions from.
+     * <p>
+     * Everything about the write - the temporary, the reservation, the inherited permissions, the
+     * atomic move - is {@link #write(Path, MergeRulesDocument, Target)}'s, and only the BYTES
+     * differ. What is added is the ADDRESS: the entry is named {@code <entryId>.xml}, and EDT
+     * restores from it only when {@code entryId} equals the launching comparison's own
+     * {@code <mainProject>_<otherProject>_<ancestorProject>}. An entry named anything else is
+     * skipped with a log warning and the launch proceeds with NO decisions, so this method exists
+     * to be handed a measured id rather than to derive one - a wrong id produces a file that looks
+     * written and does nothing.
+     * <p>
+     * The entry's EXTENSION is free ({@code removeExtension} strips it before the match) and is
+     * {@code .xml} anyway, because that is what {@code ComparisonManager.serializeMergeSettings}
+     * writes and there is no reason for this archive to look different from EDT's own.
+     *
+     * @param file the target file, normally named {@code .zip}
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param entryId the comparison id the entry is named after, without an extension; never
+     *     {@code null} or blank
+     * @throws IllegalArgumentException when {@code entryId} is absent - a zip with a made-up entry
+     *     name is the silent no-op this class exists to prevent, so it cannot be produced here
+     * @throws FileAlreadyExistsException when {@code target} is {@link Target#MUST_NOT_EXIST} and
+     *     something is already on the path
+     * @throws IOException when the file cannot be written
+     */
+    public static void writeZip(Path file, MergeRulesDocument document, Target target, String entryId)
+        throws IOException
+    {
+        if (entryId == null || entryId.isBlank())
+        {
+            throw new IllegalArgumentException(
+                "A zipped merge-rules file is addressed by the entry name the comparison looks " //$NON-NLS-1$
+                    + "for, and none was supplied. EDT ignores an archive whose entry is named " //$NON-NLS-1$
+                    + "anything else, so no name can be invented here."); //$NON-NLS-1$
+        }
+        write(file, document, target, entryId);
+    }
+
+    /**
+     * The shared write. {@code zipEntryId} picks the container: {@code null} writes the bare xml
+     * document, a name writes a one-entry zip carrying it.
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param zipEntryId the zip entry's name without its extension, or {@code null} for bare xml
+     * @throws IOException when the file cannot be written
+     */
+    private static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId)
+        throws IOException
+    {
         Path resolved = followSymbolicLink(file.toAbsolutePath());
         Path parent = resolved.getParent();
         if (parent == null)
@@ -442,7 +512,7 @@ public final class MergeRulesCodec
             // own name so a leftover is traceable to the write that left it.
             temporary = Files.createTempFile(parent, resolved.getFileName().toString() + '.',
                 ".tmp"); //$NON-NLS-1$
-            Files.write(temporary, serialize(document).getBytes(StandardCharsets.UTF_8));
+            Files.write(temporary, bodyOf(document, zipEntryId));
             // Before the move, never after: after it there is a window in which the file on the
             // caller's path is readable by its owner alone, and a reader that lost the race gets a
             // permission error on a file that is about to be perfectly readable.
@@ -472,6 +542,40 @@ public final class MergeRulesCodec
             }
             throw e;
         }
+    }
+
+    /**
+     * The bytes that land on disk: the serialized document, or that document inside the single zip
+     * entry a comparison restores from.
+     * <p>
+     * Assembled in memory rather than streamed into the temporary, and that is not laziness: the
+     * serializer already builds the whole text as one {@code String}, so the archive costs one
+     * more copy of a document this class bounds at {@link #MAX_DOCUMENT_BYTES} on the way in -
+     * against a partially written archive if the assembly threw half way through the file.
+     *
+     * @param document the document to write
+     * @param zipEntryId the zip entry's name without its extension, or {@code null} for bare xml
+     * @return the file's content
+     * @throws IOException when the archive cannot be assembled
+     */
+    private static byte[] bodyOf(MergeRulesDocument document, String zipEntryId) throws IOException
+    {
+        byte[] xml = serialize(document).getBytes(StandardCharsets.UTF_8);
+        if (zipEntryId == null)
+        {
+            return xml;
+        }
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(bytes))
+        {
+            // '<id>.xml', exactly as ComparisonManager.serializeMergeSettings names it. The reader
+            // strips the extension before matching, so the extension itself is free - the STEM is
+            // the address, and it is the caller's, not this method's.
+            zip.putNextEntry(new ZipEntry(zipEntryId + XML_EXTENSION));
+            zip.write(xml);
+            zip.closeEntry();
+        }
+        return bytes.toByteArray();
     }
 
     /**
@@ -753,24 +857,45 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Whether a path names the zipped form.
+     * Whether a path names the zipped form, for THIS codec's own reading.
+     * <p>
+     * Case-INSENSITIVE, and deliberately not the same rule as
+     * {@link #hasReadableExtension(Path)}. This one decides how to open a file somebody already
+     * has; that one decides whether the PLATFORM will accept the name, and the platform compares
+     * the extension with {@code String.equals}. Reading {@code RULES.ZIP} costs nothing and helps
+     * a caller who renamed a file; writing one would produce an archive EDT never opens.
      *
      * @param file the path
      * @return {@code true} when the file name ends with {@code .zip}, case-insensitively
      */
     public static boolean isZip(Path file)
     {
-        String name = fileName(file);
+        String name = lowerCaseFileName(file);
         return name != null && name.endsWith(ZIP_EXTENSION);
     }
 
     /**
-     * Whether a path's NAME carries an extension the platform's own merge-settings reader accepts.
+     * Whether a path's NAME carries an extension SOME supported EDT's merge-settings reader
+     * accepts - the wider of the two VERSION rules, and the exact one on spelling.
      * <p>
-     * The rule is the platform's, not ours, and it is a rule about the NAME:
-     * {@code IComparisonManager.deserializeMergeSettings} asserts that the file it is handed ends
-     * in {@code .xml} or {@code .zip} and reads nothing otherwise. That is why the question is
-     * answered here, next to the two extensions and the reader that honours them, instead of
+     * The rule is the platform's, not ours, and it is a rule about the NAME. It is
+     * VERSION-DEPENDENT: {@code deserializeMergeSettings} accepts {@code .xml} or {@code .zip} on
+     * EDT 2026.1 and {@code .zip} ALONE on 2026.2 (this class's javadoc quotes both assertions).
+     * What is answered here is the UNION of the versions, so a pre-flight check built on it
+     * refuses only what neither version could ever read; a {@code .xml} it accepts still fails
+     * inside a 2026.2 launch, loudly, with the platform's own assertion text.
+     * <p>
+     * <b>It is CASE-SENSITIVE, because the platform's own test is.</b> 2026.2 asserts
+     * {@code "zip".equals(FileUtil.getExtension(path))} and 2026.1 branches on the extension the
+     * same way - {@code String.equals}, not {@code equalsIgnoreCase} - so {@code rules.ZIP} is a
+     * name neither reader accepts. Answering {@code true} for it here let a write produce a
+     * perfectly valid archive the platform then refused, which is a file reported as written and
+     * usable while being neither. This is deliberately NARROWER than {@link #isZip(Path)}: that
+     * one decides how to open a file we already have, this one decides what the PLATFORM will
+     * take, and mixing our reading convenience into the platform's contract is what produced the
+     * defect.
+     * <p>
+     * Answered here, next to the two extensions and the reader that honours them, instead of
      * being spelled out again by every tool that hands the platform a path - a second copy of a
      * rule somebody else owns is a copy that goes out of date silently.
      * <p>
@@ -779,12 +904,12 @@ public final class MergeRulesCodec
      * ask all of them.
      *
      * @param file the path
-     * @return {@code true} when the file name ends with {@code .xml} or {@code .zip},
-     *         case-insensitively
+     * @return {@code true} when the file name ends with {@code .xml} or {@code .zip}, spelled in
+     *         lower case exactly as the platform's reader compares it
      */
     public static boolean hasReadableExtension(Path file)
     {
-        String name = fileName(file);
+        String name = rawFileName(file);
         return name != null && (name.endsWith(XML_EXTENSION) || name.endsWith(ZIP_EXTENSION));
     }
 
@@ -792,13 +917,158 @@ public final class MergeRulesCodec
      * @param file the path
      * @return the lower-cased file name, or {@code null} when the path names none
      */
-    private static String fileName(Path file)
+    private static String lowerCaseFileName(Path file)
+    {
+        String name = rawFileName(file);
+        return name == null ? null : name.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * @param file the path
+     * @return the file name exactly as spelled, or {@code null} when the path names none
+     */
+    private static String rawFileName(Path file)
     {
         if (file == null || file.getFileName() == null)
         {
             return null;
         }
-        return file.getFileName().toString().toLowerCase(Locale.ROOT);
+        return file.getFileName().toString();
+    }
+
+    /**
+     * Looks in a zipped merge-rules archive for the entry ONE comparison would restore from, and
+     * says what the archive holds instead when there is none.
+     *
+     * <h2>Why the question exists</h2>
+     * A zip of merge settings is not one document but a BAG of them, one per comparison, and EDT
+     * restores the single entry that belongs to the comparison being launched. Measured from
+     * {@code ComparisonManager.deserializeMergeSettingsFromZipFile} - byte for byte the same
+     * method in {@code com._1c.g5.v8.dt.compare} 28.0.1 (EDT 2026.1.2) and 29.0.0 (EDT 2026.2.0):
+     * the archive is walked, each entry name is put through
+     * {@code com._1c.g5.v8.dt.common.StringUtils.removeExtension} and compared with
+     * {@code String.equals} against the comparison's own id, and an archive with NO matching entry
+     * produces a logged warning and a {@code null}. The launch then proceeds with no decisions at
+     * all - nothing is thrown, and the caller is told nothing. That is the case this lookup exists
+     * to turn into an answer.
+     *
+     * <h2>The matching rule is the platform's, spelled out</h2>
+     * {@code removeExtension} keeps the part after the last {@code /} or {@code \} and drops
+     * everything from the last {@code .} of THAT part, so {@code saved/A_B_C.xml},
+     * {@code A_B_C.zip} and a bare {@code A_B_C} all reduce to {@code A_B_C} - while
+     * {@code A_B_C.old.xml} reduces to {@code A_B_C.old} and does not match. The comparison is
+     * {@code equals}, so it is CASE-SENSITIVE.
+     *
+     * <h2>The walk is unbounded here, and the accumulation is not</h2>
+     * {@link #readZip} bounds its walk because it keeps a name per entry. This answer has to agree
+     * with the platform's, and the platform walks every entry, so a bound would turn a large
+     * archive into "cannot say" - which is the silent outcome this exists to remove. What costs
+     * memory is the names kept for the message, and those stop at {@link #MAX_LISTED_ZIP_ENTRIES}.
+     *
+     * @param file the archive to look in
+     * @param entryId the id this comparison will look for, already without an extension
+     * @return what the archive holds
+     * @throws IOException when the archive cannot be opened or read
+     */
+    public static ZipEntryLookup lookUpEntry(Path file, String entryId) throws IOException
+    {
+        try (ZipFile zip = new ZipFile(file.toFile()))
+        {
+            boolean found = false;
+            List<String> kept = new ArrayList<>();
+            int total = 0;
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements())
+            {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                // Directory entries are counted and compared like any other, because the
+                // platform's own walk does not skip them: a lookup that did could answer "absent"
+                // where EDT answers "found", and a false refusal is worse than the silence.
+                total++;
+                if (kept.size() < MAX_LISTED_ZIP_ENTRIES)
+                {
+                    kept.add(name);
+                }
+                if (removeExtension(name).equals(entryId))
+                {
+                    found = true;
+                }
+            }
+            return new ZipEntryLookup(found, kept, total);
+        }
+    }
+
+    /**
+     * {@code com._1c.g5.v8.dt.common.StringUtils.removeExtension}, reproduced from its bytecode.
+     * <p>
+     * Reproduced rather than called: that class is EDT's, this codec is the plugin's own reader
+     * and is unit-tested without a workbench. The three steps are the platform's exactly - the
+     * separator taken as {@code max(lastIndexOf('/'), lastIndexOf('\\'))}, the base as everything
+     * after it, and the extension as everything from the base's LAST {@code .}.
+     *
+     * @param name a zip entry name
+     * @return the name a comparison id is matched against
+     */
+    private static String removeExtension(String name)
+    {
+        String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
+        int dot = base.lastIndexOf('.');
+        return dot < 0 ? base : base.substring(0, dot);
+    }
+
+    /**
+     * What {@link MergeRulesCodec#lookUpEntry} saw in one archive.
+     * <p>
+     * Two facts, kept apart on purpose: whether the entry a comparison will look for is THERE, and
+     * what the archive holds if it is not. The second is the only thing that lets a refusal say
+     * something a caller can act on - "a zip of somebody else's comparison" and "a zip of the
+     * wrong kind entirely" look identical without it.
+     */
+    public static final class ZipEntryLookup
+    {
+        private final boolean found;
+
+        private final List<String> kept;
+
+        private final int total;
+
+        private ZipEntryLookup(boolean found, List<String> kept, int total)
+        {
+            this.found = found;
+            this.kept = kept;
+            this.total = total;
+        }
+
+        /**
+         * @return whether an entry the comparison will pick up is in the archive
+         */
+        public boolean found()
+        {
+            return found;
+        }
+
+        /**
+         * Names what the archive holds, for a refusal that has to say what was there instead.
+         * <p>
+         * Bounded the same way {@link MergeRulesCodec#listEntries} is bounded, and for the same
+         * reason: past {@link MergeRulesCodec#MAX_LISTED_ZIP_ENTRIES} names the rest is COUNTED,
+         * so a huge archive costs a sentence rather than a page.
+         *
+         * @return the entry names, or {@code it is empty} when there are none
+         */
+        public String describeContents()
+        {
+            if (total == 0)
+            {
+                return "it is empty"; //$NON-NLS-1$
+            }
+            if (total <= kept.size())
+            {
+                return String.join(", ", kept); //$NON-NLS-1$
+            }
+            return String.join(", ", kept) + " and " + (total - kept.size()) + " more"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
     }
 
     private static MergeRulesDocument readZip(Path file) throws IOException, MergeRulesFormatException

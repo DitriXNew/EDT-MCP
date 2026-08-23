@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.core.PotentialMergeProblemDescription;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
@@ -35,6 +36,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -342,6 +344,110 @@ public class GetComparisonNodeToolTest
             message.contains("may not exist on that side")); //$NON-NLS-1$
         assertFalse("and must not blame a tree that has finished: " + message, //$NON-NLS-1$
             message.contains("still being built")); //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal may not offer the SCOPE as a reason, because this tool now promises the
+     * opposite: a scope does not narrow the tree, so an object outside it is still matched and
+     * still answered - with the run's coverage notice on top. The old wording ("the object may be
+     * outside the comparison scope") sent the caller to widen a scope that was never the cause and
+     * contradicted the document they would have got.
+     */
+    @Test
+    public void testTheAbsentAddressRefusalDoesNotBlameTheScope()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Nonexistent", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("the scope is not a reason for an absent node: " + message, //$NON-NLS-1$
+            message.contains("may be outside the comparison scope")); //$NON-NLS-1$
+        assertTrue("and the refusal says so, so nobody re-adds it: " + message, //$NON-NLS-1$
+            message.contains("Being outside a `scope` is NOT a reason")); //$NON-NLS-1$
+    }
+
+    /**
+     * What absence DOES mean is named: no MATCHED node under that name on the side that was
+     * addressed. The other side is the actionable half - a renamed object is reachable under its
+     * own side's name - so it is offered.
+     */
+    @Test
+    public void testTheAbsentAddressRefusalNamesTheReasonsThatProduceIt()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Nonexistent", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("absence is about MATCHING, and the refusal says so: " + message, //$NON-NLS-1$
+            message.contains("has no matched node")); //$NON-NLS-1$
+        assertTrue("the other side is the actionable half: " + message, //$NON-NLS-1$
+            message.contains("try the other `side`")); //$NON-NLS-1$
+        assertTrue("and the one scope-shaped case is named as itself: " + message, //$NON-NLS-1$
+            message.contains("the nodes BELOW")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGuideDoesNotPromiseAFullIndexOfComparedNodesEither()
+    {
+        // The refusal's own sentence is pinned below; this is its mirror in the guide, which is
+        // what a caller reads before ever hitting the refusal.
+        assertFalse("the guide may not describe the report as a full index", //$NON-NLS-1$
+            new GetComparisonNodeTool(new StubSource()).getGuide()
+                .contains("every node the run actually compared")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGuideSaysWhatTheReportActuallyLists()
+    {
+        assertTrue("the positive control: the guide still names the report and what is on it", //$NON-NLS-1$
+            new GetComparisonNodeTool(new StubSource()).getGuide()
+                .contains("lists the TOP-level nodes with their nodeId")); //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal sends the caller to the {@code compare_configurations} report, so it may not
+     * describe that report as something it is not. {@code ComparisonTreeReport.Collector} accepts
+     * a {@code TopComparisonNode} alone, drops the identical rows under {@code changedOnly} and
+     * cuts the rest at {@code limit} - so "lists every node it compared" turned the way out into
+     * a second false verdict: an address missing from a filtered page would read as an address
+     * the comparison does not hold.
+     */
+    @Test
+    public void testTheAbsentAddressRefusalDoesNotPromiseAFullIndexOfComparedNodes()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Nonexistent", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("the report is not a full index of what the run compared: " + message, //$NON-NLS-1$
+            message.contains("every node it compared")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAbsentAddressRefusalSaysWhatTheReportActuallyLists()
+    {
+        // The positive half: without it the pin above would pass on a refusal that had simply
+        // stopped naming the report at all, which would take the way out away.
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.FINISHED;
+
+        String message = errorMessage(call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Nonexistent", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("what the report holds is TOP-level nodes: " + message, //$NON-NLS-1$
+            message.contains("TOP-level nodes")); //$NON-NLS-1$
+        assertTrue("and its own two filters are named, because they decide what is on it: " //$NON-NLS-1$
+            + message, message.contains("`changedOnly` and `limit`")); //$NON-NLS-1$
     }
 
     /**
@@ -869,6 +975,14 @@ public class GetComparisonNodeToolTest
         private int statusReadsOutsideTheBoundary;
         private int reads;
         private boolean insideRead;
+        /**
+         * The session's own answer about the RUN: whole configuration, or a scope. This is a
+         * platform FACT and not a verdict - the fake supplies it, and the tool does the
+         * classifying, so the classification is what these tests exercise.
+         */
+        private boolean wholeConfigurationRun = true;
+        /** Whether the run fact was asked for inside the read boundary, like every other read. */
+        private int coverageReadsOutsideTheBoundary;
 
         @Override
         public boolean isKnown(String comparisonId)
@@ -1006,10 +1120,138 @@ public class GetComparisonNodeToolTest
         }
 
         @Override
+        public boolean wholeConfigurationRun()
+        {
+            if (!source.insideRead)
+            {
+                source.coverageReadsOutsideTheBoundary++;
+            }
+            return source.wholeConfigurationRun;
+        }
+
+        @Override
         public List<PotentialMergeProblemDescription> potentialProblems(long nodeId)
         {
             return Collections.emptyList();
         }
+    }
+
+    // ============ the run's scope reaches the document, or it is invisible ============
+    //
+    // These drive the CLASSIFIER, not a ready answer: the fake supplies only the platform fact
+    // (whole configuration or not) and the tool turns it into the rendered coverage. Before that
+    // split, the fake handed over a finished ContentCoverage and the decision itself was covered
+    // by nothing at all.
+
+    /**
+     * A scoped comparison excludes the own features of every object outside the scope - per
+     * feature, sparing the containment-many collections of {@code MdObject}s - so such an object's
+     * flags read exactly like those of an object compared on all of them and found equal. The tool
+     * holds the only place that knows the run was scoped - the session - and used to hand the
+     * renderer nothing about it.
+     */
+    @Test
+    public void testAScopedRunIsReportedAsScopedRatherThanAsCompared()
+    {
+        StubSource source = knownSource();
+        source.wholeConfigurationRun = false;
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$
+            "Catalog.Products")); //$NON-NLS-1$
+
+        assertTrue("the document must carry what only the session knows: " + result, //$NON-NLS-1$
+            result.contains(ComparisonNodeRenderer.SCOPED_RUN_NOTICE));
+    }
+
+    /** The control: a whole-configuration run says nothing about an exclusion that never applied. */
+    @Test
+    public void testAWholeConfigurationRunCarriesNoScopeNotice()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$
+            "Catalog.Products")); //$NON-NLS-1$
+
+        assertFalse("nothing was excluded, so nothing may be claimed: " + result, //$NON-NLS-1$
+            result.contains(ComparisonNodeRenderer.SCOPED_RUN_NOTICE));
+    }
+
+    /**
+     * The scoped-run notice describes the RUN and explicitly refuses to place THIS node on either
+     * side of the scope line. Pinned here and not only in the renderer test, because the sentence
+     * is the whole reason the per-node verdict was withdrawn: no reading of the comparison tree
+     * reproduces the platform's exclusion predicate.
+     */
+    @Test
+    public void testTheScopedRunNoticeDoesNotClaimThisNodeWasExcluded()
+    {
+        StubSource source = knownSource();
+        source.wholeConfigurationRun = false;
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$
+            "Catalog.Products")); //$NON-NLS-1$
+
+        assertTrue("the answer must say the node's own placement is NOT stated: " + result, //$NON-NLS-1$
+            result.contains("is not stated here")); //$NON-NLS-1$
+        assertFalse("and must not assert that this node is outside the scope: " + result, //$NON-NLS-1$
+            result.contains("this node is outside the")); //$NON-NLS-1$
+    }
+
+    /**
+     * The PRODUCTION adapter, over a scripted session - the link between the platform's answer and
+     * the classification everything above drives through a fake.
+     *
+     * <h2>Why this exists as its own test</h2>
+     * A mutation measured the hole it fills: replacing the adapter's body with {@code return true},
+     * which makes every scoped comparison report that content was compared everywhere, left all
+     * 6206 tests green. The stub {@code TreeAccess} above answers for the tool, and
+     * {@code ComparisonViewTest} answers for the view, but nothing joined the two, so the one line
+     * that carries the session's answer into the document was covered by neither. Both directions
+     * are pinned, because only one of them is a lie a caller can act on.
+     *
+     * @param globalScope what the session answers about the run
+     * @return the adapter's answer
+     */
+    private static boolean adapterOverSessionSaying(boolean globalScope)
+    {
+        IComparisonSession session = mock(IComparisonSession.class);
+        when(session.isGlobalScope()).thenReturn(globalScope);
+        // The handle and the context are untouched by this reader, and null says so: a fake for
+        // either would suggest the answer might come from it.
+        return new GetComparisonNodeTool.ViewTreeAccess(new ComparisonView(null, session), null)
+            .wholeConfigurationRun();
+    }
+
+    @Test
+    public void testTheAdapterReportsAWholeConfigurationRunFromTheSession()
+    {
+        assertTrue("a whole-configuration run must reach the document as one", //$NON-NLS-1$
+            adapterOverSessionSaying(true));
+    }
+
+    @Test
+    public void testTheAdapterReportsAScopedRunFromTheSession()
+    {
+        assertFalse("a scoped run must not be reported as a whole-configuration one - that is " //$NON-NLS-1$
+            + "the direction that deletes the caveat from every document of the run", //$NON-NLS-1$
+            adapterOverSessionSaying(false));
+    }
+
+    /**
+     * The run fact is asked of the session like every other read here, so it belongs inside the
+     * boundary that renders. Reading it outside would place it in a different moment of the same
+     * comparison from the node and the status it qualifies.
+     */
+    @Test
+    public void testTheCoverageIsReadInsideTheRenderingBoundary()
+    {
+        StubSource source = knownSource();
+        source.wholeConfigurationRun = false;
+
+        call(source, args("comparisonId", "cmp-1", "objectFqn", "Catalog.Products")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("every coverage read belongs in the read boundary", 0, //$NON-NLS-1$
+            source.coverageReadsOutsideTheBoundary);
     }
 
     // ============ An empty local list is not "nothing is running" ============

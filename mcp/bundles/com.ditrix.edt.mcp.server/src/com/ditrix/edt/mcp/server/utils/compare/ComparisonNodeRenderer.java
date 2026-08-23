@@ -41,6 +41,25 @@ import com.ditrix.edt.mcp.server.utils.compare.SupportStateReader.SupportState;
  * <p>Three properties of this renderer are load-bearing and are each pinned by a test.</p>
  *
  * <ol>
+ * <li><b>A SCOPED run says so, and says it about the run.</b> A scoped comparison turns on
+ * {@code mergeObjectsContent}, and {@code MdCompareUtils.isExcludeObjectsContentFeature} then
+ * drops the own features of every object whose qualified name is not at or under an entry of the
+ * effective scope - per feature, sparing the containment-many collections of {@code MdObject}s.
+ * Such a node is matched, it was compared without the features that were dropped, and its flags
+ * read exactly like those of a node that WAS compared on all of them and found equal. So
+ * {@link Request#coverage} carries the fact into the document: it opens with
+ * {@link #SCOPED_RUN_NOTICE}, the engine-filled tables qualify their emptiness with
+ * {@link #CONTENT_MAY_BE_EXCLUDED} instead of saying {@link #NO_DIFFERENCES}, and an
+ * {@code identical} {@code State} cell is qualified. What it deliberately does NOT do is decide
+ * which side of the scope line THIS node fell on - see {@link ContentCoverage} for why no reading
+ * of the tree answers that. The property table is not covered either: it is this class's own read
+ * of the matched objects, so it still answers, and the notice says so.</li>
+ * <li><b>No phrase of equality contradicts a number in the same document.</b> The {@code State}
+ * cell comes from the platform's flags and the property table from this class's own reading, and
+ * they can disagree: a node whose flags say {@code identical} while the table beside it counts a
+ * differing property was measured live. The cell is then qualified with
+ * {@link #STATE_DISPUTED_BY_PROPERTIES} and both facts are stated, because the two answer
+ * different questions and picking one would delete an observation.</li>
  * <li><b>An unfinished subtree is reported as unfinished.</b> The comparison tree is LAZY
  * ({@code Unfinished} / {@code HasUnfinishedChildren} / {@code Finished}), so a node whose status is
  * not {@code Finished} has an empty or partial child list for a reason that has nothing to do with
@@ -91,6 +110,55 @@ public final class ComparisonNodeRenderer
 
     /** Rendered in place of {@link #NO_DIFFERENCES} while the node's own status is not {@code Finished}. */
     public static final String NOT_DETERMINED = "Not determined yet (subtree not finished)"; //$NON-NLS-1$
+
+    /**
+     * Rendered in place of {@link #NO_DIFFERENCES} in every document of a SCOPED run.
+     * <p>
+     * A scope does not narrow the tree, it narrows what is compared inside it: with
+     * {@code mergeObjectsContent} on - which is what a scoped run sets -
+     * {@code MdCompareUtils.isExcludeObjectsContentFeature} EXCLUDES a feature of an object whose
+     * qualified name is not at or under an entry of the effective scope. It is applied per
+     * FEATURE, and not to every one of them: a containment-many collection of {@code MdObject}s
+     * is spared, so child object nodes can still be built under an object whose other features
+     * were dropped.
+     * <p>
+     * So an empty table in such a run does not carry {@link #NO_DIFFERENCES}'s claim - and the
+     * phrase put in its place says that and stops, without going on to state what WAS looked at.
+     * Which objects of the run the exclusion reached is not readable from a node
+     * ({@link ContentCoverage}), so the phrase states the run's limit and leaves the reader to
+     * place the node in it rather than placing it wrongly.
+     */
+    public static final String CONTENT_MAY_BE_EXCLUDED = "this run was SCOPED: outside the scope " //$NON-NLS-1$
+        + "EDT excluded an object's own features feature by feature, sparing its containment-many " //$NON-NLS-1$
+        + "collections of metadata objects, so an empty table here is not by itself \"the sides " //$NON-NLS-1$
+        + "agree\""; //$NON-NLS-1$
+
+    /** Opening notice for a document produced by a SCOPED run. */
+    public static final String SCOPED_RUN_NOTICE = "Scoped comparison"; //$NON-NLS-1$
+
+    /**
+     * What the {@code State} cell adds when the platform calls a node identical while THIS
+     * document's own property table counts a difference in it.
+     * <p>
+     * The two answer different questions - the flags are the engine's verdict for the node, the
+     * table is this server reading every assignable property off each side - and a report may not
+     * pick one of its own numbers and contradict it a paragraph later. Both are named.
+     */
+    public static final String STATE_DISPUTED_BY_PROPERTIES = " (EDT's node flags) - contradicted " //$NON-NLS-1$
+        + "here: "; //$NON-NLS-1$
+
+    /**
+     * What the {@code State} cell adds in every document of a SCOPED run.
+     * <p>
+     * It qualifies the label without replacing it, and it stops at what the run did: it does not
+     * go on to say which of this node's features the flags then speak for, because the exclusion
+     * is per feature and spares the containment-many collections (see
+     * {@link #CONTENT_MAY_BE_EXCLUDED}), so no such list is derivable here.
+     */
+    public static final String STATE_SCOPED_RUN =
+        " - SCOPED run: outside the scope EDT excluded an object's own features feature by " //$NON-NLS-1$
+            + "feature, sparing its containment-many collections of metadata objects, so if this " //$NON-NLS-1$
+            + "object is one of those it was compared without the features that were excluded"; //$NON-NLS-1$
 
     /**
      * The cell for a property whose value could not be READ on that side.
@@ -188,6 +256,67 @@ public final class ComparisonNodeRenderer
         List<PotentialMergeProblemDescription> potentialProblems(long nodeId);
     }
 
+    /**
+     * Whether the comparison compared content everywhere, or ran under a SCOPE that excluded the
+     * own features of everything outside it.
+     * <p>
+     * The document has to carry it because the two look identical from inside a node: a node
+     * whose own features the engine excluded reports exactly the flags of one it compared on all
+     * of them and found equal.
+     *
+     * <h2>Why this is a fact about the RUN and not about the node</h2>
+     * It used to claim the node, decided by {@code IComparisonSession.isInScope(node)}. Read off
+     * the bytecode of {@code com._1c.g5.v8.dt.compare} 29.0.0, that predicate answers
+     * {@code false} for every node that is not a {@code SymlinkComparisonNode}, and for one that
+     * IS it calls {@code ComparisonUtils.isSubsymlinkOf} BOTH WAYS - so a scope entry's ANCESTORS
+     * count as in scope too. The exclusion the document is describing is decided by a different
+     * predicate: {@code MdCompareUtils.isObjectAndContentInScope} tests the compared object's
+     * QUALIFIED NAME against {@code handle.getScope(side)} in ONE direction only (at or UNDER an
+     * entry), and it is applied per FEATURE, sparing the containment-many collections of
+     * {@code MdObject}s. The two disagree in both directions - with a scope of
+     * {@code Catalog.Products.Form.X} the session calls the parent {@code Catalog.Products} in
+     * scope while EDT excluded its own features, and it calls a non-symlink member of a genuinely
+     * compared object out of scope - and nothing else readable from a node reproduces the real
+     * predicate either, because the qualified name it tests comes from an
+     * {@code IQualifiedNameProvider} over the compared objects and the carve-out is per feature.
+     * <p>
+     * So the coverage says what the run did and leaves the node's place in it to the reader. That
+     * is weaker than a per-node verdict and it is the strongest thing that cannot be wrong - and
+     * it is the same statement {@link ComparisonTreeReport} already prints once for the whole
+     * comparison, so the two documents now agree instead of one of them claiming more.
+     */
+    public enum ContentCoverage
+    {
+        /**
+         * A whole-configuration run: {@code mergeObjectsContent} is off, nothing was excluded
+         * anywhere, so this node's own features WERE compared.
+         */
+        COMPARED,
+
+        /**
+         * A SCOPED run: outside the effective scope EDT excluded an object's own features from
+         * the comparison, per feature and sparing the containment-many collections of
+         * {@code MdObject}s. Whether THIS node was one of the objects that reached is not
+         * knowable from the tree, so the document states the run's limit.
+         */
+        SCOPED_RUN;
+
+        /**
+         * The coverage every node of a run of this shape carries.
+         *
+         * @param wholeConfigurationRun the session's OWN saved answer
+         *     ({@code IComparisonSession.isGlobalScope}), which is what decided
+         *     {@code mergeObjectsContent} at launch; recomputing it from the scope object would
+         *     answer about the scope as the engine extended it rather than about the setting the
+         *     run started with
+         * @return {@link #COMPARED} for a whole-configuration run, {@link #SCOPED_RUN} otherwise
+         */
+        public static ContentCoverage ofRun(boolean wholeConfigurationRun)
+        {
+            return wholeConfigurationRun ? COMPARED : SCOPED_RUN;
+        }
+    }
+
     /** Everything about the CALL that the rendered document reports back to the caller. */
     public static final class Request
     {
@@ -205,6 +334,8 @@ public final class ComparisonNodeRenderer
         public final int limit;
         /** Language code for the form snapshot's titles, or {@code null} for the configuration default. */
         public final String language;
+        /** Whether the RUN compared content everywhere, or ran under a scope that excluded some. */
+        public final ContentCoverage coverage;
 
         /**
          * @param comparisonId the comparison id
@@ -214,9 +345,12 @@ public final class ComparisonNodeRenderer
          * @param depth child levels to descend
          * @param limit maximum rows per table
          * @param language language code for the form snapshot (may be {@code null})
+         * @param coverage whether the RUN compared content everywhere; {@code null} is read as
+         *     {@link ContentCoverage#COMPARED}, which is what a whole-configuration run always is
          */
         public Request(String comparisonId, String address, ComparisonSide side,
-            ComparisonNodeStatus status, int depth, int limit, String language)
+            ComparisonNodeStatus status, int depth, int limit, String language,
+            ContentCoverage coverage)
         {
             this.comparisonId = comparisonId == null ? "" : comparisonId; //$NON-NLS-1$
             this.address = address == null ? "" : address; //$NON-NLS-1$
@@ -225,6 +359,7 @@ public final class ComparisonNodeRenderer
             this.depth = Math.max(1, depth);
             this.limit = Math.max(1, limit);
             this.language = language;
+            this.coverage = coverage == null ? ContentCoverage.COMPARED : coverage;
         }
     }
 
@@ -241,14 +376,26 @@ public final class ComparisonNodeRenderer
     public static String render(Request request, ComparisonNode node, NodeAccess access)
     {
         boolean finished = request.status == ComparisonNodeStatus.FINISHED;
+        // Read BEFORE the summary, because the summary's State cell has to be able to name a
+        // disagreement between the platform's verdict and this document's own property count.
+        // Counting the properties twice - once for the cell, once for the table - would let the
+        // two halves of one document disagree about the very number the cell exists to reconcile.
+        PropertyDigest properties = digestProperties(node, access);
         StringBuilder sb = new StringBuilder();
         sb.append("# Comparison node: ").append(request.address).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         if (!finished)
         {
             appendNotFinishedNotice(sb, request.status);
         }
-        appendSummary(sb, request, node, finished);
-        appendProperties(sb, request, node, access, finished);
+        // Independent of finishedness, and printed alongside it rather than instead of it: a
+        // document can be both unfinished and produced by a scoped run, and each notice governs
+        // different words further down.
+        if (request.coverage == ContentCoverage.SCOPED_RUN)
+        {
+            appendScopedRunNotice(sb);
+        }
+        appendSummary(sb, request, node, finished, properties);
+        appendProperties(sb, request, properties, finished);
         appendSupport(sb, node);
         appendFormStructure(sb, request, node, access);
         appendModuleSections(sb, request, node, finished);
@@ -267,8 +414,50 @@ public final class ComparisonNodeRenderer
             .append("not \"the sides agree\". Call the tool again with a larger waitSeconds.\n\n"); //$NON-NLS-1$
     }
 
+    /**
+     * Says what a SCOPED run did not compare, and says exactly which parts of the document that
+     * governs.
+     * <p>
+     * It states the RUN, not this node. Which objects EDT excluded is decided by a predicate no
+     * reading of the tree reproduces (see {@link ContentCoverage}), so the notice hands the reader
+     * the rule and the scope list - which {@code compare_configurations} prints - instead of a
+     * verdict that would be wrong in both directions.
+     * <p>
+     * Named part by part on purpose. The exclusion is applied by the ENGINE, to an object's own
+     * features and one feature at a time, so it governs the {@code State} cell, the child
+     * outline, the module sections and the potential problems. It does NOT govern the property
+     * table, which this server builds by reading the matched objects itself: that table is why a
+     * node reported {@code identical} here can still show a property differing across the sides.
+     * Blanketing the whole document with one caveat would hide the one section that still carries
+     * an answer.
+     * <p>
+     * And it describes the exclusion no more widely than the predicate applies it. The carve-out
+     * for a containment-many collection of {@code MdObject}s means an excluded object can still
+     * have child object nodes built under it, so the notice never says that nothing below such a
+     * node was looked at: it says an empty table is not by itself agreement, which is all that
+     * follows.
+     *
+     * @param sb the document being assembled
+     */
+    private static void appendScopedRunNotice(StringBuilder sb)
+    {
+        sb.append("> **").append(SCOPED_RUN_NOTICE).append("** - this comparison ran with a ") //$NON-NLS-1$
+            .append("`scope`. Outside the scope EDT EXCLUDED an object's own features from the ") //$NON-NLS-1$
+            .append("comparison, feature by feature and sparing its containment-many collections ") //$NON-NLS-1$
+            .append("of metadata objects; such an object is still MATCHED, so it is still ") //$NON-NLS-1$
+            .append("reported as added or deleted. **Whether THIS object is one of them is not ") //$NON-NLS-1$
+            .append("stated here** - the comparison tree does not answer it; the ") //$NON-NLS-1$
+            .append("compare_configurations report lists the effective scope, and an object is ") //$NON-NLS-1$
+            .append("inside it when its qualified name IS an entry or sits under one. So an ") //$NON-NLS-1$
+            .append("empty child or section table below is not by itself a statement that ") //$NON-NLS-1$
+            .append("\"the sides agree\". The property table is this server's own read of the ") //$NON-NLS-1$
+            .append("matched objects and is NOT affected. Re-run compare_configurations with ") //$NON-NLS-1$
+            .append("this object in `scope`, or with no `scope` at all, to have its content ") //$NON-NLS-1$
+            .append("compared for certain.\n\n"); //$NON-NLS-1$
+    }
+
     private static void appendSummary(StringBuilder sb, Request request, ComparisonNode node,
-        boolean finished)
+        boolean finished, PropertyDigest properties)
     {
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("Comparison", request.comparisonId); //$NON-NLS-1$
@@ -280,20 +469,142 @@ public final class ComparisonNodeRenderer
             fields.put(sideLabel(side), dashIfEmpty(symlinkOf(node, side)));
         }
         fields.put("Node status", statusText(request.status)); //$NON-NLS-1$
-        fields.put("State", stateOf(node, finished)); //$NON-NLS-1$
+        fields.put("State", summaryState(request, node, finished, properties)); //$NON-NLS-1$
         sb.append(MarkdownUtils.keyValueTable("Field", "Value", fields)).append('\n'); //$NON-NLS-1$ //$NON-NLS-2$
+        if (disputedByProperties(node, finished, properties))
+        {
+            sb.append("> **The State cell and the property table below disagree, and both are ") //$NON-NLS-1$
+                .append("reported.** EDT's own comparison flags call this node identical, while ") //$NON-NLS-1$
+                .append(properties.differing.size())
+                .append(properties.differing.size() == 1 ? " property read off the matched " //$NON-NLS-1$
+                    : " properties read off the matched ") //$NON-NLS-1$
+                .append("objects differ across the sides. The two answer different questions - ") //$NON-NLS-1$
+                .append("the flags are the engine's verdict for the node, which is what a merge ") //$NON-NLS-1$
+                .append("acts on, and the table is this server reading every assignable property ") //$NON-NLS-1$
+                .append("off each side - so neither is dropped here. A scope that excluded this ") //$NON-NLS-1$
+                .append("node's content is one way to get this state; see the notice above when ") //$NON-NLS-1$
+                .append("there is one.\n\n"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Whether the platform called this node identical while this document's own property table
+     * counts a difference in it.
+     *
+     * @param node the node (may be {@code null})
+     * @param finished whether its subtree has been compared
+     * @param properties this document's own reading of the matched objects
+     * @return {@code true} when the two disagree
+     */
+    private static boolean disputedByProperties(ComparisonNode node, boolean finished,
+        PropertyDigest properties)
+    {
+        return node != null && !properties.differing.isEmpty()
+            && ComparisonNodeState.decode(node, finished) == ComparisonNodeState.IDENTICAL;
+    }
+
+    /**
+     * The {@code State} cell of the summary, carrying every qualification the rest of this
+     * document forces on it.
+     * <p>
+     * Only {@link ComparisonNodeState#IDENTICAL} is ever qualified, and that is the point: it is
+     * the one label that asserts SAMENESS, so it is the only one a differing property count or an
+     * excluded subtree can contradict. Every other label already says something happened.
+     *
+     * @param request the call description
+     * @param node the node (may be {@code null})
+     * @param finished whether its subtree has been compared
+     * @param properties this document's own reading of the matched objects
+     * @return the cell text
+     */
+    private static String summaryState(Request request, ComparisonNode node, boolean finished,
+        PropertyDigest properties)
+    {
+        if (node == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        ComparisonNodeState state = ComparisonNodeState.decode(node, finished);
+        if (state != ComparisonNodeState.IDENTICAL)
+        {
+            return state.label();
+        }
+        StringBuilder cell = new StringBuilder(state.label());
+        if (!properties.differing.isEmpty())
+        {
+            cell.append(STATE_DISPUTED_BY_PROPERTIES).append(properties.differing.size())
+                .append(properties.differing.size() == 1 ? " property below differs" //$NON-NLS-1$
+                    : " properties below differ"); //$NON-NLS-1$
+        }
+        if (request.coverage == ContentCoverage.SCOPED_RUN)
+        {
+            cell.append(STATE_SCOPED_RUN);
+        }
+        return cell.toString();
     }
 
     // ==================== Properties ====================
 
-    private static void appendProperties(StringBuilder sb, Request request, ComparisonNode node,
-        NodeAccess access, boolean finished)
+    /**
+     * This document's own reading of the matched objects: the three-column rows and how they
+     * sorted into differing, unreadable and equal.
+     * <p>
+     * It is computed ONCE per document and handed to both the summary and the property section,
+     * because the {@code State} cell has to be able to name the count the table prints. Two
+     * independent readings would let one number contradict the other inside one answer, which is
+     * exactly the defect the {@code State} qualification exists to report.
+     */
+    private static final class PropertyDigest
     {
-        sb.append("## Properties\n\n"); //$NON-NLS-1$
+        /** No compared objects were read at all - the caller passed no read port. */
+        private static final PropertyDigest NOT_READ = new PropertyDigest(false, 0,
+            Collections.emptyMap(), Collections.emptyList(), Collections.emptyList(),
+            Collections.emptyList());
+
+        /** The objects were read, and this node carries none on any side. */
+        private static final PropertyDigest NO_OBJECTS = new PropertyDigest(true, 0,
+            Collections.emptyMap(), Collections.emptyList(), Collections.emptyList(),
+            Collections.emptyList());
+
+        private final boolean read;
+        private final int presentSides;
+        private final Map<String, String[]> rows;
+        private final List<String> differing;
+        private final List<String> undetermined;
+        private final List<String> ordered;
+
+        private PropertyDigest(boolean read, int presentSides, Map<String, String[]> rows,
+            List<String> differing, List<String> undetermined, List<String> equal)
+        {
+            this.read = read;
+            this.presentSides = presentSides;
+            this.rows = rows;
+            this.differing = differing;
+            this.undetermined = undetermined;
+            // Differing rows first: with a limit in play, the rows that carry the answer must
+            // survive truncation. Undetermined rows come next, ahead of the equal ones, because a
+            // row nobody could read is the second thing a reader needs and the one thing a silent
+            // truncation would turn into agreement. Within each group the model's own feature
+            // order is preserved.
+            List<String> all = new ArrayList<>(differing);
+            all.addAll(undetermined);
+            all.addAll(equal);
+            this.ordered = all;
+        }
+    }
+
+    /**
+     * Reads the matched objects and sorts their properties, without writing a word.
+     *
+     * @param node the node to read
+     * @param access the read port; {@code null} means the objects were not read for this call
+     * @return the digest, never {@code null}
+     */
+    private static PropertyDigest digestProperties(ComparisonNode node, NodeAccess access)
+    {
         if (access == null)
         {
-            sb.append("_(compared objects were not read for this call)_\n\n"); //$NON-NLS-1$
-            return;
+            return PropertyDigest.NOT_READ;
         }
         IComparedObjects<?> objects = access.comparedObjects(node);
         EObject[] sides = new EObject[SIDES.length];
@@ -305,8 +616,7 @@ public final class ComparisonNodeRenderer
         }
         if (presentSides == 0)
         {
-            sb.append("_(this node carries no compared model objects)_\n\n"); //$NON-NLS-1$
-            return;
+            return PropertyDigest.NO_OBJECTS;
         }
 
         Map<String, String[]> rows = new LinkedHashMap<>();
@@ -333,21 +643,31 @@ public final class ComparisonNodeRenderer
                     break;
             }
         }
-        // Differing rows first: with a limit in play, the rows that carry the answer must survive
-        // truncation. Undetermined rows come next, ahead of the equal ones, because a row nobody
-        // could read is the second thing a reader needs and the one thing a silent truncation
-        // would turn into agreement. Within each group the model's own feature order is preserved.
-        List<String> ordered = new ArrayList<>(differing);
-        ordered.addAll(undetermined);
-        ordered.addAll(equal);
+        return new PropertyDigest(true, presentSides, rows, differing, undetermined, equal);
+    }
 
-        int total = ordered.size();
-        int shown = Math.min(total, request.limit);
-        sb.append("**Properties:** ").append(total).append(" (").append(differing.size()) //$NON-NLS-1$ //$NON-NLS-2$
-            .append(" differing"); //$NON-NLS-1$
-        if (!undetermined.isEmpty())
+    private static void appendProperties(StringBuilder sb, Request request,
+        PropertyDigest properties, boolean finished)
+    {
+        sb.append("## Properties\n\n"); //$NON-NLS-1$
+        if (!properties.read)
         {
-            sb.append(", ").append(undetermined.size()).append(" not readable"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append("_(compared objects were not read for this call)_\n\n"); //$NON-NLS-1$
+            return;
+        }
+        if (properties.presentSides == 0)
+        {
+            sb.append("_(this node carries no compared model objects)_\n\n"); //$NON-NLS-1$
+            return;
+        }
+
+        int total = properties.ordered.size();
+        int shown = Math.min(total, request.limit);
+        sb.append("**Properties:** ").append(total).append(" (").append(properties.differing.size()) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" differing"); //$NON-NLS-1$
+        if (!properties.undetermined.isEmpty())
+        {
+            sb.append(", ").append(properties.undetermined.size()).append(" not readable"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append(')').append(Pagination.truncationNotice(shown, total)).append("\n\n"); //$NON-NLS-1$
 
@@ -360,33 +680,39 @@ public final class ComparisonNodeRenderer
         sb.append(MarkdownUtils.tableHeader("Property", "Main", "Other", "Ancestor")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (int i = 0; i < shown; i++)
         {
-            String name = ordered.get(i);
-            String[] values = rows.get(name);
+            String name = properties.ordered.get(i);
+            String[] values = properties.rows.get(name);
             sb.append(MarkdownUtils.tableRow(label(name), values[0], values[1], values[2]));
         }
         sb.append('\n');
-        if (differing.isEmpty())
+        if (properties.differing.isEmpty())
         {
             // "Nothing differs" is a claim about a COMPARISON, and one object is not a comparison:
             // with a single side present the other columns are empty because the object is absent,
             // not because the sides agree. Saying "no differences" there is the same lie the
             // unfinished guard exists to prevent, one level down.
-            if (presentSides < 2)
+            if (properties.presentSides < 2)
             {
                 sb.append("_Only one side carries this object, so its properties have nothing to " //$NON-NLS-1$
                     + "be compared against._\n\n"); //$NON-NLS-1$
             }
-            else if (!undetermined.isEmpty())
+            else if (!properties.undetermined.isEmpty())
             {
                 // The same lie again, one step subtler: none of the rows that COULD be read
                 // differ, but some could not be read at all, and "no differences" would cover
                 // both with one word.
                 sb.append("_No differences among the properties that could be read; ") //$NON-NLS-1$
-                    .append(undetermined.size()).append(" could not be read on at least one " //$NON-NLS-1$
-                        + "side and are not claimed either way._\n\n"); //$NON-NLS-1$
+                    .append(properties.undetermined.size())
+                    .append(" could not be read on at least one side and are not claimed either " //$NON-NLS-1$
+                        + "way._\n\n"); //$NON-NLS-1$
             }
             else
             {
+                // NOT guarded by the scope caveat, and that is deliberate: these rows are this
+                // server's own read of the matched objects through EMF, not the engine's
+                // comparison, so the exclusion the engine applies to its own features never
+                // reached them. The scope notice at the top of the document says so explicitly
+                // rather than leaving the reader to assume this table is affected too.
                 sb.append('_').append(finished ? NO_DIFFERENCES : NOT_DETERMINED)
                     .append(" in the compared properties._\n\n"); //$NON-NLS-1$
             }
@@ -578,8 +904,7 @@ public final class ComparisonNodeRenderer
         // "no differences in the module sections" over sections it had never looked at.
         if (walk.sections.isEmpty() && walk.bounds.complete())
         {
-            sb.append('_').append(finished ? NO_DIFFERENCES : NOT_DETERMINED)
-                .append(" in the module sections._\n\n"); //$NON-NLS-1$
+            appendEmptyFinding(sb, request, finished, "the module sections"); //$NON-NLS-1$
             return;
         }
         // `flattenSections` raises the flag when a section was DECLINED, and until this line
@@ -938,8 +1263,7 @@ public final class ComparisonNodeRenderer
         // is what keeps the next cap from re-opening the hole it opened there.
         if (flat.isEmpty() && bounds.complete())
         {
-            sb.append('_').append(finished ? NO_DIFFERENCES : NOT_DETERMINED)
-                .append(" in the child nodes._\n\n"); //$NON-NLS-1$
+            appendEmptyFinding(sb, request, finished, "the child nodes"); //$NON-NLS-1$
             return;
         }
         sb.append("**Children shown:** ").append(flat.size()) //$NON-NLS-1$
@@ -1253,6 +1577,42 @@ public final class ComparisonNodeRenderer
             name = name.substring(0, name.length() - NODE_SUFFIX.length());
         }
         return label(name);
+    }
+
+    /**
+     * The sentence a table of ENGINE-BUILT rows prints when it found none, guarded by every reason
+     * the emptiness might not mean agreement.
+     * <p>
+     * Two guards, and they are separate facts about separate mechanisms. An UNFINISHED subtree has
+     * no rows because the lazy engine has not built them yet. In a SCOPED run a subtree can have
+     * no rows because the engine excluded the object's own features one at a time and built no
+     * child for the ones it dropped. The first is a fact about this node; the second is a fact
+     * about the RUN, and it is worded as one, because which objects were excluded is not readable
+     * from the tree (see {@link ContentCoverage}). Both make {@link #NO_DIFFERENCES} a claim
+     * nothing observed - which is the whole of what either guard says, neither going on to state
+     * what was looked at instead - and only the tables the ENGINE fills are guarded this way: the
+     * property table is this server's own read and is left to say what it actually found.
+     *
+     * @param sb the document being assembled
+     * @param request the call description, carrying the run's coverage
+     * @param finished whether the subtree has been compared
+     * @param where the table's own subject, as it reads inside the sentence
+     */
+    private static void appendEmptyFinding(StringBuilder sb, Request request, boolean finished,
+        String where)
+    {
+        if (!finished)
+        {
+            sb.append('_').append(NOT_DETERMINED).append(" in ").append(where).append("._\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            return;
+        }
+        if (request.coverage == ContentCoverage.SCOPED_RUN)
+        {
+            sb.append("_No finding in ").append(where).append(" - ") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(CONTENT_MAY_BE_EXCLUDED).append("._\n\n"); //$NON-NLS-1$
+            return;
+        }
+        sb.append('_').append(NO_DIFFERENCES).append(" in ").append(where).append("._\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

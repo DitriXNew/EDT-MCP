@@ -13,6 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 import org.junit.Test;
@@ -437,6 +438,119 @@ public class ComparisonTreeReportTest
             report.contains("The requested scope matched no object")); //$NON-NLS-1$
     }
 
+    // === a scoped run compared content only inside the scope, and the report says so ===
+    //
+    // compare_configurations turns the platform's mergeObjectsContent setting on for a scoped
+    // run, and MdCompareUtils.isExcludeObjectsContentFeature then excludes an object's own
+    // features whenever that object is not under a scope entry. Such a node is still matched -
+    // added and deleted are still reported - but it lands in the table as 'identical', which
+    // means "compared, and equal" in every other row. The report cannot leave that unsaid.
+
+    @Test
+    public void testAScopedReportSaysContentWasComparedInsideTheScopeOnly()
+    {
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(101L, "Catalog.Products")); //$NON-NLS-1$
+
+        String report = render(collector, requestedScope("Catalog.Products")); //$NON-NLS-1$
+
+        assertContains(report, "Content was compared INSIDE THE SCOPE ONLY"); //$NON-NLS-1$
+        assertContains(report, "identical"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopedCaveatDoesNotSayANodeWasNeverComparedFeatureByFeature()
+    {
+        // The exclusion is per FEATURE and spares a containment-many collection of MdObjects, so
+        // a node outside the scope WAS compared - on everything the predicate left in. What the
+        // caveat withdraws from `identical` is narrower than the row.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(104L, "Catalog.Products")); //$NON-NLS-1$
+
+        String report = render(collector, requestedScope("Catalog.Products")); //$NON-NLS-1$
+
+        assertFalse("the caveat may not deny a comparison that did take place: " + report, //$NON-NLS-1$
+            report.contains("never compared feature by feature"));  //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopedCaveatNamesTheCarveOutItIsBoundedBy()
+    {
+        // The positive half of the pin above: the caveat has to say WHICH features can be
+        // excluded, or the narrower claim is indistinguishable from having simply dropped a
+        // sentence.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(105L, "Catalog.Products")); //$NON-NLS-1$
+
+        String report = render(collector, requestedScope("Catalog.Products")); //$NON-NLS-1$
+
+        assertContains(report, "sparing an object's containment-many collections of metadata objects"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWholeConfigurationReportCarriesNoContentCaveat()
+    {
+        // The setting is OFF for a whole-configuration run, so content WAS compared everywhere;
+        // printing the caveat here would describe a limit that was not applied.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(102L, "Catalog.Products")); //$NON-NLS-1$
+
+        String report = render(collector, emptyScope());
+
+        assertFalse("nothing was excluded from a global comparison: " + report, //$NON-NLS-1$
+            report.contains("Content was compared")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEngineExtendedWholeConfigurationRunStillCarriesNoContentCaveat()
+    {
+        // The mutation this exists for: asking the FULL scope instead of the REQUESTED one. The
+        // platform settles "is this global?" in the session constructor, before anything can be
+        // extended, so a run launched with no scope stays a global run for its whole life - but
+        // getScope() grows the moment the engine pulls a dependency in, and a report that read
+        // that would start describing a limit the launch never applied.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(103L, "Catalog.Products")); //$NON-NLS-1$
+        ComparisonScope scope = emptyScope();
+        scope.extendScope("Catalog.PulledIn", "referenced by a compared object", //$NON-NLS-1$ //$NON-NLS-2$
+            ComparisonSide.MAIN);
+
+        String report = render(collector, scope);
+
+        assertFalse("an extension by the engine does not turn a global run into a scoped one: " //$NON-NLS-1$
+            + report, report.contains("Content was compared")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheContentCaveatFollowsTheSessionsAnswerNotTheScopeObject()
+    {
+        // The two are made to DISAGREE on purpose: a scope object that looks scoped, over a run
+        // the session recorded as global. The report has to follow the session - it is describing
+        // the setting the launch chose - and re-deriving from the object here would print a limit
+        // that was never applied.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(104L, "Catalog.Products")); //$NON-NLS-1$
+
+        String report = render(collector, requestedScope("Catalog.Products"), true); //$NON-NLS-1$
+
+        assertFalse("the session called this run global, so nothing was excluded: " + report, //$NON-NLS-1$
+            report.contains("Content was compared")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheContentCaveatIsPrintedWhenTheSessionCalledTheRunScoped()
+    {
+        // The mirror, and the half that a report reading the scope object would lose entirely: the
+        // object can end up empty - the platform's own ComparisonScope(String) form builds one -
+        // while the session settled on a scoped run. The caveat belongs to the run.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, false);
+        collector.accept(identical(105L, "Catalog.Products")); //$NON-NLS-1$
+
+        String report = render(collector, emptyScope(), false);
+
+        assertContains(report, "Content was compared INSIDE THE SCOPE ONLY"); //$NON-NLS-1$
+    }
+
     // === fixtures ===
 
     private static ComparisonScope requestedScope(String symlink)
@@ -455,10 +569,34 @@ public class ComparisonTreeReportTest
 
     private static String render(ComparisonTreeReport.Collector collector, ComparisonScope scope)
     {
+        // The launch settles "is this global?" from the scope as it stood BEFORE the run, which is
+        // the input scope: that is what the production path hands the session and what the session
+        // then remembers. Passed explicitly here for the same reason the header carries it - the
+        // report must not re-derive it.
+        return render(collector, scope, isGlobalInput(scope));
+    }
+
+    private static String render(ComparisonTreeReport.Collector collector, ComparisonScope scope,
+        boolean globalScope)
+    {
         return ComparisonTreeReport.render(
             new ComparisonTreeReport.Header("cmp-1", "TestConfiguration", "origin/main", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "v1.0", "finished"), //$NON-NLS-1$ //$NON-NLS-2$
+                "v1.0", "finished", globalScope), //$NON-NLS-1$ //$NON-NLS-2$
             scope, collector);
+    }
+
+    /** @return what the session would have computed at launch, from the scope it was handed */
+    private static boolean isGlobalInput(ComparisonScope scope)
+    {
+        for (ComparisonSide side : ComparisonSide.values())
+        {
+            List<String> requested = scope.getInputScope(side);
+            if (requested != null && !requested.isEmpty())
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static TopComparisonNode conflicting(long id, String symlink)

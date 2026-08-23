@@ -59,21 +59,58 @@ import com.google.gson.JsonParser;
  * Reads and authors EDT's merge-rules file - the sparse document of per-node merge decisions a
  * configuration comparison saves, and re-applies when a comparison is launched with it.
  * <p>
- * <b>Two modes, and the answer always says which one ran.</b> The file is addressed by NAMES,
- * not by internal node ids, so it can be authored with no comparison running at all - which is
- * the scenario this exists for: prepare the decisions, then open the comparison window once,
- * already carrying them. But a file written that way has NOT been checked against what each node
- * actually allows, and reporting it as if it had is exactly the class of lie this plugin keeps
- * removing. So:
+ * <b>THREE outcomes, and the answer always says which one ran.</b> Decisions are addressed by
+ * NAMES, not by internal node ids, so the DOCUMENT can be authored with no comparison running at
+ * all - which is the scenario this exists for: prepare the decisions, then open the comparison
+ * window once, already carrying them. That freedom belongs to the document, not to every
+ * container it can be put in: an {@code .xml} needs nothing, a {@code .zip} needs a live
+ * comparison to name its entry (see below). And a file written without a comparison has NOT been
+ * checked against what each node actually allows, and reporting it as if it had is exactly the
+ * class of lie this plugin keeps removing. A comparison answers TWO separable things - its
+ * ADDRESS, known as soon as the session is found, and a RULE VERDICT, which needs a FINISHED tree
+ * - so there are three outcomes and not two:
  * <ul>
- * <li><b>no live comparison</b> - the file is authored from names and the report says
- * NOT VALIDATED, naming {@code compare_configurations} as the way to get validation;</li>
- * <li><b>live comparison</b> - every rule is checked against the rules its node allows before
- * anything is written, and an illegal rule is refused naming the node, the rule and the allowed
- * set.</li>
+ * <li><b>no comparison answered</b> - the file is authored from names and the report says
+ * NOT VALIDATED, naming {@code compare_configurations} as the way to get validation; a
+ * {@code .zip} target is refused outright, because its entry name is unknowable;</li>
+ * <li><b>a comparison answered, its tree could not be read</b> - the address is known, so a
+ * {@code .zip} still gets its own entry name, but no rule was checked. With no
+ * {@code comparisonId} the write proceeds and the report says NOT VALIDATED, naming the
+ * comparison that supplied the address; with a {@code comparisonId} it is REFUSED, because a
+ * checked file is what the caller asked for;</li>
+ * <li><b>a comparison answered with a FINISHED tree</b> - every rule is checked against the rules
+ * its node allows before anything is written, and an illegal rule is refused naming the node, the
+ * rule and the allowed set.</li>
  * </ul>
- * The two are never mixed silently, and nothing is written until EVERY decision has passed:
+ * The three are never mixed silently, and nothing is written until EVERY decision has passed:
  * a half-applied set would be a file whose contents nobody chose.
+ * <p>
+ * <b>Two containers, and which one the platform reads depends on its version.</b> EDT 2026.1
+ * reads a merge-settings file from {@code .xml} or {@code .zip}; EDT 2026.2 reads a {@code .zip}
+ * ALONE and refuses an {@code .xml} with its own assertion (see {@link MergeRulesCodec}). A zip
+ * is addressed, and by exactly one thing: the STRING
+ * {@code <mainProject>_<otherProject>_<ancestorProject>}, case for case, as
+ * {@code ComparisonEngine#mergeRulesEntryId} spells it. EDT restores the entry under that name
+ * and silently ignores an archive whose entry is named anything else. Two consequences, and both
+ * are stated to callers rather than left to be discovered. It is NOT tied to one comparison run -
+ * a later comparison of the same three projects, over different revisions, reads the same entry -
+ * so the risk a zip carries is stale decisions applied again, not decisions quietly dropped. And
+ * the name is a bare concatenation over a separator project names may themselves contain, so it
+ * is NOT injective: the triples {@code (A_B, C, D)} and {@code (A, B_C, D)} both spell
+ * {@code A_B_C_D}. "No other comparison can find this file" is therefore not something this tool
+ * says; what holds is the one direction - a comparison whose own three names spell a DIFFERENT
+ * string finds nothing here. The name is only knowable from a live comparison, so a zip target
+ * with none is REFUSED rather than filled with a guess; the alternative that refusal names is
+ * {@code .xml}, whose one limitation is stated in the report instead of being hidden: it is not
+ * read by EDT 2026.2.
+ * <p>
+ * <b>Which container is chosen by {@code filePath}, and by nothing else.</b> Passing a
+ * {@code comparisonId} does not turn an {@code .xml} target into a zip; it asks for validation.
+ * On EDT 2026.2 that makes the useful path a TWO-RUN one: start a comparison, WAIT until its tree
+ * has FINISHED - a named comparison whose tree cannot be read is refused, and an unnamed one is
+ * written unvalidated - take its id, write the {@code .zip} (which is now addressed and
+ * validated), let that comparison go, and start the next comparison over the same projects with
+ * {@code mergeRulesFile} pointing at it.
  * <p>
  * <b>This tool cannot merge.</b> It reads and writes a settings file; running the merge stays a
  * human action in the comparison window. It never receives the comparison manager, only the
@@ -138,10 +175,12 @@ public class MergeRulesTool implements IMcpTool
      * Creates the tool with the production authority - the one that asks a live comparison, over
      * {@link ComparisonEngine}, which rules each node allows.
      * <p>
-     * The authority answers only for a comparison whose tree has FINISHED. With none - no
-     * comparison running, EDT's comparison service absent, or a tree still being built - it
-     * answers nothing, and the write is authored from names and reported as NOT VALIDATED. That
-     * is the honest degradation, never a validated-looking answer.
+     * The authority answers RULES only for a comparison whose tree has FINISHED. It still answers
+     * the comparison's ADDRESS - the id and the zip entry name - while the tree is still building
+     * or while EDT's comparison service is away, because that is a fact about the handle and needs
+     * no tree. With no comparison at all it answers nothing. Either way the write is authored from
+     * names and reported as NOT VALIDATED, which is the honest degradation, never a
+     * validated-looking answer.
      */
     public MergeRulesTool()
     {
@@ -184,12 +223,18 @@ public class MergeRulesTool implements IMcpTool
     public String getDescription()
     {
         return "Read or author EDT's merge-rules file - the per-node decisions a configuration " //$NON-NLS-1$
-            + "comparison saves and re-applies when it is launched. Authoring needs NO running " //$NON-NLS-1$
-            + "comparison (the file is addressed by names), and the report says which happened: " //$NON-NLS-1$
-            + "rules written without a live comparison are reported NOT VALIDATED; with one, every " //$NON-NLS-1$
-            + "rule is checked against what its node allows and an illegal rule is refused. Never " //$NON-NLS-1$
-            + "merges anything - running the merge stays a human action in the comparison window. " //$NON-NLS-1$
-            + "Parameters and examples: get_tool_guide('merge_rules')."; //$NON-NLS-1$
+            + "comparison saves and re-applies when it is launched. Which container to write is " //$NON-NLS-1$
+            + "chosen by filePath: '.xml' needs NO running comparison but is read by EDT 2026.1 " //$NON-NLS-1$
+            + "only, while the '.zip' both versions read carries an entry named after the " //$NON-NLS-1$
+            + "comparison's three project names, so it needs a live comparison and is refused " //$NON-NLS-1$
+            + "without one. Validation has THREE outcomes: a comparison whose tree is FINISHED " //$NON-NLS-1$
+            + "checks every rule against what its node allows and refuses an illegal one; a " //$NON-NLS-1$
+            + "comparison that answers but whose tree cannot be read yet names a zip's entry " //$NON-NLS-1$
+            + "without checking anything, reported NOT VALIDATED - or refused outright when you " //$NON-NLS-1$
+            + "passed comparisonId; with no comparison at all the file is authored from names, " //$NON-NLS-1$
+            + "also NOT VALIDATED. Never merges anything - running the merge stays a human " //$NON-NLS-1$
+            + "action in the comparison window. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('merge_rules')."; //$NON-NLS-1$
     }
 
     @Override
@@ -201,15 +246,22 @@ public class MergeRulesTool implements IMcpTool
                     + "into one (required).", //$NON-NLS-1$
                 true, MODE_READ, MODE_WRITE)
             .stringProperty(KEY_FILE_PATH,
-                "Absolute path of the merge-rules file (required). read: the file to parse, '.xml' " //$NON-NLS-1$
-                    + "or the '.zip' a comparison saves. write: the '.xml' file to produce - an " //$NON-NLS-1$
-                    + "existing file there is OVERWRITTEN only when 'basedOn' names that SAME " //$NON-NLS-1$
-                    + "file, which updates it in place; any other write over an existing file is " //$NON-NLS-1$
+                "Absolute path of the merge-rules file (required). read: the file to parse, " //$NON-NLS-1$
+                    + "'.xml' or the '.zip' a comparison saves - the extension's CASE does not " //$NON-NLS-1$
+                    + "matter, '.ZIP' is read. write: this is what picks the container, and here " //$NON-NLS-1$
+                    + "the extension must be spelled in LOWER CASE, because EDT's own reader " //$NON-NLS-1$
+                    + "compares it exactly and would refuse the file inside the launch. '.zip' is " //$NON-NLS-1$
+                    + "read by every supported EDT and holds an entry named after the " //$NON-NLS-1$
+                    + "comparison's three PROJECT names, so it needs a live comparison and is " //$NON-NLS-1$
+                    + "refused without one; '.xml' needs none and is read by EDT 2026.1 only. An " //$NON-NLS-1$
+                    + "existing file is OVERWRITTEN only when 'basedOn' names that SAME file, " //$NON-NLS-1$
+                    + "which updates it in place; any other write over an existing file is " //$NON-NLS-1$
                     + "refused so decisions are never silently discarded.", //$NON-NLS-1$
                 true)
             .stringProperty(KEY_BASED_ON,
                 "write: an existing rules file to start from, so its decisions and payload are " //$NON-NLS-1$
-                    + "kept and yours are merged in (optional; '.xml' or '.zip').") //$NON-NLS-1$
+                    + "kept and yours are merged in (optional; '.xml' or '.zip', case-" //$NON-NLS-1$
+                    + "insensitive - it is only read, never handed to EDT).") //$NON-NLS-1$
             .objectArrayProperty(KEY_DECISIONS,
                 "write: the decisions to record, as [{path, rule}]. 'path' is the key chain below " //$NON-NLS-1$
                     + "the root - [] = the whole configuration, ['commonModules'] = a whole " //$NON-NLS-1$
@@ -221,8 +273,11 @@ public class MergeRulesTool implements IMcpTool
                     + "GetFromOther, DoNotMerge, MergePrioritizingMain, MergePrioritizingOther.") //$NON-NLS-1$
             .stringProperty(KEY_COMPARISON_ID,
                 "write: validate every rule against this live comparison before writing " //$NON-NLS-1$
-                    + "(optional; omitted = validate against the running comparison if there is " //$NON-NLS-1$
-                    + "one, otherwise author unvalidated and say so).") //$NON-NLS-1$
+                    + "(optional). Validation needs a FINISHED tree: naming a comparison whose " //$NON-NLS-1$
+                    + "tree cannot be read yet is REFUSED, never quietly downgraded, because you " //$NON-NLS-1$
+                    + "asked for a checked file. Omitted = validate against the running " //$NON-NLS-1$
+                    + "comparison when its tree is finished, otherwise author unvalidated and " //$NON-NLS-1$
+                    + "say so.") //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max decision rows to report; default 200, max 1000 (optional)") //$NON-NLS-1$
             .build();
     }
@@ -276,6 +331,23 @@ public class MergeRulesTool implements IMcpTool
 
     // ==================== read ====================
 
+    /**
+     * Parses a rules file and reports its decisions.
+     *
+     * <h2>No extension check, and that is deliberate</h2>
+     * {@code hasReadableExtension} is a rule about what the PLATFORM will accept, and reading is
+     * the one path that never hands the file to the platform. So this path asks nothing about the
+     * name: {@code MergeRulesCodec.read} decides how to open the file with
+     * {@code MergeRulesCodec#isZip}, which is case-INSENSITIVE, and anything else is parsed as the
+     * XML document it is. {@code RULES.ZIP} therefore reads, and so does a rules file somebody
+     * renamed. The lower-case rule applies to the two places where EDT itself opens the file -
+     * a {@code write} target and {@code compare_configurations}'s {@code mergeRulesFile} - and
+     * refusing it here as well would refuse a file that this call reads perfectly well.
+     *
+     * @param filePath the caller's path
+     * @param limit the cap on reported rows
+     * @return the report, or the refusal
+     */
     private String read(String filePath, int limit)
     {
         Path given;
@@ -454,13 +526,21 @@ public class MergeRulesTool implements IMcpTool
             return ToolResult.error(KEY_FILE_PATH + " must name a file, not a directory root: '" //$NON-NLS-1$
                 + filePath + "'.").toJson(); //$NON-NLS-1$
         }
-        if (!fileName.toString().toLowerCase(Locale.ROOT).endsWith(MergeRulesCodec.XML_EXTENSION))
+        if (!MergeRulesCodec.hasReadableExtension(file))
         {
-            return ToolResult.error("mode 'write' produces a '.xml' merge-rules file, but " + KEY_FILE_PATH //$NON-NLS-1$
-                + " is '" + fileName + "'. EDT reads a '.zip' by looking for the entry named " //$NON-NLS-1$ //$NON-NLS-2$
-                + "after the comparison's own project triple and IGNORES a zip whose entry is named " //$NON-NLS-1$
-                + "anything else, so a zip authored from outside a comparison would silently do " //$NON-NLS-1$
-                + "nothing. Write '.xml' - the comparison launcher reads it directly.").toJson(); //$NON-NLS-1$
+            String wrongCase = wrongCaseExtensionRefusal(fileName.toString());
+            if (wrongCase != null)
+            {
+                return wrongCase;
+            }
+            return ToolResult.error("mode 'write' produces '" + MergeRulesCodec.ZIP_EXTENSION //$NON-NLS-1$
+                + "' or '" + MergeRulesCodec.XML_EXTENSION + "', but " + KEY_FILE_PATH + " is '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + fileName + "'. EDT's merge-settings reader takes no other name: 2026.2 reads a " //$NON-NLS-1$
+                + "zip alone, 2026.1 reads either, so anything else would be refused inside the " //$NON-NLS-1$
+                + "launch that was meant to apply it. Name the file '" //$NON-NLS-1$
+                + MergeRulesCodec.ZIP_EXTENSION + "' and pass " + KEY_COMPARISON_ID //$NON-NLS-1$ //$NON-NLS-2$
+                + " (a zip entry is named after the comparison's three projects), or '" //$NON-NLS-1$
+                + MergeRulesCodec.XML_EXTENSION + "' to author it without one.").toJson(); //$NON-NLS-1$
         }
         if (rawDecisions.isEmpty())
         {
@@ -559,6 +639,9 @@ public class MergeRulesTool implements IMcpTool
         // the two - an exists() check here, an unconditional replacing move there - and two
         // concurrent writes to a path that started out free both pass this guard and both perform
         // that move, so the second silently destroys the decisions the first had just recorded.
+        // Asked of the codec, not of the string, so the one place that knows what the platform
+        // reads decides what this write produces.
+        boolean zipped = MergeRulesCodec.isZip(file);
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
         if (Files.exists(file))
         {
@@ -641,13 +724,22 @@ public class MergeRulesTool implements IMcpTool
         }
 
         boolean idGiven = isSet(comparisonId);
-        Optional<MergeRuleAuthority> authority = Optional.empty();
+        Optional<MergeRuleAuthority> comparison = Optional.empty();
+        // The two halves of what a live comparison gives this write, kept apart on purpose. The
+        // ADDRESS is a fact about which projects the comparison runs over, and it is known the
+        // moment the session answers at all; VALIDATION additionally needs the tree to be
+        // readable. They used to be one: the entry name was computed only on the path that had
+        // already proved the tree finished, so an unfinished comparison lost the address with it
+        // and a zip write was refused as if no comparison existed - while the very comparison the
+        // refusal told the caller to start was the one holding EDT's single slot.
+        Optional<MergeRuleAuthority> validating = Optional.empty();
         String refusal;
         try
         {
-            authority = authoritySupplier.authority(idGiven ? comparisonId : null);
-            refusal = authority.isPresent()
-                ? firstRefusedDecision(authority.get(), document, requestedPaths) : null;
+            comparison = authoritySupplier.authority(idGiven ? comparisonId : null);
+            validating = comparison.filter(MergeRuleAuthority::answersRules);
+            refusal = validating.isPresent()
+                ? firstRefusedDecision(validating.get(), document, requestedPaths) : null;
         }
         catch (RuntimeException e)
         {
@@ -663,14 +755,21 @@ public class MergeRulesTool implements IMcpTool
             // comparison is running and failing, dropping the id lands on the SAME comparison and
             // fails the same way. Authoring from names is what happens when nothing answers at
             // all, and that is not a mode a parameter can be dropped to enter.
+            //
+            // NOT VALIDATED is named as the TWO states it actually covers. The sentence used to
+            // end by naming only the state where nothing answers: the other one is a comparison
+            // that answers while its tree cannot be read, and that is the state this very branch
+            // sits next to - so the refusal was denying the existence of its own neighbour.
             return ToolResult.error("Could not check the decisions against " //$NON-NLS-1$
                 + (idGiven ? "comparison '" + comparisonId + "'" : "the running comparison") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ": " + describe(e) + ". Nothing was written - the rules were neither checked nor " //$NON-NLS-1$ //$NON-NLS-2$
                 + "found illegal, so nothing about the file has to be undone. Retry once the " //$NON-NLS-1$
                 + "comparison answers; get_comparison_node says whether its tree can be read. " //$NON-NLS-1$
                 + "Dropping " + KEY_COMPARISON_ID + " does not author the file from names " //$NON-NLS-1$ //$NON-NLS-2$
-                + "instead: a running comparison is checked against either way, and the NOT " //$NON-NLS-1$
-                + "VALIDATED report is what happens when no comparison answers at all.").toJson(); //$NON-NLS-1$
+                + "instead: with no id this tool resolves whichever comparison is RUNNING and " //$NON-NLS-1$
+                + "is checked against that one. A NOT VALIDATED report is written in two " //$NON-NLS-1$
+                + "states - when nothing answered at all, and when a comparison answered while " //$NON-NLS-1$
+                + "its tree could not be read.").toJson(); //$NON-NLS-1$
         }
         finally
         {
@@ -680,22 +779,74 @@ public class MergeRulesTool implements IMcpTool
             // lease outliving its read would keep a finished comparison out of the idle sweep's
             // reach for as long as the server runs. Everything the report still needs from it -
             // the comparison id - is a value it already carries.
-            authority.ifPresent(MergeRuleAuthority::close);
+            comparison.ifPresent(MergeRuleAuthority::close);
         }
-        if (idGiven && authority.isEmpty())
+        // Kept as a plain value, exactly as the comparison id is: the write happens after the pass
+        // has been given back, and a zip's entry name has to survive that. The getter is reached
+        // AFTER close(), which is safe by construction rather than by luck - it answers a final
+        // String captured while the lease was held, and close() releases the lease, not the value.
+        // Asked only when the target IS a zip: an xml file carries no address, so there is nothing
+        // about a comparison it could need. Taken from the comparison that ANSWERED, not from the
+        // one that validated - an unfinished tree still names its own projects.
+        String zipEntryId =
+            zipped ? comparison.map(MergeRuleAuthority::mergeRulesEntryId).orElse(null) : null;
+        if (idGiven && comparison.isPresent() && validating.isEmpty())
         {
-            // Names what was observed - that nothing answered for this id - and the two states
-            // that produce it, without picking one. In particular it does NOT say "no comparison
-            // is running" and does NOT send the caller to start one: EDT runs a single comparison
-            // per instance, so if the tree is merely still building, starting another is refused.
+            // The caller asked for validation against a comparison that IS there and cannot give a
+            // verdict. Said as itself rather than as "nothing answered for that id": the id is
+            // right, the comparison is registered, and the only thing missing is a readable tree -
+            // a state that ends by itself, so the action is to wait rather than to hunt for
+            // another id. Nothing is written, because a validated write is what was asked for.
             return ToolResult.error("Cannot validate against comparison '" + comparisonId //$NON-NLS-1$
-                + "': nothing answered for it. Either the comparison is no longer registered, or " //$NON-NLS-1$
-                + "its tree is not finished - an unfinished tree cannot tell 'not compared yet' " //$NON-NLS-1$
-                + "from 'not in this comparison', so it is never used to refuse a rule. The id is " //$NON-NLS-1$
-                + "the one compare_configurations returned; get_comparison_node shows whether the " //$NON-NLS-1$
-                + "tree is still building. Or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
-                + " to author the file from names alone - the report then says the rules were NOT " //$NON-NLS-1$
-                + "validated.").toJson(); //$NON-NLS-1$
+                + "': it is registered, but its tree could not be read - either it is still being " //$NON-NLS-1$
+                + "built, or EDT's comparison service did not answer for it. An unfinished tree " //$NON-NLS-1$
+                + "cannot tell 'not compared yet' from 'not in this comparison', so it is never " //$NON-NLS-1$
+                + "used to refuse a rule. get_comparison_node shows whether the tree is still " //$NON-NLS-1$
+                + "building; re-send this write once it is finished. Or omit " + KEY_COMPARISON_ID //$NON-NLS-1$
+                + " to write without validation - which is NOT authoring from names alone: with " //$NON-NLS-1$
+                + "no id this tool resolves whichever comparison is RUNNING, so the report names " //$NON-NLS-1$
+                + "the comparison that answered and says its rules were NOT validated, and a '" //$NON-NLS-1$
+                + MergeRulesCodec.ZIP_EXTENSION
+                + "' target still gets that comparison's own entry name.").toJson(); //$NON-NLS-1$
+        }
+        if (idGiven && comparison.isEmpty())
+        {
+            // Names what was observed - that nothing answered for this id - without picking a
+            // cause. In particular it does NOT say "no comparison is running" and does NOT send
+            // the caller to start one: EDT runs a single comparison per instance, so if another
+            // comparison holds the slot, starting one is refused. The branch above covers the
+            // comparison that IS registered and merely unreadable, so this one no longer has to
+            // hedge between the two.
+            return ToolResult.error("Cannot validate against comparison '" + comparisonId //$NON-NLS-1$
+                + "': nothing answered for it, so nothing is registered under that id any more. " //$NON-NLS-1$
+                + "The id is the one compare_configurations returned; get_comparison_node says " //$NON-NLS-1$
+                + "whether a comparison under that id can still be read. Or omit " //$NON-NLS-1$
+                + KEY_COMPARISON_ID
+                + " to write without validation - which is not necessarily authoring from names " //$NON-NLS-1$
+                + "alone: with no id this tool resolves whichever comparison is RUNNING, which " //$NON-NLS-1$
+                + "may be a different one. Either way the report says the rules were NOT " //$NON-NLS-1$
+                + "validated, and it names the comparison when one answered.").toJson(); //$NON-NLS-1$
+        }
+        if (zipped && !isSet(zipEntryId))
+        {
+            // The one case this tool will not author from names. Every other unvalidated write
+            // still produces a file the platform reads; a zip whose entry is named anything but
+            // the launching comparison's own triple is SKIPPED by EDT with a log warning and the
+            // launch proceeds with no decisions at all - so a guessed name would hand back a file
+            // reported as written that can never apply. There is nothing to say in a caveat
+            // either, because the failure is silent on the platform's side.
+            return ToolResult.error("Nothing was written: a '" + MergeRulesCodec.ZIP_EXTENSION //$NON-NLS-1$
+                + "' merge-rules file carries an entry named after the comparison's three " //$NON-NLS-1$
+                + "PROJECT names - EDT restores that entry and IGNORES an archive whose ENTRY is " //$NON-NLS-1$
+                + "named anything else, applying nothing and reporting nothing; the name of the " //$NON-NLS-1$
+                + "FILE itself is yours to choose - and no comparison answered here, so the " //$NON-NLS-1$
+                + "entry name cannot be known. Start the comparison with compare_configurations " //$NON-NLS-1$
+                + "and re-send this write; naming it with " + KEY_COMPARISON_ID //$NON-NLS-1$
+                + " also asks for the rules to be checked, which needs its tree to have " //$NON-NLS-1$
+                + "FINISHED. Or write '" + MergeRulesCodec.XML_EXTENSION //$NON-NLS-1$
+                + "' instead - which needs no comparison, and which EDT 2026.1 reads directly " //$NON-NLS-1$
+                + "while EDT 2026.2 does not read it at all.") //$NON-NLS-1$
+                .toJson();
         }
         if (refusal != null)
         {
@@ -704,7 +855,14 @@ public class MergeRulesTool implements IMcpTool
 
         try
         {
-            MergeRulesCodec.write(file, document, targetPolicy);
+            if (zipEntryId == null)
+            {
+                MergeRulesCodec.write(file, document, targetPolicy);
+            }
+            else
+            {
+                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId);
+            }
         }
         catch (FileAlreadyExistsException e)
         {
@@ -732,20 +890,96 @@ public class MergeRulesTool implements IMcpTool
             return ToolResult.error("Could not write the merge-rules file " + file + ": " //$NON-NLS-1$ //$NON-NLS-2$
                 + describe(e)).toJson();
         }
-        return renderWrite(file, basedOn, existingDecisions, requested, replaced, authority, document, limit);
+        return renderWrite(file, basedOn, existingDecisions, requested, replaced, comparison, validating,
+            document, limit, zipEntryId);
+    }
+
+    /**
+     * States which container was written and which EDT reads it.
+     * <p>
+     * The two containers are not interchangeable and the difference is invisible in the file: a
+     * {@code .zip} is read by every supported EDT but only by a comparison whose three PROJECT
+     * names spell its entry, while an {@code .xml} is read by any comparison but only on EDT
+     * 2026.1 - 2026.2 refuses it outright ({@code Can read merge settings from a zip file}). A
+     * report that named neither would leave the caller to discover the version limit inside the
+     * launch it was preparing.
+     * <p>
+     * The zip line says PROJECT NAMES rather than "this comparison", because that is what the
+     * name is made of and the difference is the whole risk: another comparison over the same three
+     * projects - a later run, other revisions - restores the same entry and applies decisions
+     * taken about something else.
+     * <p>
+     * What it deliberately does NOT say is that no other comparison can reach the file. The name
+     * is a bare concatenation with {@code _}, a character project names may contain, so the
+     * triples {@code (A_B, C, D)} and {@code (A, B_C, D)} spell the same entry - the mapping is
+     * not injective, and a claim of exclusivity would be one this tool cannot support. The line
+     * states the direction that does hold and names the separator, so a caller whose project
+     * names carry underscores can see the risk instead of being told it does not exist.
+     *
+     * @param zipEntryId the entry the zip was written under, or {@code null} for a bare xml file
+     * @return the line, ending in a newline
+     */
+    private static String containerClause(String zipEntryId)
+    {
+        if (zipEntryId == null)
+        {
+            return "- Container: '" + MergeRulesCodec.XML_EXTENSION //$NON-NLS-1$
+                + "' - read by EDT 2026.1 and by ANY comparison, because the document carries no " //$NON-NLS-1$
+                + "address. **EDT 2026.2 does not read it**: its merge-settings reader takes a '" //$NON-NLS-1$
+                + MergeRulesCodec.ZIP_EXTENSION + "' alone and fails the launch instead. Write '" //$NON-NLS-1$ //$NON-NLS-2$
+                + MergeRulesCodec.ZIP_EXTENSION + "' (which needs a live comparison to name its " //$NON-NLS-1$
+                + "entry) for a file that works on both.\n"; //$NON-NLS-1$
+        }
+        return "- Container: '" + MergeRulesCodec.ZIP_EXTENSION + "', entry `" + zipEntryId //$NON-NLS-1$ //$NON-NLS-2$
+            + ".xml` - read by EDT 2026.1 and 2026.2 alike, and ADDRESSED BY THAT EXACT STRING: " //$NON-NLS-1$
+            + "EDT restores this entry for ANY comparison whose main, other and ancestor project " //$NON-NLS-1$
+            + "names, joined by '_' in that order, spell it - this run or a later one over other " //$NON-NLS-1$
+            + "revisions - so re-using the file re-applies these decisions. It is a string, not a " //$NON-NLS-1$
+            + "set: swapping main and other spells a different entry, and because '_' is also a " //$NON-NLS-1$
+            + "legal character in a project name the mapping is not one-to-one (main 'A_B' with " //$NON-NLS-1$
+            + "other 'C' spells what main 'A' with other 'B_C' spells). What holds in one " //$NON-NLS-1$
+            + "direction: a comparison whose own three names spell a DIFFERENT string finds no " //$NON-NLS-1$
+            + "entry of its own here, applies nothing and says nothing. The name of the FILE is " //$NON-NLS-1$
+            + "yours to choose; only the entry name and the lower-case '" //$NON-NLS-1$
+            + MergeRulesCodec.ZIP_EXTENSION + "' matter.\n"; //$NON-NLS-1$
     }
 
     private String renderWrite(Path file, String basedOn, int existingDecisions, List<RequestedDecision> requested,
-        int replaced, Optional<MergeRuleAuthority> authority, MergeRulesDocument document, int limit)
+        int replaced, Optional<MergeRuleAuthority> comparison, Optional<MergeRuleAuthority> validating,
+        MergeRulesDocument document, int limit, String zipEntryId)
     {
         StringBuilder out = new StringBuilder("# Merge rules written: ").append(file).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (authority.isPresent())
+        if (validating.isPresent())
         {
-            out.append("**Validated against comparison `").append(authority.get().comparisonId()) //$NON-NLS-1$
+            out.append("**Validated against comparison `").append(validating.get().comparisonId()) //$NON-NLS-1$
                 .append("`.** Every decision IN THE FILE was checked against the rules its own " //$NON-NLS-1$
                     + "node allows before anything was written - the ones written now and the " //$NON-NLS-1$
                     + "ones carried in from " + KEY_BASED_ON + " alike. The table below lists " //$NON-NLS-1$ //$NON-NLS-2$
                     + "only what this call requested.\n\n"); //$NON-NLS-1$
+        }
+        else if (comparison.isPresent())
+        {
+            // A comparison answered - which is why a zip written here IS addressed - but it could
+            // not give a verdict on a single rule. Both facts are stated, because reporting only
+            // the first would read as a checked file and reporting only the second would hide
+            // where the entry name came from.
+            //
+            // The address half is claimed only where an address exists. An '.xml' document
+            // carries none - which is what the Container line two lines below says about it, and
+            // what makes it readable by any comparison - so on that target this branch used to
+            // contradict its own report a paragraph later. zipEntryId is exactly the fact
+            // "this file got an address", so it is what the sentence branches on.
+            out.append("**NOT VALIDATED - comparison `").append(comparison.get().comparisonId()) //$NON-NLS-1$
+                .append("` answered, but its tree could not be read.**") //$NON-NLS-1$
+                .append(zipEntryId == null
+                    ? " Not one rule was checked against it: the literals were checked" //$NON-NLS-1$
+                    : " It named this file's entry, and nothing else: the literals were checked") //$NON-NLS-1$
+                .append(" against the platform's rule vocabulary, while whether each rule is " //$NON-NLS-1$
+                    + "legal for its own node needs a FINISHED tree, which an unfinished one " //$NON-NLS-1$
+                    + "cannot substitute for - there a node that has not been compared yet is " //$NON-NLS-1$
+                    + "indistinguishable from a node the comparison does not have. Re-run this " //$NON-NLS-1$
+                    + "write once get_comparison_node reports the tree finished to have every " //$NON-NLS-1$
+                    + "rule checked.\n\n"); //$NON-NLS-1$
         }
         else
         {
@@ -755,9 +989,11 @@ public class MergeRulesTool implements IMcpTool
             out.append("**NOT VALIDATED - authored from names, without a comparison to check them " //$NON-NLS-1$
                 + "against.** The literals were checked against the platform's rule vocabulary, but " //$NON-NLS-1$
                 + "whether each rule is legal for its own node is knowable only from a live " //$NON-NLS-1$
-                + "comparison. Start one with compare_configurations and re-run this write to have " //$NON-NLS-1$
-                + "every rule checked.\n\n"); //$NON-NLS-1$
+                + "comparison whose tree has FINISHED. Start one with compare_configurations, wait " //$NON-NLS-1$
+                + "until get_comparison_node reports its tree finished, and re-run this write to " //$NON-NLS-1$
+                + "have every rule checked.\n\n"); //$NON-NLS-1$
         }
+        out.append(containerClause(zipEntryId));
         out.append("- Decisions recorded: ").append(requested.size()).append(" (") //$NON-NLS-1$ //$NON-NLS-2$
             .append(requested.size() - replaced).append(" new, ").append(replaced).append(" replaced)\n"); //$NON-NLS-1$ //$NON-NLS-2$
         if (isSet(basedOn))
@@ -1480,6 +1716,44 @@ public class MergeRulesTool implements IMcpTool
         return refusal == null ? null : refusal.toJson();
     }
 
+    /**
+     * Refuses a target whose extension is right but SPELLED in the wrong case.
+     * <p>
+     * Its own sentence, because the generic "name it .zip or .xml" refusal reads as nonsense over
+     * a file already called {@code rules.ZIP}: the caller did name it that, and the part that
+     * failed is invisible unless it is pointed at. What is being enforced here is the platform's
+     * own test - EDT 2026.2 asserts {@code "zip".equals(FileUtil.getExtension(path))} and 2026.1
+     * branches the same way - so this refusal is the whole cost of a rename, against a write that
+     * would otherwise produce a perfectly valid archive the launch then refuses.
+     *
+     * @param name the target's file name, exactly as spelled
+     * @return the refusal, or {@code null} when the name does not differ from an accepted one by
+     *         case alone
+     */
+    private static String wrongCaseExtensionRefusal(String name)
+    {
+        String lower = name.toLowerCase(Locale.ROOT);
+        String extension;
+        if (lower.endsWith(MergeRulesCodec.ZIP_EXTENSION))
+        {
+            extension = MergeRulesCodec.ZIP_EXTENSION;
+        }
+        else if (lower.endsWith(MergeRulesCodec.XML_EXTENSION))
+        {
+            extension = MergeRulesCodec.XML_EXTENSION;
+        }
+        else
+        {
+            return null;
+        }
+        String spelled = name.substring(name.length() - extension.length());
+        return ToolResult.error("Nothing was written: " + KEY_FILE_PATH + " is '" + name //$NON-NLS-1$ //$NON-NLS-2$
+            + "', and EDT's merge-settings reader compares the extension EXACTLY - '" + spelled //$NON-NLS-1$
+            + "' is not '" + extension + "'. The file would be written and then refused inside " //$NON-NLS-1$
+            + "the launch meant to apply it, with the platform's own assertion. Re-send with the " //$NON-NLS-1$
+            + "extension in lower case.").toJson(); //$NON-NLS-1$
+    }
+
     private static String invalidPath(String parameter, String value, InvalidPathException e)
     {
         return ToolResult.error(parameter + " is not a usable file path: '" + value + "' (" //$NON-NLS-1$ //$NON-NLS-2$
@@ -1548,7 +1822,58 @@ public class MergeRulesTool implements IMcpTool
         String comparisonId();
 
         /**
-         * The rules a node allows, as camel-case rule literals.
+         * The name EDT will look for INSIDE a zipped merge-rules file when it restores this
+         * comparison's decisions - {@code <mainProject>_<otherProject>_<ancestorProject>}, without
+         * an extension.
+         * <p>
+         * It is on this interface for the same reason {@link #comparisonId()} is: it is a fact
+         * about the live comparison that the write needs and cannot derive. The tool must not
+         * derive it either - the names are what the platform put in the comparison's descriptors,
+         * not what the request spelled - and an entry named anything else is skipped by EDT with a
+         * log warning while the launch proceeds with no decisions. That silence is why this is a
+         * required answer rather than a defaulted one: an authority that could not name it would
+         * let a zip be written that looks correct and does nothing.
+         * <p>
+         * It is an ADDRESS and not an identity: the three names are joined by {@code _}, which is
+         * itself legal in a project name, so different triples can spell the same id - see
+         * {@code ComparisonEngine#mergeRulesEntryId}. Nothing here may be worded as "no other
+         * comparison can restore this file".
+         *
+         * @return the entry id, never {@code null}
+         */
+        String mergeRulesEntryId();
+
+        /**
+         * Whether this comparison can answer {@link #availableRules(List)} at all.
+         * <p>
+         * A comparison answers two different things, and only one of them needs its tree. The
+         * ADDRESS ({@link #comparisonId()}, {@link #mergeRulesEntryId()}) is a fact about which
+         * projects the run covers and is known as soon as the session is found; a RULE VERDICT
+         * needs a FINISHED tree, because the tree is lazy and a node that has not been compared
+         * yet is indistinguishable from a node the comparison does not have. Folding the two
+         * together is what made an unfinished comparison lose its address as well, so a zip write
+         * was refused for want of a name the live handle was holding all along.
+         * <p>
+         * {@code false} never refuses a RULE - {@link #availableRules(List)} is not consulted at
+         * all in that state, so no decision is called illegal on the strength of a tree that
+         * could not be read. Whether the WRITE proceeds depends on what the caller asked for, and
+         * the two answers are deliberately different: with no {@code comparisonId} the write
+         * degrades to the NOT VALIDATED report, which still says which comparison named the file;
+         * with a {@code comparisonId} it is REFUSED, because a validated write is what was asked
+         * for and quietly downgrading it would report an unchecked file to a caller who requested
+         * a checked one. Both branches are in {@code writeUnderMutex}.
+         *
+         * @return {@code true} when a rule verdict can be asked of this comparison; {@code true}
+         *         by default, because an authority that exists only to answer rules always can
+         */
+        default boolean answersRules()
+        {
+            return true;
+        }
+
+        /**
+         * The rules a node allows, as camel-case rule literals. Asked only when
+         * {@link #answersRules()} is {@code true}.
          *
          * @param nodePath the full key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
          * @return the allowed literals, or empty when the comparison has no such node
@@ -1588,12 +1913,17 @@ public class MergeRulesTool implements IMcpTool
     public interface MergeRuleAuthoritySupplier
     {
         /**
-         * Finds the authority to validate against.
+         * Finds the live comparison this write can lean on.
          * <p>
-         * Empty means "there is nothing to validate against" and deliberately does not say
-         * WHY - the comparison may not be running, or this deployment may have no comparison
-         * facade wired at all. Callers must therefore report the absence of validation, never a
-         * cause they did not observe.
+         * Empty means "no comparison answered at all" and deliberately does not say WHY - the
+         * comparison may not be running, or this deployment may have no comparison facade wired at
+         * all. Callers must therefore report the absence of validation, never a cause they did not
+         * observe.
+         * <p>
+         * A PRESENT authority is not by itself a promise of validation: ask
+         * {@link MergeRuleAuthority#answersRules()}. An authority that names the comparison but
+         * cannot read its tree is a third state, and it exists because the address a zip needs is
+         * knowable exactly when the session is - not when its tree happens to be finished.
          * <p>
          * <b>A failed attempt is THROWN, never collapsed into empty.</b> "Nothing answered" and
          * "something was asked and broke" are different facts, and only the first entitles a
@@ -1620,17 +1950,22 @@ public class MergeRulesTool implements IMcpTool
      * holds {@link ComparisonEngine} and the read-only {@link ComparisonView} it hands out, which
      * is one of the three independent layers that make a merge unreachable from a tool.</p>
      *
-     * <p><b>It answers only for a FINISHED tree.</b> The comparison tree is lazy, so a node that
-     * has not been compared yet is simply absent from its parent's children - indistinguishable
-     * from a node the comparison does not have. Answering from a half-built tree would turn "not
-     * compared yet" into the refusal "that node is not in this comparison", which is a statement
-     * the tool would not have observed. While the tree is still building this supplier therefore
-     * answers NOTHING, and the write degrades to the honest NOT VALIDATED report.</p>
+     * <p><b>It answers RULES only for a FINISHED tree.</b> The comparison tree is lazy, so a node
+     * that has not been compared yet is simply absent from its parent's children -
+     * indistinguishable from a node the comparison does not have. Answering from a half-built tree
+     * would turn "not compared yet" into the refusal "that node is not in this comparison", which
+     * is a statement the tool would not have observed. While the tree is still building this
+     * supplier therefore answers no RULES, and the write degrades to the honest NOT VALIDATED
+     * report.</p>
+     *
+     * <p><b>The ADDRESS is answered whenever the session is found.</b> The zip entry name is
+     * {@code <main>_<other>_<ancestor>}, read straight off the handle's three descriptors, so it
+     * needs neither the tree nor the comparison service. It used to be computed only after both
+     * had answered, which threw a known name away and refused a zip write for want of it.</p>
      *
      * <p><b>Answering nothing is reserved for what it OBSERVED.</b> Every empty answer below is a
-     * reading: no facade installed, no comparison named, no session under that id, no view, a tree
-     * that is not finished. A failure to obtain any of those readings is not one of them, and is
-     * not caught - see {@link #authority(String)}.</p>
+     * reading: no comparison named, no session under that id, no handle. A failure to obtain any
+     * of those readings is not one of them, and is not caught - see {@link #authority(String)}.</p>
      */
     static final class EngineRuleAuthority
         implements MergeRuleAuthoritySupplier
@@ -1700,13 +2035,11 @@ public class MergeRulesTool implements IMcpTool
 
         private static Optional<MergeRuleAuthority> resolve(String comparisonId)
         {
-            ComparisonEngine engine = ComparisonEngine.get().orElse(null);
-            if (engine == null)
-            {
-                return Optional.empty();
-            }
             // Through the registry's own entry point, not the engine's: a live session must stay
-            // findable while EDT's service is momentarily unregistered.
+            // findable while EDT's service is momentarily unregistered. Asked BEFORE the engine,
+            // and that order is the fix: the entry name is a property of the handle alone, so a
+            // deployment whose comparison service is momentarily away still knows which projects
+            // the running comparison covers.
             ComparisonSessionRegistry registry = ComparisonSessionRegistry.shared();
             String id = isSet(comparisonId) ? comparisonId : registry.activeComparisonId();
             if (id == null)
@@ -1726,24 +2059,36 @@ public class MergeRulesTool implements IMcpTool
                 {
                     return Optional.empty();
                 }
+                // Computed HERE, from the handle the lease is holding, and carried as a value: the
+                // write happens after the lease has been given back, and the descriptors the names
+                // come from are reachable only through it. It is a pure function of the handle -
+                // three project names - so it is known whether or not the tree can be read.
+                String entryId = ComparisonEngine.mergeRulesEntryId(handle);
+                ComparisonEngine engine = ComparisonEngine.get().orElse(null);
                 // Both "the service could not be asked" and "EDT no longer knows the handle" land
                 // the same way HERE and only here: this path degrades to no validation, which the
                 // report states, so it draws no conclusion from either and needs to tell them apart
                 // nowhere.
-                ComparisonView view = engine.view(handle).orElse(null);
+                ComparisonView view = engine == null ? null : engine.view(handle).orElse(null);
                 if (view == null || !isTreeFinished(engine, view))
                 {
-                    return Optional.empty();
+                    // The comparison is REGISTERED and names its own projects; only the verdict is
+                    // missing. Answering empty here - which is what this used to do - threw the
+                    // address away with the verdict and left a zip write refused for want of a
+                    // name that was in hand. The lease is given back on the way out: nothing below
+                    // this line reads the tree.
+                    return Optional.of(new AddressOnlyAuthority(id, entryId));
                 }
                 handedOver = true;
-                return Optional.of(new LiveComparisonAuthority(engine, view, id, lease));
+                return Optional.of(new LiveComparisonAuthority(engine, view, id, entryId, lease));
             }
             finally
             {
                 if (!handedOver)
                 {
-                    // Every path that answers "no validation" gives the lease back here; only the
-                    // authority that was actually handed out owns one, and it closes it itself.
+                    // Every path that does not hand out a TREE-READING authority gives the lease
+                    // back here; only the authority that reads the tree owns one, and it closes it
+                    // itself.
                     lease.close();
                 }
             }
@@ -1763,6 +2108,61 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
+     * A comparison that named itself and can say nothing else.
+     * <p>
+     * It exists because "which projects is this comparison over" and "is this rule legal on that
+     * node" are answered by different parts of the platform: the first by the handle's three
+     * descriptors, the second by a tree that has to be FINISHED. When the second is unavailable
+     * the first still is, and a write that needs only the address - a zip, which is addressed by
+     * the project triple - has no reason to fail. Holding nothing, it closes to nothing.
+     */
+    private static final class AddressOnlyAuthority
+        implements MergeRuleAuthority
+    {
+        private final String comparisonId;
+
+        private final String mergeRulesEntryId;
+
+        AddressOnlyAuthority(String comparisonId, String mergeRulesEntryId)
+        {
+            this.comparisonId = comparisonId;
+            this.mergeRulesEntryId = mergeRulesEntryId;
+        }
+
+        @Override
+        public String comparisonId()
+        {
+            return comparisonId;
+        }
+
+        @Override
+        public String mergeRulesEntryId()
+        {
+            return mergeRulesEntryId;
+        }
+
+        @Override
+        public boolean answersRules()
+        {
+            return false;
+        }
+
+        /**
+         * {@inheritDoc}
+         * <p>
+         * Never reached: the caller filters on {@link #answersRules()} first. Empty rather than an
+         * exception, so that a caller which somehow lost that guard lands on the REFUSING side -
+         * empty is read as "the comparison has no such node", which refuses the decision and
+         * writes nothing - instead of on the side that writes a file described as checked.
+         */
+        @Override
+        public Optional<List<String>> availableRules(List<String> nodePath)
+        {
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Answers which rules a node allows, from one live comparison, through the read-only view.
      *
      * <p>Every lookup runs inside {@link ComparisonEngine#read} - the comparison tree lives in the
@@ -1778,15 +2178,18 @@ public class MergeRulesTool implements IMcpTool
 
         private final String comparisonId;
 
+        private final String mergeRulesEntryId;
+
         /** Held for the whole validation pass, so the idle sweep cannot reclaim it mid-read. */
         private final ComparisonSessionRegistry.Lease lease;
 
         LiveComparisonAuthority(ComparisonEngine engine, ComparisonView view, String comparisonId,
-            ComparisonSessionRegistry.Lease lease)
+            String mergeRulesEntryId, ComparisonSessionRegistry.Lease lease)
         {
             this.engine = engine;
             this.view = view;
             this.comparisonId = comparisonId;
+            this.mergeRulesEntryId = mergeRulesEntryId;
             this.lease = lease;
         }
 
@@ -1794,6 +2197,12 @@ public class MergeRulesTool implements IMcpTool
         public String comparisonId()
         {
             return comparisonId;
+        }
+
+        @Override
+        public String mergeRulesEntryId()
+        {
+            return mergeRulesEntryId;
         }
 
         @Override

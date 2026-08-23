@@ -382,7 +382,7 @@ public class ComparisonNodeStateTest
         collector.accept(node);
         String report = ComparisonTreeReport.render(
             new ComparisonTreeReport.Header("cmp-1", "TestConfiguration", "origin/main", "v1.0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                "finished"), //$NON-NLS-1$
+                "finished", true), //$NON-NLS-1$
             new ComparisonScope(Collections.emptyList(), Collections.emptyList(),
                 Collections.emptyList()),
             collector);
@@ -395,7 +395,8 @@ public class ComparisonNodeStateTest
     private static String nodeStateCell(TopComparisonNode node)
     {
         ComparisonNodeRenderer.Request request = new ComparisonNodeRenderer.Request("cmp-1", FQN, //$NON-NLS-1$
-            ComparisonSide.MAIN, node.getComparisonStatus(), 1, 100, null);
+            ComparisonSide.MAIN, node.getComparisonStatus(), 1, 100, null,
+            ComparisonNodeRenderer.ContentCoverage.COMPARED);
         String document = ComparisonNodeRenderer.render(request, node, new SilentAccess());
         return cellOfRowStartingWith(document, "State", 1); //$NON-NLS-1$
     }

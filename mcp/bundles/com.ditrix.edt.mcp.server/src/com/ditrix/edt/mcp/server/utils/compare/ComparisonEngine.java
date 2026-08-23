@@ -7,6 +7,9 @@
 package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.io.IOException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -99,6 +102,15 @@ public final class ComparisonEngine
      * {@code EdtServices} calls when the bundle starts and stops.
      */
     private static final AtomicReference<ComparisonEngine> INSTANCE = new AtomicReference<>();
+
+    /**
+     * What EDT writes in the ancestor's place when it names a comparison that has no ancestor.
+     * <p>
+     * The platform's own literal, not a stand-in of ours: {@code getComparisonSessionStringId}
+     * formats {@code NONE} into the third slot for a two-way comparison, so an id built any other
+     * way would not be the one a saved archive was named after.
+     */
+    private static final String TWO_WAY_ANCESTOR_ID = "NONE"; //$NON-NLS-1$
 
     /**
      * The merge-free shape of {@code IComparisonManager} that the rest of this class sees.
@@ -766,14 +778,35 @@ public final class ComparisonEngine
      * dialog per object. It lives here because it is a call on the comparison manager, and the
      * manager is not handed to anyone.
      *
+     * <h2>A zip is refused when it holds nothing for THIS comparison</h2>
+     * The platform reads a zip by looking for one entry and ignoring the rest, and when no entry
+     * matches it logs a warning and answers {@code null} - the comparison then starts with NO
+     * decisions while the caller, who named a file, has every reason to believe theirs were
+     * applied. That is a report of work that did not happen, so the file is looked at here first
+     * and a zip that cannot address this comparison is refused instead. The refusal is raised
+     * BEFORE {@link Backend#restoreMergeSettings} is called, so the platform is never asked and
+     * the launch that would have taken EDT's single comparison slot never happens.
+     * <p>
+     * Only a zip is examined. An {@code .xml} file is the document itself and carries no address,
+     * so there is nothing to disprove about it and its path through here is unchanged. That is a
+     * statement about ADDRESSING and not about readability: EDT 2026.2 refuses an {@code .xml}
+     * rules file outright ({@code Can read merge settings from a zip file}), which is a loud
+     * failure from the platform itself and needs no help from here - see {@link MergeRulesCodec}.
+     *
      * @param handle the comparison the decisions belong to
      * @param fileName the rules file, {@code .xml} or {@code .zip}
      * @return the restored decisions, to be handed to the process settings before the launch
-     * @throws IllegalStateException when the file cannot be read or is not a rules file - the
-     *     message names the file, because that is the thing the caller can fix
+     * @throws IllegalStateException when the file cannot be read, is not a rules file, or is a zip
+     *     that holds no entry this comparison would restore from - the message names the file,
+     *     because that is the thing the caller can fix
      */
     public RestoredMergeSettings restoreMergeSettings(ComparisonProcessHandle handle, String fileName)
     {
+        String unaddressed = zipHoldsNothingFor(handle, fileName);
+        if (unaddressed != null)
+        {
+            throw new IllegalStateException(unaddressed);
+        }
         try
         {
             return backend.restoreMergeSettings(handle, fileName);
@@ -783,6 +816,111 @@ public final class ComparisonEngine
             throw new IllegalStateException("Could not read the merge-rules file '" + fileName //$NON-NLS-1$
                 + "': " + ComparisonFailures.describe(e), e); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * The name EDT looks for inside a zipped merge-rules archive when it restores the rules of one
+     * comparison.
+     * <p>
+     * Measured from {@code ComparisonManager.getComparisonSessionStringId} - byte for byte the
+     * same method in {@code com._1c.g5.v8.dt.compare} 28.0.1 (EDT 2026.1.2) and 29.0.0 (EDT
+     * 2026.2.0): {@code String.format("%s_%s_%s", main, other, ancestor)} over the three
+     * descriptors' {@code getProjectName()}, with the literal {@code NONE} in the ancestor's place
+     * when the comparison is not three-way. The same method names the entry the comparison editor
+     * WRITES ({@code <id>.xml} inside the zip) and the entry a launch looks for, which is why a
+     * launch restores exactly the settings saved under its own three names.
+     *
+     * <h2>The name is an ADDRESS, not an identity - the separator is not injective</h2>
+     * {@code String.format("%s_%s_%s", ...)} concatenates over {@code _}, and {@code _} is a legal
+     * character in an Eclipse project name, so different triples collide: {@code (A_B, C, D)} and
+     * {@code (A, B_C, D)} both produce {@code A_B_C_D}. Nor is it a SET - the three names are
+     * positional, so swapping main and other produces a different address. Callers may therefore
+     * be told the direction that holds ("a comparison whose names spell a different string finds
+     * nothing here") and must not be told the converse ("no other comparison can find this file"),
+     * which this construction does not support. Widening it is not open to us: the name has to be
+     * the one EDT computes, or the launch restores nothing at all.
+     * <p>
+     * Derived from the handle's own descriptors rather than from the tool's arguments: the project
+     * names are what the platform put in the descriptors - a workspace project name on the main
+     * side, a name read out of the {@code .project} file of a checked-out revision on the others -
+     * and reconstructing them from a request would be guessing at the platform's answer.
+     *
+     * @param handle the comparison
+     * @return the entry id, without an extension
+     */
+    public static String mergeRulesEntryId(ComparisonProcessHandle handle)
+    {
+        String ancestor = handle.isThreeWay()
+            ? handle.getCommonAncestorDescriptor().getProjectName()
+            : TWO_WAY_ANCESTOR_ID;
+        return handle.getMainDescriptor().getProjectName() + "_" //$NON-NLS-1$
+            + handle.getOtherDescriptor().getProjectName() + "_" + ancestor; //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a zipped merge-rules file carries nothing this comparison would restore from.
+     *
+     * <h2>Three ways to answer, and only one of them refuses</h2>
+     * <ul>
+     *   <li>The file is not a zip - nothing is claimed, because an xml file is the document
+     *       itself and has no entry to address.</li>
+     *   <li>The archive could not be opened or read - nothing is claimed either. The platform
+     *       opens the SAME path with its own {@code ZipFile} and fails the launch naming the file,
+     *       so a refusal invented here would put this plugin's words on a file it did not manage
+     *       to look at.</li>
+     *   <li>The archive was read and the entry is not in it - refused, naming the id that was
+     *       looked for and what the archive holds instead.</li>
+     * </ul>
+     *
+     * @param handle the comparison the decisions would belong to
+     * @param fileName the caller's path
+     * @return the refusal, or {@code null} when nothing was disproved
+     */
+    private static String zipHoldsNothingFor(ComparisonProcessHandle handle, String fileName)
+    {
+        if (handle == null || fileName == null)
+        {
+            return null;
+        }
+        Path path;
+        try
+        {
+            path = Paths.get(fileName);
+        }
+        catch (InvalidPathException e)
+        {
+            // A spelling that is not even a path was refused by the tool long before a handle
+            // existed; nothing is claimed about one that somehow arrives here.
+            return null;
+        }
+        if (!MergeRulesCodec.isZip(path))
+        {
+            return null;
+        }
+        String entryId = mergeRulesEntryId(handle);
+        MergeRulesCodec.ZipEntryLookup lookup;
+        try
+        {
+            lookup = MergeRulesCodec.lookUpEntry(path, entryId);
+        }
+        catch (IOException e)
+        {
+            // Not read is not "does not address this comparison"; see the third case above.
+            return null;
+        }
+        if (lookup.found())
+        {
+            return null;
+        }
+        return "The merge-rules file '" + fileName //$NON-NLS-1$
+            + "' is a zip that holds nothing for THIS comparison, so starting with it would have " //$NON-NLS-1$
+            + "applied none of its decisions and said nothing about it. A zip keeps one entry per " //$NON-NLS-1$
+            + "PROJECT TRIPLE and EDT restores the one whose name, minus its extension, is '" //$NON-NLS-1$
+            + entryId + "' - the main, other and ancestor project names of this comparison; " //$NON-NLS-1$
+            + "this archive holds " + lookup.describeContents() //$NON-NLS-1$
+            + ". Pass the zip that THIS comparison saved, or write the decisions with merge_rules " //$NON-NLS-1$
+            + "(mode 'write' naming this comparison produces a zip whose entry is '" + entryId //$NON-NLS-1$
+            + "', which is the name this launch looks for) and pass that file."; //$NON-NLS-1$
     }
 
     private static Phase phaseOf(ComparisonProcessStatus status)

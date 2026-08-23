@@ -2,8 +2,20 @@
 e2e tests for merge_rules (kind: action - it reads and writes files under the OS TEMP root,
 never inside the project, so every test also asserts the project tree stayed clean).
 
-merge_rules is the read/author half of EDT's merge-settings file: the sparse XML document of
+merge_rules is the read/author half of EDT's merge-settings file: the sparse document of
 per-node merge decisions a configuration comparison saves and re-applies when it is launched.
+It is written either bare (`.xml`, which EDT 2026.1 reads and EDT 2026.2 refuses) or as the
+single-entry `.zip` both read - and that entry is ADDRESSED by the exact STRING
+`<main>_<other>_<ancestor>` over the comparison's three project names, which is why a `.zip`
+target with no comparison to name it is refused rather than written blind. It is not tied to one
+comparison RUN: a later comparison over the same three projects restores the same entry, so a
+stale zip re-applies old decisions rather than being ignored. Nor is the string an identity - `_`
+is legal inside a project name, so different triples can spell it - so the only claim that holds
+is the one direction: a comparison whose OWN three names spell a different string finds nothing
+in it.
+Which container gets written is chosen by `filePath` alone, and for a WRITE its extension must be
+lower case - EDT's reader compares it exactly. `mode: "read"` is lenient about case, because that
+path opens the file itself and never hands it to EDT.
 The format is the platform's own (measured on MergeSettingsTree): `Settings/@Format_version="2.0"`
 -> `MergeSettings` -> `Node Key="$$Root$$"` -> a collection keyed by the model feature name ->
 an object keyed `main:other:ancestor`, with `NONE` for a side on which the object does not exist.
@@ -14,7 +26,12 @@ What these tests prove that a unit test cannot: the CONTRACT on the wire.
     the object is reported as a read-only `member` row, and the payload the tool does not
     interpret is counted rather than quietly dropped.
   - a write with no live comparison SAYS it was not validated and names compare_configurations -
-    it must never read like a checked file.
+    it must never read like a checked file. Validation has THREE outcomes, not two: a comparison
+    whose tree has FINISHED checks every rule, a comparison that answers while its tree cannot be
+    read supplies only the zip's entry name (NOT VALIDATED, or refused when `comparisonId` was
+    passed), and no comparison at all authors from names.
+  - `mode: "read"` accepts an upper-case `.ZIP`, which no version of EDT would open - reading is
+    this server's own, so the platform's exact-case rule does not reach it.
   - an illegal rule is an isError whose text carries the allowed set, and nothing is written.
 
 The fixtures are built inside the run (no dependency on any pre-existing file or history), in a
@@ -129,6 +146,25 @@ def test_read_of_a_zip_names_the_entry_it_read():
 
 
 @e2e_test(tool="merge_rules", kind="action")
+def test_read_accepts_an_upper_case_zip_extension():
+    # The lower-case rule is the PLATFORM's - EDT compares the extension with String.equals - and
+    # reading never hands the file to EDT: the server opens it itself, case-insensitively. The
+    # surface used to state the rule as a property of filePath, so `.ZIP` looked refused for every
+    # mode while `mode: "read"` had always accepted it. On the wire, that is this call.
+    directory = _workdir()
+    zip_path = os.path.join(directory, "SETTINGS.ZIP")
+    with zipfile.ZipFile(zip_path, "w") as z:
+        z.writestr("Main_Other_Ancestor.xml", FIXTURE)
+
+    r = call("merge_rules", {"mode": "read", "filePath": zip_path})
+    assert_ok(r, "reading is this server's own, so the platform's exact-case rule does not apply")
+    assert_contains(r.text, "!Main_Other_Ancestor.xml",
+                    "the entry that was read must still be named")
+    assert_contains(r.text, "Decisions: 4", "and the document must parse the same way")
+    assert_no_diff("read must not touch the project")
+
+
+@e2e_test(tool="merge_rules", kind="action")
 def test_read_of_a_missing_file_is_actionable():
     path = os.path.join(_workdir(), "not-here.xml")
 
@@ -184,6 +220,13 @@ def test_write_without_a_live_comparison_says_it_was_not_validated():
                     "the root decision applies to the whole configuration")
     assert_contains(written, '<Node Key="Alpha:Beta:Gamma" MergeRule="MergePrioritizingMain"/>',
                     "an object is addressed by its name on the three sides")
+    # The container is part of the answer, not a detail: EDT 2026.2 does not read a bare
+    # '.xml' at all, and discovering that inside the launch this file was prepared for is
+    # exactly the failure the sentence exists to prevent.
+    assert_contains(r.text, "Container: '.xml'",
+                    "the report must say which container it produced")
+    assert_contains(r.text, "EDT 2026.2 does not read it",
+                    "and which EDT will refuse it")
     assert_no_diff("writing outside the workspace must not touch the project")
 
 
@@ -316,12 +359,19 @@ def test_an_object_key_without_the_three_names_is_refused_with_the_form_spelled_
 
 @e2e_test(tool="merge_rules", kind="action")
 def test_a_zip_target_is_refused_because_edt_would_ignore_it():
+    # A zip IS writable - it is the container EDT 2026.2 needs - but only when a live
+    # comparison can name its entry. EDT restores the entry named after the launching
+    # comparison's own project triple and SKIPS an archive whose ENTRY is named anything
+    # else - the archive's own file name is never matched - applying nothing and reporting
+    # nothing, so a guessed name would hand back a file described as written that can never
+    # apply. With no comparison running there is nothing to name it.
     target = os.path.join(_workdir(), "rules.zip")
 
     r = call("merge_rules", {"mode": "write", "filePath": target,
                              "decisions": [{"path": [], "rule": "DoNotMerge"}]})
     err = assert_error(r, "EDT picks the zip entry by the comparison's project triple")
-    assert_error_quality(err, names=[".zip"], suggests=[".xml"], ctx="zip write target")
+    assert_error_quality(err, names=[".zip"],
+                         suggests=[".xml", "compare_configurations"], ctx="zip write target")
     assert not os.path.exists(target), "the refused write must create nothing"
 
 

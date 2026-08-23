@@ -17,9 +17,14 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.junit.Test;
 
@@ -635,5 +640,240 @@ public class ComparisonEngineTest
             assertTrue("the refusal must name the file: " + e.getMessage(), //$NON-NLS-1$
                 e.getMessage().contains("rules.xml")); //$NON-NLS-1$
         }
+    }
+
+    // ======= A zip of merge settings is addressed by the three PROJECT NAMES =======
+
+    /**
+     * The defect these tests pin: {@code mergeRulesFile} was checked by EXTENSION alone, so a zip
+     * saved from a different comparison passed every check, the comparison started, and the
+     * platform - which restores the entry named after the comparison's own project triple and
+     * ignores an archive that has none - applied nothing and logged a warning nobody sees. The
+     * parameter and the guide meanwhile said the decisions were in place before the comparison
+     * opened. That is a report of work that never happened.
+     * <p>
+     * Measured from {@code ComparisonManager.getComparisonSessionStringId} and
+     * {@code deserializeMergeSettingsFromZipFile}, identical in {@code com._1c.g5.v8.dt.compare}
+     * 28.0.1 (EDT 2026.1.2) and 29.0.0 (EDT 2026.2.0).
+     */
+    @Test
+    public void mergeRulesEntryIdNamesTheThreeProjectsOfAThreeWayComparison()
+    {
+        assertEquals("Main_Other_Ancestor", //$NON-NLS-1$
+            ComparisonEngine.mergeRulesEntryId(threeWayHandle("Main", "Other", "Ancestor"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The literal is the platform's: a two-way comparison formats {@code NONE} into the ancestor's
+     * slot. An id built any other way would not be the one an archive was named after, so this
+     * pins the spelling rather than the shape.
+     */
+    @Test
+    public void mergeRulesEntryIdSpellsAMissingAncestorAsNone()
+    {
+        assertEquals("Main_Other_NONE", //$NON-NLS-1$
+            ComparisonEngine.mergeRulesEntryId(handle("Main", "Other"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The separator is not injective, and the surface has to stop claiming that it is.
+     * <p>
+     * {@code String.format("%s_%s_%s", ...)} joins with {@code _}, which is itself a legal
+     * character in an Eclipse project name, so two DIFFERENT triples produce the same entry name:
+     * a zip written for one of them is restored by a comparison over the other. Every place that
+     * used to say "only a comparison over a different set of projects finds nothing here" was
+     * asserting the converse of what this construction supports.
+     * <p>
+     * Pinned as an equality between two computed ids rather than against a literal, so the pin
+     * survives any future change of the format string that keeps the collision, and fails the
+     * moment the collision is actually removed - which would be a change of the entry name and
+     * therefore a change EDT has to make first.
+     */
+    @Test
+    public void mergeRulesEntryIdCollidesBetweenTwoDifferentProjectTriples()
+    {
+        String first = ComparisonEngine.mergeRulesEntryId(
+            threeWayHandle("A_B", "C", "D")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String second = ComparisonEngine.mergeRulesEntryId(
+            threeWayHandle("A", "B_C", "D")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertEquals("two different triples spell one entry name", first, second); //$NON-NLS-1$
+        assertEquals("A_B_C_D", first); //$NON-NLS-1$
+    }
+
+    /**
+     * And it is not a SET either: the three names are positional, so swapping main and other
+     * addresses a different entry. "The three project names" reads like an unordered collection,
+     * which is why the surface now says the exact string instead.
+     */
+    @Test
+    public void mergeRulesEntryIdChangesWhenMainAndOtherAreSwapped()
+    {
+        assertNotEquals("main and other are positions, not members of a set", //$NON-NLS-1$
+            ComparisonEngine.mergeRulesEntryId(threeWayHandle("Alpha", "Beta", "Base")), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ComparisonEngine.mergeRulesEntryId(threeWayHandle("Beta", "Alpha", "Base"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void aZipAddressedToAnotherComparisonNeverReachesThePlatform() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("foreign.zip", "X_Y_Z.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                zip.toString());
+            fail("a zip that addresses another comparison must be refused, not silently ignored"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            // The message is pinned separately; what this test is about is the call list below.
+        }
+
+        // The whole point of refusing HERE: the platform is not asked, so the batch that would
+        // take EDT's single comparison slot is never built. An empty list, not "does not contain":
+        // a refusal that had already spoken to EDT would still satisfy the weaker assertion.
+        assertEquals("nothing may reach EDT once the file is known not to address this comparison", //$NON-NLS-1$
+            Collections.emptyList(), backend.calls);
+    }
+
+    @Test
+    public void theRefusalNamesTheEntryItLookedForAndWhatTheArchiveHolds() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("foreign.zip", "X_Y_Z.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                zip.toString());
+            fail("expected the unaddressed archive to be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            String message = e.getMessage();
+            assertTrue("the refusal must name the file: " + message, //$NON-NLS-1$
+                message.contains(zip.toString()));
+            assertTrue("it must name the entry EDT would look for: " + message, //$NON-NLS-1$
+                message.contains("Main_Other_Ancestor")); //$NON-NLS-1$
+            assertTrue("it must name what the archive holds instead: " + message, //$NON-NLS-1$
+                message.contains("X_Y_Z.xml")); //$NON-NLS-1$
+            assertTrue("it must name the way out through merge_rules: " + message, //$NON-NLS-1$
+                message.contains("merge_rules")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The way out this refusal offers has to be one that WORKS on the EDT the caller is running.
+     * <p>
+     * It used to end with "mode 'write' produces '.xml'", which was true of the tool and useless
+     * on EDT 2026.2: that version's {@code deserializeMergeSettings} asserts the file is a zip and
+     * reads nothing else, so the advice sent the caller from an archive the launch ignores to a
+     * file the launch refuses. The advice is now the zip this comparison would accept, and its
+     * entry name is quoted so the caller can see what has to match.
+     */
+    @Test
+    public void theRefusalOffersAZipAddressedToThisComparisonRatherThanAnXmlFile() throws IOException
+    {
+        Path zip = zipHolding("foreign.zip", "X_Y_Z.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(new RecordingBackend()).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("expected the unaddressed archive to be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            String message = e.getMessage();
+            assertTrue("the advice must be the zip this comparison would read: " + message, //$NON-NLS-1$
+                message.contains("produces a zip whose entry is 'Main_Other_Ancestor'")); //$NON-NLS-1$
+            // Pinned as an ABSENCE: the old sentence names a container EDT 2026.2 does not read,
+            // and a message that merely GAINED the zip advice while keeping it would still send
+            // half its readers to a file their platform refuses.
+            assertFalse("it must not promise an '.xml' file: " + message, //$NON-NLS-1$
+                message.contains("mode 'write' produces '.xml'")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The other half, and the one a lookup rebuilt from guesswork would break: a zip that DOES
+     * carry this comparison's entry is legitimate - it is what the comparison editor saves - and
+     * must pass through untouched. A false refusal here would cost the caller the one file that
+     * actually works.
+     */
+    @Test
+    public void aZipSavedFromThisComparisonIsNotRefused() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertEquals(Collections.singletonList("restoreMergeSettings"), backend.calls); //$NON-NLS-1$
+    }
+
+    /**
+     * An {@code .xml} file is the settings document itself and carries no address, so there is
+     * nothing about it to disprove and its path is unchanged. Pinned as an ABSENCE - the file does
+     * not exist on disk, and a check that judged xml files by their content would have to open it.
+     */
+    @Test
+    public void anXmlRulesFileIsNotJudgedByEntryName()
+    {
+        RecordingBackend backend = new RecordingBackend();
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "nowhere/rules.xml"); //$NON-NLS-1$
+
+        assertEquals(Collections.singletonList("restoreMergeSettings"), backend.calls); //$NON-NLS-1$
+    }
+
+    /**
+     * A zip this process could not open is one nothing was learnt about, and "not read" is not
+     * "does not address this comparison". The platform opens the same path with its own
+     * {@code ZipFile} and fails the launch naming the file, so the honest answer here is to claim
+     * nothing and let that happen.
+     */
+    @Test
+    public void aZipThatCannotBeOpenedIsLeftToThePlatform()
+    {
+        RecordingBackend backend = new RecordingBackend();
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "nowhere/missing.zip"); //$NON-NLS-1$
+
+        assertEquals(Collections.singletonList("restoreMergeSettings"), backend.calls); //$NON-NLS-1$
+    }
+
+    private static ComparisonProcessHandle threeWayHandle(String main, String other, String ancestor)
+    {
+        return new ComparisonProcessHandle(new FakeDescriptor(main), new FakeDescriptor(other),
+            new FakeDescriptor(ancestor), ComparisonScope.EMPTY_SCOPE);
+    }
+
+    /**
+     * Writes a one-entry zip into a temporary directory that is deleted when the JVM exits.
+     *
+     * @param fileName the archive's name
+     * @param entryName the single entry to put in it
+     * @return the archive
+     * @throws IOException when it cannot be written
+     */
+    private static Path zipHolding(String fileName, String entryName) throws IOException
+    {
+        Path dir = Files.createTempDirectory("comparison-engine-test"); //$NON-NLS-1$
+        dir.toFile().deleteOnExit();
+        Path zip = dir.resolve(fileName);
+        zip.toFile().deleteOnExit();
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            out.putNextEntry(new ZipEntry(entryName));
+            out.write("<Settings/>".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+            out.closeEntry();
+        }
+        return zip;
     }
 }

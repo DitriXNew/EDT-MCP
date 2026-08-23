@@ -1177,9 +1177,305 @@ public class ComparisonNodeRendererTest
     private static String render(ComparisonNode node, ComparisonNodeStatus status,
         ComparisonNodeRenderer.NodeAccess access, int limit, int depth)
     {
+        return render(node, status, access, limit, depth,
+            ComparisonNodeRenderer.ContentCoverage.COMPARED);
+    }
+
+    private static String render(ComparisonNode node, ComparisonNodeStatus status,
+        ComparisonNodeRenderer.NodeAccess access, int limit, int depth,
+        ComparisonNodeRenderer.ContentCoverage coverage)
+    {
         ComparisonNodeRenderer.Request request = new ComparisonNodeRenderer.Request("cmp-1", //$NON-NLS-1$
-            "Catalog.Products", ComparisonSide.MAIN, status, depth, limit, null); //$NON-NLS-1$
+            "Catalog.Products", ComparisonSide.MAIN, status, depth, limit, null, coverage); //$NON-NLS-1$
         return ComparisonNodeRenderer.render(request, node, access);
+    }
+
+    // ============ a SCOPED run is reported as one, and it is reported as a RUN ============
+    //
+    // A scoped comparison turns mergeObjectsContent on, and the platform then drops the own
+    // features of every object whose qualified name is not at or under a scope entry and builds no
+    // child node for them. Such an object is matched, so it carries flags - and those flags read
+    // exactly like the flags of an object that WAS compared and found equal. The tree report
+    // already says this about the whole run; a single expanded node used to say nothing at all,
+    // and then said it about the node, which no reading of the tree can support.
+
+    /**
+     * The classifier, exercised directly. It used to live in the tool's platform-facing adapter,
+     * decided from a node, and no test could reach it: every test above and below supplied a ready
+     * enum, so the decision itself was covered by nothing. It is now a function of ONE run-level
+     * fact, and both of its values are pinned here.
+     */
+    @Test
+    public void testAWholeConfigurationRunComparedContentEverywhere()
+    {
+        assertEquals("nothing is excluded when the exclusion is off", //$NON-NLS-1$
+            ComparisonNodeRenderer.ContentCoverage.COMPARED,
+            ComparisonNodeRenderer.ContentCoverage.ofRun(true));
+    }
+
+    @Test
+    public void testAScopedRunIsClassifiedAsScopedAndNotAsCompared()
+    {
+        assertEquals("a scoped run excluded content somewhere, and the document must say so", //$NON-NLS-1$
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN,
+            ComparisonNodeRenderer.ContentCoverage.ofRun(false));
+    }
+
+    @Test
+    public void testAScopedRunOpensWithTheScopedRunNotice()
+    {
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertTrue("the document must open by saying the run excluded content: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.SCOPED_RUN_NOTICE));
+    }
+
+    /**
+     * The notice states the RUN. It may not tell the caller that THIS object was excluded, because
+     * the comparison tree does not answer that - see {@code ContentCoverage}. The pin is on the
+     * word that makes the difference: the document says the placement is not stated, and a
+     * rewording that quietly re-asserts the node would drop it.
+     */
+    @Test
+    public void testTheScopedRunNoticeDoesNotClaimThisNodeWasExcluded()
+    {
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertTrue("the document must say the node's own placement is NOT stated: " + text, //$NON-NLS-1$
+            text.contains("is not stated here")); //$NON-NLS-1$
+        assertFalse("and it must not assert that this node is outside the scope: " + text, //$NON-NLS-1$
+            text.contains("this node is outside the")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAScopedRunIsNotReportedAsIdenticalWithoutQualification()
+    {
+        // The State cell comes from the platform's flags, which for an excluded object were filled
+        // in without its content ever being looked at. The label stays - it is what EDT says - and
+        // it is qualified, because on its own it reads as "compared, and equal".
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertTrue("the platform's own label is kept: " + text, text.contains("identical")); //$NON-NLS-1$
+        assertTrue("and it may not stand unqualified: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.STATE_SCOPED_RUN));
+    }
+
+    @Test
+    public void testAnEmptyChildOutlineInAScopedRunDoesNotSayNoDifferences()
+    {
+        // In a scoped run the engine may have excluded the features this table would have been
+        // filled from, so its emptiness does not establish agreement any more than an unfinished
+        // subtree's does - and the phrase of agreement may not be printed over it.
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertFalse("a scoped run may not claim the sides agree: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NO_DIFFERENCES));
+        assertTrue("and the qualification belongs in the sentence: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.CONTENT_MAY_BE_EXCLUDED));
+    }
+
+    @Test
+    public void testAWholeConfigurationRunStillSaysNoDifferences()
+    {
+        // The positive control. Without it every assertion above would pass on a renderer that had
+        // simply stopped printing the phrase.
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null));
+
+        assertTrue("a compared, equal subtree says so: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NO_DIFFERENCES));
+        assertFalse("and carries no scoped-run notice: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.SCOPED_RUN_NOTICE));
+    }
+
+    // ==== the scoped-run text states the RUN, and nothing wider than the predicate ====
+    //
+    // MdCompareUtils.isExcludeObjectsContentFeature excludes a feature when the setting is on, the
+    // feature is NOT a containment-many collection of MdObjects, and neither compared object's
+    // qualified name is under a scope entry. Two things follow, and the document used to deny
+    // both: the exclusion is per FEATURE, so an excluded object is not an object nothing was
+    // looked at under, and the carve-out means child object nodes can still be built beneath it.
+    //
+    // Each removed claim gets its own @Test. JUnit abandons a method at its first failed
+    // assertion, so a single method holding all of them would only ever hold the first one down.
+
+    @Test
+    public void testTheScopedRunNoticeDoesNotSayNothingBelowTheNodeWasLookedAt()
+    {
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertFalse("the exclusion is per feature, so 'nothing about its content was looked at' " //$NON-NLS-1$
+            + "is wider than the mechanism: " + text, //$NON-NLS-1$
+            text.contains("nothing about its content")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopedRunNoticeDoesNotClaimNoChildNodeWasBuilt()
+    {
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertFalse("a containment-many collection of MdObjects is SPARED, so child object " //$NON-NLS-1$
+            + "nodes can still be built under an excluded object: " + text, //$NON-NLS-1$
+            text.contains("no child node")); //$NON-NLS-1$
+    }
+
+    // "never compared feature by feature" is NOT pinned here, and deliberately so: this document
+    // never carried that phrase. It lived in ComparisonTreeReport's clause, in this class's own
+    // javadoc and in the two guides, and it is pinned where it lived - measured, by reverting all
+    // four texts at once and watching which tests reddened. A pin here would have stayed green
+    // over the whole revert.
+
+    @Test
+    public void testTheScopedRunNoticeDoesNotReadAnEmptyTableAsNeverLookedAt()
+    {
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertFalse("what follows from a scoped run is that an empty table is not AGREEMENT, " //$NON-NLS-1$
+            + "not that it is a table nothing was looked at for: " + text, //$NON-NLS-1$
+            text.contains("never looked at")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopedStateQualifierDoesNotReduceTheFlagsToStructureAndPresence()
+    {
+        // The cell used to say the flags "speak for its structure and presence only". The spared
+        // containment-many collections are compared, so a difference inside a member object still
+        // reaches those flags - the old sentence told the caller to discount a real finding.
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertFalse("the flags are not reduced to structure and presence: " + text, //$NON-NLS-1$
+            text.contains("structure and presence")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopedRunNoticeStillStatesTheRunItself()
+    {
+        // Positive control on the FIRST of the two facts left standing. Without it every negative
+        // pin above would pass on a renderer that had simply stopped printing the notice.
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertTrue("the run's own limit is the fact the document carries: " + text, //$NON-NLS-1$
+            text.contains("this comparison ran with a `scope`")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopedRunNoticeNamesTheCarveOutThatKeepsTheClaimNarrow()
+    {
+        // Positive control on the SECOND fact, and the one that makes the negatives non-vacuous:
+        // the text says WHICH features can be excluded, naming the collections that are not.
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED, access(null), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertTrue("the carve-out is what stops the claim from being an absolute: " + text, //$NON-NLS-1$
+            text.contains("sparing its containment-many collections of metadata objects")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePropertyTableIsNotCoveredByTheScopeCaveat()
+    {
+        // The exclusion is applied by the ENGINE to its own comparison; this table is built by
+        // reading the matched objects here, so it still answers. Blanketing it would delete the
+        // one section of the document that still carries a finding - and it is the section that
+        // showed the difference an excluded node's flags had missed.
+        EObject main = mdObject("Products", "a"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = mdObject("Products", "b"); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(main, other, null)), 100, 1,
+            ComparisonNodeRenderer.ContentCoverage.SCOPED_RUN);
+
+        assertTrue("the properties were read and one of them differs: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
+    }
+
+    // ============ no phrase of equality contradicts a number in the same document ============
+    //
+    // Measured live: three objects whose expanded document carried "**Properties:** N (1
+    // differing)" AND a State of "identical", with the differing row printed in the table between
+    // them. The State comes from the platform's flags and the count from this renderer's own
+    // reading, so the two really can disagree - and the document has to say so instead of picking
+    // one of its own halves.
+
+    @Test
+    public void testAnIdenticalStateIsQualifiedWhenThePropertyCountContradictsIt()
+    {
+        EObject main = mdObject("Products", "a"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = mdObject("Products", "b"); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertTrue("the count that contradicts it is printed here: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
+        assertTrue("so the State cell may not assert sameness on its own: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.STATE_DISPUTED_BY_PROPERTIES));
+        assertTrue("and the platform's own verdict is still named: " + text, //$NON-NLS-1$
+            text.contains("identical")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnIdenticalStateStandsPlainWhenNothingContradictsIt()
+    {
+        // The control that keeps the pin above from passing on a renderer that qualifies every
+        // State cell: with the two sides equal there is nothing to reconcile, and the cell must
+        // read as the plain platform label.
+        EObject main = mdObject("Products", "same"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = mdObject("Products", "same"); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode node = topNode("TopMdObjectComparisonNode"); //$NON-NLS-1$
+        when(node.getComparisonFlags()).thenReturn(new ComparisonFlags());
+
+        String text = render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertTrue("the fixture must really count no difference: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (0 differing)")); //$NON-NLS-1$
+        assertFalse("nothing contradicts the verdict, so nothing is appended to it: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.STATE_DISPUTED_BY_PROPERTIES));
     }
 
     /** One module section, named so a dropped or displaced row is identifiable. */

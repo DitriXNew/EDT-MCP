@@ -149,6 +149,7 @@ public final class ComparisonTreeReport
         private final String otherRevision;
         private final String ancestorRevision;
         private final String state;
+        private final boolean globalScope;
 
         /**
          * @param comparisonId this plugin's id for the live comparison session
@@ -156,15 +157,23 @@ public final class ComparisonTreeReport
          * @param otherRevision the git revision compared against
          * @param ancestorRevision the git revision used as the common ancestor
          * @param state the comparison's own reported state
+         * @param globalScope the SESSION's own answer to "does this run cover the whole
+         *     configuration", as it computed it once in its constructor. It is carried here
+         *     rather than recomputed from the scope object, because the scope object does not
+         *     stand still: the engine extends it while the run proceeds, so a report asking it
+         *     afterwards would describe a whole-configuration run as a scoped one as soon as one
+         *     dependency had been pulled in. See {@code ComparisonScopeBuilder#isGlobalScope},
+         *     which is the same question asked BEFORE the session exists.
          */
         public Header(String comparisonId, String projectName, String otherRevision,
-            String ancestorRevision, String state)
+            String ancestorRevision, String state, boolean globalScope)
         {
             this.comparisonId = comparisonId;
             this.projectName = projectName;
             this.otherRevision = otherRevision;
             this.ancestorRevision = ancestorRevision;
             this.state = state;
+            this.globalScope = globalScope;
         }
     }
 
@@ -327,7 +336,7 @@ public final class ComparisonTreeReport
         summary.put("state", header.state); //$NON-NLS-1$
         out.append(MarkdownUtils.keyValueTable("Field", "Value", summary)); //$NON-NLS-1$ //$NON-NLS-2$
 
-        appendScope(out, scope, collector.limit);
+        appendScope(out, scope, collector.limit, header.globalScope);
         appendNodes(out, scope, collector);
         return out.toString();
     }
@@ -339,8 +348,10 @@ public final class ComparisonTreeReport
      * @param scope the comparison's scope (may be {@code null})
      * @param limit largest number of qualified names to list per side - in the table cells AND in
      *     the reasons below them, which describe the same names
+     * @param globalScope the session's own answer to whether the run covered everything
      */
-    private static void appendScope(StringBuilder out, ComparisonScope scope, int limit)
+    private static void appendScope(StringBuilder out, ComparisonScope scope, int limit,
+        boolean globalScope)
     {
         out.append("\n## Scope\n\n"); //$NON-NLS-1$
         if (scope == null)
@@ -401,6 +412,53 @@ public final class ComparisonTreeReport
                 .append(":\n\n") //$NON-NLS-1$
                 .append(reasons);
         }
+        out.append(contentClause(globalScope));
+    }
+
+    /**
+     * What a SCOPED comparison did not compare, said out loud.
+     *
+     * <h2>Why the report has to say it</h2>
+     * A scope does not narrow the TREE, it narrows what is compared inside it.
+     * {@code compare_configurations} turns the platform's {@code mergeObjectsContent} setting on
+     * for a scoped run, and {@code MdCompareUtils.isExcludeObjectsContentFeature} then excludes an
+     * object's own features from the comparison whenever that object's qualified name is not under
+     * an entry of the comparison's scope. Such a node is still matched - it is still reported as
+     * added or deleted - and it can land in the table as {@code identical} having been compared
+     * without the features that were excluded. That word means "compared, and equal" everywhere
+     * else in this report, and there is no way to tell the two apart from the row itself.
+     * <p>
+     * The clause says that and no more. The exclusion is applied per FEATURE and spares a
+     * containment-many collection of {@code MdObject}s, so a row outside the scope is NOT a row
+     * nothing was looked at under: what the caveat withdraws from {@code identical} there is the
+     * claim that the excluded features were compared, not the whole of the row.
+     * <p>
+     * Emitted ONLY for a scoped comparison, because it is only true of one: a whole-configuration
+     * run has the setting off and compares content everywhere, and printing the caveat there would
+     * describe a limit that was not applied.
+     * <p>
+     * Which of the two it was is READ FROM THE HEADER, not recomputed from the scope object. The
+     * scope object is extended by the engine as the run proceeds, so recomputing here answers a
+     * question about the scope as it ended up rather than about the setting the launch chose - and
+     * the caveat describes that setting.
+     *
+     * @param globalScope the session's own saved answer: the run covered the whole configuration
+     * @return the clause, or an empty string for a whole-configuration comparison
+     */
+    private static String contentClause(boolean globalScope)
+    {
+        if (globalScope)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return "\n> **Content was compared INSIDE THE SCOPE ONLY.** For an object in the scope " //$NON-NLS-1$
+            + "above, EDT compared its own features - module text, form and template content, " //$NON-NLS-1$
+            + "every plain property. Everywhere else those features were EXCLUDED from the " //$NON-NLS-1$
+            + "comparison, feature by feature and sparing an object's containment-many " //$NON-NLS-1$
+            + "collections of metadata objects: such an object is still matched, so it is still " //$NON-NLS-1$
+            + "reported as added or deleted. What `identical` does NOT establish for a node " //$NON-NLS-1$
+            + "outside the scope is that the excluded features were compared. Add that object " //$NON-NLS-1$
+            + "to `scope`, or omit `scope` entirely, to have its content compared.\n"; //$NON-NLS-1$
     }
 
     /**

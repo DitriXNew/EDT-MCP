@@ -638,7 +638,7 @@ with `python docs/generate_tool_docs.py`.
 |------|-------------|
 | [`compare_configurations`](docs/tools/compare_configurations.md) | Compare a project's working tree against two git revisions (three-way) and report which top objects differ. Read-only: it never merges and never writes the p… |
 | [`get_comparison_node`](docs/tools/get_comparison_node.md) | Expand one node of a comparison started by compare_configurations: three-way property table, form structure, module sections, support state and potential pro… |
-| [`merge_rules`](docs/tools/merge_rules.md) | Read or author EDT's merge-rules file - the per-node decisions a configuration comparison saves and re-applies when it is launched. Authoring needs NO runnin… |
+| [`merge_rules`](docs/tools/merge_rules.md) | Read or author EDT's merge-rules file - the per-node decisions a configuration comparison saves and re-applies when it is launched. Which container to write… |
 
 ### Git
 
@@ -679,7 +679,16 @@ in EDT's comparison window.
   **unfinished** — never as "no differences".
 - **`merge_rules`** reads and authors the sparse XML merge-rules file the comparison saves
   and re-applies when it is launched with it. `mode` is `read` or `write`; `filePath` is
-  absolute (read takes the `.xml` or the `.zip` a comparison saves, write takes `.xml`, and
+  absolute, and for a WRITE its extension must be spelled in LOWER CASE, because EDT's own
+  reader compares it case-sensitively — `mode: "read"` and `basedOn` are lenient about
+  case, since those files are opened by this server and never by the platform (read takes
+  the `.xml` or the `.zip` a comparison saves;
+  write takes `.zip`, which every supported EDT reads, or `.xml`, which EDT 2026.1 reads
+  and EDT 2026.2 refuses outright; a `.zip` carries ONE entry, named by the exact string
+  `<main>_<other>_<ancestor>` over the three project names, so a later comparison over the
+  same three projects re-applies it even with other revisions — and since `_` is legal
+  inside a project name that string is not unique to one triple, so a comparison finds
+  nothing here only when its OWN three names spell something else; and
   an existing file is replaced only when `basedOn` names that SAME file — any other write
   over an existing file is refused); `basedOn` carries an existing file's decisions
   forward; `decisions` is `[{path, rule}]`, where `path` is the key chain below the root
@@ -687,10 +696,14 @@ in EDT's comparison window.
   `["commonModules","Alpha:Beta:Gamma"]` = one object, keyed by its main:other:ancestor
   names with `NONE` for a side that has no such object) and `rule` is one of
   `GetFromOther`, `DoNotMerge`, `MergePrioritizingMain`, `MergePrioritizingOther`;
-  `comparisonId` and `limit` complete the list. Authoring needs no running comparison, and
-  the report says which happened: with a live comparison every rule is checked against what
-  its own node allows, without one the file is authored from names and reported
-  `NOT VALIDATED`.
+  `comparisonId` and `limit` complete the list. Authoring the DOCUMENT needs no running
+  comparison; naming a `.zip`'s entry does, so a `.zip` is refused without one. The
+  report names the container it wrote and which EDT reads it, and it says which of THREE
+  validation outcomes happened: a comparison whose tree has FINISHED checks every rule
+  against what its own node allows; a comparison that answers while its tree cannot be
+  read names the zip's entry but checks nothing — reported `NOT VALIDATED`, or refused
+  outright if you passed `comparisonId`; with no comparison at all the file is authored
+  from names and also reported `NOT VALIDATED`.
 
 **One comparison at a time, and it stays open when it finishes.** EDT runs exactly one
 comparison per workbench, so a second `compare_configurations` while one is live is refused
