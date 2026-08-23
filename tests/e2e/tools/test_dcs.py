@@ -1176,6 +1176,44 @@ def test_settings_write_refuses_type_mismatch_without_touching_disk():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_default_settings_remove_refuses_mismatched_type_without_touching_disk():
+    report_name = "E2EDcsSettingsRootRemoveGuard"
+    root = _seed_report(report_name)
+    marker = "M2RootGuardOperand"
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "filter": {
+                "items": [{
+                    "left": {"kind": "field", "value": marker},
+                    "comparisonType": "Equal",
+                    "use": True,
+                }],
+            },
+        },
+    })
+    assert_ok(authored, "author default settings for the root-remove type guard")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the settings root-remove fixture")
+    poll_disk_contains(dcs_rel, marker,
+                       ctx="the default settings must reach Template.dcs before the refusal")
+
+    settings = _get(root + "#/defaultSettings", "userSettings")
+    assert_ok(settings, "read the default-settings root before the mismatched remove")
+    before_disk = read_disk(dcs_rel)
+    refused = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": root + "#/defaultSettings",
+        "action": "remove",
+        "type": "selection",
+        "expectedHash": _hash(settings),
+    })
+    error = assert_error(refused, "remove defaultSettings while declaring selection")
+    assert "type='selection'" in error and "type='userSettings'" in error, \
+        "the refusal must name both the declared and resolved root types: %s" % error
+    assert read_disk(dcs_rel) == before_disk, \
+        "a refused defaultSettings removal must leave Template.dcs byte-for-byte unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_user_fields_holder_replace_with_empty_body_clears_exported_items():
     report_name = "E2EDcsReplaceUserFields"
     root = _seed_report(report_name)

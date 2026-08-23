@@ -1029,6 +1029,41 @@ public class DcsSchemaWriterTest
         assertEquals(beforeHash, DcsHash.compute(schema));
     }
 
+    @Test
+    public void testDataSetUpdateRefusesCreatingNestedFieldsAndUnionMembers()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsSchemaWriter.Result authored = apply(schema, "upsert", "dataSet", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"name\":\"AllSales\",\"type\":\"union\",\"items\":[" //$NON-NLS-1$
+                + "{\"name\":\"Retail\",\"type\":\"query\",\"query\":\"SELECT 1 AS Amount\"," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Amount\"}]}]}"); //$NON-NLS-1$
+        assertTrue(authored.error(), authored.isSuccess());
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result missingField = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/AllSales/items/Retail", //$NON-NLS-1$
+            "{\"fields\":[{\"dataPath\":\"Tax\"}]}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result missingMember = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/AllSales", //$NON-NLS-1$
+            "{\"items\":[{\"name\":\"Wholesale\",\"type\":\"query\"," //$NON-NLS-1$
+                + "\"query\":\"SELECT 2\"}]}"); //$NON-NLS-1$
+
+        assertFalse(missingField.isSuccess());
+        assertTrue(missingField.error(), missingField.error().contains("nested field 'Tax'")); //$NON-NLS-1$
+        assertTrue(missingField.error(), missingField.error().contains("action='upsert'")); //$NON-NLS-1$
+        assertFalse(missingMember.isSuccess());
+        assertTrue(missingMember.error(), missingMember.error().contains("nested dataSet 'Wholesale'")); //$NON-NLS-1$
+        assertTrue(missingMember.error(), missingMember.error().contains("action='upsert'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result existingMember = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/AllSales", //$NON-NLS-1$
+            "{\"items\":[{\"name\":\"Retail\",\"query\":\"SELECT 3 AS Amount\"}]}"); //$NON-NLS-1$
+        assertTrue(existingMember.error(), existingMember.isSuccess());
+        assertEquals("SELECT 3 AS Amount", retail(schema).getQuery()); //$NON-NLS-1$
+        assertEquals(1, ((DataCompositionSchemaDataSetUnion)schema.getDataSets().get(0)).getItems().size());
+    }
+
     private static DcsSchemaWriter.Result apply(DataCompositionSchema schema, String action, String type,
         String address, String body)
     {

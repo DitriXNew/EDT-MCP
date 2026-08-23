@@ -809,6 +809,12 @@ public final class DcsSchemaWriter
                 return PayloadResult.failure(missing(request, keyed.key,
                     dataSetKeys(target.owner)));
             }
+            if (ACTION_UPDATE.equals(request.action))
+            {
+                String error = nestedDataSetUpdateError(request, existing, request.body,
+                    request.address.toString());
+                if (error != null) return PayloadResult.failure(error);
+            }
             JsonObject entry = request.body.deepCopy();
             entry.addProperty(KEY_NAME, keyed.key);
             String error = normalizeDataSet(entry, existing, keyed.key);
@@ -833,6 +839,12 @@ public final class DcsSchemaWriter
         if (ACTION_UPDATE.equals(request.action) && existing == null)
         {
             return PayloadResult.failure(missing(request, keyed.key, keys(schema, "dataSets", null))); //$NON-NLS-1$
+        }
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            String nested = nestedDataSetUpdateError(request, existing, request.body,
+                request.address.toString());
+            if (nested != null) return PayloadResult.failure(nested);
         }
         JsonObject entry = request.body.deepCopy();
         entry.addProperty(KEY_NAME, keyed.key);
@@ -926,6 +938,78 @@ public final class DcsSchemaWriter
             if (error != null) return error;
         }
         return null;
+    }
+
+    private static String nestedDataSetUpdateError(Request request, DataSet existing,
+        JsonObject body, String address)
+    {
+        if (body.has(KEY_FIELDS) && body.get(KEY_FIELDS).isJsonArray())
+        {
+            for (JsonObject field : objects(body.getAsJsonArray(KEY_FIELDS)))
+            {
+                String key = string(field, KEY_DATA_PATH);
+                if (key == null) continue;
+                List<DataSetField> matches = dataSetFields(existing, key);
+                if (matches.isEmpty())
+                {
+                    return nestedUpdateMissing(request, "field", key, address, fieldKeys(existing)); //$NON-NLS-1$
+                }
+                if (matches.size() > 1)
+                {
+                    return nestedUpdateAmbiguous(request, "field", key, address, matches.size()); //$NON-NLS-1$
+                }
+                if (!(matches.get(0) instanceof DataCompositionSchemaDataSetField))
+                {
+                    return "Field '" + key + "' below '" + address + "' has unsupported subtype '" //$NON-NLS-1$ //$NON-NLS-2$
+                        + matches.get(0).eClass().getName()
+                        + "'. Field folders are not authorable; edit the folder in the DCS designer, " //$NON-NLS-1$
+                        + "re-run get, and retry."; //$NON-NLS-1$
+                }
+            }
+        }
+        if (!body.has(KEY_ITEMS) || !body.get(KEY_ITEMS).isJsonArray()) return null;
+        if (!(existing instanceof DataCompositionSchemaDataSetUnion))
+        {
+            return "Data set '" + existing.getName() + "' at '" + address + "' is kind '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + dataSetKind(existing) + "', not union. Only union data sets have nested 'items'."; //$NON-NLS-1$
+        }
+        List<DataSet> existingItems = ((DataCompositionSchemaDataSetUnion)existing).getItems();
+        for (JsonObject child : objects(body.getAsJsonArray(KEY_ITEMS)))
+        {
+            String key = string(child, KEY_NAME);
+            if (key == null) continue;
+            List<DataSet> matches = matchingDataSets(existingItems, key);
+            String childAddress = address + "/items/" + key; //$NON-NLS-1$
+            if (matches.isEmpty())
+            {
+                return nestedUpdateMissing(request, "dataSet", key, address, dataSetKeys(existingItems)); //$NON-NLS-1$
+            }
+            if (matches.size() > 1)
+            {
+                return nestedUpdateAmbiguous(request, "dataSet", key, address, matches.size()); //$NON-NLS-1$
+            }
+            String error = nestedDataSetUpdateError(request, matches.get(0), child, childAddress);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String nestedUpdateMissing(Request request, String type, String key,
+        String address, List<String> existing)
+    {
+        return "action='update' cannot create nested " + type + " '" + key + "' below '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + address + "' while updating '" + request.address + "'. Existing keys at that level: " //$NON-NLS-1$ //$NON-NLS-2$
+            + display(existing) + ". Copy an exact existing address from dcs action='get', or use " //$NON-NLS-1$
+            + "action='upsert' to create '" + key + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String nestedUpdateAmbiguous(Request request, String type, String key,
+        String address, int count)
+    {
+        return "Cannot update nested " + type + " '" + key + "' below '" + address //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' while updating '" + request.address + "' because natural key '" + key //$NON-NLS-1$ //$NON-NLS-2$
+            + "' matches " + count + " existing nodes. The address is ambiguous; disambiguate the " //$NON-NLS-1$
+            + "duplicates in the DCS designer first, re-run get, and retry."; //$NON-NLS-1$
     }
 
     private static void mergeDataSetFields(JsonObject entry, DataSet dataSet)

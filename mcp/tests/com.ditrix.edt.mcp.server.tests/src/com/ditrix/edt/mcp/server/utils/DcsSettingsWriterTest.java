@@ -813,6 +813,128 @@ public class DcsSettingsWriterTest
         assertNull(supported.getDefaultSettings().getOrder());
     }
 
+    @Test
+    public void testGroupFieldsHolderUpdateRefusesAppendingNestedFields()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"grouping\"," //$NON-NLS-1$
+            + "\"name\":\"G\",\"groupFields\":{\"items\":[{\"field\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"Existing\"}}]}}]}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+
+        DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("items", "0", "groupFields"), "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Created\"}}]}"), //$NON-NLS-1$
+            LANGUAGES);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("exact group-field item index")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("upsert")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(settings));
+        DataCompositionGroup group = (DataCompositionGroup)settings.getItems().get(0);
+        assertEquals(1, group.getGroupFields().getItems().size());
+    }
+
+    @Test
+    public void testSelectionGroupUpdateRefusesAppendingNestedSelectionItems()
+    {
+        DataCompositionSettings settings = plan(json("{\"selection\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"group\",\"items\":[{\"kind\":\"field\",\"field\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"Existing\"}}]}]}}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+
+        DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("selection", "items", "0"), "update", "selection", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"kind\":\"group\",\"items\":[{\"kind\":\"field\",\"field\":{" //$NON-NLS-1$
+                + "\"kind\":\"field\",\"value\":\"Created\"}}]}"), LANGUAGES); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("exact selection item index")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("upsert")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(settings));
+    }
+
+    @Test
+    public void testFilterGroupUpdateRefusesAppendingNestedFilterItems()
+    {
+        DataCompositionSettings settings = plan(json("{\"filter\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"group\",\"items\":[{\"kind\":\"item\",\"left\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"Existing\"},\"comparisonType\":\"Equal\"}]}]}}")); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(settings);
+
+        DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("filter", "items", "0"), "update", "filter", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"kind\":\"group\",\"items\":[{\"kind\":\"item\",\"left\":{" //$NON-NLS-1$
+                + "\"kind\":\"field\",\"value\":\"Created\"},\"comparisonType\":\"Equal\"}]}"), //$NON-NLS-1$
+            LANGUAGES);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("exact filter item index")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("upsert")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(settings));
+    }
+
+    @Test
+    public void testDefaultSettingsRemoveChecksResolvedRootTypeBeforeClearingTree()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        schema.setDefaultSettings(plan(json("{\"filter\":{\"items\":[]}}"))); //$NON-NLS-1$
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSettingsWriter.SchemaResult refused = DcsSettingsWriter.planSchema(schema, "remove", //$NON-NLS-1$
+            "selection", address("Report.Sales#/defaultSettings"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse(refused.isSuccess());
+        assertTrue(refused.error(), refused.error().contains("type='selection'")); //$NON-NLS-1$
+        assertTrue(refused.error(), refused.error().contains("type='userSettings'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+        assertNotNull(schema.getDefaultSettings());
+
+        DcsSettingsWriter.SchemaResult removed = DcsSettingsWriter.planSchema(schema, "remove", //$NON-NLS-1$
+            "userSettings", address("Report.Sales#/defaultSettings"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(removed.error(), removed.isSuccess());
+        removed.plan().commit(schema);
+        assertNull(schema.getDefaultSettings());
+    }
+
+    @Test
+    public void testVariantMutationsRefuseAmbiguousNaturalKeyAndUniqueRemoveStillWorks()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        for (int i = 0; i < 2; i++)
+        {
+            SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createSettingsVariant();
+            variant.setName("Duplicate"); //$NON-NLS-1$
+            variant.setSettings(plan(json("{}"))); //$NON-NLS-1$
+            schema.getSettingsVariants().add(variant);
+        }
+        String beforeHash = DcsHash.compute(schema);
+
+        for (String action : Arrays.asList("update", "remove")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            DcsSettingsWriter.SchemaResult refused = DcsSettingsWriter.planSchema(schema, action,
+                "variant", address("Report.Sales#/variants/Duplicate"), //$NON-NLS-1$ //$NON-NLS-2$
+                json("{\"presentation\":{\"EN\":\"Changed\"}}"), LANGUAGES); //$NON-NLS-1$
+            assertFalse(refused.isSuccess());
+            assertTrue(refused.error(), refused.error().contains("Cannot " + action + " variant")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(refused.error(), refused.error().contains("matches 2 existing nodes")); //$NON-NLS-1$
+            assertTrue(refused.error(), refused.error().contains("disambiguate")); //$NON-NLS-1$
+        }
+        DcsSettingsWriter.SchemaResult nested = DcsSettingsWriter.planSchema(schema, "update", //$NON-NLS-1$
+            "selection", address("Report.Sales#/variants/Duplicate/settings/selection"), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"items\":[]}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(nested.isSuccess());
+        assertTrue(nested.error(), nested.error().contains("matches 2 existing nodes")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DataCompositionSchema unique = schemaWithVariant();
+        DcsSettingsWriter.SchemaResult removed = DcsSettingsWriter.planSchema(unique, "remove", //$NON-NLS-1$
+            "variant", address("Report.Sales#/variants/Operational"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(removed.error(), removed.isSuccess());
+        removed.plan().commit(unique);
+        assertTrue(unique.getSettingsVariants().isEmpty());
+    }
+
     private static DataCompositionSettings plan(JsonObject body)
     {
         DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,

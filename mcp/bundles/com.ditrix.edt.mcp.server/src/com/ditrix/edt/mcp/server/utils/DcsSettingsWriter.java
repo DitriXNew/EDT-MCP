@@ -321,6 +321,15 @@ public final class DcsSettingsWriter
                     + "exact '#/variants/<name>' address; got '" + address //$NON-NLS-1$
                     + "'. Copy a variant address from dcs action='get'."); //$NON-NLS-1$
             }
+            if (pointerName != null)
+            {
+                List<Integer> matches = findVariants(variants, pointerName);
+                if (matches.size() > 1)
+                {
+                    return SchemaResult.failure(ambiguousVariant(action, pointerName,
+                        address.toString(), matches.size()));
+                }
+            }
             if (ACTION_REMOVE.equals(action))
             {
                 if (pointerName == null)
@@ -348,9 +357,12 @@ public final class DcsSettingsWriter
         {
             if (schema.getDefaultSettings() == null)
                 return SchemaResult.failure("defaultSettings is not present. Re-run get."); //$NON-NLS-1$
+            String typeError = resolvedSettingsTypeError(schema.getDefaultSettings(),
+                address.segments(), action, type);
+            if (typeError != null) return SchemaResult.failure(typeError);
             return SchemaResult.success(new SchemaPlan(null, variants, true, false));
         }
-        SettingsLocation location = locateSchemaSettings(schema, variants, address, type, body);
+        SettingsLocation location = locateSchemaSettings(schema, variants, address, type, body, action);
         if (location.error != null)
         {
             return SchemaResult.failure(location.error);
@@ -521,7 +533,7 @@ public final class DcsSettingsWriter
     }
 
     private static SettingsLocation locateSchemaSettings(DataCompositionSchema schema,
-        List<SettingsVariant> variants, DcsAddress address, String type, JsonObject body)
+        List<SettingsVariant> variants, DcsAddress address, String type, JsonObject body, String action)
     {
         List<String> segments = new ArrayList<>(address.segments());
         if (segments.isEmpty())
@@ -536,10 +548,17 @@ public final class DcsSettingsWriter
         if (segments.size() >= 3 && "variants".equals(segments.get(0)) //$NON-NLS-1$
             && "settings".equals(segments.get(2))) //$NON-NLS-1$
         {
-            int index = findVariant(variants, segments.get(1));
+            String name = segments.get(1);
+            List<Integer> matches = findVariants(variants, name);
+            if (matches.size() > 1)
+            {
+                return SettingsLocation.failure(ambiguousVariant(action, name, address.toString(),
+                    matches.size()));
+            }
+            int index = matches.isEmpty() ? -1 : matches.get(0).intValue();
             if (index < 0)
             {
-                return SettingsLocation.failure("Settings variant '" + segments.get(1) //$NON-NLS-1$
+                return SettingsLocation.failure("Settings variant '" + name //$NON-NLS-1$
                     + "' was not found. Existing variants: " + variantNames(variants) //$NON-NLS-1$
                     + ". Copy a variant address from dcs action='get', or upsert the variant first."); //$NON-NLS-1$
             }
@@ -593,7 +612,12 @@ public final class DcsSettingsWriter
             return "Variant body at '" + path //$NON-NLS-1$
                 + "' needs a non-empty 'name'. Add its natural key and retry."; //$NON-NLS-1$
         }
-        int index = findVariant(variants, name);
+        List<Integer> matches = findVariants(variants, name);
+        if (matches.size() > 1)
+        {
+            return ambiguousVariant(action, name, path, matches.size());
+        }
+        int index = matches.isEmpty() ? -1 : matches.get(0).intValue();
         if (ACTION_UPDATE.equals(action) && index < 0)
         {
             return "action='update' could not find variant '" + name + "'. Existing variants: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1663,15 +1687,29 @@ public final class DcsSettingsWriter
             {
                 return arrayObjectError;
             }
-            DataCompositionGroupField field = DcsFactory.eINSTANCE.createDataCompositionGroupField();
-            String error = applyGroupField(field, item, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (error != null)
-            {
-                return error;
-            }
-            fields.getItems().add(field);
+            String error = appendGroupField(fields.getItems(), item, action,
+                path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
         }
         return null;
+    }
+
+    private static String appendGroupField(List<GroupItem> items, JsonObject body, String action,
+        String path)
+    {
+        String updateError = updateAppendError(action, "group-field item", path); //$NON-NLS-1$
+        if (updateError != null) return updateError;
+        DataCompositionGroupField field = DcsFactory.eINSTANCE.createDataCompositionGroupField();
+        String error = applyGroupField(field, body, path);
+        if (error == null) items.add(field);
+        return error;
+    }
+
+    private static String updateAppendError(String action, String itemType, String path)
+    {
+        if (!ACTION_UPDATE.equals(action)) return null;
+        return "action='update' needs an exact " + itemType + " index at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "'. Copy the item address from get; use upsert to append a new item."; //$NON-NLS-1$
     }
 
     private static String applyGroupField(DataCompositionGroupField field, JsonObject body, String path)
@@ -1817,7 +1855,7 @@ public final class DcsSettingsWriter
                 {
                     return selectedKindError;
                 }
-                String rebuilt = applySelectedItem(fresh, body, languages, at);
+                String rebuilt = applySelectedItem(fresh, body, action, languages, at);
                 if (rebuilt != null)
                 {
                     return rebuilt;
@@ -1825,7 +1863,7 @@ public final class DcsSettingsWriter
                 items.set(selected, fresh);
                 return null;
             }
-            return applySelectedItem(item, body, languages, at);
+            return applySelectedItem(item, body, action, languages, at);
         }
         if (!(item instanceof DataCompositionSelectedFieldGroup))
         {
@@ -1877,17 +1915,14 @@ public final class DcsSettingsWriter
     private static String appendSelected(List<SelectedItem> items, JsonObject body, String action,
         DcsPresentationParser.LanguageContext languages, String path)
     {
-        if (ACTION_UPDATE.equals(action))
-        {
-            return "action='update' needs an exact selection item index at '" + path //$NON-NLS-1$
-                + "'. Copy the item address from get; use upsert to append a new item."; //$NON-NLS-1$
-        }
+        String updateError = updateAppendError(action, "selection item", path); //$NON-NLS-1$
+        if (updateError != null) return updateError;
         SelectedItem item = newSelectedItem(body, path);
         if (item == null)
         {
             return selectedKindError;
         }
-        String error = applySelectedItem(item, body, languages, path);
+        String error = applySelectedItem(item, body, action, languages, path);
         if (error == null)
         {
             items.add(item);
@@ -1926,7 +1961,7 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    private static String applySelectedItem(SelectedItem item, JsonObject body,
+    private static String applySelectedItem(SelectedItem item, JsonObject body, String action,
         DcsPresentationParser.LanguageContext languages, String path)
     {
         if (item instanceof DataCompositionAutoSelectedField)
@@ -2060,7 +2095,7 @@ public final class DcsSettingsWriter
                     {
                         return arrayObjectError;
                     }
-                    String error = appendSelected(selectedGroup.getItems(), child, ACTION_UPSERT,
+                    String error = appendSelected(selectedGroup.getItems(), child, action,
                         languages, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
                     if (error != null)
                     {
@@ -2149,7 +2184,7 @@ public final class DcsSettingsWriter
                 {
                     return filterKindError;
                 }
-                String rebuilt = applyFilterItem(fresh, body, languages, at);
+                String rebuilt = applyFilterItem(fresh, body, action, languages, at);
                 if (rebuilt != null)
                 {
                     return rebuilt;
@@ -2157,7 +2192,7 @@ public final class DcsSettingsWriter
                 items.set(selected, fresh);
                 return null;
             }
-            return applyFilterItem(item, body, languages, at);
+            return applyFilterItem(item, body, action, languages, at);
         }
         if (!(item instanceof DataCompositionFilterItemGroup))
         {
@@ -2209,11 +2244,8 @@ public final class DcsSettingsWriter
     private static String appendFilter(List<FilterItem> items, JsonObject body, String action,
         DcsPresentationParser.LanguageContext languages, String path)
     {
-        if (ACTION_UPDATE.equals(action))
-        {
-            return "action='update' needs an exact filter item index at '" + path //$NON-NLS-1$
-                + "'. Copy the item address from get; use upsert to append a new item."; //$NON-NLS-1$
-        }
+        String updateError = updateAppendError(action, "filter item", path); //$NON-NLS-1$
+        if (updateError != null) return updateError;
         String kind = optionalString(body, KEY_KIND, path);
         if (stringError != null)
         {
@@ -2224,7 +2256,7 @@ public final class DcsSettingsWriter
         {
             return filterKindError;
         }
-        String error = applyFilterItem(item, body, languages, path);
+        String error = applyFilterItem(item, body, action, languages, path);
         if (error == null)
         {
             items.add(item);
@@ -2252,7 +2284,7 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    private static String applyFilterItem(FilterItem item, JsonObject body,
+    private static String applyFilterItem(FilterItem item, JsonObject body, String action,
         DcsPresentationParser.LanguageContext languages, String path)
     {
         boolean group = item instanceof DataCompositionFilterItemGroup;
@@ -2320,7 +2352,7 @@ public final class DcsSettingsWriter
                     {
                         return arrayObjectError;
                     }
-                    String error = appendFilter(filterGroup.getItems(), child, ACTION_UPSERT,
+                    String error = appendFilter(filterGroup.getItems(), child, action,
                         languages, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
                     if (error != null)
                     {
@@ -4514,14 +4546,29 @@ public final class DcsSettingsWriter
 
     private static int findVariant(List<SettingsVariant> variants, String name)
     {
+        List<Integer> matches = findVariants(variants, name);
+        return matches.isEmpty() ? -1 : matches.get(0).intValue();
+    }
+
+    private static List<Integer> findVariants(List<SettingsVariant> variants, String name)
+    {
+        List<Integer> result = new ArrayList<>();
         for (int i = 0; i < variants.size(); i++)
         {
             if (name.equals(variants.get(i).getName()))
             {
-                return i;
+                result.add(Integer.valueOf(i));
             }
         }
-        return -1;
+        return result;
+    }
+
+    private static String ambiguousVariant(String action, String name, String address, int count)
+    {
+        return "Cannot " + action + " variant '" + name + "' at '" + address //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' because natural key '" + name + "' matches " + count //$NON-NLS-1$ //$NON-NLS-2$
+            + " existing nodes. The address is ambiguous; disambiguate the duplicates in the DCS " //$NON-NLS-1$
+            + "designer first, re-run get, and retry."; //$NON-NLS-1$
     }
 
     private static String variantNames(List<SettingsVariant> variants)
