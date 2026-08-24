@@ -11,8 +11,10 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -2831,6 +2833,26 @@ public class CompareConfigurationsTool implements IMcpTool
          * scope that matched such objects collected ZERO nodes and the report said the
          * comparison found nothing.
          *
+         * <h2>The descent uses an explicit stack, and that is not a matter of taste</h2>
+         * This walk used to re-enter itself once per level, and it is the last thing that runs
+         * before the TERMINAL report is handed back - so on a deeply nested hierarchy it did not
+         * produce a bad answer, it produced a {@code StackOverflowError} at the moment of
+         * answering, with the comparison already finished and its work thrown away. Nothing above
+         * it bounded the depth either: {@code limit} bounds the ROWS KEPT while the counters are
+         * taken over the whole tree, so the walk visits every node whatever the caller asked for.
+         * Heap is a bound the workbench can be given more of; the walking thread's stack is not.
+         * <p>
+         * <b>The ORDER is the recursion's own, and is what the report prints.</b> A node is
+         * collected before anything below it, and everything below one child is collected before
+         * the next child is reached - plain pre-order. The stack reproduces it by pushing a node's
+         * children in REVERSE, so the first child is the next one popped. The starting node is
+         * descended from and never collected itself, exactly as before.
+         * <p>
+         * What it deliberately does NOT add is a seen-set. {@code topChildren} is a {@code refers}
+         * collection, so a node reachable by two paths is walked twice and reported twice - the
+         * recursion did that too, and de-duplicating here would change the counters this report
+         * publishes rather than the mechanism it walks with.
+         *
          * @param node the node to descend from (may be {@code null})
          * @param collector the report being accumulated
          */
@@ -2840,24 +2862,42 @@ public class CompareConfigurationsTool implements IMcpTool
             {
                 return;
             }
+            Deque<ComparisonNode> pending = new ArrayDeque<>();
+            pushChildren(node, pending);
+            while (!pending.isEmpty())
+            {
+                ComparisonNode current = pending.pop();
+                if (current instanceof TopComparisonNode)
+                {
+                    collector.accept((TopComparisonNode)current);
+                }
+                // Descended into unconditionally: a containment node carries no verdict of its
+                // own and exists precisely to hold the top nodes below it.
+                pushChildren(current, pending);
+            }
+        }
+
+        /**
+         * Puts one node's children on the walk's stack in the order that reproduces the descent
+         * the recursion made: REVERSED, so the first child is the next one popped.
+         *
+         * @param node the node whose children are to be walked
+         * @param pending the walk's stack
+         */
+        private static void pushChildren(ComparisonNode node, Deque<ComparisonNode> pending)
+        {
             List<ComparisonNode> children = node.<ComparisonNode> getChildren();
             if (children == null)
             {
                 return;
             }
-            for (ComparisonNode child : children)
+            for (int i = children.size() - 1; i >= 0; i--)
             {
-                if (child == null)
+                ComparisonNode child = children.get(i);
+                if (child != null)
                 {
-                    continue;
+                    pending.push(child);
                 }
-                if (child instanceof TopComparisonNode)
-                {
-                    collector.accept((TopComparisonNode)child);
-                }
-                // Descended into unconditionally: a containment node carries no verdict of its
-                // own and exists precisely to hold the top nodes below it.
-                collectTopNodes(child, collector);
             }
         }
 

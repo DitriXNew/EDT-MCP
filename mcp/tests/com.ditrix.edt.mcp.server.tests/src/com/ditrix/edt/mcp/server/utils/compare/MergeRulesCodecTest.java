@@ -17,6 +17,7 @@ import static org.junit.Assert.fail;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystems;
@@ -2027,6 +2028,248 @@ public class MergeRulesCodecTest
                 Files.deleteIfExists(probe);
             }
         }
+    }
+
+    // ==== A failed write removes ITS OWN reservation, and never what replaced it ====
+
+    /** What the other process writes onto the reserved path, so its survival can be pinned. */
+    private static final String FOREIGN_DECISIONS = "the other write's decisions"; //$NON-NLS-1$
+
+    /** The failure raised from inside the window, standing in for any step that can fail there. */
+    private static final String INTERFERING_FAILURE = "the step after the reservation failed"; //$NON-NLS-1$
+
+    /**
+     * The finding: the clean-up on the failure path deleted the target PATH unconditionally.
+     * <p>
+     * That is sound about the moment the reservation was taken and about no moment after it.
+     * Between the claim and the failure the path is an ordinary name in a directory anybody may
+     * write to, so another process - another run of this very tool - can remove the empty
+     * reservation and put its own rules file there. Deleting by path then deletes SOMEBODY ELSE'S
+     * FILE, and the caller is told only that a write failed.
+     * <p>
+     * The assertion is on the CONTENT and not on the file's existence: a clean-up that deleted it
+     * and a caller that put something back would both leave "a file is there".
+     */
+    @Test
+    public void testAFailedWriteDoesNotDeleteTheFileThatReplacedItsReservation() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null, replaceReservationThenFail(target));
+            fail("the write must fail: the interference raised a failure inside it"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            // The refusal is expected; what is on disk afterwards is the point.
+        }
+
+        assertEquals("the file that replaced the reservation is not this call's litter and must " //$NON-NLS-1$
+            + "survive its clean-up", FOREIGN_DECISIONS, //$NON-NLS-1$
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * A file left on the caller's path is a fact the caller has to be given. Told only "the write
+     * failed", they would go on believing the path is in whatever state it was before - and the
+     * whole reason it was left is that it may hold somebody's decisions.
+     */
+    @Test
+    public void testAWriteThatLeftAForeignFileSaysSoAndStillReportsWhatFailed() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null, replaceReservationThenFail(target));
+            fail("the write must fail: the interference raised a failure inside it"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            assertTrue("the refusal must say the file was left where it is: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("LEFT THERE")); //$NON-NLS-1$
+            assertTrue("and name the path it was left on: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(target.toString()));
+            // The original failure is still what the caller was asking about, so it may not be
+            // replaced by the note about the leftover.
+            assertTrue("and still report what actually failed: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(INTERFERING_FAILURE));
+        }
+    }
+
+    /**
+     * The control, and the half that keeps the fix from being "never clean up": a reservation that
+     * is still the empty file this call claimed is removed exactly as before. Leaving it behind
+     * would make the next write refuse a path that holds no rules at all.
+     */
+    @Test
+    public void testAFailedWriteStillRemovesItsOwnReservation() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null, failWithoutTouchingAnything());
+            fail("the write must fail: the interference raised a failure inside it"); //$NON-NLS-1$
+        }
+        catch (UncheckedIOException expected)
+        {
+            // Rethrown as itself: nothing was left behind, so there is nothing to add to it.
+        }
+
+        assertFalse("the reservation must not outlive the write that took it", //$NON-NLS-1$
+            Files.exists(target));
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("and the failed write must leave the directory as it found it", //$NON-NLS-1$
+                List.of(), list.toList());
+        }
+    }
+
+    /**
+     * Stands in for the other process: takes the reserved path away and puts its own file there,
+     * then fails the write from inside the same window.
+     * <p>
+     * A seam rather than a second thread, and that is not convenience: the window between the
+     * claim and a failure is microseconds wide and nothing in the codec blocks in it, so a racing
+     * thread would occupy it by luck or not at all - and a test that reproduces the defect by luck
+     * proves nothing on the run where it loses.
+     *
+     * @param target the path the write reserved
+     * @return the interference
+     */
+    private static Runnable replaceReservationThenFail(Path target)
+    {
+        return () -> {
+            try
+            {
+                // Deleted and recreated, which is what a replacement is: on a POSIX store the new
+                // file has its own inode, and on NTFS - where this view answers no file key - it
+                // is a file of a different SIZE, which is the half of the fallback that matters.
+                Files.delete(target);
+                Files.write(target, FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8));
+            }
+            catch (IOException e)
+            {
+                throw new UncheckedIOException(e);
+            }
+            throw new UncheckedIOException(new IOException(INTERFERING_FAILURE));
+        };
+    }
+
+    /**
+     * @return an interference that only fails, leaving the reservation exactly as the write made it
+     */
+    private static Runnable failWithoutTouchingAnything()
+    {
+        return () -> {
+            throw new UncheckedIOException(new IOException(INTERFERING_FAILURE));
+        };
+    }
+
+    // ============ Nor may the NUMBER of nodes a document builds run without a bound ============
+
+    /**
+     * The bytes are bounded and the nesting is bounded, and neither bounds the COUNT. Every node
+     * becomes an object owning a map and a list, so a document of very many very small tags passes
+     * both existing bounds and still builds millions of them - hundreds of megabytes of the
+     * workbench's heap for a source of a few.
+     */
+    @Test
+    public void testADocumentPastTheNodeBudgetIsRefusedNamingTheBudget()
+    {
+        try
+        {
+            MergeRulesCodec.parse(documentOfEmptyTags(MergeRulesCodec.MAX_DOCUMENT_NODES + 1));
+            fail("a document that builds more nodes than the budget must be refused"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the refusal must name the budget it ran out of: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("more than " + MergeRulesCodec.MAX_DOCUMENT_NODES //$NON-NLS-1$
+                    + " nodes")); //$NON-NLS-1$
+            // Told "too large", a caller would go looking for a file past the size bound and find
+            // one a quarter of it; told "too deep", they would go looking for nesting that is not
+            // there. The three refusals have to be distinguishable to be actionable.
+            assertFalse("it must not read as the nesting refusal: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("levels deep")); //$NON-NLS-1$
+            assertFalse("nor as the size refusal: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("MB and was not read")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The boundary: a document of exactly the budget is READ. A bound that refused at its own
+     * number would be a different bound from the one documented, and the documented one is what
+     * the "no real file reaches it" argument is made about.
+     *
+     * @throws Exception never; the document is well-formed
+     */
+    @Test
+    public void testADocumentExactlyAtTheNodeBudgetIsStillRead() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse(documentOfEmptyTags(MergeRulesCodec.MAX_DOCUMENT_NODES));
+
+        assertNotNull("a document AT the budget is inside it, not past it", document); //$NON-NLS-1$
+    }
+
+    /**
+     * The budget is ONE budget: a zip entry is charged for what it EXPANDS to, exactly as the byte
+     * bound is, because the parse is charged for the expansion and not for the archive. Bounding
+     * only the container the caller happened to choose is no bound at all.
+     *
+     * @throws Exception never; the archive is written by this test
+     */
+    @Test
+    public void testAZipEntryIsBoundedByTheSameNodeBudget() throws Exception
+    {
+        Path zip = workDir.resolve("many-nodes.zip"); //$NON-NLS-1$
+        try (OutputStream out = Files.newOutputStream(zip);
+            ZipOutputStream zipOut = new ZipOutputStream(out))
+        {
+            zipOut.putNextEntry(new ZipEntry("Main_Other_Ancestor.xml")); //$NON-NLS-1$
+            zipOut.write(documentOfEmptyTags(MergeRulesCodec.MAX_DOCUMENT_NODES + 1)
+                .getBytes(StandardCharsets.UTF_8));
+            zipOut.closeEntry();
+        }
+
+        try
+        {
+            MergeRulesCodec.read(zip);
+            fail("the entry builds more nodes than the budget and must be refused"); //$NON-NLS-1$
+        }
+        catch (MergeRulesFormatException e)
+        {
+            assertTrue("the entry must be charged the same budget as a plain file: " //$NON-NLS-1$
+                + e.getMessage(),
+                e.getMessage().contains("more than " + MergeRulesCodec.MAX_DOCUMENT_NODES //$NON-NLS-1$
+                    + " nodes")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * A merge-settings document that builds exactly {@code nodes} nodes: the {@code Settings} root
+     * and empty tags under it, with no whitespace, so nothing but the tags is counted.
+     *
+     * @param nodes how many nodes the parse must build
+     * @return the document text
+     */
+    private static String documentOfEmptyTags(int nodes)
+    {
+        String open = "<Settings Format_version=\"2.0\">"; //$NON-NLS-1$
+        String close = "</Settings>"; //$NON-NLS-1$
+        StringBuilder xml =
+            new StringBuilder(open.length() + close.length() + 4 * (nodes - 1)).append(open);
+        for (int i = 1; i < nodes; i++)
+        {
+            xml.append("<a/>"); //$NON-NLS-1$
+        }
+        return xml.append(close).toString();
     }
 
     @Test

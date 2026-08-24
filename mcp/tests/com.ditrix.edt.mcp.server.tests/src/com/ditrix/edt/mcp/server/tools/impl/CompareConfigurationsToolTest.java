@@ -982,6 +982,213 @@ public class CompareConfigurationsToolTest
         assertEquals(1, collector.getTotal());
     }
 
+    // ======== The walk spends the heap, not the walking thread's stack ========
+
+    /**
+     * Deep enough that the descent this walk replaced could not have finished on the stack given
+     * below: at the cheapest a frame of that descent held the node, the collector, the child list,
+     * its iterator and the child - call it sixty-four bytes - so twelve thousand of them need
+     * something approaching a megabyte, against the quarter of one the walking thread is started
+     * with.
+     */
+    private static final int DEEP_TREE_DEPTH = 12_000;
+
+    /** The walking thread's stack, small on purpose - see {@link #DEEP_TREE_DEPTH}. */
+    private static final int SMALL_STACK_BYTES = 256 * 1024;
+
+    /**
+     * The finding: the walk that builds the TERMINAL report re-entered itself once per level, so a
+     * deeply nested hierarchy did not produce a wrong report - it produced a
+     * {@code StackOverflowError} at the moment of answering, with the comparison already finished
+     * and its work thrown away.
+     * <p>
+     * Nothing above the walk bounded that depth either, and the caller's {@code limit} cannot:
+     * it bounds the ROWS KEPT while the counters are taken over the whole tree, so every node is
+     * visited whatever was asked for.
+     *
+     * @throws InterruptedException never; the walking thread is joined
+     */
+    @Test
+    public void testADeepTreeIsWalkedWithoutSpendingTheStack() throws InterruptedException
+    {
+        ComparisonNode root = chainOfTopNodes(DEEP_TREE_DEPTH);
+        ComparisonTreeReport.Collector collector =
+            new ComparisonTreeReport.Collector(1, false);
+
+        onASmallStack(() -> CompareConfigurationsTool.EngineBackend.collectTopNodes(root, collector));
+
+        // Every node below the root, and the root itself is descended from rather than reported -
+        // which is also what says the walk went all the way down instead of stopping early.
+        assertEquals(DEEP_TREE_DEPTH, collector.getTotal());
+    }
+
+    /**
+     * The mechanism changed and the ANSWER may not: same nodes, same order, same counters.
+     * <p>
+     * Pinned against the descent that was replaced rather than against numbers written down here,
+     * and that is the difference between a pin and a restatement: {@link #descendRecursively} is
+     * the original method, verbatim, so the assertion is an EQUIVALENCE that stays true whatever
+     * the tree is - and a walk that reordered the children, skipped the containment nodes or
+     * collected the starting node would break it while a hand-written expected list might not.
+     */
+    @Test
+    public void testTheWalkAnswersExactlyWhatTheRecursiveDescentAnswered()
+    {
+        ComparisonNode root = mixedTree();
+        ComparisonTreeReport.Collector walked = new ComparisonTreeReport.Collector(100, false);
+        ComparisonTreeReport.Collector reference = new ComparisonTreeReport.Collector(100, false);
+
+        CompareConfigurationsTool.EngineBackend.collectTopNodes(root, walked);
+        descendRecursively(root, reference);
+
+        // The tree has to be worth comparing over: two empty walks agree about nothing.
+        assertTrue("the fixture must produce several rows, or this proves nothing", //$NON-NLS-1$
+            reference.getRows().size() >= 5);
+        assertEquals("the same nodes in the same order", nodeIds(reference), nodeIds(walked)); //$NON-NLS-1$
+        assertEquals("total", reference.getTotal(), walked.getTotal()); //$NON-NLS-1$
+        assertEquals("matching", reference.getMatching(), walked.getMatching()); //$NON-NLS-1$
+        assertEquals("differing", reference.getDiffering(), walked.getDiffering()); //$NON-NLS-1$
+        assertEquals("conflicts", reference.getConflicts(), walked.getConflicts()); //$NON-NLS-1$
+        assertEquals("not compared", reference.getNotCompared(), walked.getNotCompared()); //$NON-NLS-1$
+    }
+
+    /**
+     * The descent {@code collectTopNodes} replaced, kept here VERBATIM as the reference the
+     * equivalence test compares against. It is deliberately not tidied: a reference that has been
+     * improved is no longer the thing that was replaced.
+     *
+     * @param node the node to descend from (may be {@code null})
+     * @param collector the report being accumulated
+     */
+    private static void descendRecursively(ComparisonNode node,
+        ComparisonTreeReport.Collector collector)
+    {
+        if (node == null)
+        {
+            return;
+        }
+        List<ComparisonNode> children = node.<ComparisonNode> getChildren();
+        if (children == null)
+        {
+            return;
+        }
+        for (ComparisonNode child : children)
+        {
+            if (child == null)
+            {
+                continue;
+            }
+            if (child instanceof TopComparisonNode)
+            {
+                collector.accept((TopComparisonNode)child);
+            }
+            descendRecursively(child, collector);
+        }
+    }
+
+    /**
+     * A tree with the shapes the walk has to get right: top objects beside containment nodes, top
+     * objects BELOW them, several levels, and a {@code null} among the children - which the
+     * platform's own lists do admit and which both walks skip.
+     *
+     * @return the root to descend from
+     */
+    private static ComparisonNode mixedTree()
+    {
+        ComparisonNode root = mock(ComparisonNode.class);
+        TopComparisonNode first = topNode(1);
+        ComparisonNode collection = mock(ComparisonNode.class);
+        TopComparisonNode last = topNode(2);
+        withChildren(root, first, collection, null, last);
+
+        TopComparisonNode inCollection = topNode(3);
+        ComparisonNode nested = mock(ComparisonNode.class);
+        withChildren(collection, inCollection, nested);
+
+        TopComparisonNode deep = topNode(4);
+        withChildren(nested, deep);
+
+        TopComparisonNode belowFirst = topNode(5);
+        TopComparisonNode belowFirstToo = topNode(6);
+        withChildren(first, belowFirst, belowFirstToo);
+        return root;
+    }
+
+    /**
+     * A straight chain: every node is a top node and holds the next one as its only child.
+     *
+     * @param depth how many nodes hang below the root
+     * @return the root of the chain
+     */
+    private static ComparisonNode chainOfTopNodes(int depth)
+    {
+        TopComparisonNode root = mock(TopComparisonNode.class);
+        ComparisonNode parent = root;
+        for (int level = 1; level <= depth; level++)
+        {
+            // No id stubbed: this test counts nodes, and twelve thousand extra stubbings would
+            // buy nothing but time.
+            TopComparisonNode child = mock(TopComparisonNode.class);
+            withChildren(parent, child);
+            parent = child;
+        }
+        return root;
+    }
+
+    /**
+     * @param id the node's BM id, which is what the collected rows are told apart by
+     * @return a top node carrying it
+     */
+    private static TopComparisonNode topNode(long id)
+    {
+        TopComparisonNode node = mock(TopComparisonNode.class);
+        when(node.bmGetId()).thenReturn(Long.valueOf(id));
+        return node;
+    }
+
+    /**
+     * @param collector a finished walk
+     * @return the ids of the rows it kept, in the order it kept them
+     */
+    private static List<Long> nodeIds(ComparisonTreeReport.Collector collector)
+    {
+        List<Long> ids = new ArrayList<>();
+        for (ComparisonTreeReport.Node node : collector.getRows())
+        {
+            ids.add(Long.valueOf(node.getNodeId()));
+        }
+        return ids;
+    }
+
+    /**
+     * Runs {@code body} on a thread started with {@link #SMALL_STACK_BYTES} of stack, and reports
+     * whatever it threw - a {@code StackOverflowError} included, which is the whole point.
+     *
+     * @param body the walk under test
+     * @throws InterruptedException never; the thread is joined
+     */
+    private static void onASmallStack(Runnable body) throws InterruptedException
+    {
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread walker = new Thread(null, () -> {
+            try
+            {
+                body.run();
+            }
+            catch (Throwable t) // NOSONAR a StackOverflowError is exactly what this catches
+            {
+                thrown.set(t);
+            }
+        }, "deep-comparison-tree-walk", SMALL_STACK_BYTES); //$NON-NLS-1$
+        walker.start();
+        walker.join();
+        if (thrown.get() != null)
+        {
+            throw new AssertionError("the walk must not spend the walking thread's stack", //$NON-NLS-1$
+                thrown.get());
+        }
+    }
+
     // ======== The state is READ, not carried over from the poll that ended the wait ========
 
     /** The root's id, so a status read against any other id is visibly a different reading. */

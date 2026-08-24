@@ -15,9 +15,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
@@ -190,6 +192,42 @@ public final class MergeRulesCodec
     private static final int MAX_ELEMENT_DEPTH = 500;
 
     /**
+     * Largest number of NODES one parse may build - elements, text runs, comments and processing
+     * instructions alike.
+     *
+     * <h2>Why the byte bound does not already cover this</h2>
+     * {@link #MAX_DOCUMENT_BYTES} bounds the SOURCE, and the source is the cheap half. Every node
+     * this codec builds is a {@code MergeRulesDocument.Element}, and an {@code Element} owns a
+     * {@code LinkedHashMap} and an {@code ArrayList} from the moment it exists, whether or not it
+     * ever holds an attribute or a child - so a node costs a couple of hundred bytes of heap
+     * against the four its shortest spelling ({@code <a/>}) costs on disk. A document that passes
+     * the byte bound while consisting of nothing else builds roughly four million of them, which
+     * is a heap cost in the gigabytes: the parse would spend the WORKBENCH'S memory, not this
+     * call's, which is the same failure the byte bound exists to prevent and reached by a route it
+     * does not watch.
+     *
+     * <h2>Where the number comes from</h2>
+     * It is {@link #MAX_DOCUMENT_BYTES} divided by 16, so the two bounds move together and the
+     * rule they express is one rule: <b>an accepted document must average at least sixteen source
+     * bytes per node.</b> A real merge-settings file is far denser than that - measured on the
+     * saved-file fixture this codec's tests are built from, 855 bytes buy 42 nodes, or 20.4 bytes
+     * each, and that is the LAYOUT-heavy count with every indentation run charged as a node of its
+     * own. So a document at the byte bound written in this format builds some 824 000 nodes and
+     * does not reach the budget, while a document of bare four-byte tags is refused at a quarter of
+     * the byte bound - before the tree it would build is several times the size of EDT's heap.
+     * <p>
+     * <b>It is charged in ONE place</b> - {@code readTree}, which every entry point goes through -
+     * so the plain xml file, the in-memory string and the zip entry are bounded by the same count
+     * without any of them having to remember to ask. For a zip that count is taken on what the
+     * entry EXPANDS to, exactly as the byte bound is, because the parse is charged for the
+     * expansion and not for the archive.
+     * <p>
+     * Package-scoped rather than private so the tests can build a document AT the bound instead of
+     * restating the number: a test carrying its own copy of it would keep passing if this one moved.
+     */
+    static final int MAX_DOCUMENT_NODES = MAX_DOCUMENT_BYTES / 16;
+
+    /**
      * Largest number of symbolic links {@link #followSymbolicLink(Path)} walks through before it
      * refuses.
      * <p>
@@ -239,6 +277,11 @@ public final class MergeRulesCodec
      * what is in there.
      */
     private static final int MAX_LISTED_ZIP_ENTRIES = 20;
+
+    /** What a production write meets in the window between the claim and the first byte: nothing. */
+    private static final Runnable NOTHING_INTERFERES = () -> {
+        // Production takes the reservation and goes straight on to the bytes.
+    };
 
     private MergeRulesCodec()
     {
@@ -517,6 +560,29 @@ public final class MergeRulesCodec
     private static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId)
         throws IOException
     {
+        write(file, document, target, zipEntryId, NOTHING_INTERFERES);
+    }
+
+    /**
+     * The shared write with the window between the claim and the first byte made OCCUPIABLE.
+     * <p>
+     * {@code afterReservation} is a test seam and nothing else: production passes
+     * {@link #NOTHING_INTERFERES}. It exists because the defect this method's clean-up guards
+     * against - another process replacing the reservation while this write is failing - lives in a
+     * window that is microseconds wide and that nothing in here blocks in, so no test could stand
+     * in it from the outside.
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param zipEntryId the zip entry's name without its extension, or {@code null} for bare xml
+     * @param afterReservation run once the reservation has been taken and its identity recorded,
+     *     before anything is written; production does nothing here
+     * @throws IOException when the file cannot be written
+     */
+    static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
+        Runnable afterReservation) throws IOException
+    {
         // FIRST, and before a single filesystem step - not even the parent directories. This is
         // the one refusal that has to leave the path exactly as it found it, and a check made
         // after the reservation or after the temporary would already have created something to
@@ -534,11 +600,13 @@ public final class MergeRulesCodec
         // Taken BEFORE the bytes are produced, so there is no window between "the path is free"
         // and "the path is mine". Files.createFile either claims the name or fails; it cannot
         // report a claim it did not make, which is the whole difference from an exists() check.
-        boolean reserved = false;
+        // Its IDENTITY is recorded in the same breath, because the clean-up below removes what
+        // this call created and must be able to tell that from what somebody else put there since.
+        BasicFileAttributes reservation = null;
         if (target == Target.MUST_NOT_EXIST)
         {
             Files.createFile(resolved);
-            reserved = true;
+            reservation = identifyReservation(resolved);
         }
         // EVERY step that can fail after the reservation is inside this block, and that is the
         // point of the shape rather than a matter of taste: the reservation is an empty file on
@@ -552,6 +620,7 @@ public final class MergeRulesCodec
         Path temporary = null;
         try
         {
+            afterReservation.run();
             // Created in the TARGET's directory, never in the system temp area: the move over the
             // target has to stay within one filesystem to be atomic. The name carries the target's
             // own name so a leftover is traceable to the write that left it.
@@ -578,15 +647,177 @@ public final class MergeRulesCodec
             {
                 cleanUp(temporary, e);
             }
-            if (reserved)
+            if (target == Target.MUST_NOT_EXIST)
             {
-                // The empty reservation is this call's own litter: the path was free when the call
-                // started and nothing was written onto it, so leaving a zero-byte file behind
-                // would make the next attempt refuse a path nobody is using.
-                cleanUp(resolved, e);
+                String left = releaseReservation(resolved, reservation, e);
+                if (left != null)
+                {
+                    // The clean-up refused to remove what it found, so the answer says so. A
+                    // caller told only "the write failed" would go on believing the path is in
+                    // whatever state it was before - and the whole reason the file was left is
+                    // that it may be somebody's rules.
+                    throw new IOException(left + " The write itself failed with: " //$NON-NLS-1$
+                        + describeFailure(e), e);
+                }
             }
             throw e;
         }
+    }
+
+    /**
+     * Records enough of the empty file {@link Target#MUST_NOT_EXIST} has just claimed to recognise
+     * it again after a failure - and refuses to record anything else.
+     * <p>
+     * {@code Files.createFile} and this read are two syscalls, so the same window the identity
+     * exists for is open between them. What that means here is that "the file on the path right
+     * now" is not automatically this call's reservation: a replacement that got in first would be
+     * recorded as the reservation and then, matching itself, be deleted by the clean-up - the very
+     * loss the identity is against, moved one step earlier. So the shape is checked as well as
+     * read: {@code createFile} makes an EMPTY REGULAR file, and anything that is not one is
+     * refused as an identity, which leaves the clean-up unable to remove it.
+     *
+     * @param path the reserved path
+     * @return the identity to compare against later, or {@code null} when none could be
+     *     established - in which case nothing on that path may be removed
+     */
+    private static BasicFileAttributes identifyReservation(Path path)
+    {
+        try
+        {
+            BasicFileAttributes taken =
+                Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return taken.isRegularFile() && taken.size() == 0 ? taken : null;
+        }
+        catch (IOException | RuntimeException e) // NOSONAR no answer is a state, not a failure
+        {
+            // Nothing to compare against later. That is not an error to fail the write over - the
+            // write has already failed - it only means the clean-up leaves the path alone.
+            return null;
+        }
+    }
+
+    /**
+     * Removes the reservation this write took, and ONLY it.
+     *
+     * <h2>Why the identity is checked instead of the path</h2>
+     * The clean-up used to delete the target path unconditionally, and the reasoning behind that
+     * ("the path was free when the call started, so whatever is on it is this call's own litter")
+     * is true of the moment the reservation was taken and of no moment after it. Between the claim
+     * and the failure the path is an ordinary name in a directory anybody may write to: another
+     * process - another instance of this very tool - can remove the empty reservation and put its
+     * own rules file there. Deleting by path then deletes SOMEBODY ELSE'S FILE, and the caller is
+     * told only that a write failed.
+     *
+     * <h2>What the identity can and cannot tell apart</h2>
+     * {@code fileKey()} is the whole answer wherever the store gives one: on a POSIX filesystem it
+     * is the {@code (device, inode)} pair, which names the FILE rather than the path, so a
+     * replacement differs even when it carries the same name, size and timestamps. Windows returns
+     * none from this view, and there the fallback is the shape and the two timestamps: an empty
+     * regular file created and last modified at the instants recorded.
+     * <p>
+     * <b>The fallback's limit, stated rather than implied.</b> It cannot tell the reservation from
+     * a replacement that is ALSO an empty regular file carrying the same two timestamps - and NTFS
+     * makes that reachable rather than theoretical: file-system tunnelling restores the creation
+     * time of a file re-created under a name deleted within the last few seconds, which is exactly
+     * this scenario's shape. What the fallback does hold onto is the case that costs something: a
+     * replacement with rules in it is not empty, and a file of a different size is never taken for
+     * the reservation. So the loss it can still permit is an empty file, and the loss it prevents
+     * is a file with decisions in it.
+     *
+     * @param path the reserved path
+     * @param taken the identity recorded when the reservation was claimed, or {@code null} when
+     *     none could be
+     * @param failure the failure being reported, which a removal failure is attached to
+     * @return {@code null} when the path is free again - removed here or already gone - or the
+     *     sentence that has to reach the caller when something was left on it
+     */
+    private static String releaseReservation(Path path, BasicFileAttributes taken, Exception failure)
+    {
+        if (taken == null)
+        {
+            return leftInPlace(path, "the empty file it claimed could not be identified when it " //$NON-NLS-1$
+                + "was claimed, so this call cannot tell it from a file somebody else put there"); //$NON-NLS-1$
+        }
+        BasicFileAttributes present;
+        try
+        {
+            present =
+                Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        }
+        catch (NoSuchFileException e) // NOSONAR an empty path is the outcome this method wants
+        {
+            // Already gone, by this filesystem or by whoever else was working on that path. There
+            // is nothing to remove and nothing to warn about.
+            return null;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            failure.addSuppressed(e instanceof IOException ? (IOException)e
+                : new IOException("Could not read '" + path + '\'', e)); //$NON-NLS-1$
+            return leftInPlace(path, "what is on it now could not be read (" //$NON-NLS-1$
+                + describeFailure(e) + ')');
+        }
+        if (!isTheSameFile(taken, present))
+        {
+            return leftInPlace(path, "the file on it now is NOT the empty reservation this call " //$NON-NLS-1$
+                + "made - something replaced it while this write was failing"); //$NON-NLS-1$
+        }
+        // Confirmed as this call's own litter: the path was free when the call started, nothing
+        // was ever written onto it, and it is still the very file that was claimed. Leaving a
+        // zero-byte file behind would make the next attempt refuse a path nobody is using.
+        cleanUp(path, failure);
+        return null;
+    }
+
+    /**
+     * Whether the file described by {@code present} is the same file as the one described by
+     * {@code taken}. See {@code releaseReservation} for what each half can and cannot tell apart.
+     *
+     * @param taken the identity recorded at the claim
+     * @param present the identity read now
+     * @return whether they describe one file
+     */
+    private static boolean isTheSameFile(BasicFileAttributes taken, BasicFileAttributes present)
+    {
+        Object claimedKey = taken.fileKey();
+        Object presentKey = present.fileKey();
+        if (claimedKey != null || presentKey != null)
+        {
+            // Where the store answers a key at all it is the whole answer, and a side that
+            // answers none where the other did is a different file by that alone.
+            return claimedKey != null && claimedKey.equals(presentKey);
+        }
+        return present.isRegularFile() && present.size() == 0
+            && taken.creationTime().equals(present.creationTime())
+            && taken.lastModifiedTime().equals(present.lastModifiedTime());
+    }
+
+    /**
+     * The sentence a caller gets when the clean-up refused to remove what it found on the target
+     * path.
+     *
+     * @param path the reserved path
+     * @param why what stopped the removal, as a clause
+     * @return the message, ending in a full stop and a space
+     */
+    private static String leftInPlace(Path path, String why)
+    {
+        return "The merge-rules write failed, and the file on '" + path //$NON-NLS-1$
+            + "' was LEFT THERE rather than removed, because " + why //$NON-NLS-1$
+            + ". Removing it could delete a file this call never wrote. Check what that path " //$NON-NLS-1$
+            + "actually holds before writing there again: if it carries decisions, keep it and " //$NON-NLS-1$
+            + "aim this write somewhere else; if it is an empty leftover, delete it and re-send " //$NON-NLS-1$
+            + "the write."; //$NON-NLS-1$
+    }
+
+    /**
+     * @param failure the failure to describe
+     * @return its message, or its type when it carries none
+     */
+    private static String describeFailure(Exception failure)
+    {
+        return failure.getMessage() == null ? failure.getClass().getSimpleName()
+            : failure.getMessage();
     }
 
     /**
@@ -1427,7 +1658,8 @@ public final class MergeRulesCodec
      *             for an empty document
      * @throws XMLStreamException when the stream is not well-formed XML
      * @throws MergeRulesFormatException when the document nests deeper than
-     *             {@link #MAX_ELEMENT_DEPTH}
+     *             {@link #MAX_ELEMENT_DEPTH}, or builds more nodes than
+     *             {@link #MAX_DOCUMENT_NODES}
      */
     private static ParsedTree readTree(XMLStreamReader reader)
         throws XMLStreamException, MergeRulesFormatException
@@ -1435,18 +1667,23 @@ public final class MergeRulesCodec
         ParsedTree tree = new ParsedTree();
         Deque<Element> stack = new ArrayDeque<>();
         StringBuilder pending = new StringBuilder();
+        // Charged at every node this loop builds, and this is the only place that builds any - so
+        // the plain file, the in-memory string and the zip entry are bounded alike, by
+        // construction rather than by each of them remembering to ask.
+        NodeBudget budget = new NodeBudget();
         while (reader.hasNext())
         {
             int event = reader.next();
             if (event == XMLStreamConstants.START_ELEMENT)
             {
                 // Whatever has been read so far belongs to the element still open above.
-                flushText(stack.peek(), pending);
+                flushText(stack.peek(), pending, budget);
                 rejectNamespaceUse(reader);
                 if (stack.size() >= MAX_ELEMENT_DEPTH)
                 {
                     throw new MergeRulesFormatException(tooDeep(reader.getLocalName()));
                 }
+                budget.charge('<' + reader.getLocalName() + '>');
                 Element element = new Element(reader.getLocalName());
                 for (int i = 0; i < reader.getAttributeCount(); i++)
                 {
@@ -1468,22 +1705,53 @@ public final class MergeRulesCodec
             }
             else if (event == XMLStreamConstants.COMMENT)
             {
-                flushText(stack.peek(), pending);
+                flushText(stack.peek(), pending, budget);
+                budget.charge("a comment"); //$NON-NLS-1$
                 tree.add(stack.peek(), Element.comment(reader.getText()));
             }
             else if (event == XMLStreamConstants.PROCESSING_INSTRUCTION)
             {
-                flushText(stack.peek(), pending);
+                flushText(stack.peek(), pending, budget);
+                budget.charge("a processing instruction"); //$NON-NLS-1$
                 tree.add(stack.peek(),
                     Element.processingInstruction(reader.getPITarget(), reader.getPIData()));
             }
             else if (event == XMLStreamConstants.END_ELEMENT)
             {
-                flushText(stack.peek(), pending);
+                flushText(stack.peek(), pending, budget);
                 separateLayoutFromContent(stack.pop());
             }
         }
         return tree;
+    }
+
+    /**
+     * The running count of nodes one parse has built, and the bound it may not pass.
+     * <p>
+     * One object per parse rather than a counter threaded through the loop's helpers: the text
+     * runs are created inside {@code flushText}, so a plain {@code int} would have to travel out
+     * of it and back, and a node that forgot to travel would be a node nobody charged for.
+     */
+    private static final class NodeBudget
+    {
+        private int spent;
+
+        /**
+         * Charges one node, before it is built.
+         *
+         * @param what names the node for the refusal, so the message points at where the count ran
+         *     out rather than at the document as a whole
+         * @throws MergeRulesFormatException when the document builds more nodes than
+         *     {@link MergeRulesCodec#MAX_DOCUMENT_NODES}
+         */
+        void charge(String what) throws MergeRulesFormatException
+        {
+            if (spent >= MAX_DOCUMENT_NODES)
+            {
+                throw new MergeRulesFormatException(tooManyNodes(what));
+            }
+            spent++;
+        }
     }
 
     /**
@@ -1794,8 +2062,13 @@ public final class MergeRulesCodec
      *
      * @param owner the element the run belongs to, or {@code null} for text outside the root
      * @param pending the accumulated run, cleared by this call
+     * @param budget the parse's node budget, charged only when a node is actually built - a run
+     *     outside the root is dropped and costs nothing, and neither does an empty one
+     * @throws MergeRulesFormatException when the document builds more nodes than
+     *     {@link #MAX_DOCUMENT_NODES}
      */
-    private static void flushText(Element owner, StringBuilder pending)
+    private static void flushText(Element owner, StringBuilder pending, NodeBudget budget)
+        throws MergeRulesFormatException
     {
         if (pending.length() == 0)
         {
@@ -1805,6 +2078,7 @@ public final class MergeRulesCodec
         pending.setLength(0);
         if (owner != null)
         {
+            budget.charge("a run of character data"); //$NON-NLS-1$
             owner.children().add(Element.text(content));
         }
     }
@@ -1912,6 +2186,31 @@ public final class MergeRulesCodec
             + WRITABLE_XML_VERSION + "'; or, if the file really holds nothing but ordinary " //$NON-NLS-1$
             + "characters, change its declaration to '" + WRITABLE_XML_VERSION //$NON-NLS-1$
             + "' yourself and read it again."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for a document that builds more nodes than {@link #MAX_DOCUMENT_NODES}.
+     * <p>
+     * Worded so it cannot be mistaken for either of its two neighbours: the byte refusal says the
+     * SOURCE is too large and the depth refusal says it NESTS too far, while this one says the
+     * source is within both and still asks for more objects than the workbench can hold. A caller
+     * that read "too large" here would go looking for a big file and find a small one.
+     *
+     * @param what names the node the count ran out on
+     * @return the message
+     */
+    private static String tooManyNodes(String what)
+    {
+        return "The merge-settings document builds more than " + MAX_DOCUMENT_NODES //$NON-NLS-1$
+            + " nodes (the count ran out at " + what + ") and was not read. This is NOT the size " //$NON-NLS-1$ //$NON-NLS-2$
+            + "bound and NOT the nesting bound - the source is inside both. Every element, text " //$NON-NLS-1$
+            + "run, comment and processing instruction becomes an object holding a map and a " //$NON-NLS-1$
+            + "list, so a document made of very many very small tags costs hundreds of times its " //$NON-NLS-1$
+            + "own bytes in the workbench's memory, and reading it would spend EDT's heap rather " //$NON-NLS-1$
+            + "than this call's. A merge-settings file EDT saves is nowhere near this: its nodes " //$NON-NLS-1$
+            + "carry keys and rules and average some twenty source bytes each. Check what the " //$NON-NLS-1$
+            + "file actually holds - a generated or concatenated document is the usual answer - " //$NON-NLS-1$
+            + "and point this at the merge-settings document itself."; //$NON-NLS-1$
     }
 
     private static String tooDeep(String tag)
