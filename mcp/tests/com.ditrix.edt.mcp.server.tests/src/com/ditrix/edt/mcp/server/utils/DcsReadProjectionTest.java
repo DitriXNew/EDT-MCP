@@ -38,6 +38,10 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldCase;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldsCaseVariants;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
@@ -811,6 +815,48 @@ public class DcsReadProjectionTest
         assertFalse(unknown.isSuccess());
         assertTrue(unknown.error(), unknown.error().contains("Existing keys/indices")); //$NON-NLS-1$
         assertTrue(unknown.error(), unknown.error().contains("userFields")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCaseVariantsAddressAdvertisedByParentResolvesAgainstCaseOwner()
+    {
+        String root = "Report.CaseVariants"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionUserFields userFields =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionUserFields();
+        DataCompositionUserFieldCase caseField =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionUserFieldCase();
+        DataCompositionUserFieldsCaseVariants variants =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionUserFieldsCaseVariants();
+        DataCompositionUserFieldsVariant variant =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionUserFieldsVariant();
+        variant.setUse(true);
+        variants.getItems().add(variant);
+        caseField.setVariants(variants);
+        userFields.getItems().add(caseField);
+        settings.setUserFields(userFields);
+        schema.setDefaultSettings(settings);
+
+        String fieldAddress = root + "#/defaultSettings/userFields/items/0"; //$NON-NLS-1$
+        String variantAddress = fieldAddress + "/variants/items/0"; //$NON-NLS-1$
+        DcsReadProjection.Result parent = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(fieldAddress).address(),
+            "userField", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result exact = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(variantAddress).address(),
+            "userField", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(parent.error(), parent.isSuccess());
+        assertTrue(parent.markdown(), parent.markdown().contains(variantAddress));
+        assertTrue(exact.error(), exact.isSuccess());
+        assertTrue(exact.markdown(), exact.markdown().contains("DataCompositionUserFieldsVariant")); //$NON-NLS-1$
     }
 
     @Test

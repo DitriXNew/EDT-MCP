@@ -366,9 +366,9 @@ public class RenameMetadataObjectTool implements IMcpTool
         case TIMED_OUT_BEFORE_START:
             return notStartedError(objectFqn, newName, timeoutMs);
         case INTERRUPTED:
-            return ToolResult.error("The rename of '" + objectFqn + "' was interrupted while " //$NON-NLS-1$ //$NON-NLS-2$
+            return inFlightMutationError("The rename of '" + objectFqn + "' was interrupted while " //$NON-NLS-1$ //$NON-NLS-2$
                 + "waiting for it. " + stateAdvice(confirm, progress.getPhase(), //$NON-NLS-1$
-                    inspectorFor(objectFqn))).toJson();
+                    inspectorFor(objectFqn)), confirm, progress.getPhase());
         case NOT_RUN:
             return ToolResult.error("The rename of '" + objectFqn + "' was cancelled before it " //$NON-NLS-1$ //$NON-NLS-2$
                 + "started, so nothing was renamed. Retry; if it keeps happening, EDT is shutting " //$NON-NLS-1$
@@ -379,10 +379,10 @@ public class RenameMetadataObjectTool implements IMcpTool
             // Fail CLOSED on an outcome added to BoundedJob later. The old 'default: break' fell
             // through and returned the (possibly null) payload below, which for a cascade rename
             // means answering an agent with silence about a model it may have changed.
-            return ToolResult.error("The rename of '" + objectFqn + "' ended in an unrecognised " //$NON-NLS-1$ //$NON-NLS-2$
+            return inFlightMutationError("The rename of '" + objectFqn + "' ended in an unrecognised " //$NON-NLS-1$ //$NON-NLS-2$
                 + "state (" + result.getOutcome() + "), so whether it applied is unknown. Check " //$NON-NLS-1$ //$NON-NLS-2$
                 + "the target's name with " + inspectorFor(objectFqn) //$NON-NLS-1$
-                + " before retrying.").toJson(); //$NON-NLS-1$
+                + " before retrying.", confirm, progress.getPhase()); //$NON-NLS-1$
         }
 
         Throwable failure = result.getFailure();
@@ -391,9 +391,10 @@ public class RenameMetadataObjectTool implements IMcpTool
             // The service catches its own exceptions; reaching here means the hand-off to the UI
             // thread itself failed (a disposed display, a workbench shutting down).
             Activator.logError("Error in rename_metadata_object", failure); //$NON-NLS-1$
-            return ToolResult.error(failure.getMessage()).toJson();
+            return completedMutationError(failure.getMessage(), confirm, progress.getPhase());
         }
-        return resultRef.get();
+        String answer = resultRef.get();
+        return markCompletedMutationError(answer, confirm, progress.getPhase());
     }
 
     /**
@@ -445,9 +446,49 @@ public class RenameMetadataObjectTool implements IMcpTool
                 + "' (seconds, up to " + MAX_RENAME_TIMEOUT_SECONDS + ") or raise the default in " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Preferences > MCP Server > Tools > " + NAME + "."; //$NON-NLS-1$ //$NON-NLS-2$
 
-        return ToolResult.error("Renaming '" + objectFqn + "' to '" + newName + "' did not finish " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String message = "Renaming '" + objectFqn + "' to '" + newName + "' did not finish " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "within " + seconds + (seconds == 1 ? " second" : " seconds") + ". " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + stateAdvice(confirm, phase, inspectorFor(objectFqn)) + " " + lever).toJson(); //$NON-NLS-1$
+            + stateAdvice(confirm, phase, inspectorFor(objectFqn)) + " " + lever; //$NON-NLS-1$
+        return inFlightMutationError(message, confirm, phase);
+    }
+
+    /**
+     * A timed-out/interrupted rename is still running. APPLIED proves a mutation boundary; every
+     * earlier confirmed phase is unknown because the Job may advance immediately after we sample
+     * it. A preview can never apply and remains an ordinary error.
+     */
+    private static String inFlightMutationError(String message, boolean confirm,
+        RenameProgress.Phase phase)
+    {
+        if (!confirm)
+        {
+            return ToolResult.error(message).toJson();
+        }
+        return (phase == RenameProgress.Phase.APPLIED
+            ? ToolResult.errorAfterMutation(message)
+            : ToolResult.errorWithUnknownMutationOutcome(message)).toJson();
+    }
+
+    /** The Job ended: its final phase can distinguish pre-apply, applying and applied failures. */
+    private static String completedMutationError(String message, boolean confirm,
+        RenameProgress.Phase phase)
+    {
+        return markCompletedMutationError(ToolResult.error(message).toJson(), confirm, phase);
+    }
+
+    private static String markCompletedMutationError(String answer, boolean confirm,
+        RenameProgress.Phase phase)
+    {
+        if (!confirm)
+        {
+            return answer;
+        }
+        if (phase == RenameProgress.Phase.APPLIED)
+        {
+            return ToolResult.markErrorAfterMutation(answer);
+        }
+        return phase == RenameProgress.Phase.APPLYING
+            ? ToolResult.markErrorWithUnknownMutationOutcome(answer) : answer;
     }
 
     /**

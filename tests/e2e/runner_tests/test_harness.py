@@ -49,6 +49,18 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertFalse(HARNESS._MUTATION_CONFIRMED)
         self.assertFalse(HARNESS._model_may_have_moved())
 
+    def test_unknown_mutation_outcome_forfeits_the_shortcut_without_a_phrase(self):
+        HARNESS._record_attempt("apply_quick_fix")
+        HARNESS._record_outcome("apply_quick_fix", True, {
+            "success": False,
+            "error": "opaque provider failed",
+            "mutationOutcomeUnknown": True,
+        })
+
+        self.assertEqual(0, HARNESS._MUTATIONS_UNRESOLVED)
+        self.assertTrue(HARNESS._MUTATION_CONFIRMED)
+        self.assertTrue(HARNESS._model_may_have_moved())
+
 
 if __name__ == "__main__":
     unittest.main()

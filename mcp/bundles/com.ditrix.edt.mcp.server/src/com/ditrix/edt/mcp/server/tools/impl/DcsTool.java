@@ -232,8 +232,22 @@ public class DcsTool implements IMcpTool
         {
             JsonObject parsedBody = ACTION_REMOVE.equals(action) ? null
                 : JsonParser.parseString(body).getAsJsonObject();
-            display.syncExec(() -> result.set(executeWrite(projectName, parsed.address(), action, type,
-                parsedBody, expectedHash, language)));
+            WriteScope scope = new WriteScope();
+            try
+            {
+                display.syncExec(() -> WriteScope.runWithScope(scope,
+                    () -> result.set(executeWrite(projectName, parsed.address(), action, type,
+                        parsedBody, expectedHash, language))));
+            }
+            catch (RuntimeException e)
+            {
+                Activator.logError("Error dispatching DCS write " + parsed.address(), e); //$NON-NLS-1$
+                String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                result.set(ToolResult.error("Could not dispatch DCS write for '" + parsed.address() //$NON-NLS-1$
+                    + "': " + message + ". Re-open or clean the project, run dcs action='get', " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "then retry.").toJson()); //$NON-NLS-1$
+            }
+            return finalizeWriteResult(scope, result.get());
         }
         else
         {
@@ -245,6 +259,12 @@ public class DcsTool implements IMcpTool
                 + "; no model changes were made.").toJson(); //$NON-NLS-1$
         }
         return result.get();
+    }
+
+    /** The one exit for a DCS mutation, deriving its marker from the request's recorded writes. */
+    static String finalizeWriteResult(WriteScope scope, String result)
+    {
+        return scope.markErrorAfterRecordedWrite(result);
     }
 
     private static String validateIntegerArguments(Map<String, String> params, int offset)
@@ -720,12 +740,13 @@ public class DcsTool implements IMcpTool
             String validationJson = FormValidationException.jsonOf(e);
             if (validationJson != null)
             {
-                return validationJson;
+                return WriteScope.markCurrentErrorAfterRecordedWrite(validationJson);
             }
             Activator.logError("Error writing DCS target " + address, e); //$NON-NLS-1$
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            return ToolResult.error("Could not write DCS target '" + address + "': " + message //$NON-NLS-1$ //$NON-NLS-2$
-                + ". Re-open or clean the project, run dcs action='get', then retry.").toJson(); //$NON-NLS-1$
+            return WriteScope.markCurrentErrorAfterRecordedWrite(
+                ToolResult.error("Could not write DCS target '" + address + "': " + message //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". Re-open or clean the project, run dcs action='get', then retry.").toJson()); //$NON-NLS-1$
         }
     }
 

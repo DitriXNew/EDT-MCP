@@ -57,6 +57,10 @@ public final class DcsReadProjection
     private static final String CHART_CLASS = "DataCompositionChart"; //$NON-NLS-1$
     private static final int ERROR_KEY_LIMIT = 20;
 
+    private static final FeatureAlias[] FEATURE_ALIASES = {
+        new FeatureAlias(DataCompositionSchema.class, FEATURE_VARIANTS, MODEL_FEATURE_VARIANTS)
+    };
+
     // Aggregate rows are item-paged and cannot split one cell across item offsets. Keep a very long
     // presentation bounded and point at its exact node, whose character pager carries the full value.
     private static final int MAX_TABLE_CELL_CHARS = 4096;
@@ -287,7 +291,7 @@ public final class DcsReadProjection
         for (EReference reference : object.eClass().getEAllContainments())
         {
             Object value = object.eGet(reference);
-            String feature = canonicalFeature(reference.getName());
+            String feature = canonicalFeature(object, reference.getName());
             String featureAddress = child(address, feature);
             if (reference.isMany() && value instanceof List<?>)
             {
@@ -360,7 +364,7 @@ public final class DcsReadProjection
         for (EReference reference : object.eClass().getEAllContainments())
         {
             Object value = object.eGet(reference);
-            String feature = canonicalFeature(reference.getName());
+            String feature = canonicalFeature(object, reference.getName());
             String featureAddress = child(address, feature);
             if (reference.isMany() && value instanceof List<?>)
             {
@@ -654,7 +658,8 @@ public final class DcsReadProjection
                     : directCollection(rootFqn, root, "totalFields"); //$NON-NLS-1$
             case "variant": //$NON-NLS-1$
                 return kind == TargetKind.DYNAMIC_LIST ? unsupportedCollection(rootFqn, type, kind)
-                    : directCollection(rootFqn, root, MODEL_FEATURE_VARIANTS);
+                    : directCollection(rootFqn, root, DataCompositionSchema.class,
+                        MODEL_FEATURE_VARIANTS);
             default:
                 return settingsCollection(rootFqn, kind, root, type);
         }
@@ -875,7 +880,15 @@ public final class DcsReadProjection
 
     private static CollectionRef directCollection(String rootFqn, EObject owner, String featureName)
     {
-        String canonical = canonicalFeature(featureName);
+        String canonical = canonicalFeature(owner, featureName);
+        String address = child(rootFqn, canonical);
+        return CollectionRef.success(address, directItemsAt(rootFqn, owner, featureName));
+    }
+
+    private static CollectionRef directCollection(String rootFqn, EObject owner,
+        Class<? extends EObject> resolvedOwnerType, String featureName)
+    {
+        String canonical = canonicalFeature(owner, resolvedOwnerType, featureName);
         String address = child(rootFqn, canonical);
         return CollectionRef.success(address, directItemsAt(rootFqn, owner, featureName));
     }
@@ -898,7 +911,7 @@ public final class DcsReadProjection
         }
         List<NodeRef> result = new ArrayList<>();
         List<?> list = (List<?>)value;
-        String canonical = canonicalFeature(featureName);
+        String canonical = canonicalFeature(owner, featureName);
         String collectionAddress = child(ownerAddress, canonical);
         for (int i = 0; i < list.size(); i++)
         {
@@ -1117,7 +1130,7 @@ public final class DcsReadProjection
                 return failedSegment(segment, currentAddress, Collections.<String> emptyList());
             }
             EObject object = (EObject)current;
-            String modelName = modelFeature(segment);
+            String modelName = modelFeature(object, segment);
             EStructuralFeature feature = object.eClass().getEStructuralFeature(modelName);
             if (feature == null)
             {
@@ -1125,8 +1138,8 @@ public final class DcsReadProjection
             }
             Object value = object.eGet(feature);
             owner = object;
-            currentAddress = child(currentAddress, canonicalFeature(feature.getName()));
-            collectionName = canonicalFeature(feature.getName());
+            currentAddress = child(currentAddress, canonicalFeature(object, feature.getName()));
+            collectionName = canonicalFeature(object, feature.getName());
             if (!feature.isMany())
             {
                 if (value == null)
@@ -1228,7 +1241,7 @@ public final class DcsReadProjection
         {
             if (reference.isContainment())
             {
-                result.add(canonicalFeature(reference.getName()));
+                result.add(canonicalFeature(object, reference.getName()));
             }
         }
         return result;
@@ -1453,7 +1466,7 @@ public final class DcsReadProjection
                 continue;
             }
             Object value = object.eGet(reference);
-            String feature = canonicalFeature(reference.getName());
+            String feature = canonicalFeature(object, reference.getName());
             String featureAddress = child(address, feature);
             if (reference.isMany() && value instanceof List<?>)
             {
@@ -1494,7 +1507,7 @@ public final class DcsReadProjection
         for (EReference reference : object.eClass().getEAllContainments())
         {
             Object value = object.eGet(reference);
-            String feature = canonicalFeature(reference.getName());
+            String feature = canonicalFeature(object, reference.getName());
             String featureAddress = child(address, feature);
             if (reference.isMany() && value instanceof List<?>)
             {
@@ -1853,7 +1866,7 @@ public final class DcsReadProjection
         {
             return null;
         }
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(modelFeature(name));
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(modelFeature(object, name));
         return feature == null ? null : object.eGet(feature);
     }
 
@@ -1878,14 +1891,34 @@ public final class DcsReadProjection
         return value instanceof EObject && CHART_CLASS.equals(((EObject)value).eClass().getName());
     }
 
-    private static String canonicalFeature(String modelName)
+    private static String canonicalFeature(EObject owner, String modelName)
     {
-        return MODEL_FEATURE_VARIANTS.equals(modelName) ? FEATURE_VARIANTS : modelName;
+        return canonicalFeature(owner, null, modelName);
     }
 
-    private static String modelFeature(String canonicalName)
+    private static String canonicalFeature(EObject owner,
+        Class<? extends EObject> resolvedOwnerType, String modelName)
     {
-        return FEATURE_VARIANTS.equals(canonicalName) ? MODEL_FEATURE_VARIANTS : canonicalName;
+        for (FeatureAlias alias : FEATURE_ALIASES)
+        {
+            if (alias.matches(owner, resolvedOwnerType) && alias.modelName.equals(modelName))
+            {
+                return alias.canonicalName;
+            }
+        }
+        return modelName;
+    }
+
+    private static String modelFeature(EObject owner, String canonicalName)
+    {
+        for (FeatureAlias alias : FEATURE_ALIASES)
+        {
+            if (alias.ownerType.isInstance(owner) && alias.canonicalName.equals(canonicalName))
+            {
+                return alias.modelName;
+            }
+        }
+        return canonicalName;
     }
 
     private static String child(String address, String decodedSegment)
@@ -1944,6 +1977,26 @@ public final class DcsReadProjection
         PageStop(String label)
         {
             this.label = label;
+        }
+    }
+
+    private static final class FeatureAlias
+    {
+        final Class<? extends EObject> ownerType;
+        final String canonicalName;
+        final String modelName;
+
+        FeatureAlias(Class<? extends EObject> ownerType, String canonicalName, String modelName)
+        {
+            this.ownerType = ownerType;
+            this.canonicalName = canonicalName;
+            this.modelName = modelName;
+        }
+
+        boolean matches(EObject owner, Class<? extends EObject> resolvedOwnerType)
+        {
+            return owner != null ? ownerType.isInstance(owner)
+                : resolvedOwnerType != null && ownerType.isAssignableFrom(resolvedOwnerType);
         }
     }
 

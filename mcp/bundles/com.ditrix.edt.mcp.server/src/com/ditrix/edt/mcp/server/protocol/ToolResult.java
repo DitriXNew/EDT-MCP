@@ -10,6 +10,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 /**
  * Builder for MCP tool results.
  * Uses GsonProvider for JSON serialization to avoid manual string building.
@@ -62,6 +66,88 @@ public class ToolResult
     public static ToolResult errorAfterMutation(String message)
     {
         return error(message).put("mutationCommitted", true); //$NON-NLS-1$
+    }
+
+    /**
+     * Creates an error from an opaque mutating API whose failure does not report whether it rolled
+     * back. This is intentionally distinct from {@code mutationCommitted}: callers must reset, but
+     * the tool must not claim a commit it could not observe.
+     *
+     * @param message error message
+     * @return a failed result carrying {@code mutationOutcomeUnknown:true}
+     */
+    public static ToolResult errorWithUnknownMutationOutcome(String message)
+    {
+        return error(message).put("mutationOutcomeUnknown", true); //$NON-NLS-1$
+    }
+
+    /**
+     * Adds the post-mutation marker to an already-built error result.
+     *
+     * <p>This is the return-path counterpart of {@link #errorAfterMutation(String)}. A writer may
+     * build or catch an ordinary error deep below the line that knows whether its transaction has
+     * committed. Rebuilding the message there is both lossy and easy to forget; the request's write
+     * scope instead calls this once, at the result choke point. Only an explicit
+     * {@code success:false} JSON object is changed. Successes, Markdown payloads and malformed
+     * strings pass through byte-for-byte.</p>
+     *
+     * @param result the tool result about to be returned
+     * @return {@code result}, or the same error object carrying {@code mutationCommitted:true}
+     */
+    public static String markErrorAfterMutation(String result)
+    {
+        return markError(result, "mutationCommitted"); //$NON-NLS-1$
+    }
+
+    /** Adds {@code mutationOutcomeUnknown:true} to an already-built explicit error result. */
+    public static String markErrorWithUnknownMutationOutcome(String result)
+    {
+        return markError(result, "mutationOutcomeUnknown"); //$NON-NLS-1$
+    }
+
+    private static String markError(String result, String marker)
+    {
+        if (result == null)
+        {
+            return null;
+        }
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(result);
+            if (!parsed.isJsonObject())
+            {
+                return result;
+            }
+            JsonObject object = parsed.getAsJsonObject();
+            JsonElement success = object.get("success"); //$NON-NLS-1$
+            if (success == null || !success.isJsonPrimitive()
+                || !success.getAsJsonPrimitive().isBoolean() || success.getAsBoolean())
+            {
+                return result;
+            }
+            // The markers are a strongest-known-state classification, not independent flags.
+            // A known commit outranks uncertainty (for example: project 1 cleaned, project 2 then
+            // failed opaquely), and a later uncertainty stamp must never weaken an existing fact.
+            if ("mutationCommitted".equals(marker)) //$NON-NLS-1$
+            {
+                object.remove("mutationOutcomeUnknown"); //$NON-NLS-1$
+            }
+            else
+            {
+                JsonElement committed = object.get("mutationCommitted"); //$NON-NLS-1$
+                if (committed != null && committed.isJsonPrimitive()
+                    && committed.getAsJsonPrimitive().isBoolean() && committed.getAsBoolean())
+                {
+                    return GsonProvider.toJson(object);
+                }
+            }
+            object.addProperty(marker, true);
+            return GsonProvider.toJson(object);
+        }
+        catch (RuntimeException e)
+        {
+            return result;
+        }
     }
     
     /**

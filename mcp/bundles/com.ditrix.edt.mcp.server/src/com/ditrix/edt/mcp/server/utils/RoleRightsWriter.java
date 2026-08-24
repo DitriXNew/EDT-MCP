@@ -50,6 +50,7 @@ import com._1c.g5.v8.dt.rights.tasks.EditRlsTemplateTask;
 import com._1c.g5.v8.dt.rights.tasks.SetIndependentRightsOfChildObjectsTask;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -1348,12 +1349,14 @@ public final class RoleRightsWriter
         {
             model.execute(task);
             written = true;
+            WriteScope.recordWrite(project);
         }
 
         /** Records a commit made outside {@link #execute} (the bootstrap attach, a direct setter). */
         void recordWrite()
         {
             written = true;
+            WriteScope.recordWrite(project);
         }
 
         /** Whether this call has committed at least one write to the role's rights model. */

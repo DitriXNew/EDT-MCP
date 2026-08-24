@@ -176,6 +176,34 @@ public class WriteScopeTest
     }
 
     @Test
+    public void testARecordedWriteMarksAnyPlainErrorAtTheReturnPoint()
+    {
+        WriteScope scope = new WriteScope();
+        String refusal = com.ditrix.edt.mcp.server.protocol.ToolResult.error("later step failed").toJson(); //$NON-NLS-1$
+
+        assertEquals("an error before the commit must stay an ordinary refusal", refusal, //$NON-NLS-1$
+            scope.markErrorAfterRecordedWrite(refusal));
+
+        scope.wrote(PROJECT);
+        String marked = scope.markErrorAfterRecordedWrite(refusal);
+        assertTrue(marked.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+        assertTrue("the original diagnostic must survive", marked.contains("later step failed")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnOpaqueWriterMarksUnknownWithoutClaimingACommit()
+    {
+        WriteScope scope = new WriteScope();
+        scope.undeterminable("extension point is opaque", Collections.singletonList(PROJECT)); //$NON-NLS-1$
+        String refusal = com.ditrix.edt.mcp.server.protocol.ToolResult.error("fix threw").toJson(); //$NON-NLS-1$
+
+        String marked = scope.markErrorAfterRecordedWrite(refusal);
+
+        assertTrue(marked.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
+        assertFalse(marked.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testANestedCallRecordsIntoItsOwnScopeAndGivesTheOuterOneBack()
     {
         // Reachable: the consent dialog and resync_to_disk both pump nested SWT event loops, in

@@ -661,6 +661,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String projectName = project.getName();
         try
         {
+            // EDT's refactoring API does not expose rollback/partial-apply state if perform()
+            // throws. Record that opacity before entering it; a normal return is upgraded to the
+            // known write below, while a throw makes the base finalizer emit outcome-unknown.
+            WriteScope.recordUndeterminable("delete refactoring may mutate before throwing", //$NON-NLS-1$
+                Collections.singletonList(projectName));
             refactoring.perform();
             // This project was written in, whatever the container export below manages to queue:
             // stating it here rather than leaving it to that submission keeps the wait honest when

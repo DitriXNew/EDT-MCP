@@ -107,7 +107,7 @@ public final class BmTransactions
      */
     public static <T> T write(IBmModel model, String taskName, BmOperation<T> operation)
     {
-        return model.execute(new AbstractBmTask<T>(taskName)
+        T result = model.execute(new AbstractBmTask<T>(taskName)
         {
             @Override
             public T execute(IBmTransaction tx, IProgressMonitor monitor)
@@ -115,6 +115,11 @@ public final class BmTransactions
                 return operation.execute(tx, monitor);
             }
         });
+        // execute() returned, so the writable BM boundary committed. Record that fact BEFORE any
+        // caller-side identity/render/export work can throw. Project identity is intentionally a
+        // separate signal, supplied by recordWrite/forceExport for the export barrier.
+        WriteScope.recordMutationCommitted();
+        return result;
     }
 
     /**

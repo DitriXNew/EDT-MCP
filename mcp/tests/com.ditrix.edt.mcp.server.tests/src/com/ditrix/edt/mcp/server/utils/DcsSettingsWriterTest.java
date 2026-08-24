@@ -633,6 +633,86 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testEveryIndexedHolderDescendantUnderTableCanBeUpdatedAndRemoved()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"table\",\"name\":\"T\"," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Direct\"}}]}," //$NON-NLS-1$
+            + "\"conditionalAppearance\":{\"items\":[{\"use\":true," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"use\":true,\"field\":{\"kind\":\"field\",\"value\":\"Direct\"}}]}," //$NON-NLS-1$
+            + "\"filter\":{\"items\":[{\"left\":{\"kind\":\"field\",\"value\":\"Direct\"}," //$NON-NLS-1$
+            + "\"comparisonType\":\"Equal\",\"use\":true}]}}]}," //$NON-NLS-1$
+            + "\"outputParameters\":{\"items\":[{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Direct\"},\"use\":true}]}," //$NON-NLS-1$
+            + "\"rows\":[" + tableAxisJson("Row") + "]," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"columns\":[" + tableAxisJson("Column") + "]}]}")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "selection", "items", "0"), "selection"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "conditionalAppearance", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "conditionalAppearance"); //$NON-NLS-1$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "conditionalAppearance", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "selection", "items", "0"), "conditionalAppearance"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "conditionalAppearance", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "filter", "items", "0"), "filter"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "outputParameters", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "outputParameter"); //$NON-NLS-1$
+
+        for (String axis : Arrays.asList("rows", "columns")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "groupFields", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "grouping"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "selection", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "selection"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "filter", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "filter"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "order", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "order"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "conditionalAppearance", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "conditionalAppearance"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "outputParameters", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "outputParameter"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testEveryIndexedHolderDescendantUnderCaseUserFieldCanBeUpdatedAndRemoved()
+    {
+        DataCompositionSettings settings = plan(json("{\"userFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"case\",\"dataPath\":\"Choice\",\"use\":true,\"variants\":{\"items\":[" //$NON-NLS-1$
+            + "{\"use\":true,\"value\":{\"kind\":\"string\",\"value\":\"A\"}," //$NON-NLS-1$
+            + "\"filter\":{\"items\":[{\"kind\":\"group\",\"use\":true,\"items\":[" //$NON-NLS-1$
+            + "{\"left\":{\"kind\":\"field\",\"value\":\"Amount\"}," //$NON-NLS-1$
+            + "\"comparisonType\":\"Equal\",\"use\":true}]}]}}]}}]}}")); //$NON-NLS-1$
+
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("userFields", "items", "0"), "userField"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("userFields", "items", "0", "variants", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "userField"); //$NON-NLS-1$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("userFields", "items", "0", "variants", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "filter", "items", "0"), "filter"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("userFields", "items", "0", "variants", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "filter", "items", "0", "items", "0"), "filter"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+        DcsSettingsWriter.SettingsResult parentUpdate = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("userFields", "items", "0"), "update", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"variants\":{\"items\":[{\"use\":false}]}}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(parentUpdate.isSuccess());
+        assertTrue(parentUpdate.error(), parentUpdate.error().contains("variants/items/<index>")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testReplaceOnUserFieldsHolderClearsItemsWhenBodyOmitsThem()
     {
         DataCompositionSettings settings = plan(json("{\"userFields\":{\"items\":[" //$NON-NLS-1$
@@ -1492,6 +1572,36 @@ public class DcsSettingsWriterTest
         return json("{\"selection\":{\"items\":[{\"kind\":\"field\",\"field\":{" //$NON-NLS-1$
             + "\"kind\":\"field\",\"value\":\"ProtectedField\"}}]},\"userFields\":{" //$NON-NLS-1$
             + "\"items\":[{\"kind\":\"expression\",\"dataPath\":\"FreeField\"}]}}"); //$NON-NLS-1$
+    }
+
+    private static void assertIndexedUpdateAndRemove(DataCompositionSettings settings,
+        java.util.List<String> path, String type)
+    {
+        DcsSettingsWriter.SettingsResult updated = DcsSettingsWriter.planSettings(settings, path,
+            "update", type, json("{\"use\":false}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(path + ": " + updated.error(), updated.isSuccess()); //$NON-NLS-1$
+        assertFalse(path.toString(), DcsHash.compute(settings).equals(DcsHash.compute(updated.settings())));
+
+        DcsSettingsWriter.SettingsResult removed = DcsSettingsWriter.planSettings(settings, path,
+            "remove", type, json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(path + ": " + removed.error(), removed.isSuccess()); //$NON-NLS-1$
+        assertFalse(path.toString(), DcsHash.compute(settings).equals(DcsHash.compute(removed.settings())));
+    }
+
+    private static String tableAxisJson(String name)
+    {
+        return "{\"name\":\"" + name + "\"," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"" //$NON-NLS-1$
+            + name + "\"},\"use\":true}]}," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"" //$NON-NLS-1$
+            + name + "\"},\"use\":true}]}," //$NON-NLS-1$
+            + "\"filter\":{\"items\":[{\"left\":{\"kind\":\"field\",\"value\":\"" //$NON-NLS-1$
+            + name + "\"},\"comparisonType\":\"Equal\",\"use\":true}]}," //$NON-NLS-1$
+            + "\"order\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"" //$NON-NLS-1$
+            + name + "\"},\"use\":true}]}," //$NON-NLS-1$
+            + "\"conditionalAppearance\":{\"items\":[{\"use\":true}]}," //$NON-NLS-1$
+            + "\"outputParameters\":{\"items\":[{\"parameter\":{\"kind\":\"parameter\"," //$NON-NLS-1$
+            + "\"value\":\"" + name + "\"},\"use\":true}]}}"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static JsonObject settingsBody()

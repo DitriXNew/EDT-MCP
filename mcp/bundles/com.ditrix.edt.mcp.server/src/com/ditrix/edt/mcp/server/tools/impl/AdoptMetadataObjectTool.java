@@ -220,7 +220,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
-        // The service runs its own BM write task on the extension's model.
+        // The service runs its own BM write task on the extension's model, but exposes no rollback
+        // outcome if it throws. Record the opaque interval before entering it; the known write
+        // declaration immediately after a normal return takes precedence.
+        WriteScope.recordUndeterminable("model-object adopter may mutate before throwing", //$NON-NLS-1$
+            java.util.Collections.singletonList(extName));
         EObject adopted = adopter.adoptAndAttach(source, target, new NullProgressMonitor());
 
         // projectName is the BASE configuration by contract; the write lands in the EXTENSION.

@@ -24,10 +24,11 @@ signals are needed: the base class is a statement of INTENT that a writer can si
 (build_external_objects implements IMcpTool directly and writes anyway), so a ratchet reading
 only the base class certified a set that was already missing a tool.
 
-The check is deliberately ONE-WAY: every write tool must be IN the set, but the set may
-hold more (rename_metadata_object, update_database, clean_project and the project tools
-mutate without sharing that base class). Over-inclusion costs a reset that was not needed;
-omission costs correctness, and only omission is a ratchet failure.
+The write-marker check is deliberately ONE-WAY because several real writers
+(rename_metadata_object, update_database, clean_project and the project tools) do not share
+those Java markers. Membership itself is checked in BOTH directions below: every discovered
+writer must be classified, and every classified name must still be a published tool. A ghost
+entry cannot protect a renamed replacement and makes an audit look broader than it is.
 
 Pure source inspection - no live server, so it cannot flake and it fails at the same
 moment the offending tool is written.
@@ -92,6 +93,19 @@ def _write_tools():
     return found
 
 
+def _published_tools():
+    """Every Java tool wire name currently published by a NAME constant."""
+    published = set()
+    for entry in os.listdir(_TOOLS_IMPL_DIR):
+        if not entry.endswith("Tool.java"):
+            continue
+        with open(os.path.join(_TOOLS_IMPL_DIR, entry), encoding="utf-8") as f:
+            match = _NAME_RE.search(f.read())
+        if match:
+            published.add(match.group(1))
+    return published
+
+
 @e2e_test(tool="_mutation_set_ratchet", kind="read")
 def test_every_metadata_write_tool_is_a_known_mutation():
     """A tool that writes the model but is missing from MODEL_MUTATION_TOOLS silently
@@ -136,18 +150,24 @@ def test_writers_that_delegate_through_reflection_are_still_classified():
 
     # And they must really exist under the names claimed: a renamed tool would leave this list
     # pinning a ghost while the real writer went unclassified again.
-    published = set()
-    for entry in os.listdir(_TOOLS_IMPL_DIR):
-        if entry.endswith("Tool.java"):
-            with open(os.path.join(_TOOLS_IMPL_DIR, entry), encoding="utf-8") as f:
-                match = _NAME_RE.search(f.read())
-            if match:
-                published.add(match.group(1))
+    published = _published_tools()
     ghosts = [name for name in _REFLECTIVE_WRITERS if name not in published]
     if ghosts:
         _fail("no tool publishes these names any more: %s. The reflective-writer list is pinning "
               "something that no longer exists, so it is no longer protecting anything - update it "
               "to whatever the tool is called now." % ", ".join(ghosts))
+
+
+@e2e_test(tool="_mutation_set_ratchet", kind="read")
+def test_every_classified_mutation_is_still_a_published_tool():
+    """A stale name is not harmless over-inclusion: it can conceal that the replacement name was
+    never classified. Pin the whole set, not only the two reflective entries that happened to
+    expose this failure shape first."""
+    ghosts = sorted(name for name in MODEL_MUTATION_TOOLS if name not in _published_tools())
+    if ghosts:
+        _fail("harness.MODEL_MUTATION_TOOLS contains names no Java tool publishes: %s. Remove a "
+              "truly deleted tool and classify its replacement if it was renamed; a ghost entry "
+              "cannot protect the model." % ", ".join(ghosts))
 
 
 @e2e_test(tool="_mutation_set_ratchet", kind="read")

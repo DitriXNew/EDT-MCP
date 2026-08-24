@@ -179,6 +179,8 @@ public class AbstractMetadataWriteToolTest
 
         assertTrue("a pending export must not be reported as success", //$NON-NLS-1$
             answer.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the pending-export refusal follows a committed model write", //$NON-NLS-1$
+            answer.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
         // The caller's next move depends on knowing nothing was undone - a refusal that let them
         // assume a rollback would be worse than the raw success it replaced.
         assertTrue("the refusal must say nothing was rolled back: " + answer, //$NON-NLS-1$
@@ -239,14 +241,16 @@ public class AbstractMetadataWriteToolTest
     }
 
     @Test
-    public void testAnErrorResultIsNeverWaitedOn()
+    public void testAnErrorAfterARecordedWriteIsMarkedAndNeverWaitedOn()
     {
         // An error is a well-formed JSON object too. Waiting on one would spend the whole deadline
         // on a call that wrote nothing, and then re-report a rejected argument as a disk problem.
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.PENDING);
         String result = ToolResult.error("Node not found: Catalog.Nope").toJson(); //$NON-NLS-1$
 
-        assertSame(result, new StubTool(environment).awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT)));
+        String answer = new StubTool(environment).awaitDiskExport(params(PROJECT), result, wroteIn(PROJECT));
+        assertTrue(answer.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+        assertTrue(answer.contains("Node not found: Catalog.Nope")); //$NON-NLS-1$
         assertEquals("an error result must not reach the export wait", 0, environment.calls); //$NON-NLS-1$
     }
 

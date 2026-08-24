@@ -162,7 +162,12 @@ public class DeleteProjectTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error deleting project: " + projectName, e); //$NON-NLS-1$
-            return ToolResult.error("Failed to delete project '" + projectName + "': " + e.getMessage()).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            String message = "Failed to delete project '" + projectName //$NON-NLS-1$
+                + "': " + e.getMessage(); //$NON-NLS-1$
+            // Derive the strongest honest answer from the workspace. Absence proves the delete
+            // landed; presence cannot prove that Eclipse did not remove part of the project first.
+            return (!project.exists() ? ToolResult.errorAfterMutation(message)
+                : ToolResult.errorWithUnknownMutationOutcome(message)).toJson();
         }
     }
 }

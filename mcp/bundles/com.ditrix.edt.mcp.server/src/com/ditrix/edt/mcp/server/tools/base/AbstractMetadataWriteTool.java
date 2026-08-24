@@ -102,25 +102,36 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         AtomicReference<String> resultRef = new AtomicReference<>();
         WriteScope scope = new WriteScope();
         Display display = PlatformUI.getWorkbench().getDisplay();
-        display.syncExec(() -> WriteScope.runWithScope(scope, () -> {
-            // Bound around the tool's own work so that submitting an export IS declaring one: the
-            // single place this plugin hands save tasks to the platform records into whatever scope
-            // is bound.
-            try
-            {
-                resultRef.set(executeOnUiThread(params));
-            }
-            catch (Exception e)
-            {
-                Activator.logError("Error in " + getName(), e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
-            }
-        }));
+        try
+        {
+            display.syncExec(() -> WriteScope.runWithScope(scope, () -> {
+                // Bound around the tool's own work so that submitting an export IS declaring one:
+                // the single place this plugin hands save tasks to the platform records into
+                // whatever scope is bound.
+                try
+                {
+                    resultRef.set(executeOnUiThread(params));
+                }
+                catch (Exception e)
+                {
+                    Activator.logError("Error in " + getName(), e); //$NON-NLS-1$
+                    resultRef.set(ToolResult.error(e.getMessage()).toJson());
+                }
+            }));
 
-        // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's
-        // derived-data pipeline, and waiting for it while holding the UI thread is how a headless
-        // MCP call turns into a hung workbench.
-        return awaitDiskExport(params, resultRef.get(), scope);
+            // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's
+            // derived-data pipeline, and waiting for it while holding the UI thread is how a
+            // headless MCP call turns into a hung workbench.
+            return awaitDiskExport(params, resultRef.get(), scope);
+        }
+        catch (RuntimeException e)
+        {
+            // Covers failures in the UI hand-off itself and in every post-commit export/refresh
+            // step. The scope, not this catch's position or wording, decides whether the mutation
+            // marker belongs on the answer.
+            Activator.logError("Error finishing " + getName(), e); //$NON-NLS-1$
+            return scope.markErrorAfterRecordedWrite(ToolResult.error(e.getMessage()).toJson());
+        }
     }
 
     /**
@@ -155,7 +166,10 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         JsonObject success = successObject(result);
         if (success == null)
         {
-            return result;
+            // This is also the common return path for an exception caught by execute(). If the
+            // tool recorded a write before producing that ordinary error, derive the structural
+            // post-commit marker here instead of requiring every catch to remember a factory.
+            return scope.markErrorAfterRecordedWrite(result);
         }
         WriteScope.Verdict verdict = scope.verdict(defaultProjectsToAwait(params));
         if (verdict.written().isEmpty() && verdict.cascaded().isEmpty())
@@ -164,7 +178,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             // must not start until the barrier is behind it, and skipping it here would silently
             // drop that work for exactly the calls that queued nothing. Reported as established:
             // this call put nothing in the queue, so there is nothing about it left unfinished.
-            return publish(verdict, refreshAfterExportAwait(params, result, true));
+            return scope.markErrorAfterRecordedWrite(
+                publish(verdict, refreshAfterExportAwait(params, result, true)));
         }
         // ONE budget for the whole set, not one per project: a cascade that touches the base and
         // three extensions must not be able to take four deadlines to answer.
@@ -180,7 +195,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             BuildUtils.DiskExportState state = waitWithin(deadlineAtMs, projectName);
             if (state == BuildUtils.DiskExportState.PENDING)
             {
-                return exportNotConfirmed(projectName);
+                return scope.markErrorAfterRecordedWrite(exportNotConfirmed(projectName));
             }
             drainEstablished &= state == BuildUtils.DiskExportState.DRAINED;
         }
@@ -192,7 +207,8 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             // extension and not - which is why the outcome only clears the "established" flag.
             drainEstablished &= waitWithin(deadlineAtMs, projectName) == BuildUtils.DiskExportState.DRAINED;
         }
-        return publish(verdict, refreshAfterExportAwait(params, result, drainEstablished));
+        return scope.markErrorAfterRecordedWrite(
+            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished)));
     }
 
     /**

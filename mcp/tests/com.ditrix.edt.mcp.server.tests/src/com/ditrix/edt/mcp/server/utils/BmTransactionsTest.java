@@ -20,6 +20,8 @@ import org.junit.Test;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 
 /**
  * Tests for {@link BmTransactions}.
@@ -80,6 +82,28 @@ public class BmTransactionsTest
         // A write must go through the writable path, never the read-only one.
         verify(model).execute(any());
         verify(model, never()).executeReadonlyTask(any());
+    }
+
+    @Test
+    public void testWriteReturnRecordsCommitBeforeCallerSideWorkCanFail()
+    {
+        IBmModel model = mock(IBmModel.class);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        when(model.execute(any())).thenAnswer(inv -> {
+            IBmTask<?> task = inv.getArgument(0);
+            return task.execute(tx, null);
+        });
+
+        WriteScope scope = new WriteScope();
+        WriteScope.runWithScope(scope, () ->
+            BmTransactions.write(model, "commit", (t, pm) -> "done")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String failure = scope.markErrorAfterRecordedWrite(
+            ToolResult.error("response rendering failed").toJson()); //$NON-NLS-1$
+        assertTrue("a BM write that returned must mark every later error as post-commit: " + failure, //$NON-NLS-1$
+            failure.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+        assertTrue("commit-only recording must not invent an export project", //$NON-NLS-1$
+            scope.writtenProjects().isEmpty());
     }
 
     @Test

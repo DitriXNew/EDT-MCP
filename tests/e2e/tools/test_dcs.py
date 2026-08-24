@@ -1573,6 +1573,48 @@ def test_user_fields_holder_replace_with_empty_body_clears_exported_items():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_case_variant_address_copied_from_user_field_read_can_be_updated():
+    report_name = "E2EDcsCaseVariantAddress"
+    root = _seed_report(report_name)
+    before_marker = "E2ECaseVariantBefore"
+    after_marker = "E2ECaseVariantAfter"
+    seeded = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "userFields": {"items": [{
+                "kind": "case",
+                "dataPath": "E2EChoice",
+                "variants": {"items": [{
+                    "value": {"kind": "string", "value": before_marker},
+                    "use": True,
+                }]},
+            }]},
+        },
+    })
+    assert_ok(seeded, "seed a case user field carrying one variant")
+
+    field_address = root + "#/defaultSettings/userFields/items/0"
+    field = _get(field_address, "userField")
+    assert_ok(field, "read the case field that advertises its variant address")
+    expected = field_address + "/variants/items/0"
+    copied = re.search(re.escape(expected), field.text)
+    assert copied, "the user-field read must print its exact variant address: %s" % field.text
+
+    before = _get(copied.group(0), "userField")
+    assert_ok(before, "read the case variant through the copied address")
+    updated = _write(copied.group(0), "update", "userField", {
+        "value": {"kind": "string", "value": after_marker},
+    }, expectedHash=_hash(before))
+    assert_ok(updated, "update the case variant through its copied address")
+
+    after = _get(copied.group(0), "userField")
+    assert_ok(after, "read back the case variant through the same address")
+    assert after_marker in after.text and before_marker not in after.text
+    dcs_rel = _poll_report_dcs(report_name, ctx="the exact case-variant update")
+    poll_disk_contains(dcs_rel, after_marker,
+                       ctx="the case-variant update must reach Template.dcs")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_settings_collection_address_copied_from_outline_renders_a_page():
     root = _seed_report("E2EDcsSettingsCollectionRead")
     authored = _write(root, "upsert", "variant", {
@@ -1680,6 +1722,48 @@ def test_indexed_group_field_replace_resets_omitted_members_on_model_and_disk():
     on_disk = read_disk(dcs_rel)
     assert new_field in on_disk and old_field not in on_disk
     assert "31337" not in on_disk and "31338" not in on_disk
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_table_selection_item_address_copied_from_read_can_be_updated():
+    report_name = "E2EDcsTableSelectionAddress"
+    root = _seed_report(report_name)
+    old_field = "E2ETableSelectionBefore"
+    new_field = "E2ETableSelectionAfter"
+    seeded = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "items": [{
+                "kind": "table",
+                "name": "SalesTable",
+                "selection": {"items": [{
+                    "field": {"kind": "field", "value": old_field},
+                    "use": True,
+                }]},
+            }],
+        },
+    })
+    assert_ok(seeded, "seed a table carrying one selected field")
+
+    table_address = root + "#/defaultSettings/items/0"
+    table = _get(table_address, "table")
+    assert_ok(table, "read the table that advertises its selected-field address")
+    expected = table_address + "/selection/items/0"
+    copied = re.search(re.escape(expected), table.text)
+    assert copied, "the table read must print its exact selection-item address: %s" % table.text
+
+    before = _get(copied.group(0), "selection")
+    assert_ok(before, "read the table selection item through the copied address")
+    updated = _write(copied.group(0), "update", "selection", {
+        "field": {"kind": "field", "value": new_field},
+    }, expectedHash=_hash(before))
+    assert_ok(updated, "update the table selection item through its copied address")
+
+    after = _get(copied.group(0), "selection")
+    assert_ok(after, "read back the table selection item through the same address")
+    assert new_field in after.text and old_field not in after.text
+    dcs_rel = _poll_report_dcs(report_name, ctx="the exact table-selection update")
+    poll_disk_contains(dcs_rel, new_field,
+                       ctx="the table-selection update must reach Template.dcs")
 
 
 @e2e_test(tool="dcs", kind="write-metadata")

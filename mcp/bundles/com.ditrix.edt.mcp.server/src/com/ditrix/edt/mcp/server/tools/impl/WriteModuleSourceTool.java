@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
@@ -174,13 +175,21 @@ public class WriteModuleSourceTool implements IMcpTool
                 ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
         }
 
+        AtomicBoolean mutationEntered = new AtomicBoolean();
+        AtomicBoolean mutationCommitted = new AtomicBoolean();
         try
         {
-            return writeModule(req, file, fileExists);
+            return writeModule(req, file, fileExists, mutationEntered, mutationCommitted);
         }
         catch (Exception e)
         {
-            return ToolResult.error("Failed to write file: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            ToolResult error = mutationCommitted.get()
+                ? ToolResult.errorAfterMutation("Failed to write file: " + e.getMessage()) //$NON-NLS-1$
+                : mutationEntered.get()
+                    ? ToolResult.errorWithUnknownMutationOutcome(
+                        "Failed to write file: " + e.getMessage()) //$NON-NLS-1$
+                    : ToolResult.error("Failed to write file: " + e.getMessage()); //$NON-NLS-1$
+            return error.toJson();
         }
     }
 
@@ -248,7 +257,8 @@ public class WriteModuleSourceTool implements IMcpTool
      * @return the success response, or a ready {@link ToolResult#error} JSON payload from a
      *         guard (returned verbatim) — the same value in the same case as the inline flow
      */
-    private String writeModule(WriteRequest req, IFile file, boolean fileExists) throws Exception
+    private String writeModule(WriteRequest req, IFile file, boolean fileExists,
+        AtomicBoolean mutationEntered, AtomicBoolean mutationCommitted) throws Exception
     {
         // Normalize source: \r\n -> \n (same point and order as the inline try block,
         // i.e. AFTER validateWriteArguments measured the raw length).
@@ -300,7 +310,11 @@ public class WriteModuleSourceTool implements IMcpTool
         }
 
         // Write file (the mutating step — kept inline under the passed guards)
+        mutationEntered.set(true);
         writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
+        // IFile.setContents/create has returned: any later exception is response work after the
+        // workspace mutation, not a refusal that left the module untouched.
+        mutationCommitted.set(true);
 
         // Return success
         return buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,

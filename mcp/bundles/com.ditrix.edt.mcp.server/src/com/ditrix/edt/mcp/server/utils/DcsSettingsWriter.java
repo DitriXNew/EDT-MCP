@@ -1576,11 +1576,6 @@ public final class DcsSettingsWriter
             return applyTableGroupsPath("rows".equals(head) ? table.getRows() : table.getColumns(), //$NON-NLS-1$
                 tail, body, action, languages, version, where + "/" + head); //$NON-NLS-1$
         }
-        if (!tail.isEmpty())
-        {
-            return "Table child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "' is invalid. Copy the exact address from dcs action='get'."; //$NON-NLS-1$
-        }
         if ("selection".equals(head)) //$NON-NLS-1$
         {
             // A holder is not a collection: it carries viewMode, userSettingID and a presentation
@@ -1594,10 +1589,11 @@ public final class DcsSettingsWriter
                     + relativeAddress
                     + "/selection'. Use action='upsert' to create it."; //$NON-NLS-1$
             }
-            DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null
+            DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) && tail.isEmpty() ? null
                 : copy(existing);
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
-            String error = applySelection(holder, body, action, languages, where + "/selection"); //$NON-NLS-1$
+            String error = applySelectionPath(holder, tail, body, action, languages,
+                where + "/selection"); //$NON-NLS-1$
             if (error == null) table.setSelection(holder);
             return error;
         }
@@ -1610,16 +1606,37 @@ public final class DcsSettingsWriter
                     + relativeAddress
                     + "/conditionalAppearance'. Use action='upsert' to create it."; //$NON-NLS-1$
             }
-            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
+            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) && tail.isEmpty() ? null
                 : copy(existing);
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
-            String error = applyConditionalAppearance(holder, body, action, languages, version,
+            String error = applyConditionalAppearancePath(holder, tail, body, action, languages, version,
                 where + "/conditionalAppearance"); //$NON-NLS-1$
             if (error == null) table.setConditionalAppearance(holder);
             return error;
         }
+        if ("outputParameters".equals(head)) //$NON-NLS-1$
+        {
+            DataCompositionTableOutputParameterValues existing = table.getOutputParameters();
+            if (ACTION_UPDATE.equals(action) && existing == null)
+            {
+                return "action='update' cannot find outputParameters at relative address '" //$NON-NLS-1$
+                    + relativeAddress
+                    + "/outputParameters'. Use action='upsert' to create them."; //$NON-NLS-1$
+            }
+            DataCompositionTableOutputParameterValues holder = ACTION_REPLACE.equals(action)
+                && tail.isEmpty() ? null : copy(existing);
+            if (holder == null)
+            {
+                holder = DcsFactory.eINSTANCE.createDataCompositionTableOutputParameterValues();
+            }
+            String error = applyParameterValuesPath(holder, tail, body, action, languages,
+                where + "/outputParameters"); //$NON-NLS-1$
+            if (error == null) table.setOutputParameters(holder);
+            return error;
+        }
         return "Table path segment '" + head + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
-            + "' is not authorable. Use rows, columns, selection, or conditionalAppearance."; //$NON-NLS-1$
+            + "' is not authorable. Use rows, columns, selection, conditionalAppearance, or " //$NON-NLS-1$
+            + "outputParameters."; //$NON-NLS-1$
     }
 
     private static String applyTableGroupsMember(List<DataCompositionTableGroup> groups, JsonObject body,
@@ -1675,10 +1692,51 @@ public final class DcsSettingsWriter
                 path.subList(2, path.size()), body, action, languages,
                 where + "/" + path.get(0)); //$NON-NLS-1$
         }
+        if ("conditionalAppearance".equals(member)) //$NON-NLS-1$
+        {
+            List<String> tail = path.subList(2, path.size());
+            DataCompositionConditionalAppearance existing = group.getConditionalAppearance();
+            if (ACTION_UPDATE.equals(action) && existing == null)
+            {
+                return "action='update' cannot find conditionalAppearance at '" + where + "/" //$NON-NLS-1$ //$NON-NLS-2$
+                    + path.get(0) + "/conditionalAppearance'. Use action='upsert' to create it."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action)
+                && tail.isEmpty() ? null : copy(existing);
+            if (holder == null)
+            {
+                holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
+            }
+            String error = applyConditionalAppearancePath(holder, tail, body, action, languages,
+                version, where + "/" + path.get(0) + "/conditionalAppearance"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error == null) group.setConditionalAppearance(holder);
+            return error;
+        }
+        if ("outputParameters".equals(member)) //$NON-NLS-1$
+        {
+            List<String> tail = path.subList(2, path.size());
+            DataCompositionTableGroupOutputParameterValues existing = group.getOutputParameters();
+            if (ACTION_UPDATE.equals(action) && existing == null)
+            {
+                return "action='update' cannot find outputParameters at '" + where + "/" //$NON-NLS-1$ //$NON-NLS-2$
+                    + path.get(0) + "/outputParameters'. Use action='upsert' to create them."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            DataCompositionTableGroupOutputParameterValues holder = ACTION_REPLACE.equals(action)
+                && tail.isEmpty() ? null : copy(existing);
+            if (holder == null)
+            {
+                holder = DcsFactory.eINSTANCE.createDataCompositionTableGroupOutputParameterValues();
+            }
+            String error = applyParameterValuesPath(holder, tail, body, action, languages,
+                where + "/" + path.get(0) + "/outputParameters"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error == null) group.setOutputParameters(holder);
+            return error;
+        }
         if (!KEY_ITEMS.equals(member))
         {
             return "Table-axis path '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "' is invalid. Use items, groupFields, selection, filter, or order."; //$NON-NLS-1$
+                + "' is invalid. Use items, groupFields, selection, filter, order, " //$NON-NLS-1$
+                + "conditionalAppearance, or outputParameters."; //$NON-NLS-1$
         }
         return applyTableGroupsPath(group.getItems(), path.subList(2, path.size()), body, action,
             languages, version, where + "/" + path.get(0) + "/items"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2875,15 +2933,26 @@ public final class DcsSettingsWriter
             }
             holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
         }
-        String error;
+        String error = applyConditionalAppearancePath(holder, path, body, action, languages, version,
+            "conditionalAppearance"); //$NON-NLS-1$
+        if (error == null)
+        {
+            settings.setConditionalAppearance(holder);
+        }
+        return error;
+    }
+
+    private static String applyConditionalAppearancePath(DataCompositionConditionalAppearance holder,
+        List<String> path, JsonObject body, String action,
+        DcsPresentationParser.LanguageContext languages, Version version, String where)
+    {
         if (path.isEmpty())
         {
-            error = applyConditionalAppearance(holder, body, action, languages, version,
-                "conditionalAppearance"); //$NON-NLS-1$
+            return applyConditionalAppearance(holder, body, action, languages, version, where);
         }
-        else if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
+        if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
-            int selected = index(path.get(1), holder.getItems().size(), "conditionalAppearance/items"); //$NON-NLS-1$
+            int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
             if (indexError != null)
             {
                 return indexError;
@@ -2896,8 +2965,8 @@ public final class DcsSettingsWriter
                     item = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearanceItem();
                     holder.getItems().set(selected, item);
                 }
-                error = applyConditionalAppearanceItem(item, body, action,
-                    languages, version, "conditionalAppearance/items/" + path.get(1)); //$NON-NLS-1$
+                return applyConditionalAppearanceItem(item, body, action,
+                    languages, version, where + "/items/" + path.get(1)); //$NON-NLS-1$
             }
             else if ("selection".equals(path.get(2))) //$NON-NLS-1$
             {
@@ -2910,32 +2979,44 @@ public final class DcsSettingsWriter
                     if (ACTION_UPDATE.equals(action))
                     {
                         return "action='update' cannot find conditional-appearance selection at '" //$NON-NLS-1$
-                            + "conditionalAppearance/items/" + path.get(1) //$NON-NLS-1$
+                            + where + "/items/" + path.get(1) //$NON-NLS-1$
                             + "/selection'. Use action='upsert' to create it."; //$NON-NLS-1$
                     }
                     fields = DcsFactory.eINSTANCE.createDataCompositionAppearanceFields();
                 }
-                error = applyAppearanceFieldsPath(fields, path.subList(3, path.size()), body,
-                    action, "conditionalAppearance/items/" + path.get(1) + "/selection"); //$NON-NLS-1$ //$NON-NLS-2$
+                String error = applyAppearanceFieldsPath(fields, path.subList(3, path.size()), body,
+                    action, where + "/items/" + path.get(1) + "/selection"); //$NON-NLS-1$ //$NON-NLS-2$
                 if (error == null) item.setSelection(fields);
+                return error;
+            }
+            else if ("filter".equals(path.get(2))) //$NON-NLS-1$
+            {
+                DataCompositionFilter filter = ACTION_REPLACE.equals(action) && path.size() == 3
+                    ? null : copy(item.getFilter());
+                if (filter == null)
+                {
+                    if (ACTION_UPDATE.equals(action))
+                    {
+                        return "action='update' cannot find conditional-appearance filter at '" //$NON-NLS-1$
+                            + where + "/items/" + path.get(1) //$NON-NLS-1$
+                            + "/filter'. Use action='upsert' to create it."; //$NON-NLS-1$
+                    }
+                    filter = DcsFactory.eINSTANCE.createDataCompositionFilter();
+                }
+                String error = applyFilterPath(filter, path.subList(3, path.size()), body, action,
+                    languages, where + "/items/" + path.get(1) + "/filter"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (error == null) item.setFilter(filter);
+                return error;
             }
             else
             {
                 return "Conditional-appearance item address must continue through selection/items/" //$NON-NLS-1$
-                    + "<index>. Copy the canonical address from get."; //$NON-NLS-1$
+                    + "<index> or filter/items/<index>. Copy the canonical address from get."; //$NON-NLS-1$
             }
         }
-        else
-        {
-            return "Conditional-appearance address must end at conditionalAppearance, " //$NON-NLS-1$
-                + "conditionalAppearance/items/<index>, or an exact selection/items/<index> " //$NON-NLS-1$
-                + "below a rule. Copy the canonical address from get."; //$NON-NLS-1$
-        }
-        if (error == null)
-        {
-            settings.setConditionalAppearance(holder);
-        }
-        return error;
+        return "Conditional-appearance address must end at " + where + ", " + where //$NON-NLS-1$ //$NON-NLS-2$
+            + "/items/<index>, or an exact selection/items/<index> or filter/items/<index> " //$NON-NLS-1$
+            + "below a rule. Copy the canonical address from get."; //$NON-NLS-1$
     }
 
     private static String applyConditionalAppearance(DataCompositionConditionalAppearance holder,
@@ -3235,12 +3316,29 @@ public final class DcsSettingsWriter
                 : DcsFactory.eINSTANCE.createDataCompositionOutputParameterValues();
         }
         String where = dataParameters ? "dataParameters" : "outputParameters"; //$NON-NLS-1$ //$NON-NLS-2$
-        String error;
+        String error = applyParameterValuesPath(holder, path, body, action, languages, where);
+        if (error == null)
+        {
+            if (dataParameters)
+            {
+                settings.setDataParameters((DataCompositionDataParameterValues)holder);
+            }
+            else
+            {
+                settings.setOutputParameters((DataCompositionOutputParameterValues)holder);
+            }
+        }
+        return error;
+    }
+
+    private static String applyParameterValuesPath(ParameterValues holder, List<String> path,
+        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, String where)
+    {
         if (path.isEmpty())
         {
-            error = applyParameters(holder, body, action, languages, where);
+            return applyParameters(holder, body, action, languages, where);
         }
-        else if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
+        if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
             if (indexError != null)
@@ -3260,34 +3358,17 @@ public final class DcsSettingsWriter
                 // not survive a replace that never named them. There is only one shape here, so
                 // the rebuild is the factory call itself.
                 SettingsParameterValue fresh = DcsFactory.eINSTANCE.createSettingsParameterValue();
-                error = applyParameterItem(fresh, body, languages, at);
+                String error = applyParameterItem(fresh, body, languages, at);
                 if (error == null)
                 {
                     holder.getItems().set(selected, fresh);
                 }
+                return error;
             }
-            else
-            {
-                error = applyParameterItem((SettingsParameterValue)item, body, languages, at);
-            }
+            return applyParameterItem((SettingsParameterValue)item, body, languages, at);
         }
-        else
-        {
-            return "Parameter-settings address at '" + where //$NON-NLS-1$
-                + "' must end at the holder or items/<index>. Copy it from get."; //$NON-NLS-1$
-        }
-        if (error == null)
-        {
-            if (dataParameters)
-            {
-                settings.setDataParameters((DataCompositionDataParameterValues)holder);
-            }
-            else
-            {
-                settings.setOutputParameters((DataCompositionOutputParameterValues)holder);
-            }
-        }
-        return error;
+        return "Parameter-settings address at '" + where //$NON-NLS-1$
+            + "' must end at the holder or items/<index>. Copy it from get."; //$NON-NLS-1$
     }
 
     private static String applyParameters(ParameterValues holder, JsonObject body, String action,
@@ -3352,12 +3433,13 @@ public final class DcsSettingsWriter
         {
             error = applyUserFields(holder, body, action, languages, version, "userFields"); //$NON-NLS-1$
         }
-        else if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
+        else if (path.size() >= 2 && KEY_ITEMS.equals(path.get(0)))
         {
             int selected = index(path.get(1), holder.getItems().size(), "userFields/items"); //$NON-NLS-1$
             if (indexError != null) return indexError;
             String at = "userFields/items/" + path.get(1); //$NON-NLS-1$
-            if (ACTION_REPLACE.equals(action))
+            UserField field = holder.getItems().get(selected);
+            if (path.size() == 2 && ACTION_REPLACE.equals(action))
             {
                 // Authoritative replacement, so the field is REBUILT from the body: applying over
                 // the existing one let an omitted title, use flag, detailExpression or
@@ -3383,16 +3465,42 @@ public final class DcsSettingsWriter
                     holder.getItems().set(selected, fresh);
                 }
             }
+            else if (path.size() == 2)
+            {
+                error = applyUserField(field, body, action, languages, version, at);
+            }
+            else if (!(field instanceof DataCompositionUserFieldCase)
+                || !"variants".equals(path.get(2))) //$NON-NLS-1$
+            {
+                return "User-field child address at '" + at //$NON-NLS-1$
+                    + "' is authorable only for a case field through variants/items/<index>. " //$NON-NLS-1$
+                    + "Copy the canonical case-variant address from get."; //$NON-NLS-1$
+            }
             else
             {
-                error = applyUserField(holder.getItems().get(selected), body, action, languages,
-                    version, at);
+                DataCompositionUserFieldCase caseField = (DataCompositionUserFieldCase)field;
+                List<String> tail = path.subList(3, path.size());
+                DataCompositionUserFieldsCaseVariants variants = ACTION_REPLACE.equals(action)
+                    && tail.isEmpty() ? null : copy(caseField.getVariants());
+                if (variants == null)
+                {
+                    if (ACTION_UPDATE.equals(action))
+                    {
+                        return "action='update' cannot find variants at '" + at //$NON-NLS-1$
+                            + "/variants'. Use action='upsert' to create them."; //$NON-NLS-1$
+                    }
+                    variants = DcsFactory.eINSTANCE.createDataCompositionUserFieldsCaseVariants();
+                }
+                error = applyUserFieldVariantsPath(variants, tail, body, action, languages,
+                    at + "/variants"); //$NON-NLS-1$
+                if (error == null) caseField.setVariants(variants);
             }
         }
         else
         {
-            return "User-field address must end at userFields or userFields/items/<index>. " //$NON-NLS-1$
-                + "Copy the canonical address from get."; //$NON-NLS-1$
+            return "User-field address must end at userFields, userFields/items/<index>, or an " //$NON-NLS-1$
+                + "exact variants/items/<index> descendant of a case field. Copy the canonical " //$NON-NLS-1$
+                + "address from get."; //$NON-NLS-1$
         }
         if (error == null) settings.setUserFields(holder);
         return error;
@@ -3550,48 +3658,108 @@ public final class DcsSettingsWriter
         if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         if (ACTION_UPDATE.equals(action))
         {
-            return "action='update' needs an exact case-variant address. Use replace on variants " //$NON-NLS-1$
-                + "or upsert to append one."; //$NON-NLS-1$
+            return "action='update' needs an exact case-variant address ending in " //$NON-NLS-1$
+                + "variants/items/<index>. Copy it from get; use upsert to append one."; //$NON-NLS-1$
         }
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject itemBody = arrayObject(array, i, path + ".items"); //$NON-NLS-1$
             if (itemBody == null) return arrayObjectError;
-            String itemMembers = checkMembers(itemBody, path + ".items[" + i + "]", //$NON-NLS-1$ //$NON-NLS-2$
-                KEY_USE, "filter", "value", "presentationValue"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            if (itemMembers != null) return itemMembers;
             DataCompositionUserFieldsVariant variant =
                 DcsFactory.eINSTANCE.createDataCompositionUserFieldsVariant();
-            if (itemBody.has(KEY_USE))
-            {
-                Boolean use = bool(itemBody, KEY_USE, path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (use == null) return booleanError;
-                variant.setUse(use.booleanValue());
-            }
-            if (itemBody.has("filter")) //$NON-NLS-1$
-            {
-                JsonObject filterBody = object(itemBody, "filter", path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                if (filterBody == null) return objectError;
-                DataCompositionFilter filter = DcsFactory.eINSTANCE.createDataCompositionFilter();
-                String error = applyFilter(filter, filterBody, action, languages,
-                    path + ".items[" + i + "].filter"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (error != null) return error;
-                variant.setFilter(filter);
-            }
-            if (itemBody.has("value")) //$NON-NLS-1$
-            {
-                ValueResult value = value(itemBody.get("value"), path + ".items[" + i + "].value"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                if (value.error != null) return value.error;
-                variant.setValue(value.value);
-            }
-            if (itemBody.has("presentationValue")) //$NON-NLS-1$
-            {
-                PresentationResult value = presentation(itemBody.get("presentationValue"), languages, //$NON-NLS-1$
-                    path + ".items[" + i + "].presentationValue"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (value.error != null) return value.error;
-                variant.setPresentationValue(value.value);
-            }
+            String error = applyUserFieldVariant(variant, itemBody, action, languages,
+                path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
             holder.getItems().add(variant);
+        }
+        return null;
+    }
+
+    private static String applyUserFieldVariantsPath(DataCompositionUserFieldsCaseVariants holder,
+        List<String> path, JsonObject body, String action,
+        DcsPresentationParser.LanguageContext languages, String where)
+    {
+        if (path.isEmpty())
+        {
+            return applyUserFieldVariants(holder, body, action, languages, where);
+        }
+        if (path.size() < 2 || !KEY_ITEMS.equals(path.get(0)))
+        {
+            return "Case-variant address at '" + where //$NON-NLS-1$
+                + "' must continue with items/<index>. Copy the canonical address from get."; //$NON-NLS-1$
+        }
+        int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
+        if (indexError != null) return indexError;
+        DataCompositionUserFieldsVariant variant = holder.getItems().get(selected);
+        String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+        if (path.size() == 2)
+        {
+            if (ACTION_REPLACE.equals(action))
+            {
+                variant = DcsFactory.eINSTANCE.createDataCompositionUserFieldsVariant();
+                holder.getItems().set(selected, variant);
+            }
+            return applyUserFieldVariant(variant, body, action, languages, at);
+        }
+        if (!"filter".equals(path.get(2))) //$NON-NLS-1$
+        {
+            return "Case-variant child address at '" + at //$NON-NLS-1$
+                + "' is authorable only through filter/items/<index>. Copy it from get."; //$NON-NLS-1$
+        }
+        List<String> tail = path.subList(3, path.size());
+        DataCompositionFilter filter = ACTION_REPLACE.equals(action) && tail.isEmpty()
+            ? null : copy(variant.getFilter());
+        if (filter == null)
+        {
+            if (ACTION_UPDATE.equals(action))
+            {
+                return "action='update' cannot find filter at '" + at //$NON-NLS-1$
+                    + "/filter'. Use action='upsert' to create it."; //$NON-NLS-1$
+            }
+            filter = DcsFactory.eINSTANCE.createDataCompositionFilter();
+        }
+        String error = applyFilterPath(filter, tail, body, action, languages, at + "/filter"); //$NON-NLS-1$
+        if (error == null) variant.setFilter(filter);
+        return error;
+    }
+
+    private static String applyUserFieldVariant(DataCompositionUserFieldsVariant variant,
+        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, String path)
+    {
+        String members = checkMembers(body, path, KEY_USE, "filter", "value", //$NON-NLS-1$ //$NON-NLS-2$
+            "presentationValue"); //$NON-NLS-1$
+        if (members != null) return members;
+        if (body.has(KEY_USE))
+        {
+            Boolean use = bool(body, KEY_USE, path);
+            if (use == null) return booleanError;
+            variant.setUse(use.booleanValue());
+        }
+        if (body.has("filter")) //$NON-NLS-1$
+        {
+            JsonObject filterBody = object(body, "filter", path); //$NON-NLS-1$
+            if (filterBody == null) return objectError;
+            String missing = missingHolderUpdate(action, variant.getFilter(), path + ".filter"); //$NON-NLS-1$
+            if (missing != null) return missing;
+            DataCompositionFilter filter = ACTION_REPLACE.equals(action) ? null
+                : copy(variant.getFilter());
+            if (filter == null) filter = DcsFactory.eINSTANCE.createDataCompositionFilter();
+            String error = applyFilter(filter, filterBody, action, languages, path + ".filter"); //$NON-NLS-1$
+            if (error != null) return error;
+            variant.setFilter(filter);
+        }
+        if (body.has("value")) //$NON-NLS-1$
+        {
+            ValueResult parsed = value(body.get("value"), path + ".value"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (parsed.error != null) return parsed.error;
+            variant.setValue(parsed.value);
+        }
+        if (body.has("presentationValue")) //$NON-NLS-1$
+        {
+            PresentationResult parsed = presentation(body.get("presentationValue"), languages, //$NON-NLS-1$
+                path + ".presentationValue"); //$NON-NLS-1$
+            if (parsed.error != null) return parsed.error;
+            variant.setPresentationValue(parsed.value);
         }
         return null;
     }
@@ -4534,8 +4702,7 @@ public final class DcsSettingsWriter
         }
         if ("userFields".equals(head)) //$NON-NLS-1$
         {
-            return removeIndexed(settings.getUserFields() == null ? null
-                : settings.getUserFields().getItems(), tail, "userFields"); //$NON-NLS-1$
+            return removeUserFieldsPath(settings.getUserFields(), tail, "userFields"); //$NON-NLS-1$
         }
         if ("filter".equals(head)) //$NON-NLS-1$
         {
@@ -4701,6 +4868,9 @@ public final class DcsSettingsWriter
         if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
             return removeConditionalAppearancePath(table.getConditionalAppearance(), tail,
                 where + "/conditionalAppearance"); //$NON-NLS-1$
+        if ("outputParameters".equals(head)) //$NON-NLS-1$
+            return removeIndexed(table.getOutputParameters() == null ? null
+                : table.getOutputParameters().getItems(), tail, where + "/outputParameters"); //$NON-NLS-1$
         return "Table child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' does not select exactly one authorable node."; //$NON-NLS-1$
     }
@@ -4725,9 +4895,31 @@ public final class DcsSettingsWriter
         if (isGroupingHolder(tail.get(0)))
             return removeGroupingHolder(new TableGroupSettingsAccess(group), tail,
                 where + "/" + path.get(0)); //$NON-NLS-1$
+        if ("conditionalAppearance".equals(tail.get(0))) //$NON-NLS-1$
+        {
+            if (tail.size() == 1)
+            {
+                group.setConditionalAppearance(null);
+                return null;
+            }
+            return removeConditionalAppearancePath(group.getConditionalAppearance(),
+                tail.subList(1, tail.size()), where + "/" + path.get(0) //$NON-NLS-1$
+                    + "/conditionalAppearance"); //$NON-NLS-1$
+        }
+        if ("outputParameters".equals(tail.get(0))) //$NON-NLS-1$
+        {
+            if (tail.size() == 1)
+            {
+                group.setOutputParameters(null);
+                return null;
+            }
+            return removeIndexed(group.getOutputParameters() == null ? null
+                : group.getOutputParameters().getItems(), tail.subList(1, tail.size()),
+                where + "/" + path.get(0) + "/outputParameters"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return "Table-axis child removal at '" + where //$NON-NLS-1$
-            + "' currently supports items, groupFields, selection, filter, or order. Remove the " //$NON-NLS-1$
-            + "group or update its body."; //$NON-NLS-1$
+            + "' currently supports items, groupFields, selection, filter, order, " //$NON-NLS-1$
+            + "conditionalAppearance, or outputParameters. Remove the group or update its body."; //$NON-NLS-1$
     }
 
     private static String removeGroupingHolder(GroupingSettingsAccess owner, List<String> path,
@@ -4758,6 +4950,71 @@ public final class DcsSettingsWriter
                 tail, where + "/order"); //$NON-NLS-1$
         return "Grouping child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' does not select exactly one authorable node."; //$NON-NLS-1$
+    }
+
+    private static String removeUserFieldsPath(DataCompositionUserFields holder, List<String> path,
+        String where)
+    {
+        if (holder == null) return "No userFields exist at '" + where + "'. Re-run get."; //$NON-NLS-1$ //$NON-NLS-2$
+        if (path.size() < 2 || !KEY_ITEMS.equals(path.get(0)))
+        {
+            return "User-field removal at '" + where //$NON-NLS-1$
+                + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$
+        }
+        int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
+        if (indexError != null) return indexError;
+        if (path.size() == 2)
+        {
+            holder.getItems().remove(selected);
+            return null;
+        }
+        UserField field = holder.getItems().get(selected);
+        String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+        if (!(field instanceof DataCompositionUserFieldCase)
+            || !"variants".equals(path.get(2))) //$NON-NLS-1$
+        {
+            return "User-field child address at '" + at //$NON-NLS-1$
+                + "' does not select an exact removable case variant."; //$NON-NLS-1$
+        }
+        DataCompositionUserFieldCase caseField = (DataCompositionUserFieldCase)field;
+        if (path.size() == 3)
+        {
+            caseField.setVariants(null);
+            return null;
+        }
+        DataCompositionUserFieldsCaseVariants variants = caseField.getVariants();
+        String variantsWhere = at + "/variants"; //$NON-NLS-1$
+        if (variants == null)
+        {
+            return "No case variants exist at '" + variantsWhere + "'. Re-run get."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        List<String> tail = path.subList(3, path.size());
+        if (tail.size() < 2 || !KEY_ITEMS.equals(tail.get(0)))
+        {
+            return "Case-variant removal at '" + variantsWhere //$NON-NLS-1$
+                + "' needs items/<index>. Copy the exact address from get."; //$NON-NLS-1$
+        }
+        int variantIndex = index(tail.get(1), variants.getItems().size(), variantsWhere + "/items"); //$NON-NLS-1$
+        if (indexError != null) return indexError;
+        if (tail.size() == 2)
+        {
+            variants.getItems().remove(variantIndex);
+            return null;
+        }
+        DataCompositionUserFieldsVariant variant = variants.getItems().get(variantIndex);
+        String variantWhere = variantsWhere + "/items/" + tail.get(1); //$NON-NLS-1$
+        if (!"filter".equals(tail.get(2))) //$NON-NLS-1$
+        {
+            return "Case-variant child address at '" + variantWhere //$NON-NLS-1$
+                + "' does not select an exact removable filter node."; //$NON-NLS-1$
+        }
+        if (tail.size() == 3)
+        {
+            variant.setFilter(null);
+            return null;
+        }
+        return removeFilterPath(variant.getFilter(), tail.subList(3, tail.size()),
+            variantWhere + "/filter"); //$NON-NLS-1$
     }
 
     private static String removeFilterPath(DataCompositionFilter filter, List<String> path, String where)

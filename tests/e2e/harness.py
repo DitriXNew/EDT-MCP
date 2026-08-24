@@ -509,8 +509,8 @@ DEEP_MUTATION_TOOLS = frozenset({
     "clean_project", "create_project", "delete_project",
 })
 
-# Tools that change the BM model. A SUCCESSFUL call, or an error carrying the structural
-# mutationCommitted:true contract, forfeits the shortcut outright, whatever the later evidence says.
+# Tools that change the BM model. A SUCCESSFUL call, an observed post-commit error, or an error
+# whose mutating API cannot report rollback forfeits the shortcut, whatever later evidence says.
 #
 # Because the evidence has a blind spot, and this closes it: a metadata write can succeed
 # with persisted=false — the transaction changed the in-memory model while the fixture stays
@@ -522,17 +522,18 @@ DEEP_MUTATION_TOOLS = frozenset({
 # the Java side and is missing here fails the suite. Hand-maintained membership silently rots -
 # apply_quick_fix landed on master mutating the model, and this set did not know about it.
 MODEL_MUTATION_TOOLS = frozenset({
-    "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
+    "create_metadata", "modify_metadata", "write_module_source",
     "apply_quick_fix", "build_external_objects",
     # dcs authors schemas / settings / dynamic lists. It belongs here rather than in
     # DEEP_MUTATION_TOOLS because an ordinary refusal does not move the model: the writer validates
     # the request before the first eSet. The exception is a post-commit force-export scheduling
-    # failure; every post-commit error carries mutationCommitted:true, and _record_outcome treats
-    # that field as a confirmed mutation without making every negative test forfeit the shortcut.
+    # failure; every post-commit error carries mutationCommitted:true, and an opaque in-flight
+    # failure carries mutationOutcomeUnknown:true. Both forfeit the shortcut without making an
+    # ordinary negative test do so.
     "dcs",
-    # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection, so
-    # no marker in this repository's sources can reveal them. The ratchet pins them by name for
-    # exactly that reason - see _REFLECTIVE_WRITERS in test_mutation_set_ratchet.py.
+    # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection.
+    # Their entry points now mark an exception after invoke() as outcome-unknown, but source
+    # scanning still cannot discover their membership; the ratchet pins their names explicitly.
     "generate_translation_strings", "translate_configuration",
 }) | DEEP_MUTATION_TOOLS
 
@@ -540,7 +541,8 @@ _CALLED_TOOLS = set()
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
 
-# A mutating call that SUCCEEDED. One is enough to forfeit the shortcut for the whole test.
+# A mutating call that succeeded, committed before failing, or entered an opaque mutation whose
+# rollback outcome is unknown. Any one is enough to forfeit the shortcut for the whole test.
 _MUTATION_CONFIRMED = False
 # Mutating calls issued whose outcome was never read back (connection reset, truncated body,
 # timeout). The server may well have committed them, so while this is non-zero the model counts
@@ -569,9 +571,9 @@ def _record_attempt(tool):
 def _record_outcome(tool, is_error, structured):
     """Called once the server's answer has actually been read.
 
-    Post-commit failures are identified by a boolean response field, never their prose. ToolResult's
-    errorAfterMutation factory emits that field, so changing or translating the message cannot
-    accidentally make a committed write look like an ordinary refusal.
+    Mutation-bearing failures are identified by boolean response fields, never their prose.
+    ToolResult emits mutationCommitted for an observed commit and mutationOutcomeUnknown for an
+    entered opaque/in-flight mutation, so wording changes cannot accidentally re-arm the shortcut.
     """
     global _MUTATIONS_UNRESOLVED, _MUTATION_CONFIRMED
     if tool not in MODEL_MUTATION_TOOLS:
@@ -579,7 +581,9 @@ def _record_outcome(tool, is_error, structured):
     _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
     mutation_committed = (isinstance(structured, dict)
                           and structured.get("mutationCommitted") is True)
-    if not is_error or mutation_committed:
+    mutation_unknown = (isinstance(structured, dict)
+                        and structured.get("mutationOutcomeUnknown") is True)
+    if not is_error or mutation_committed or mutation_unknown:
         _MUTATION_CONFIRMED = True
 
 

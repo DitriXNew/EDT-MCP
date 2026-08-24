@@ -30,7 +30,9 @@ import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.ditrix.edt.mcp.server.utils.DcsModelComparison;
 import com.google.gson.JsonArray;
@@ -115,6 +117,22 @@ public class DcsToolTest
         assertTrue(error, error.contains("post-commit read")); //$NON-NLS-1$
         assertTrue(error, error.contains(address));
         assertTrue(error, error.contains("root/listSettings/selection")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMutationExitDerivesMarkerFromTheRecordedWrite()
+    {
+        WriteScope scope = new WriteScope();
+        String genericCatch = ToolResult.error("post-commit scheduling threw").toJson(); //$NON-NLS-1$
+
+        assertEquals(genericCatch, DcsTool.finalizeWriteResult(scope, genericCatch));
+
+        scope.wrote("TestConfiguration"); //$NON-NLS-1$
+        JsonObject marked = JsonParser.parseString(
+            DcsTool.finalizeWriteResult(scope, genericCatch)).getAsJsonObject();
+        assertFalse(marked.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(marked.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("post-commit scheduling threw", marked.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

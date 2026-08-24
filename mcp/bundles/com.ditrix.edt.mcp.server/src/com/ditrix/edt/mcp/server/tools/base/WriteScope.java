@@ -16,6 +16,8 @@ import java.util.TreeSet;
 
 import org.eclipse.core.resources.IProject;
 
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+
 /**
  * What a single write call says about WHERE it wrote - stated by the call itself, while it runs.
  * <p>
@@ -109,6 +111,9 @@ public final class WriteScope
     /** Projects the platform's cascade may have written in. */
     private final Set<String> cascadedInto = new LinkedHashSet<>();
 
+    /** A mutation boundary returned successfully, even if its project is not known here. */
+    private boolean mutationCommitted;
+
     private boolean queuedNothing;
 
     private String undeterminableReason;
@@ -188,6 +193,23 @@ public final class WriteScope
         if (scope != null)
         {
             scope.wrote(project);
+        }
+    }
+
+    /**
+     * Records the successful return of a mutation boundary when it cannot name a project.
+     *
+     * <p>{@code BmTransactions.write} calls this centrally after {@code IBmModel.execute} returns,
+     * so an exception in response/export work cannot reopen the post-commit plain-error hole. It
+     * deliberately records only the commit fact; export routing still comes from
+     * {@link #recordWrite(IProject)} or {@link #recordExportSubmission(IProject)}.</p>
+     */
+    public static void recordMutationCommitted()
+    {
+        WriteScope scope = BOUND.get();
+        if (scope != null)
+        {
+            scope.mutationCommitted = true;
         }
     }
 
@@ -286,6 +308,7 @@ public final class WriteScope
         if (projectName != null && !projectName.isEmpty())
         {
             written.add(projectName);
+            mutationCommitted = true;
         }
     }
 
@@ -332,11 +355,10 @@ public final class WriteScope
     /**
      * States that what was written cannot be determined here, and names what to wait for instead.
      * <p>
-     * For the one case the platform keeps to itself: {@code apply_quick_fix} hands the work to EDT's
-     * fix extension point, which reports nothing about what it touched. The classification stays -
-     * it is the best signal available - but it is now a decision recorded at the call whose opacity
-     * is the reason, rather than a guess re-derived from the response afterwards, and it publishes
-     * nothing, because "I could not tell" must not be shown to a caller as "I wrote nowhere".
+     * For platform extension points that keep their rollback/reach to themselves: quick fixes,
+     * metadata adoption and delete refactoring. The classification is recorded before entering the
+     * opaque call and is overridden by a known write after a normal return. It publishes nothing,
+     * because "I could not tell" must not be shown to a caller as "I wrote nowhere".
      *
      * @param reason why the write scope cannot be determined; kept for diagnostics
      * @param fallbackProjects the projects to wait for instead; may be empty, never {@code null}
@@ -354,6 +376,52 @@ public final class WriteScope
     public List<String> writtenProjects()
     {
         return new ArrayList<>(written);
+    }
+
+    /**
+     * Whether this request has crossed a commit boundary recorded by the writer.
+     *
+     * <p>Set either by an explicit {@link #wrote(IProject)} declaration or centrally when
+     * {@code BmTransactions.write} returns. The latter closes the interval between a BM commit and
+     * the later project/export declaration. Default-project fallbacks, cascade participants and an
+     * undeterminable scope remain routing facts, not evidence of a known commit.</p>
+     *
+     * @return {@code true} once this request recorded at least one committed write
+     */
+    public boolean hasRecordedWrite()
+    {
+        return mutationCommitted;
+    }
+
+    /**
+     * Enforces the post-mutation error contract at a writer's single return point.
+     *
+     * @param result the result about to leave the writer
+     * @return the result, structurally marked when it is an error after a recorded write
+     */
+    public String markErrorAfterRecordedWrite(String result)
+    {
+        if (hasRecordedWrite())
+        {
+            return ToolResult.markErrorAfterMutation(result);
+        }
+        // An opaque platform extension point may throw without saying whether it rolled back;
+        // preserve that distinction on the wire while still forcing callers to reset before
+        // trusting the model.
+        return undeterminableFallback != null
+            ? ToolResult.markErrorWithUnknownMutationOutcome(result) : result;
+    }
+
+    /**
+     * Static face used by a catch while this scope is still bound.
+     *
+     * @param result the caught error result
+     * @return the result, structurally marked when the current request already wrote
+     */
+    public static String markCurrentErrorAfterRecordedWrite(String result)
+    {
+        WriteScope scope = BOUND.get();
+        return scope == null ? result : scope.markErrorAfterRecordedWrite(result);
     }
 
     /**

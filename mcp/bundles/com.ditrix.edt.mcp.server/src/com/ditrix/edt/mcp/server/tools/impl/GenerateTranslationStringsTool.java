@@ -127,6 +127,8 @@ public class GenerateTranslationStringsTool implements IMcpTool
             return opts.error;
         }
 
+        boolean mutationApiEntered = false;
+        boolean mutationApiReturned = false;
         try
         {
             // Resolve the configuration project and the LanguageTool API (no side
@@ -152,6 +154,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
             Method method = resolved.api.getClass().getMethod("generateTranslationStrings", //$NON-NLS-1$
                 IDtProject.class, List.class, String.class, String.class, Path.class,
                 boolean.class, boolean.class, String.class, boolean.class, Map.class);
+            mutationApiEntered = true;
             method.invoke(resolved.api,
                 resolved.dtProject,
                 targetLanguages,
@@ -163,6 +166,7 @@ public class GenerateTranslationStringsTool implements IMcpTool
                 opts.collectModelType,
                 Boolean.FALSE,
                 Collections.emptyMap());
+            mutationApiReturned = true;
 
             BuildUtils.waitForDerivedData(resolved.project);
 
@@ -180,7 +184,16 @@ public class GenerateTranslationStringsTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return CliReflectionErrors.toErrorJson(e, "Generate translation strings", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = CliReflectionErrors.toErrorJson(e,
+                "Generate translation strings", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+            // LanguageTool exposes no transaction/rollback outcome. Once invoke() was entered an
+            // exception can follow a partial dictionary/model write, so state the uncertainty
+            // structurally instead of pretending this was a preflight refusal.
+            if (mutationApiReturned)
+            {
+                return ToolResult.markErrorAfterMutation(error);
+            }
+            return mutationApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
         }
     }
 
