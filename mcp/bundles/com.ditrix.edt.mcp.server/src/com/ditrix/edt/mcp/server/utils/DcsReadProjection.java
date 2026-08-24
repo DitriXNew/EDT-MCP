@@ -174,6 +174,14 @@ public final class DcsReadProjection
         }
         if (!type.equals(actualType))
         {
+            if (node.value instanceof DataCompositionSettings && isStructureKind(type))
+            {
+                return settingsStructureTypeMismatch(type, node.address);
+            }
+            if (isStructureCollection(node) && isStructureKind(type))
+            {
+                return structureCollectionTypeMismatch(type, node.address);
+            }
             return typeMismatch(type, actualType, node.address);
         }
         if (node.value instanceof List<?>)
@@ -229,13 +237,19 @@ public final class DcsReadProjection
     public static List<String> referenceAddresses(EObject root, String rootFqn, String kind,
         String identity)
     {
+        return referenceAddressesAt(root,
+            DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind, identity);
+    }
+
+    static List<String> referenceAddressesAt(EObject root, String rootAddress, String kind,
+        String identity)
+    {
         if (root == null || identity == null || identity.isEmpty())
         {
             return Collections.emptyList();
         }
         Set<String> result = new LinkedHashSet<>();
-        collectReferences(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind,
-            identity, result);
+        collectReferences(root, rootAddress, kind, identity, result);
         return new ArrayList<>(result);
     }
 
@@ -299,7 +313,8 @@ public final class DcsReadProjection
     private static void collectReferences(EObject object, String address, String kind,
         String identity, Set<String> result)
     {
-        if (("field".equals(kind) || "calculatedField".equals(kind) || "totalField".equals(kind)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (("field".equals(kind) || "calculatedField".equals(kind) || "totalField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            || "userField".equals(kind)) //$NON-NLS-1$
             && object instanceof DataCompositionField
             && sameIdentity(identity, ((DataCompositionField)object).getValue()))
         {
@@ -585,13 +600,23 @@ public final class DcsReadProjection
             if (row.section != current)
             {
                 current = row.section;
-                result.append("## ").append(current.title).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
-                    .append(current.header);
+                result.append("## ").append(current.title).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (i > 0 && rows.get(i - 1).section == current)
+                {
+                    result.append("_(continued from an earlier page)_\n\n"); //$NON-NLS-1$
+                }
+                result.append(current.header);
             }
             result.append(row.markdown);
             if (i + 1 >= to || rows.get(i + 1).section != current)
             {
                 result.append('\n');
+                if (i + 1 >= to && i + 1 < rows.size()
+                    && rows.get(i + 1).section == current)
+                {
+                    result.append("_(section continues at offset ").append(i + 1) //$NON-NLS-1$
+                        .append(")_\n\n"); //$NON-NLS-1$
+                }
             }
         }
         if (from == to)
@@ -1111,7 +1136,7 @@ public final class DcsReadProjection
                         current = null;
                         continue;
                     }
-                    return failedSegment(segment, parentAddress(currentAddress), navigationKeys(object));
+                    return unsetFeature(segment, parentAddress(currentAddress), currentAddress);
                 }
                 current = value;
                 continue;
@@ -1146,6 +1171,14 @@ public final class DcsReadProjection
         return NodeResolution.failure("Pointer segment '" + segment + "' could not be resolved at '" //$NON-NLS-1$ //$NON-NLS-2$
             + address + "'. Existing keys/indices at that level: " + available //$NON-NLS-1$
             + ". Copy one of those into the address, or get its parent collection first."); //$NON-NLS-1$
+    }
+
+    private static NodeResolution unsetFeature(String segment, String ownerAddress,
+        String featureAddress)
+    {
+        return NodeResolution.failure("Pointer segment '" + segment + "' names a feature on '" //$NON-NLS-1$ //$NON-NLS-2$
+            + ownerAddress + "', but that feature is not set. Create it with action='upsert' at '" //$NON-NLS-1$
+            + featureAddress + "', then retry the read."); //$NON-NLS-1$
     }
 
     private static String boundedExisting(List<String> existing)
@@ -1222,17 +1255,17 @@ public final class DcsReadProjection
     {
         if (!(node.value instanceof EObject))
         {
-            return "# DCS value\n\n**Address:** `" + node.address + "`\n\n" //$NON-NLS-1$ //$NON-NLS-2$
+            return "# DCS value\n\n" //$NON-NLS-1$
                 + MarkdownUtils.escapeMarkdown(displayValue(node.value, language)) + '\n';
         }
         EObject object = (EObject)node.value;
         if (isChart(object))
         {
-            return "# Existing DCS chart\n\n**Address:** `" + node.address //$NON-NLS-1$
-                + "`\n\nThis chart is visible read-only; chart authoring is unsupported.\n"; //$NON-NLS-1$
+            return "# Existing DCS chart\n\n" //$NON-NLS-1$
+                + "This chart is visible read-only; chart authoring is unsupported.\n"; //$NON-NLS-1$
         }
-        StringBuilder result = new StringBuilder("# DCS node: ").append(itemKind(object)).append("\n\n") //$NON-NLS-1$ //$NON-NLS-2$
-            .append("**Address:** `").append(node.address).append("`\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        StringBuilder result = new StringBuilder("# DCS node: ").append(itemKind(object)) //$NON-NLS-1$
+            .append("\n\n"); //$NON-NLS-1$
 
         if (object instanceof DataCompositionSettings)
         {
@@ -1690,6 +1723,38 @@ public final class DcsReadProjection
         }
         name = presentationFeature(object, "presentation", language); //$NON-NLS-1$
         return name.isEmpty() ? "(unnamed)" : name; //$NON-NLS-1$
+    }
+
+    private static boolean isStructureCollection(NodeRef node)
+    {
+        return node.value instanceof List<?> && FEATURE_ITEMS.equals(node.collection)
+            && node.owner instanceof DataCompositionSettings;
+    }
+
+    private static boolean isStructureKind(String type)
+    {
+        return "grouping".equals(type) || "table".equals(type); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static Result structureCollectionTypeMismatch(String requested, String address)
+    {
+        return Result.failure("Type '" + requested + "' does not match structure collection '" //$NON-NLS-1$ //$NON-NLS-2$
+            + address + "' for a read. It is polymorphic (groupings and tables), so read this " //$NON-NLS-1$
+            + "same address with type='userSettings'; read one structure item by its own type at '" //$NON-NLS-1$
+            + address + "/<index>'. For a write, type='" + requested //$NON-NLS-1$
+            + "' is accepted at this same address because the write type describes the body, " //$NON-NLS-1$
+            + "not the collection target."); //$NON-NLS-1$
+    }
+
+    private static Result settingsStructureTypeMismatch(String requested, String address)
+    {
+        String collection = address + "/items"; //$NON-NLS-1$
+        return Result.failure("Type '" + requested + "' does not match settings target '" //$NON-NLS-1$ //$NON-NLS-2$
+            + address + "' for a read (its type is 'userSettings'). Its structure collection is '" //$NON-NLS-1$
+            + collection + "' and reads with type='userSettings'; read one structure item by its " //$NON-NLS-1$
+            + "own type at '" + collection + "/<index>'. For a write, type='" + requested //$NON-NLS-1$ //$NON-NLS-2$
+            + "' is accepted at this same settings address because the write type describes the " //$NON-NLS-1$
+            + "body, not the settings target."); //$NON-NLS-1$
     }
 
     private static String boundedTableCell(String value, String address)

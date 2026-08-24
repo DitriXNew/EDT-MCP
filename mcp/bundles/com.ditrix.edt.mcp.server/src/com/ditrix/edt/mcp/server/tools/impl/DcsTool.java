@@ -32,9 +32,9 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
-import com.ditrix.edt.mcp.server.utils.DcsDynamicListContent;
 import com.ditrix.edt.mcp.server.utils.DcsDynamicListWriter;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
+import com.ditrix.edt.mcp.server.utils.DcsModelComparison;
 import com.ditrix.edt.mcp.server.utils.DcsMutationGuard;
 import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DcsReadProjection;
@@ -840,26 +840,33 @@ public class DcsTool implements IMcpTool
                         throw new FormValidationException(recheck);
                     }
                 }
-                List<String> applied = planned.plan().commit(formModel, member, extInfo,
-                    context.configuration(), version);
-                DynamicListExtInfo effective = dynamicListExtInfo(member);
-                String settingsFqn = null;
-                if (planned.plan().settingsTouched())
-                {
-                    DcsDynamicListContent.Result settings =
-                        DcsDynamicListContent.ensureAttached(tx, effective);
-                    if (!settings.isSuccess())
-                    {
-                        throw new FormValidationException(ToolResult.error(settings.error()).toJson());
-                    }
-                    settingsFqn = settings.fqn();
-                }
-                outcome.set(new DynamicWriteOutcome(DcsHash.compute(effective), settingsFqn,
-                    applied));
+                DcsDynamicListWriter.CommitResult committed = planned.plan().commit(formModel,
+                    member, extInfo, tx, context.configuration(), version);
+                outcome.set(new DynamicWriteOutcome(committed.modelSnapshot(),
+                    committed.settingsFqn(), committed.applied()));
             });
         DynamicWriteOutcome written = outcome.get();
-        boolean settingsPersisted = written != null && (written.settingsFqn == null
-            || BmTransactions.forceExportToDisk(context.project(), written.settingsFqn));
+        if (written == null)
+        {
+            return ToolResult.error("DCS dynamic-list write committed without a model outcome for '" //$NON-NLS-1$
+                + address + "'. Applied is withheld; re-run get before retrying.").toJson(); //$NON-NLS-1$
+        }
+        DynamicWriteVerification verified = FormElementWriter.readEditableForm(fctx,
+            "DcsDynamicListVerify", (formModel, tx) -> //$NON-NLS-1$
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                DynamicListExtInfo effective = member == null ? null : dynamicListExtInfo(member);
+                String error = dynamicCommitVerificationError(written.modelSnapshot,
+                    effective, address.toString());
+                return new DynamicWriteVerification(effective == null ? null
+                    : DcsHash.compute(effective), error);
+            });
+        if (verified.error != null)
+        {
+            return ToolResult.error(verified.error).toJson();
+        }
+        boolean settingsPersisted = written.settingsFqn == null
+            || BmTransactions.forceExportToDisk(context.project(), written.settingsFqn);
         if (!formPersisted || !settingsPersisted)
         {
             return ToolResult.error("DCS action='" + action + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
@@ -868,11 +875,27 @@ public class DcsTool implements IMcpTool
                 + ". Save or resync the project, then verify with dcs action='get'.").toJson(); //$NON-NLS-1$
         }
         return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
-            + "`\n\n**Hash:** `" + written.hash + "`\n\n**Form.form export scheduled:** `true`" //$NON-NLS-1$ //$NON-NLS-2$
+            + "`\n\n**Hash:** `" + verified.modelHash //$NON-NLS-1$
+            + "`\n\n**Form.form export scheduled:** `true`" //$NON-NLS-1$
             + "\n\n**ListSettings.dcss export scheduled:** `" //$NON-NLS-1$
             + (written.settingsFqn != null) + "`\n\n**Applied:** " //$NON-NLS-1$
             + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)) //$NON-NLS-1$ //$NON-NLS-2$
             + localeUnusedNote(context, languages);
+    }
+
+    static String dynamicCommitVerificationError(DynamicListExtInfo expected,
+        DynamicListExtInfo actual, String address)
+    {
+        String difference = DcsModelComparison.firstDifference(expected, actual);
+        if (difference == null)
+        {
+            return null;
+        }
+        return "DCS action committed for '" + address //$NON-NLS-1$
+            + "', but a post-commit read did not find the exact dynamic-list model that was " //$NON-NLS-1$
+            + "written. Applied is withheld because the response cannot prove the requested " //$NON-NLS-1$
+            + "content is attached. First differing model path: " + difference //$NON-NLS-1$
+            + ". Re-run dcs action='get' before any retry."; //$NON-NLS-1$
     }
 
     /**
@@ -1047,15 +1070,28 @@ public class DcsTool implements IMcpTool
 
     private static final class DynamicWriteOutcome
     {
-        final String hash;
+        final DynamicListExtInfo modelSnapshot;
         final String settingsFqn;
         final List<String> applied;
 
-        DynamicWriteOutcome(String hash, String settingsFqn, List<String> applied)
+        DynamicWriteOutcome(DynamicListExtInfo modelSnapshot, String settingsFqn,
+            List<String> applied)
         {
-            this.hash = hash;
+            this.modelSnapshot = modelSnapshot;
             this.settingsFqn = settingsFqn;
             this.applied = applied;
+        }
+    }
+
+    private static final class DynamicWriteVerification
+    {
+        final String modelHash;
+        final String error;
+
+        DynamicWriteVerification(String modelHash, String error)
+        {
+            this.modelHash = modelHash;
+            this.error = error;
         }
     }
 

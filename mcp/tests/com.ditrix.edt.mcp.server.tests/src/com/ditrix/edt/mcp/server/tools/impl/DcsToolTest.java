@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -31,6 +32,7 @@ import com._1c.g5.v8.dt.form.model.FormFactory;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
+import com.ditrix.edt.mcp.server.utils.DcsModelComparison;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -70,6 +72,49 @@ public class DcsToolTest
         xmlGet.put("format", "xml"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(ResponseType.JSON, tool.getResponseType(xmlGet));
         assertEquals(ResponseType.MARKDOWN, tool.getResponseType(baseGet("Report.Sales", "schema"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testGuideDocumentsOwnerDerivedStructureCollectionTypes()
+    {
+        String guide = new DcsTool().getGuide();
+        assertTrue(guide, guide.contains("every named holder reads by its own type")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("#/variants/<name>/settings/<holder>/items")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("takes its read type")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("from its owner")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("type='userSettings'")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains(
+            "#/variants/<name>/settings/items/<group-index>/items")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains(
+            "#/variants/<name>/settings/items/<table-index>/rows")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains(
+            "#/variants/<name>/settings/items/<table-index>/columns")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("#/variants/<name>/settings/items/<index>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDynamicWriteAppliedClaimRequiresMatchingPostCommitModel()
+    {
+        DynamicListExtInfo actual = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSettings();
+        settings.setSelection(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSelectedFields());
+        actual.setListSettings(settings);
+        DynamicListExtInfo expected = DcsModelComparison.snapshot(actual);
+        String address = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+
+        assertNotSame("the verification snapshot must not retain the transaction-owned settings", //$NON-NLS-1$
+            settings, expected.getListSettings());
+        assertNull(DcsTool.dynamicCommitVerificationError(expected, actual, address));
+
+        settings.setSelection(null);
+        String error = DcsTool.dynamicCommitVerificationError(expected, actual, address);
+        assertNotNull(error);
+        assertTrue(error, error.contains("Applied is withheld")); //$NON-NLS-1$
+        assertTrue(error, error.contains("post-commit read")); //$NON-NLS-1$
+        assertTrue(error, error.contains(address));
+        assertTrue(error, error.contains("root/listSettings/selection")); //$NON-NLS-1$
     }
 
     @Test

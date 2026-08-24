@@ -226,8 +226,17 @@ pages the dynamic list's own `#/fields` collection.
 
 Settings collection types (`grouping`, `selection`, `filter`, `dataParameter`, `order`,
 `conditionalAppearance`, `table`, `userField`, `outputParameter`, `userSettings`) refer
-to `defaultSettings` for a schema and `listSettings` for a dynamic list. To inspect the
-same kind inside a named variant, address that variant's `settings` subtree explicitly.
+to `defaultSettings` for a schema and `listSettings` for a dynamic list. Inside a named
+variant, every named holder reads by its own type at
+`#/variants/<name>/settings/<holder>/items`. A structure collection takes its read type
+from its owner: the settings object owns `#/variants/<name>/settings/items`, so that
+polymorphic groupings-and-tables collection reads as `type='userSettings'`; a grouping
+owns `#/variants/<name>/settings/items/<group-index>/items`, so that collection reads as
+`type='grouping'`; and a table owns
+`#/variants/<name>/settings/items/<table-index>/rows` and
+`#/variants/<name>/settings/items/<table-index>/columns`, so both read as `type='table'`.
+A single structure item at `#/variants/<name>/settings/items/<index>` reads by its own
+type, `grouping` or `table`.
 
 ### Actions
 

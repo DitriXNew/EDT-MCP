@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -263,6 +264,84 @@ public class DcsSettingsWriterTest
         assertSame(existing, extInfo.getListSettings());
         assertEquals("changed", existing.getSelection().getUserSettingID()); //$NON-NLS-1$
         assertEquals(DcsHash.compute(changed.settings()), DcsHash.compute(existing));
+    }
+
+    @Test
+    public void testFirstDynamicListSettingsCommitMaterializesCarrierThenCopiesEveryHolder()
+    {
+        JsonObject[] bodies = {
+            json("{\"listSettings\":{\"userFields\":{\"items\":[{" //$NON-NLS-1$
+                + "\"kind\":\"expression\",\"dataPath\":\"FirstField\"}]}}}"), //$NON-NLS-1$
+            json("{\"listSettings\":{\"selection\":{\"items\":[{" //$NON-NLS-1$
+                + "\"kind\":\"field\",\"field\":{\"kind\":\"field\"," //$NON-NLS-1$
+                + "\"value\":\"FirstSelection\"}}]}}}") //$NON-NLS-1$
+        };
+        for (JsonObject body : bodies)
+        {
+            DynamicListExtInfo extInfo = FormFactory.eINSTANCE.createDynamicListExtInfo();
+            DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, "upsert", //$NON-NLS-1$
+                "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
+                body, null, LANGUAGES, Version.LATEST);
+            assertTrue(planned.error(), planned.isSuccess());
+            assertNull(extInfo.getListSettings());
+
+            DataCompositionSettings detachedPlan = planned.plan().settings();
+            String attachedFqn = DcsDynamicListWriter.commitSettingsCarrierWithAttachment(extInfo,
+                detachedPlan, current ->
+                {
+                    assertNotSame("attachment must receive an empty carrier, not the populated plan", //$NON-NLS-1$
+                        detachedPlan, current.getListSettings());
+                    // Real BM may replace the just-attached external-property instance. Reproduce
+                    // that shape so the test fails if content is copied before attachment/refetch.
+                    current.setListSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+                        .eINSTANCE.createDataCompositionSettings());
+                    return "Form.Attribute.List.ListSettings"; //$NON-NLS-1$
+                });
+
+            DataCompositionSettings committed = extInfo.getListSettings();
+            assertEquals("Form.Attribute.List.ListSettings", attachedFqn); //$NON-NLS-1$
+            assertNotNull(committed);
+            assertNotSame("the populated plan must not be assigned as the external carrier", //$NON-NLS-1$
+                detachedPlan, committed);
+            assertNull(DcsModelComparison.firstDifference(detachedPlan, committed));
+        }
+        DynamicListExtInfo userFields = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DcsDynamicListWriter.Result fieldPlan = DcsDynamicListWriter.plan(userFields, "upsert", //$NON-NLS-1$
+            "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
+            bodies[0], null, LANGUAGES, Version.LATEST);
+        DcsDynamicListWriter.commitSettingsCarrier(userFields, fieldPlan.plan().settings(), null);
+        assertEquals("FirstField", userFields.getListSettings().getUserFields().getItems().get(0) //$NON-NLS-1$
+            .getDataPath());
+
+        DynamicListExtInfo selection = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DcsDynamicListWriter.Result selectionPlan = DcsDynamicListWriter.plan(selection, "upsert", //$NON-NLS-1$
+            "dynamicList", address("Catalog.Products.Form.ListForm.Attribute.List"), //$NON-NLS-1$ //$NON-NLS-2$
+            bodies[1], null, LANGUAGES, Version.LATEST);
+        DcsDynamicListWriter.commitSettingsCarrier(selection, selectionPlan.plan().settings(), null);
+        DataCompositionSelectedField item = (DataCompositionSelectedField)selection.getListSettings()
+            .getSelection().getItems().get(0);
+        assertEquals("FirstSelection", item.getField().getValue()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEffectiveSettingsComparisonNamesTheFirstMissingAuthoredFeature()
+    {
+        DataCompositionSettings expected = plan(json("{\"selection\":{\"items\":[]}}")); //$NON-NLS-1$
+        DataCompositionSettings actual = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        actual.setSelection(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSelectedFields());
+
+        // These are effective defaults on both sides. Whether BM records the assignments is a
+        // storage detail and must not turn a successful attachment into an integrity refusal.
+        actual.setItemsViewMode(expected.getItemsViewMode());
+        actual.setItemsUserSettingID(expected.getItemsUserSettingID());
+        assertNull(DcsModelComparison.firstDifference(expected, actual));
+
+        actual.setSelection(null);
+        String difference = DcsModelComparison.firstDifference(expected, actual);
+        assertNotNull(difference);
+        assertTrue(difference, difference.contains("root/selection")); //$NON-NLS-1$
     }
 
     private static DataCompositionSchema schemaWithVariant()
@@ -1118,6 +1197,186 @@ public class DcsSettingsWriterTest
         assertEquals(defaults.isUse(), replacedField.isUse());
     }
 
+    @Test
+    public void testReferencedUserFieldRemoveAndRenameAreGuardedInVariantAndDynamicList()
+    {
+        String reportRoot = "Report.UserFieldReferences"; //$NON-NLS-1$
+        String reportTarget = reportRoot
+            + "#/variants/Protected/settings/userFields/items/0"; //$NON-NLS-1$
+        String reportReference = reportRoot
+            + "#/variants/Protected/settings/selection/items/0"; //$NON-NLS-1$
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Protected"); //$NON-NLS-1$
+        variant.setSettings(settingsWithUserFields());
+        schema.getSettingsVariants().add(variant);
+        String schemaHash = DcsHash.compute(schema);
+
+        DcsSettingsWriter.SchemaResult reportRemove = DcsSettingsWriter.planSchema(schema,
+            "remove", "userField", address(reportTarget), null, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(reportRemove.isSuccess());
+        assertTrue(reportRemove.error(), reportRemove.error().contains("userField 'ProtectedField'")); //$NON-NLS-1$
+        assertTrue(reportRemove.error(), reportRemove.error().contains(reportReference));
+        assertEquals(schemaHash, DcsHash.compute(schema));
+
+        DcsSettingsWriter.SchemaResult reportRename = DcsSettingsWriter.planSchema(schema,
+            "update", "userField", address(reportTarget), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"dataPath\":\"RenamedField\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(reportRename.isSuccess());
+        assertTrue(reportRename.error(), reportRename.error().contains(reportReference));
+        assertEquals(schemaHash, DcsHash.compute(schema));
+
+        String listRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        String listTarget = listRoot + "#/listSettings/userFields/items/0"; //$NON-NLS-1$
+        String listReference = listRoot + "#/listSettings/selection/items/0"; //$NON-NLS-1$
+        DataCompositionSettings listSettings = settingsWithUserFields();
+        String settingsHash = DcsHash.compute(listSettings);
+
+        DcsSettingsWriter.SettingsResult listRemove = DcsSettingsWriter.planDynamicList(
+            listSettings, "remove", "userField", address(listTarget), null, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(listRemove.isSuccess());
+        assertTrue(listRemove.error(), listRemove.error().contains(listReference));
+        assertEquals(settingsHash, DcsHash.compute(listSettings));
+
+        DcsSettingsWriter.SettingsResult listRename = DcsSettingsWriter.planDynamicList(
+            listSettings, "update", "userField", address(listTarget), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"dataPath\":\"RenamedField\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(listRename.isSuccess());
+        assertTrue(listRename.error(), listRename.error().contains(listReference));
+        assertEquals(settingsHash, DcsHash.compute(listSettings));
+    }
+
+    @Test
+    public void testUserFieldHolderReplacementRemovalAndExactRenameVerbsAreGuarded()
+    {
+        String reportRoot = "Report.UserFieldOmission"; //$NON-NLS-1$
+        String settingsAddress = reportRoot + "#/variants/Protected/settings"; //$NON-NLS-1$
+        String holderAddress = settingsAddress + "/userFields"; //$NON-NLS-1$
+        String itemAddress = holderAddress + "/items/0"; //$NON-NLS-1$
+        String referenceAddress = settingsAddress + "/selection/items/0"; //$NON-NLS-1$
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Protected"); //$NON-NLS-1$
+        variant.setSettings(settingsWithUserFields());
+        schema.getSettingsVariants().add(variant);
+        String beforeHash = DcsHash.compute(schema);
+
+        JsonObject retainedOnly = json("{\"items\":[{\"kind\":\"expression\"," //$NON-NLS-1$
+            + "\"dataPath\":\"FreeField\"}]}"); //$NON-NLS-1$
+        DcsSettingsWriter.SchemaResult holderReplace = DcsSettingsWriter.planSchema(schema,
+            "replace", "userField", address(holderAddress), retainedOnly, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(holderReplace.isSuccess());
+        assertTrue(holderReplace.error(), holderReplace.error().contains(referenceAddress));
+
+        DcsSettingsWriter.SchemaResult holderRemove = DcsSettingsWriter.planSchema(schema,
+            "remove", "userField", address(holderAddress), null, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(holderRemove.isSuccess());
+        assertTrue(holderRemove.error(), holderRemove.error().contains(referenceAddress));
+
+        for (String action : new String[] {"upsert", "replace"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonObject rename = "replace".equals(action) //$NON-NLS-1$
+                ? json("{\"kind\":\"expression\",\"dataPath\":\"RenamedField\"}") //$NON-NLS-1$
+                : json("{\"dataPath\":\"RenamedField\"}"); //$NON-NLS-1$
+            DcsSettingsWriter.SchemaResult refused = DcsSettingsWriter.planSchema(schema,
+                action, "userField", address(itemAddress), rename, LANGUAGES); //$NON-NLS-1$
+            assertFalse(action, refused.isSuccess());
+            assertTrue(refused.error(), refused.error().contains(referenceAddress));
+        }
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        String listRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        String listHolder = listRoot + "#/listSettings/userFields"; //$NON-NLS-1$
+        String listReference = listRoot + "#/listSettings/selection/items/0"; //$NON-NLS-1$
+        DataCompositionSettings listSettings = settingsWithUserFields();
+        DcsSettingsWriter.SettingsResult listReplace = DcsSettingsWriter.planDynamicList(
+            listSettings, "replace", "userField", address(listHolder), retainedOnly, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(listReplace.isSuccess());
+        assertTrue(listReplace.error(), listReplace.error().contains(listReference));
+    }
+
+    @Test
+    public void testWholeSettingsVariantAndSchemaReplaceGuardRetainedDanglingReferences()
+    {
+        String root = "Report.AuthoritativeSettings"; //$NON-NLS-1$
+        String settingsAddress = root + "#/variants/Protected/settings"; //$NON-NLS-1$
+        String referenceAddress = settingsAddress + "/selection/items/0"; //$NON-NLS-1$
+        JsonObject replacement = settingsReplacementKeepingProtectedReference();
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Protected"); //$NON-NLS-1$
+        variant.setSettings(settingsWithUserFields());
+        schema.getSettingsVariants().add(variant);
+
+        DcsSettingsWriter.SchemaResult settingsReplace = DcsSettingsWriter.planSchema(schema,
+            "replace", "userSettings", address(settingsAddress), replacement, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(settingsReplace.isSuccess());
+        assertTrue(settingsReplace.error(), settingsReplace.error().contains(referenceAddress));
+
+        JsonObject variantBody = new JsonObject();
+        variantBody.addProperty("name", "Protected"); //$NON-NLS-1$ //$NON-NLS-2$
+        variantBody.add("settings", replacement.deepCopy()); //$NON-NLS-1$
+        DcsSettingsWriter.SchemaResult variantReplace = DcsSettingsWriter.planSchema(schema,
+            "replace", "variant", address(root + "#/variants/Protected"), variantBody, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(variantReplace.isSuccess());
+        assertTrue(variantReplace.error(), variantReplace.error().contains(referenceAddress));
+
+        DataCompositionSchema defaultSchema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        defaultSchema.setDefaultSettings(settingsWithUserFields());
+        JsonObject schemaBody = new JsonObject();
+        schemaBody.add("defaultSettings", replacement.deepCopy()); //$NON-NLS-1$
+        DcsSettingsWriter.SchemaResult schemaReplace = DcsSettingsWriter.planSchema(defaultSchema,
+            "replace", "schema", address(root), schemaBody, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(schemaReplace.isSuccess());
+        assertTrue(schemaReplace.error(), schemaReplace.error().contains(
+            root + "#/defaultSettings/selection/items/0")); //$NON-NLS-1$
+
+        String listRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult listReplace = DcsSettingsWriter.planDynamicList(
+            settingsWithUserFields(), "replace", "userSettings", //$NON-NLS-1$ //$NON-NLS-2$
+            address(listRoot + "#/listSettings"), replacement, LANGUAGES); //$NON-NLS-1$
+        assertFalse(listReplace.isSuccess());
+        assertTrue(listReplace.error(), listReplace.error().contains(
+            listRoot + "#/listSettings/selection/items/0")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SchemaResult removeWholeSubtree = DcsSettingsWriter.planSchema(schema,
+            "replace", "userSettings", address(settingsAddress), new JsonObject(), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(removeWholeSubtree.error(), removeWholeSubtree.isSuccess());
+    }
+
+    @Test
+    public void testUnreferencedUserFieldStillRemovesInVariantAndDynamicList()
+    {
+        String reportRoot = "Report.UnreferencedUserField"; //$NON-NLS-1$
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Free"); //$NON-NLS-1$
+        variant.setSettings(settingsWithUserFields());
+        schema.getSettingsVariants().add(variant);
+        String reportTarget = reportRoot + "#/variants/Free/settings/userFields/items/1"; //$NON-NLS-1$
+
+        DcsSettingsWriter.SchemaResult reportRemove = DcsSettingsWriter.planSchema(schema,
+            "remove", "userField", address(reportTarget), null, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(reportRemove.error(), reportRemove.isSuccess());
+        reportRemove.plan().commit(schema);
+        assertEquals(1, schema.getSettingsVariants().get(0).getSettings().getUserFields()
+            .getItems().size());
+
+        String listRoot = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DataCompositionSettings listSettings = settingsWithUserFields();
+        DcsSettingsWriter.SettingsResult listRemove = DcsSettingsWriter.planDynamicList(
+            listSettings, "remove", "userField", //$NON-NLS-1$ //$NON-NLS-2$
+            address(listRoot + "#/listSettings/userFields/items/1"), null, LANGUAGES); //$NON-NLS-1$
+        assertTrue(listRemove.error(), listRemove.isSuccess());
+        assertEquals(1, listRemove.settings().getUserFields().getItems().size());
+        assertEquals("ProtectedField", listRemove.settings().getUserFields().getItems().get(0) //$NON-NLS-1$
+            .getDataPath());
+    }
+
     private static DataCompositionSettings plan(JsonObject body)
     {
         DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,
@@ -1125,6 +1384,21 @@ public class DcsSettingsWriterTest
         assertTrue(result.error(), result.isSuccess());
         assertNotNull(result.settings());
         return result.settings();
+    }
+
+    private static DataCompositionSettings settingsWithUserFields()
+    {
+        return plan(json("{\"selection\":{\"items\":[{\"kind\":\"field\",\"field\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"ProtectedField\"}}]},\"userFields\":{" //$NON-NLS-1$
+            + "\"items\":[{\"kind\":\"expression\",\"dataPath\":\"ProtectedField\"}," //$NON-NLS-1$
+            + "{\"kind\":\"expression\",\"dataPath\":\"FreeField\"}]}}")); //$NON-NLS-1$
+    }
+
+    private static JsonObject settingsReplacementKeepingProtectedReference()
+    {
+        return json("{\"selection\":{\"items\":[{\"kind\":\"field\",\"field\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"ProtectedField\"}}]},\"userFields\":{" //$NON-NLS-1$
+            + "\"items\":[{\"kind\":\"expression\",\"dataPath\":\"FreeField\"}]}}"); //$NON-NLS-1$
     }
 
     private static JsonObject settingsBody()

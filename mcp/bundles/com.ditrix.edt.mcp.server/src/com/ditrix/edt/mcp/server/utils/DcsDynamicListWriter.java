@@ -14,10 +14,12 @@ import java.util.Set;
 
 import org.eclipse.emf.common.util.Enumerator;
 
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DcsFactory;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.DynamicListKeyType;
 import com._1c.g5.v8.dt.form.model.FormFactory;
@@ -463,9 +465,9 @@ public final class DcsDynamicListWriter
         }
 
         /** Applies the validated plan. Query/main-table changes intentionally use the legacy path. */
-        public List<String> commit(org.eclipse.emf.ecore.EObject formModel,
+        public CommitResult commit(org.eclipse.emf.ecore.EObject formModel,
             org.eclipse.emf.ecore.EObject attribute, DynamicListExtInfo extInfo,
-            Configuration configuration, Version version)
+            IBmTransaction transaction, Configuration configuration, Version version)
         {
             List<String> applied = new ArrayList<>();
             if (scalars.queryTextTouched || scalars.customQuery != null || scalars.mainTable != null)
@@ -538,19 +540,14 @@ public final class DcsDynamicListWriter
                 extInfo.getParameters().addAll(items.parameters());
                 applied.add(KEY_PARAMETERS);
             }
+            String settingsFqn = null;
             if (settingsTouched)
             {
-                if (extInfo.getListSettings() == null)
-                {
-                    extInfo.setListSettings(settings);
-                }
-                else
-                {
-                    DcsSettingsWriter.commitSettings(extInfo.getListSettings(), settings);
-                }
+                settingsFqn = commitSettingsCarrier(extInfo, settings, transaction);
                 applied.add("listSettings"); //$NON-NLS-1$
             }
-            return applied;
+            return new CommitResult(applied, settingsFqn,
+                DcsModelComparison.snapshot(extInfo));
         }
 
         public boolean settingsTouched() { return settingsTouched; }
@@ -566,6 +563,89 @@ public final class DcsDynamicListWriter
         {
             return items == null ? null : items.applied();
         }
+    }
+
+    /**
+     * Materializes the external settings carrier before copying content into it. An unattached
+     * {@code @ExternalProperty} object may be replaced by BM attachment, so assigning the populated
+     * detached plan first can lose that content on the first write. Refetching after attachment makes
+     * the copy target the exact instance the committed ext-info owns.
+     *
+     * <p>A {@code null} transaction is supported for detached-model tests; production commits always
+     * pass their active BM write transaction.</p>
+     */
+    static String commitSettingsCarrier(DynamicListExtInfo extInfo,
+        DataCompositionSettings planned, IBmTransaction transaction)
+    {
+        SettingsCarrierAttacher attacher = transaction == null ? null : current ->
+        {
+            DcsDynamicListContent.Result attached =
+                DcsDynamicListContent.ensureAttached(transaction, current);
+            if (!attached.isSuccess())
+            {
+                throw new FormValidationException(
+                    com.ditrix.edt.mcp.server.protocol.ToolResult.error(attached.error()).toJson());
+            }
+            return attached.fqn();
+        };
+        return commitSettingsCarrierWithAttachment(extInfo, planned, attacher);
+    }
+
+    /** Package-visible attachment seam: unit tests can reproduce BM replacing the carrier. */
+    static String commitSettingsCarrierWithAttachment(DynamicListExtInfo extInfo,
+        DataCompositionSettings planned, SettingsCarrierAttacher attacher)
+    {
+        if (extInfo.getListSettings() == null)
+        {
+            extInfo.setListSettings(DcsFactory.eINSTANCE.createDataCompositionSettings());
+        }
+        String settingsFqn = attacher == null ? null : attacher.attach(extInfo);
+        DataCompositionSettings attachedSettings = extInfo.getListSettings();
+        if (attachedSettings == null)
+        {
+            throw new FormValidationException(
+                com.ditrix.edt.mcp.server.protocol.ToolResult.error(
+                    "Dynamic-list listSettings were materialized, but the committed ext-info does " //$NON-NLS-1$
+                        + "not expose the attached settings object. The write was rolled back; " //$NON-NLS-1$
+                        + "re-open the form and retry.").toJson()); //$NON-NLS-1$
+        }
+        DcsSettingsWriter.commitSettings(attachedSettings, planned);
+        String difference = DcsModelComparison.firstDifference(planned, attachedSettings);
+        if (difference != null)
+        {
+            throw new FormValidationException(
+                com.ditrix.edt.mcp.server.protocol.ToolResult.error(
+                    "Dynamic-list listSettings do not match the validated plan after attachment. " //$NON-NLS-1$
+                        + "First differing model path: " + difference + ". The write was rolled " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "back instead of reporting Applied; re-open the form and retry.").toJson()); //$NON-NLS-1$
+        }
+        return settingsFqn;
+    }
+
+    @FunctionalInterface
+    interface SettingsCarrierAttacher
+    {
+        String attach(DynamicListExtInfo extInfo);
+    }
+
+    /** Actual transaction-local state produced by {@link Plan#commit}. */
+    public static final class CommitResult
+    {
+        private final List<String> applied;
+        private final String settingsFqn;
+        private final DynamicListExtInfo modelSnapshot;
+
+        private CommitResult(List<String> applied, String settingsFqn,
+            DynamicListExtInfo modelSnapshot)
+        {
+            this.applied = applied;
+            this.settingsFqn = settingsFqn;
+            this.modelSnapshot = modelSnapshot;
+        }
+
+        public List<String> applied() { return applied; }
+        public String settingsFqn() { return settingsFqn; }
+        public DynamicListExtInfo modelSnapshot() { return modelSnapshot; }
     }
 
     /** Planning outcome; shared-writer errors may already be serialized ToolResult JSON. */

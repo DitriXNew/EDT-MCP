@@ -193,15 +193,19 @@ public final class DcsSettingsWriter
                 continue;
             }
             Object value = copy.eGet(sourceFeature);
-            if (targetFeature.isMany())
+            if (!copy.eIsSet(sourceFeature))
+            {
+                // BM remembers an explicit eSet(default) even where detached EMF reports the
+                // feature as unset. Apart from creating a noisy storage-level hash difference,
+                // that is not an authoritative copy of the plan's set/unset state. eUnset is
+                // valid for every structural feature, not only features declared unsettable.
+                target.eUnset(targetFeature);
+            }
+            else if (targetFeature.isMany())
             {
                 EList<Object> targetValues = (EList<Object>)target.eGet(targetFeature);
                 targetValues.clear();
                 targetValues.addAll(new ArrayList<>((Collection<Object>)value));
-            }
-            else if (sourceFeature.isUnsettable() && !copy.eIsSet(sourceFeature))
-            {
-                target.eUnset(targetFeature);
             }
             else
             {
@@ -299,8 +303,13 @@ public final class DcsSettingsWriter
                 }
                 variantsTouched = ACTION_REPLACE.equals(action) || !array.isEmpty();
             }
-            return SchemaResult.success(new SchemaPlan(defaultSettings, variants, defaultTouched,
-                variantsTouched));
+            String referenceError = ACTION_REPLACE.equals(action)
+                ? omittedSchemaSettingsReferenceError(schema, defaultSettings, variants,
+                    address.rootFqn()) : null;
+            return referenceError == null
+                ? SchemaResult.success(new SchemaPlan(defaultSettings, variants, defaultTouched,
+                    variantsTouched))
+                : SchemaResult.failure(referenceError);
         }
 
         if (TYPE_VARIANT.equals(type))
@@ -354,6 +363,11 @@ public final class DcsSettingsWriter
                 return SchemaResult.success(new SchemaPlan(defaultSettings, variants, false, true));
             }
             String error = applyVariant(variants, pointerName, action, body, languages, version, "body"); //$NON-NLS-1$
+            if (error == null && ACTION_REPLACE.equals(action))
+            {
+                error = omittedSchemaSettingsReferenceError(schema, defaultSettings, variants,
+                    address.rootFqn());
+            }
             return error == null
                 ? SchemaResult.success(new SchemaPlan(defaultSettings, variants, false, true))
                 : SchemaResult.failure(error);
@@ -375,7 +389,7 @@ public final class DcsSettingsWriter
             return SchemaResult.failure(location.error);
         }
         SettingsResult planned = planSettings(location.settings, location.relative, action, type, body,
-            languages, version);
+            languages, version, address, schemaSettingsRootAddress(address, location.relative));
         if (!planned.isSuccess())
         {
             return SchemaResult.failure(planned.error());
@@ -436,7 +450,8 @@ public final class DcsSettingsWriter
             JsonObject settingsBody = object(body, "listSettings", "dynamic-list settings body"); //$NON-NLS-1$ //$NON-NLS-2$
             return settingsBody == null ? SettingsResult.failure(objectError)
                 : withTouched(planSettings(current, Collections.emptyList(), action,
-                    TYPE_USER_SETTINGS, settingsBody, languages, version));
+                    TYPE_USER_SETTINGS, settingsBody, languages, version, address,
+                    dynamicListSettingsRootAddress(address)));
         }
 
         List<String> segments = new ArrayList<>(address.segments());
@@ -449,7 +464,8 @@ public final class DcsSettingsWriter
             return SettingsResult.failure("Dynamic-list settings address '" + address //$NON-NLS-1$
                 + "' must start with '#/listSettings'. Copy the settings address from dcs action='get'."); //$NON-NLS-1$
         }
-        return withTouched(planSettings(current, segments, action, type, body, languages, version));
+        return withTouched(planSettings(current, segments, action, type, body, languages, version,
+            address, dynamicListSettingsRootAddress(address)));
     }
 
     /**
@@ -467,6 +483,13 @@ public final class DcsSettingsWriter
         String action, String type, JsonObject body, DcsPresentationParser.LanguageContext languages,
         Version version)
     {
+        return planSettings(current, relative, action, type, body, languages, version, null, null);
+    }
+
+    private static SettingsResult planSettings(DataCompositionSettings current, List<String> relative,
+        String action, String type, JsonObject body, DcsPresentationParser.LanguageContext languages,
+        Version version, DcsAddress targetAddress, String settingsRootAddress)
+    {
         List<String> path = relative == null ? Collections.emptyList() : relative;
         if (ACTION_REMOVE.equals(action))
         {
@@ -482,7 +505,14 @@ public final class DcsSettingsWriter
             }
             DataCompositionSettings working = copy(current);
             String error = removeSettingsPath(working, path, type);
-            return error == null ? SettingsResult.success(working, true) : SettingsResult.failure(error);
+            if (error != null)
+            {
+                return SettingsResult.failure(error);
+            }
+            String referenceError = omittedUserFieldReferenceError(current, working,
+                settingsRootAddress);
+            return referenceError == null ? SettingsResult.success(working, true)
+                : SettingsResult.failure(referenceError);
         }
         // Resolve the default path BEFORE deciding whether to start from a blank settings object.
         // A concrete type addressed at the bare root (action='replace', type='selection') arrives
@@ -513,7 +543,109 @@ public final class DcsSettingsWriter
         }
         String error = path.isEmpty() ? applySettingsBody(working, body, action, languages, version, "body") //$NON-NLS-1$
             : applySettingsPath(working, path, body, action, type, languages, version);
-        return error == null ? SettingsResult.success(working, true) : SettingsResult.failure(error);
+        if (error != null)
+        {
+            return SettingsResult.failure(error);
+        }
+        String referenceError = omittedUserFieldReferenceError(current, working,
+            settingsRootAddress);
+        return referenceError == null ? SettingsResult.success(working, true)
+            : SettingsResult.failure(referenceError);
+    }
+
+    /**
+     * Refuses every settings mutation whose resulting tree omits an existing user-field identity
+     * while retaining a node that still refers to it. Comparing the planned tree, rather than a
+     * verb-specific body shape, covers exact renames, holder removal/replacement, and authoritative
+     * replacement of a whole settings object with the same rule.
+     */
+    private static String omittedUserFieldReferenceError(DataCompositionSettings existing,
+        DataCompositionSettings retained, String settingsRootAddress)
+    {
+        if (existing == null || retained == null || settingsRootAddress == null
+            || existing.getUserFields() == null)
+        {
+            return null;
+        }
+        Set<String> retainedIdentities = new LinkedHashSet<>();
+        if (retained.getUserFields() != null)
+        {
+            for (UserField field : retained.getUserFields().getItems())
+            {
+                String identity = field.getDataPath();
+                if (identity != null && !identity.isEmpty())
+                {
+                    retainedIdentities.add(identity);
+                }
+            }
+        }
+
+        List<UserField> existingFields = existing.getUserFields().getItems();
+        for (int i = 0; i < existingFields.size(); i++)
+        {
+            String identity = existingFields.get(i).getDataPath();
+            if (identity == null || identity.isEmpty() || retainedIdentities.contains(identity))
+            {
+                continue;
+            }
+            DcsAddress target = userFieldAddress(settingsRootAddress, i);
+            String error = DcsMutationGuard.referenceError(retained, settingsRootAddress, target,
+                TYPE_USER_FIELD, identity);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String omittedSchemaSettingsReferenceError(DataCompositionSchema existing,
+        DataCompositionSettings retainedDefault, List<SettingsVariant> retainedVariants,
+        String rootFqn)
+    {
+        String defaultAddress = DcsAddress.render(rootFqn,
+            Collections.singletonList("defaultSettings")); //$NON-NLS-1$
+        String error = omittedUserFieldReferenceError(existing.getDefaultSettings(),
+            retainedDefault, defaultAddress);
+        if (error != null) return error;
+
+        for (SettingsVariant existingVariant : existing.getSettingsVariants())
+        {
+            String name = existingVariant.getName();
+            if (name == null || name.isEmpty()) continue;
+            List<Integer> matches = findVariants(retainedVariants, name);
+            if (matches.size() != 1) continue;
+            List<String> segments = new ArrayList<>(Arrays.asList("variants", name, "settings")); //$NON-NLS-1$ //$NON-NLS-2$
+            String settingsAddress = DcsAddress.render(rootFqn, segments);
+            error = omittedUserFieldReferenceError(existingVariant.getSettings(),
+                retainedVariants.get(matches.get(0).intValue()).getSettings(), settingsAddress);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static DcsAddress userFieldAddress(String settingsRootAddress, int index)
+    {
+        DcsAddress.ParseResult parsed = DcsAddress.parse(settingsRootAddress);
+        List<String> segments = new ArrayList<>(parsed.address().segments());
+        segments.add("userFields"); //$NON-NLS-1$
+        segments.add(KEY_ITEMS);
+        segments.add(Integer.toString(index));
+        return DcsAddress.parse(DcsAddress.render(parsed.address().rootFqn(), segments)).address();
+    }
+
+    private static String schemaSettingsRootAddress(DcsAddress address, List<String> relative)
+    {
+        List<String> segments = address.segments();
+        int prefixSize = segments.size() - relative.size();
+        if (prefixSize <= 0)
+        {
+            return DcsAddress.render(address.rootFqn(),
+                Collections.singletonList("defaultSettings")); //$NON-NLS-1$
+        }
+        return DcsAddress.render(address.rootFqn(), segments.subList(0, prefixSize));
+    }
+
+    private static String dynamicListSettingsRootAddress(DcsAddress address)
+    {
+        return DcsAddress.render(address.rootFqn(), Collections.singletonList("listSettings")); //$NON-NLS-1$
     }
 
     private static String validateCommon(String action, String type, DcsAddress address, JsonObject body,

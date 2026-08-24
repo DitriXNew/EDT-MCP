@@ -47,8 +47,16 @@ public final class DcsMutationGuard
     public static String referenceError(EObject root, DcsAddress target, String kind,
         String identity)
     {
-        if (root == null || target == null) return null;
-        List<String> references = DcsReadProjection.referenceAddresses(root, target.rootFqn(), kind,
+        String rootAddress = target == null ? null : target.rootFqn();
+        return referenceError(root, rootAddress, target, kind, identity);
+    }
+
+    /** Refuses identity removal/rename within a subtree rooted at a canonical DCS address. */
+    public static String referenceError(EObject root, String rootAddress, DcsAddress target,
+        String kind, String identity)
+    {
+        if (root == null || rootAddress == null || target == null) return null;
+        List<String> references = DcsReadProjection.referenceAddressesAt(root, rootAddress, kind,
             identity);
         String targetAddress = target.toString();
         references.removeIf(address -> address.equals(targetAddress)

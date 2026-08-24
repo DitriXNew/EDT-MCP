@@ -36,6 +36,8 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
@@ -57,6 +59,24 @@ public class DcsReadProjectionTest
         assertTrue(result.markdown().contains("Sales")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("| Data sets | 1 |")); //$NON-NLS-1$
         assertFalse(result.markdown().contains("SecretQueryText")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExactNodeEnvelopeOwnsAddressAndValueKeepsEClassName()
+    {
+        String root = "Report.ExactAddress"; //$NON-NLS-1$
+        String address = root + "#/dataSets/Sales"; //$NON-NLS-1$
+        DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        DcsReadProjection.Result result = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "dataSet", "en", 100_000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(result.error(), result.isSuccess());
+        assertEquals(1, occurrences(result.markdown(), "**Address:** `" + address + "`")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.markdown(), result.markdown().contains(
+            "# DCS node: DataCompositionSchemaDataSetQuery")); //$NON-NLS-1$
+        assertFalse(textPageValue(result.markdown()).contains("**Address:** `" + address + "`")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -375,6 +395,100 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testCutSummarySectionCarriesLocalContinuationMarkers()
+    {
+        String root = "Report.SectionPaging"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        for (int i = 0; i < 8; i++)
+        {
+            SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createSettingsVariant();
+            variant.setName("Variant" + i); //$NON-NLS-1$
+            schema.getSettingsVariants().add(variant);
+        }
+
+        DcsReadProjection.Result first = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "schema", "en", 3, 0, 100_000); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result middle = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "schema", "en", 3, 3, 100_000); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result last = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root).address(),
+            "schema", "en", 3, 6, 100_000); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(first.error(), first.isSuccess());
+        assertTrue(first.markdown(), first.markdown().contains("| Variants | 8 |")); //$NON-NLS-1$
+        assertTrue(first.markdown(), first.markdown().contains(
+            "_(section continues at offset 3)_")); //$NON-NLS-1$
+        assertTrue(middle.markdown(), middle.markdown().contains(
+            "_(continued from an earlier page)_")); //$NON-NLS-1$
+        assertTrue(middle.markdown(), middle.markdown().contains(
+            "_(section continues at offset 6)_")); //$NON-NLS-1$
+        assertTrue(last.markdown(), last.markdown().contains(
+            "_(continued from an earlier page)_")); //$NON-NLS-1$
+        assertFalse(last.markdown(), last.markdown().contains("section continues at offset")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVariantStructureCollectionRefusalExplainsReadWriteAsymmetry()
+    {
+        String root = "Report.StructureCollection"; //$NON-NLS-1$
+        String settingsAddress = root + "#/variants/Mixed/settings"; //$NON-NLS-1$
+        String address = root + "#/variants/Mixed/settings/items"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Mixed"); //$NON-NLS-1$
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionGroup());
+        settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionTable());
+        variant.setSettings(settings);
+        schema.getSettingsVariants().add(variant);
+
+        for (String type : new String[] {"grouping", "table"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            DcsReadProjection.Result refusedRoot = DcsReadProjection.render(root,
+                TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(settingsAddress).address(),
+                type, "en", 100, 0); //$NON-NLS-1$
+            assertFalse(refusedRoot.isSuccess());
+            assertTrue(refusedRoot.error(), refusedRoot.error().contains(
+                address + "' and reads with type='userSettings'")); //$NON-NLS-1$
+            assertTrue(refusedRoot.error(), refusedRoot.error().contains(address + "/<index>")); //$NON-NLS-1$
+            assertTrue(refusedRoot.error(), refusedRoot.error().contains("For a write")); //$NON-NLS-1$
+
+            DcsReadProjection.Result refused = DcsReadProjection.render(root,
+                TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+                type, "en", 100, 0); //$NON-NLS-1$
+            assertFalse(refused.isSuccess());
+            assertTrue(refused.error(), refused.error().contains("type='userSettings'")); //$NON-NLS-1$
+            assertTrue(refused.error(), refused.error().contains(address + "/<index>")); //$NON-NLS-1$
+            assertTrue(refused.error(), refused.error().contains("For a write")); //$NON-NLS-1$
+            assertTrue(refused.error(), refused.error().contains("describes the body")); //$NON-NLS-1$
+        }
+
+        DcsReadProjection.Result collection = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(),
+            "userSettings", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result item = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address + "/0").address(),
+            "grouping", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(collection.error(), collection.isSuccess());
+        assertTrue(item.error(), item.isSuccess());
+
+        DcsSettingsWriter.SchemaResult write = DcsSettingsWriter.planSchema(schema, "upsert", //$NON-NLS-1$
+            "grouping", DcsAddress.parse(address).address(), //$NON-NLS-1$
+            JsonParser.parseString("{\"name\":\"Appended\"}").getAsJsonObject(), //$NON-NLS-1$
+            new DcsPresentationParser.LanguageContext(java.util.Arrays.asList("en"))); //$NON-NLS-1$
+        assertTrue(write.error(), write.isSuccess());
+    }
+
+    @Test
     public void testGenericParameterItemsUseOwningHolderTypeForReadAndWrite()
     {
         String root = "Report.Parameters"; //$NON-NLS-1$
@@ -672,6 +786,34 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testKnownButUnsetSettingsFeatureDoesNotContradictItsNavigationKeys()
+    {
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        dynamic.setListSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings());
+        String settingsAddress = root + "#/listSettings"; //$NON-NLS-1$
+        String userFieldsAddress = settingsAddress + "/userFields"; //$NON-NLS-1$
+
+        DcsReadProjection.Result unset = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            dynamic, DcsAddress.parse(userFieldsAddress).address(), "userField", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(unset.isSuccess());
+        assertTrue(unset.error(), unset.error().contains("names a feature on '" //$NON-NLS-1$
+            + settingsAddress + "'")); //$NON-NLS-1$
+        assertTrue(unset.error(), unset.error().contains("feature is not set")); //$NON-NLS-1$
+        assertTrue(unset.error(), unset.error().contains("action='upsert'")); //$NON-NLS-1$
+        assertTrue(unset.error(), unset.error().contains(userFieldsAddress));
+        assertFalse(unset.error(), unset.error().contains("Existing keys/indices")); //$NON-NLS-1$
+
+        DcsReadProjection.Result unknown = DcsReadProjection.render(root, TargetKind.DYNAMIC_LIST,
+            dynamic, DcsAddress.parse(settingsAddress + "/notAFeature").address(), //$NON-NLS-1$
+            "userField", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(unknown.isSuccess());
+        assertTrue(unknown.error(), unknown.error().contains("Existing keys/indices")); //$NON-NLS-1$
+        assertTrue(unknown.error(), unknown.error().contains("userFields")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testVariantPresentationAppearsInExactNodeAndCollectionReads()
     {
         DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
@@ -826,6 +968,15 @@ public class DcsReadProjectionTest
         group.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionGroup());
         settings.getItems().add(group);
+        DataCompositionTable table = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionTable();
+        DataCompositionTableGroup row = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionTableGroup();
+        DataCompositionTableGroup column = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionTableGroup();
+        table.getRows().add(row);
+        table.getColumns().add(column);
+        settings.getItems().add(table);
         schema.setDefaultSettings(settings);
 
         assertCollectionType(schema, "Report.Sales#/defaultSettings/selection/items", "selection"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -840,7 +991,10 @@ public class DcsReadProjectionTest
         assertCollectionType(schema,
             "Report.Sales#/defaultSettings/conditionalAppearance/items/0/appearance/items", //$NON-NLS-1$
             "conditionalAppearance"); //$NON-NLS-1$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/items", "userSettings"); //$NON-NLS-1$ //$NON-NLS-2$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items/0/items", "grouping"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/items/1/rows", "table"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/items/1/columns", "table"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static void assertCollectionType(DataCompositionSchema schema, String address,

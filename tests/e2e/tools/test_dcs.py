@@ -573,6 +573,11 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
 
     drill = _get(root + "#/dataSets/Second", "dataSet")
     assert_ok(drill, "drill into one query data set")
+    exact_address = "**Address:** `%s#/dataSets/Second`" % root
+    assert drill.text.count(exact_address) == 1, \
+        "the exact-node envelope must print its address once: %s" % drill.text
+    assert "# DCS node: DataCompositionSchemaDataSetQuery" in drill.text, \
+        "removing the duplicate address must retain the concrete EClass: %s" % drill.text
     query_address = root + "#/dataSets/Second/query"
     assert query_address in drill.text
     assert "SELECT 2 AS Amount" not in drill.text
@@ -580,6 +585,29 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
         query_address, "dataSet", limit=None) == "SELECT 2 AS Amount"
     assert root + "#/dataSets/Second/fields/Amount2" in drill.text
     _assert_read_did_not_change(before, "report summary/pagination/drill-down")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_cut_report_summary_section_names_its_local_continuation_offsets():
+    root = _seed_report("E2EDcsSummarySectionMarkers")
+    authored = _write(root, "upsert", "schema", {
+        "variants": [{"name": "Variant%d" % index} for index in range(8)],
+    })
+    assert_ok(authored, "seed eight variants for a section-local paging signal")
+
+    first = _get(root, "schema", limit=3, offset=0)
+    assert_ok(first, "read the first partial Variants section")
+    assert "| Variants | 8 |" in first.text, \
+        "the unpaged count must continue to describe the whole section"
+    assert "_(section continues at offset 3)_" in first.text, \
+        "the cut section itself must name the continuation offset: %s" % first.text
+
+    middle = _get(root, "schema", limit=3, offset=3)
+    assert_ok(middle, "read a middle page of the Variants section")
+    assert "_(continued from an earlier page)_" in middle.text, \
+        "a section resumed mid-table must identify itself as continued: %s" % middle.text
+    assert "_(section continues at offset 6)_" in middle.text, \
+        "a middle section page must also name its next local offset: %s" % middle.text
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -1252,6 +1280,27 @@ def test_variant_nested_settings_and_hash_guarded_filter_index_update():
 
     variant = _get(root + "#/variants/ManagerView/settings", "userSettings")
     assert_ok(variant, "read back the settings addresses")
+    structure_address = root + "#/variants/ManagerView/settings/items"
+    refused_settings_root = _get(root + "#/variants/ManagerView/settings", "grouping")
+    settings_root_error = assert_error(
+        refused_settings_root, "read the settings root as grouping")
+    assert_error_quality(
+        settings_root_error,
+        names=[structure_address, "type='userSettings'", structure_address + "/<index>"],
+        suggests=["For a write", "describes the body"],
+        ctx="the settings-root refusal must lead directly to the readable structure addresses")
+    refused_structure = _get(structure_address, "grouping")
+    structure_error = assert_error(
+        refused_structure, "read the polymorphic structure collection as grouping")
+    assert_error_quality(
+        structure_error,
+        names=["type='userSettings'", structure_address + "/<index>"],
+        suggests=["For a write", "describes the body"],
+        ctx="the refusal must explain the deliberate read/write type asymmetry")
+    structure = _get(structure_address, "userSettings")
+    assert_ok(structure, "read the variant structure collection by its actual public type")
+    first_structure = _get(structure_address + "/0", "grouping")
+    assert_ok(first_structure, "read one structure item by its own concrete type")
     first_address = root + "#/variants/ManagerView/settings/filter/items/0/items/0"
     changed_address = root + "#/variants/ManagerView/settings/filter/items/0/items/1/items/0"
     assert root + "#/variants/ManagerView/settings/items/0" in variant.text
@@ -1667,6 +1716,154 @@ def test_schema_summary_and_schema_collection_read_expose_data_set_links():
                          ctx="a retained link must block parameter removal")
     assert read_disk(dcs_rel) == before_disk, \
         "a refused linked-parameter removal must leave Template.dcs byte-for-byte unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_user_field_reference_guard_covers_report_variant_and_dynamic_list_settings():
+    settings = {
+        "selection": {"items": [{
+            "kind": "field",
+            "field": {"kind": "field", "value": "ProtectedField"},
+        }]},
+        "userFields": {"items": [
+            {"kind": "expression", "dataPath": "ProtectedField"},
+            {"kind": "expression", "dataPath": "FreeField"},
+        ]},
+    }
+
+    report_root = _seed_report("E2EDcsUserFieldReferences")
+    variant_name = "Protected"
+    authored_report = _write(report_root, "upsert", "variant", {
+        "name": variant_name,
+        "settings": settings,
+    })
+    assert_ok(authored_report, "seed referenced and free user fields in a report variant")
+    report_settings = report_root + "#/variants/%s/settings" % variant_name
+    report_target = report_settings + "/userFields/items/0"
+    report_reference = report_settings + "/selection/items/0"
+    report_field = _get(report_target, "userField")
+    assert_ok(report_field, "read the referenced report user field and its hash")
+
+    report_remove = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": report_target,
+        "action": "remove",
+        "type": "userField",
+        "expectedHash": _hash(report_field),
+    })
+    report_remove_error = assert_error(report_remove, "remove a referenced report user field")
+    assert_error_quality(
+        report_remove_error,
+        names=["ProtectedField", report_reference],
+        suggests=["referring nodes", "re-run get"],
+        ctx="the report-variant refusal must name the referring selection item")
+
+    report_rename = _write(report_target, "update", "userField", {
+        "dataPath": "RenamedField",
+    }, expectedHash=_hash(report_field))
+    report_rename_error = assert_error(report_rename, "rename a referenced report user field")
+    assert_error_quality(
+        report_rename_error,
+        names=["ProtectedField", report_reference],
+        suggests=["referring nodes", "retry"],
+        ctx="the report-variant rename must reach the same reference guard")
+
+    report_holder = _get(report_settings + "/userFields", "userField")
+    assert_ok(report_holder, "read the report userFields holder before replacement")
+    report_replace = _write(report_settings + "/userFields", "replace", "userField", {
+        "items": [{"kind": "expression", "dataPath": "FreeField"}],
+    }, expectedHash=_hash(report_holder))
+    report_replace_error = assert_error(
+        report_replace, "replace the report userFields holder while omitting a referenced field")
+    assert_error_quality(
+        report_replace_error,
+        names=["ProtectedField", report_reference],
+        suggests=["referring nodes", "retry"],
+        ctx="authoritative report holder replacement must guard deletion by omission")
+
+    report_free = _get(report_settings + "/userFields/items/1", "userField")
+    assert_ok(report_free, "read the unreferenced report user field")
+    report_free_remove = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": report_settings + "/userFields/items/1",
+        "action": "remove",
+        "type": "userField",
+        "expectedHash": _hash(report_free),
+    })
+    assert_ok(report_free_remove, "remove an unreferenced report user field")
+    report_fields = _get(report_settings + "/userFields/items", "userField")
+    assert_ok(report_fields, "read back report user fields after the allowed removal")
+    assert "ProtectedField" in report_fields.text and "FreeField" not in report_fields.text
+
+    list_root = _seed_dynamic_list("UserFieldReferences")
+    authored_list = _write(list_root, "upsert", "dynamicList", {"listSettings": settings})
+    assert_ok(authored_list, "seed referenced and free user fields in listSettings")
+    list_settings = list_root + "#/listSettings"
+    list_target = list_settings + "/userFields/items/0"
+    list_reference = list_settings + "/selection/items/0"
+    first_list_settings = _get(list_settings, "userSettings")
+    assert_ok(first_list_settings, "read listSettings immediately after its first settings-only write")
+    assert "ProtectedField" in first_list_settings.text, \
+        "the first write must attach userFields content: %s" % first_list_settings.text
+    assert list_target in first_list_settings.text, \
+        "the first write must expose its user-field address: %s" % first_list_settings.text
+    assert list_reference in first_list_settings.text, \
+        "the first write must attach selection content: %s" % first_list_settings.text
+    assert _hash(authored_list) == _hash(first_list_settings), \
+        "the write response hash must come from the committed model read back by the tool"
+    list_field = _get(list_target, "userField")
+    assert_ok(list_field, "read the referenced dynamic-list user field and its hash")
+
+    list_remove = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": list_target,
+        "action": "remove",
+        "type": "userField",
+        "expectedHash": _hash(list_field),
+    })
+    list_remove_error = assert_error(list_remove, "remove a referenced list user field")
+    assert_error_quality(
+        list_remove_error,
+        names=["ProtectedField", list_reference],
+        suggests=["referring nodes", "re-run get"],
+        ctx="the dynamic-list refusal must name the referring selection item")
+
+    list_rename = _write(list_target, "update", "userField", {
+        "dataPath": "RenamedField",
+    }, expectedHash=_hash(list_field))
+    list_rename_error = assert_error(list_rename, "rename a referenced list user field")
+    assert_error_quality(
+        list_rename_error,
+        names=["ProtectedField", list_reference],
+        suggests=["referring nodes", "retry"],
+        ctx="the dynamic-list rename must reach the same reference guard")
+
+    list_holder = _get(list_settings + "/userFields", "userField")
+    assert_ok(list_holder, "read the list userFields holder before replacement")
+    list_replace = _write(list_settings + "/userFields", "replace", "userField", {
+        "items": [{"kind": "expression", "dataPath": "FreeField"}],
+    }, expectedHash=_hash(list_holder))
+    list_replace_error = assert_error(
+        list_replace, "replace the list userFields holder while omitting a referenced field")
+    assert_error_quality(
+        list_replace_error,
+        names=["ProtectedField", list_reference],
+        suggests=["referring nodes", "retry"],
+        ctx="authoritative list holder replacement must guard deletion by omission")
+
+    list_free = _get(list_settings + "/userFields/items/1", "userField")
+    assert_ok(list_free, "read the unreferenced dynamic-list user field")
+    list_free_remove = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": list_settings + "/userFields/items/1",
+        "action": "remove",
+        "type": "userField",
+        "expectedHash": _hash(list_free),
+    })
+    assert_ok(list_free_remove, "remove an unreferenced dynamic-list user field")
+    list_fields = _get(list_settings + "/userFields/items", "userField")
+    assert_ok(list_fields, "read back list user fields after the allowed removal")
+    assert "ProtectedField" in list_fields.text and "FreeField" not in list_fields.text
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
