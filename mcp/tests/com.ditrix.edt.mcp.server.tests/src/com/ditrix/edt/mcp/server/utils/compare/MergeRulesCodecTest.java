@@ -55,6 +55,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec.MergeRulesFormatException;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Decision;
+import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.TopObjectKey;
 
 /**
@@ -770,8 +771,8 @@ public class MergeRulesCodecTest
     // ============ what decisions() cannot report, the document still COUNTS ============
     //
     // Not returning an unreachable rule is right - it has no address to be returned under -
-    // but it left the rule named nowhere at all: preservedSectionCount does not cover a Node
-    // either, because a Node is tree rather than a preserved block. A reader was then told a
+    // but it left the rule named nowhere at all: the preserved-section count measures BLOCKS
+    // rather than rules, so it cannot stand in for this. A reader was then told a
     // file with a rule in it records none, which is a false claim of absence.
 
     /**
@@ -890,6 +891,315 @@ public class MergeRulesCodecTest
             document.decisions().size());
         assertEquals("so the file carries no rule at an unreachable node", 0, //$NON-NLS-1$
             document.unreachableRuleCount());
+    }
+
+    // ============ the identity: every MergeRule is reported exactly once ============
+    //
+    // Four separate reviews found four separate shapes whose rule was reported by NOTHING - a Node
+    // beside the root, a keyless node, a node shadowed by a same-keyed sibling, a second
+    // <MergeSettings>. Every one of them was the same mistake: the counter ENUMERATED the places a
+    // rule was known to hide, so a place not on the list fell out of both halves of the report and
+    // the file read as carrying nothing. The pins below do not add a fifth place to the list. They
+    // assert the identity the counters now hold by construction:
+    //
+    //     decisions().size() + unreachableRuleCount() == ruleCount()
+    //
+    // and they check ruleCount() itself against an oracle that reads the FILE TEXT rather than the
+    // model, so a walk that skips an element cannot satisfy both sides of the equation by skipping
+    // it twice.
+
+    /**
+     * The oracle the identity is checked against: how many times the file SPELLS the attribute.
+     * <p>
+     * Deliberately naive and deliberately not the model - a count derived from the same walk the
+     * counters use would agree with them however wrong they both were. It counts a literal, so a
+     * fixture it judges must not put that literal in text or in an attribute VALUE; none below
+     * does.
+     *
+     * @param xml the document source
+     * @return how many times the attribute name followed by '=' appears in it
+     */
+    private static int rulesSpelledIn(String xml)
+    {
+        int count = 0;
+        int at = 0;
+        String spelling = MergeRulesDocument.ATTR_MERGE_RULE + "="; //$NON-NLS-1$
+        while ((at = xml.indexOf(spelling, at)) >= 0)
+        {
+            count++;
+            at += spelling.length();
+        }
+        return count;
+    }
+
+    /**
+     * The identity itself, asserted on one document.
+     *
+     * @param what what the document is, for the failure message
+     * @param xml the document source
+     * @throws Exception when the document does not parse
+     */
+    private static void assertEveryRuleIsReportedOnce(String what, String xml) throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(xml);
+        int spelled = rulesSpelledIn(xml);
+        assertEquals(what + ": the document must count every merge rule the file spells\n" + xml, //$NON-NLS-1$
+            spelled, document.ruleCount());
+        assertEquals(what + ": every rule must be reported exactly once - as a decision at an " //$NON-NLS-1$
+            + "address, or as unreachable, never as neither\n" + xml, spelled, //$NON-NLS-1$
+            document.decisions().size() + document.unreachableRuleCount());
+    }
+
+    /**
+     * A document carrying a rule in EVERY hiding place that can be built at once: on the
+     * {@code Settings} root, inside a {@code Correspondences} block beside the tree, on the
+     * container element the document reads, on a non-{@code Node} child inside the read tree, on a
+     * {@code Node} buried inside such a child, below a keyless node, beside the root marker, on a
+     * SECOND container element and on a THIRD, and one honest decision at a real address so the
+     * addressed half is not vacuously zero.
+     * <p>
+     * Ten rules; exactly one of them is addressable.
+     */
+    private static final String A_RULE_IN_EVERY_HIDING_PLACE =
+        "<Settings Format_version=\"2.0\" MergeRule=\"GetFromOther\">" //$NON-NLS-1$
+            + "<Correspondences><Correspondence MergeRule=\"DoNotMerge\"/></Correspondences>" //$NON-NLS-1$
+            + "<MergeSettings MergeRule=\"GetFromOther\">" //$NON-NLS-1$
+            + "<Properties MergeRule=\"DoNotMerge\">" //$NON-NLS-1$
+            + "<Node Key=\"buried\" MergeRule=\"GetFromOther\"/></Properties>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\" MergeRule=\"MergePrioritizingMain\"/>" //$NON-NLS-1$
+            + "<Node><Node Key=\"under-a-keyless-node\" MergeRule=\"DoNotMerge\"/></Node>" //$NON-NLS-1$
+            + "</Node>" //$NON-NLS-1$
+            + "<Node Key=\"beside-the-root\" MergeRule=\"GetFromOther\"/>" //$NON-NLS-1$
+            + "</MergeSettings>" //$NON-NLS-1$
+            + "<MergeSettings MergeRule=\"DoNotMerge\"><Node Key=\"$$Root$$\"/></MergeSettings>" //$NON-NLS-1$
+            + "<MergeSettings><Node Key=\"$$Root$$\" MergeRule=\"GetFromOther\"/></MergeSettings>" //$NON-NLS-1$
+            + "</Settings>"; //$NON-NLS-1$
+
+    /**
+     * The pin that would have caught all four findings, and the one a fifth shape has to get past:
+     * ten rules in nine different hiding places, and the report has to account for every one.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testEveryRuleInEveryHidingPlaceIsReportedExactlyOnce() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("a rule in every hiding place", A_RULE_IN_EVERY_HIDING_PLACE); //$NON-NLS-1$
+    }
+
+    /**
+     * Its numbers spelled out, so a failure says WHICH half moved. One rule of the ten sits at an
+     * address; the other nine are reachable by nothing.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testTheHidingPlacesSplitNineToOne() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(A_RULE_IN_EVERY_HIDING_PLACE);
+
+        assertEquals("the file spells ten rules", 10, document.ruleCount()); //$NON-NLS-1$
+        assertEquals("exactly one of them sits at an address", //$NON-NLS-1$
+            List.of(List.of("$$Root$$", "commonModules")), //$NON-NLS-1$ //$NON-NLS-2$
+            document.decisions().stream().map(Decision::path).toList());
+        assertEquals("so nine are reachable by nothing", 9, document.unreachableRuleCount()); //$NON-NLS-1$
+    }
+
+    /**
+     * The document from the review finding, verbatim: an EMPTY first container followed by a
+     * second that carries a rule on its own element and another on a {@code Properties} child.
+     * <p>
+     * Both were omitted. The scan of unread containers looked at their direct {@code Node}
+     * children only, so a rule on the container element itself and a rule under a tag it did not
+     * recognise fell through it; {@code decisions()} could not see them either, the first
+     * container being the one it reads and that one being empty. The three counters then totalled
+     * ONE - a single preserved block - for a file carrying two rules, and the read report said the
+     * file records no merge rule.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testTheReportedDocumentCountsBothOfItsRules() throws Exception
+    {
+        String xml = "<Settings Format_version=\"2.0\"><MergeSettings/>" //$NON-NLS-1$
+            + "<MergeSettings MergeRule=\"GetFromOther\">" //$NON-NLS-1$
+            + "<Properties MergeRule=\"DoNotMerge\"/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(xml);
+
+        assertEquals("the codec accepts this document, so the counters have to describe it", 2, //$NON-NLS-1$
+            document.ruleCount());
+        assertEquals("neither rule sits at an address", 0, document.decisions().size()); //$NON-NLS-1$
+        assertEquals("so both are unreachable, and neither is left out", 2, //$NON-NLS-1$
+            document.unreachableRuleCount());
+    }
+
+    /**
+     * A rule on a non-{@code Node} child INSIDE the container the document reads - the same hole
+     * as the finding, one level in, and the proof that it was never only about unread containers.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testARuleOnANonNodeChildOfTheReadTreeIsCounted() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("a rule on a Properties map inside the read tree", //$NON-NLS-1$
+            "<Settings Format_version=\"2.0\"><MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Properties MergeRule=\"DoNotMerge\"/></Node></MergeSettings></Settings>"); //$NON-NLS-1$
+    }
+
+    /**
+     * A rule on the container element the document READS. No walk of node children can see it: it
+     * is not a child, it is the thing being walked.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testARuleOnTheReadContainerElementIsCounted() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("a rule on the MergeSettings element itself", //$NON-NLS-1$
+            "<Settings Format_version=\"2.0\"><MergeSettings MergeRule=\"GetFromOther\">" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"/></MergeSettings></Settings>"); //$NON-NLS-1$
+    }
+
+    /**
+     * A rule on the {@code Settings} root itself - above every container, so above every walk that
+     * started at one.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testARuleOnTheSettingsRootIsCounted() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("a rule on the Settings root", //$NON-NLS-1$
+            "<Settings Format_version=\"2.0\" MergeRule=\"GetFromOther\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"/></MergeSettings></Settings>"); //$NON-NLS-1$
+    }
+
+    /**
+     * A rule inside a preserved block beside the tree. The block is counted as ONE preserved
+     * section and the rule as ONE unreachable rule - two facts in two units about one element, and
+     * the preserved-section count cannot stand in for the rule count because it does not measure
+     * rules.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testARuleInsideAPreservedBlockIsCountedAsARuleAndTheBlockAsABlock() throws Exception
+    {
+        String xml = "<Settings Format_version=\"2.0\">" //$NON-NLS-1$
+            + "<Correspondences><Correspondence MergeRule=\"DoNotMerge\"/></Correspondences>" //$NON-NLS-1$
+            + "<MergeSettings><Node Key=\"$$Root$$\"/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+        assertEveryRuleIsReportedOnce("a rule inside a Correspondences block", xml); //$NON-NLS-1$
+        assertEquals("the block is still one preserved block", 1, //$NON-NLS-1$
+            MergeRulesCodec.parse(xml).preservedSectionCount());
+    }
+
+    /**
+     * A rule in a document with NO container at all. The old counter returned zero here by an
+     * early exit, which was the right answer to the wrong question: there is no node tree, but
+     * there is still a rule in the file.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testARuleInADocumentWithoutAContainerIsCounted() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("a rule in a document that has no MergeSettings at all", //$NON-NLS-1$
+            "<Settings Format_version=\"2.0\"><Stray MergeRule=\"GetFromOther\"/></Settings>"); //$NON-NLS-1$
+    }
+
+    /**
+     * The one place a rule can sit that no parsed file reaches, so it is built by hand: BESIDE the
+     * root element, where the document model holds a prolog and an epilog. XML admits only
+     * comments and processing instructions there, so this is not a file anyone can write - it is
+     * the boundary of the word "anywhere" in the invariant, pinned so that the walk covers the
+     * whole document object and not merely its root.
+     */
+    @Test
+    public void testARuleBesideTheRootElementIsCounted()
+    {
+        Element settings = new Element(MergeRulesDocument.TAG_SETTINGS);
+        settings.attribute(MergeRulesDocument.ATTR_FORMAT_VERSION,
+            MergeRulesDocument.SUPPORTED_FORMAT_VERSION);
+        Element before = new Element("Before"); //$NON-NLS-1$
+        before.attribute(MergeRulesDocument.ATTR_MERGE_RULE, "GetFromOther"); //$NON-NLS-1$
+        Element after = new Element("After"); //$NON-NLS-1$
+        after.attribute(MergeRulesDocument.ATTR_MERGE_RULE, "DoNotMerge"); //$NON-NLS-1$
+
+        MergeRulesDocument document =
+            MergeRulesDocument.of(settings, List.of(before), List.of(after));
+
+        assertEquals("the prolog and the epilog are part of the document", 2, document.ruleCount()); //$NON-NLS-1$
+        assertEquals("and neither is at an address", 2, document.unreachableRuleCount()); //$NON-NLS-1$
+    }
+
+    /**
+     * The controls, and they are what stop the identity from being satisfied by a counter that
+     * calls everything unreachable: on this document the addressed half holds every rule and the
+     * unreachable half is empty.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testTheIdentityHoldsOnAFileWhoseRulesAreAllAddressable() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("the realistic fixture", FIXTURE); //$NON-NLS-1$
+        assertEquals("all four of its rules are decisions", 4, //$NON-NLS-1$
+            MergeRulesCodec.parse(FIXTURE).decisions().size());
+        assertEquals("and none of them is unreachable", 0, //$NON-NLS-1$
+            MergeRulesCodec.parse(FIXTURE).unreachableRuleCount());
+    }
+
+    /**
+     * And on the shapes the earlier findings were about, so the identity covers the history as
+     * well as the future.
+     * <p>
+     * <b>A regression guard, not a demonstration.</b> The enumerating counter had a branch for
+     * every one of these by the time it was replaced, so this pin is green on the old behaviour
+     * too - it is here to make sure the derivation did not LOSE what the enumeration had learnt.
+     *
+     * @throws Exception when a fixture does not parse
+     */
+    @Test
+    public void testTheIdentityHoldsOnEveryShapeAPreviousFindingNamed() throws Exception
+    {
+        assertEveryRuleIsReportedOnce("a rule beside the root, twice under one key", //$NON-NLS-1$
+            RULE_BESIDE_THE_ROOT);
+        assertEveryRuleIsReportedOnce("a rule in a second container", RULE_IN_A_SECOND_CONTAINER); //$NON-NLS-1$
+        assertEveryRuleIsReportedOnce("a rule under a keyless node", //$NON-NLS-1$
+            "<Settings Format_version=\"2.0\"><MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+                + "<Node><Node Key=\"x\" MergeRule=\"GetFromOther\"/></Node>" //$NON-NLS-1$
+                + "</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+        assertEveryRuleIsReportedOnce("a file with no rule at all", //$NON-NLS-1$
+            "<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"/></MergeSettings></Settings>"); //$NON-NLS-1$
+    }
+
+    /**
+     * What makes the count worth printing at all - stated as a ROUND TRIP, because that is what a
+     * caller who writes with {@code basedOn} does: the rewrite carries all ten rules forward, and
+     * the document read back out of it accounts for all ten again.
+     * <p>
+     * Asserting only that the rewrite keeps the rules would have been green on the old counters
+     * too: the serializer was never the broken part. Asserting the identity on BOTH sides of the
+     * round trip is what the old behaviour fails.
+     *
+     * @throws Exception when the fixture does not parse
+     */
+    @Test
+    public void testEveryHiddenRuleSurvivesTheRewriteAndIsStillAccountedFor() throws Exception
+    {
+        String rewritten =
+            MergeRulesCodec.serialize(MergeRulesCodec.parse(A_RULE_IN_EVERY_HIDING_PLACE));
+
+        assertEquals("a rewrite carries what it does not interpret, verbatim:\n" + rewritten, //$NON-NLS-1$
+            rulesSpelledIn(A_RULE_IN_EVERY_HIDING_PLACE), rulesSpelledIn(rewritten));
+        assertEveryRuleIsReportedOnce("the document read back out of the rewrite", rewritten); //$NON-NLS-1$
+        assertEquals("and the split is the same on both sides of the round trip", 9, //$NON-NLS-1$
+            MergeRulesCodec.parse(rewritten).unreachableRuleCount());
     }
 
     /**

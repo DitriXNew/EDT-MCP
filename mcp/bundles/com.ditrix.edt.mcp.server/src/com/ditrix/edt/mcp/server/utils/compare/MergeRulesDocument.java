@@ -308,6 +308,10 @@ public final class MergeRulesDocument
      * rule that is not in the file. What does NOT change is that the file keeps it: a rewrite
      * carries the element through verbatim, as it carries any other payload this plugin does not
      * interpret.
+     * <p>
+     * <b>What this list omits, {@link #unreachableRuleCount()} counts - by subtraction, so the two
+     * cannot disagree.</b> Together they partition every {@link #ATTR_MERGE_RULE} attribute in the
+     * document, each one reported exactly once; see the invariant stated there.
      *
      * @return the decisions, never {@code null}
      */
@@ -349,6 +353,14 @@ public final class MergeRulesDocument
      * carries through exactly like a {@code Correspondences} block, was named nowhere. Keyed on
      * identity, everything this document does not read is a preserved block, and the file's
      * elements are partitioned by the same question every other reader here asks.
+     * <p>
+     * <b>This count and the rule counts measure DIFFERENT UNITS, and neither is a term of the
+     * other's total.</b> This one counts BLOCKS a rewrite carries verbatim; {@link #decisions()}
+     * and {@link #unreachableRuleCount()} count {@link #ATTR_MERGE_RULE} ATTRIBUTES, and those two
+     * partition every such attribute in the document between them ({@link #ruleCount()}). So a
+     * preserved block that happens to spell {@code MergeRule} inside itself is one block here AND
+     * one unreachable rule there - two true facts about one element, not one fact counted twice.
+     * Adding the two numbers is meaningless in either direction; each answers its own question.
      *
      * @return the count of preserved blocks
      */
@@ -379,49 +391,81 @@ public final class MergeRulesDocument
     }
 
     /**
-     * Number of merge rules the file carries on nodes ADDRESSING CANNOT REACH, counted over the
-     * whole node tree.
+     * Number of {@link #ATTR_MERGE_RULE} attributes the document carries ANYWHERE - at an address
+     * or not, on a {@code Node} or not, inside the container this document reads or outside it.
      * <p>
-     * Reachable means here what it means everywhere else in this class: the container
-     * {@link #findContainer(Element)} picks, entered at the one address it exposes
-     * ({@link #findRoot(Element)}), then walked down by {@link #findNode(Element, String)} on each
-     * key. Four shapes fall outside it - a {@code Node} sitting BESIDE the root, a node carrying
-     * no {@link #ATTR_KEY} (a lookup matches on tag AND key, so no path comes to rest on it and
-     * nothing below it is reachable either), a keyed node a lookup does not LAND on because an
-     * earlier sibling carries the same key, and every node of a SECOND {@code <MergeSettings>}
-     * element, which {@link #findContainer(Element)} never picks and no reader here enters.
+     * This is the WHOLE the other two rule counts partition, and it is deliberately the dumbest
+     * question this class asks: walk every node of the document, prolog and epilog included, and
+     * count the elements whose attribute map holds the name. Nothing about tags, containers, keys
+     * or reachability enters it, because every one of those judgements is a chance for a shape
+     * nobody anticipated to fall between two enumerations - which is exactly how this class came
+     * to under-report a file four separate times.
+     *
+     * @return the count of merge-rule attributes in the document
+     */
+    public int ruleCount()
+    {
+        int count = 0;
+        for (Element node : prolog)
+        {
+            count += rulesInside(node);
+        }
+        count += rulesInside(settings);
+        for (Element node : epilog)
+        {
+            count += rulesInside(node);
+        }
+        return count;
+    }
+
+    /**
+     * Number of merge rules the file carries where ADDRESSING CANNOT REACH THEM.
+     *
+     * <h2>The invariant this method exists to hold</h2>
+     * <b>Every {@link #ATTR_MERGE_RULE} attribute in the document is reported exactly once:</b>
+     * either {@link #decisions()} returns it under the address that reaches it, or this count
+     * covers it. Never both, never neither -
+     * {@code decisions().size() + unreachableRuleCount() == ruleCount()}, for every document,
+     * always.
+     * <p>
+     * <b>It is DERIVED from that identity rather than enumerated, and that is the whole point.</b>
+     * This count used to be a walk that visited the places a stray rule was known to hide - a
+     * {@code Node} beside the root, a keyless node, a node shadowed by a same-keyed sibling, a
+     * second {@code <MergeSettings>} - and each time a fifth place turned up, the file was
+     * under-reported until a branch was added for it. Four such places were found one after
+     * another, all the same shape of mistake: an enumeration walked STRUCTURE while claiming to
+     * count a THING, so anything not on the list vanished from both halves of the report. Counting
+     * the whole and subtracting the addressed half inverts the default: a shape nobody has thought
+     * of yet is unreachable until addressing proves otherwise, so the worst a new shape can now do
+     * is be reported as unaddressable - never as absent.
+     * <p>
+     * The subtraction cannot go negative, and not by luck: {@link #decisions()} reaches an element
+     * only by descending {@code children()} from the root element, which is precisely the walk
+     * {@link #ruleCount()} makes, and it visits each element at most once (it descends one
+     * DISTINCT key at a time, and an element carries one key). So the decisions are a subset of
+     * the whole.
+     * <p>
+     * <b>What "unreachable" claims, and what it does not.</b> It claims that key-chain resolution
+     * - the container {@link #findContainer(Element)} picks, entered at {@link #findRoot(Element)}
+     * and walked by {@link #findNode(Element, String)}, which is how EDT resolves a node too -
+     * never arrives at the element carrying the attribute, so the rule applies to nothing and no
+     * request here can address it. It does NOT claim to know what a foreign block MEANT by
+     * spelling {@code MergeRule}: whatever that is, it is not a decision this format's own reader
+     * will resolve, and saying so is the honest report either way.
      * <p>
      * <b>Counted because otherwise nothing mentions such a rule at all.</b> {@link #decisions()}
      * deliberately does not return one - it has no address to return it under - and
-     * {@link #preservedSectionCount()} does not count it either, because a {@code Node} is tree,
-     * not a preserved block. Left unreported, a file whose only rules are unreachable reads as a
-     * file with no rule in it, which is the same false claim of absence this model refuses to make
-     * anywhere else. What is NOT claimed is that the file loses them: a rewrite carries the
-     * elements through verbatim, as it carries any other payload this plugin does not interpret.
+     * {@link #preservedSectionCount()} counts BLOCKS, not rules, so it cannot stand in for this.
+     * Left unreported, a file whose only rules are unreachable reads as a file with no rule in it,
+     * which is the same false claim of absence this model refuses to make anywhere else. What is
+     * NOT claimed is that the file loses them: a rewrite carries the elements through verbatim, as
+     * it carries any other payload this plugin does not interpret.
      *
-     * @return the count of rules sitting at unreachable nodes
+     * @return the count of merge rules no address reaches
      */
     public int unreachableRuleCount()
     {
-        Element container = findContainer(settings);
-        if (container == null)
-        {
-            // No container is no node tree at all: a Node elsewhere in the file sits inside some
-            // other block, and preservedSectionCount already reports that block as preserved.
-            return 0;
-        }
-        Element rootNode = findRoot(container);
-        int count = rulesInUnreadContainers(container);
-        for (Element child : nodeChildren(container))
-        {
-            if (child != rootNode)
-            {
-                // The container exposes exactly one address, so every other node under it - and
-                // everything below that node - is addressed by nothing.
-                count += rulesInSubtree(child);
-            }
-        }
-        return rootNode == null ? count : count + unreachableRulesBelow(rootNode);
+        return ruleCount() - decisions().size();
     }
 
     /**
@@ -743,78 +787,28 @@ public final class MergeRulesDocument
     }
 
     /**
-     * Rules held by a {@code <MergeSettings>} element this document does not read.
+     * Every {@link #ATTR_MERGE_RULE} attribute on a node and everything below it, whatever the
+     * tags in between are.
      * <p>
-     * {@link #findContainer(Element)} picks the FIRST one and every reader here stops there, so a
-     * second container is a node tree nothing enters: not one of its rules can be addressed,
-     * written to, or applied by a launch. They are counted here rather than left to
-     * {@link #preservedSectionCount()} because that count answers a different question - it
-     * reports the second container as ONE block a rewrite carries verbatim, which is true and says
-     * nothing about the rules inside it. Uncounted in both, a file whose only rules sit in a second
-     * container reported no merge rule at all while carrying them forward on every write.
+     * The walk goes through {@code children()}, not through {@link #nodeChildren(Element)}: this
+     * is the counter of the WHOLE, so it must not stop at a tag it does not recognise. A rule on a
+     * {@code Properties} map, on a {@code Correspondences} entry, on a {@code <MergeSettings>}
+     * element itself or on some element a future EDT adds is a spelling of {@code MergeRule} the
+     * file carries, and the one thing the report must never do about it is fall silent.
      * <p>
-     * Only {@code Node} subtrees are counted, exactly as inside the container that IS read: a
-     * {@code MergeRule} attribute on some other element is content this plugin does not interpret,
-     * and guessing at its meaning here would be reading somebody else's block.
-     *
-     * @param read the container this document reads, never {@code null}
-     * @return the count of rules held by the containers after it
-     */
-    private int rulesInUnreadContainers(Element read)
-    {
-        int count = 0;
-        for (Element child : settings.children())
-        {
-            if (child == read || !TAG_MERGE_SETTINGS.equals(child.tag()))
-            {
-                continue;
-            }
-            for (Element node : nodeChildren(child))
-            {
-                count += rulesInSubtree(node);
-            }
-        }
-        return count;
-    }
-
-    /**
-     * Rules held below a node addressing DOES reach, on children it does not.
-     *
-     * @param reachable a node some key chain lands on
-     * @return the count of rules under it that no key chain lands on
-     */
-    private static int unreachableRulesBelow(Element reachable)
-    {
-        int count = 0;
-        for (Element child : nodeChildren(reachable))
-        {
-            String key = child.attribute(ATTR_KEY);
-            if (key != null && findNode(reachable, key) == child)
-            {
-                count += unreachableRulesBelow(child);
-            }
-            else
-            {
-                // Either the child carries no key, or a lookup for its key lands on an earlier
-                // sibling. Either way nothing addresses it, and nothing addresses its subtree.
-                count += rulesInSubtree(child);
-            }
-        }
-        return count;
-    }
-
-    /**
-     * Rules on a node and on every node below it, addressable or not.
+     * Non-element nodes cost nothing to visit and are visited anyway - a text run, a comment and a
+     * processing instruction hold no attributes and no children, so they contribute zero without a
+     * kind test standing between this walk and a node it should have counted.
      *
      * @param node the subtree root
      * @return the count
      */
-    private static int rulesInSubtree(Element node)
+    private static int rulesInside(Element node)
     {
         int count = node.attribute(ATTR_MERGE_RULE) == null ? 0 : 1;
-        for (Element child : nodeChildren(node))
+        for (Element child : node.children())
         {
-            count += rulesInSubtree(child);
+            count += rulesInside(child);
         }
         return count;
     }

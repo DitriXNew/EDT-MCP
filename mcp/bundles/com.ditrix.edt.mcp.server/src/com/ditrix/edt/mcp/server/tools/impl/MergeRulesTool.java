@@ -446,7 +446,7 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
-     * What the report says about the merge rules a file carries at nodes no address reaches.
+     * What the report says about the merge rules a file carries where no address reaches them.
      * <p>
      * Emitted ONLY when there are such rules, so an ordinary file reads exactly as before.
      * The sentence it replaces - "the file records no merge rule" - would be a false claim of
@@ -459,23 +459,27 @@ public class MergeRulesTool implements IMcpTool
      * the write report's own counts understate the file for exactly the same reason. One clause
      * against one counter ({@code MergeRulesDocument.unreachableRuleCount()}) keeps the two
      * halves from wording - or numbering - the same fact differently.
+     * <p>
+     * <b>The clause states the PARTITION and gives its places as examples, never as a list.</b>
+     * Its counter is a subtraction - every {@code MergeRule} the file spells, minus the ones the
+     * table above addresses - so a shape nobody has named yet is already inside this number, and
+     * a sentence that read as an exhaustive inventory would be the one part of the report that
+     * could still go stale.
      *
      * @param count how many such rules the file carries, always positive
      * @return the clause, ending in a newline
      */
     private static String unreachableRuleClause(int count)
     {
-        // The three shapes the counter actually sees. A fourth - a node shadowed by an earlier
-        // sibling carrying the same key - is defended against in the counter but cannot occur in
-        // a document that got this far: duplicate sibling keys inside the addressable tree are
-        // refused while parsing. Naming it here would describe a state this tool never loads.
         boolean one = count == 1;
         return "The file carries " + count + " merge rule" + (one ? "" : "s") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + " in a part of the node tree addressing never enters: anything outside the subtree " //$NON-NLS-1$
-            + "of the '" + MergeRulesDocument.ROOT_KEY + "' marker - a second " //$NON-NLS-1$ //$NON-NLS-2$
-            + "'<" + MergeRulesDocument.TAG_MERGE_SETTINGS + ">' element included, because only " //$NON-NLS-1$ //$NON-NLS-2$
-            + "the first one is read - and anything below a node " //$NON-NLS-1$
-            + "that carries no 'Key'. EDT resolves a node by its key chain from that marker, so " //$NON-NLS-1$
+            + " at no address: every 'MergeRule' this file spells is either one of the decisions " //$NON-NLS-1$
+            + "counted above or one of these " + count + ". They sit where a key chain from the '" //$NON-NLS-1$ //$NON-NLS-2$
+            + MergeRulesDocument.ROOT_KEY + "' marker never arrives - among such places: outside " //$NON-NLS-1$
+            + "that marker's subtree (a second '<" + MergeRulesDocument.TAG_MERGE_SETTINGS //$NON-NLS-1$
+            + ">' element included, because only the first one is read), below a node that " //$NON-NLS-1$
+            + "carries no 'Key', and on an element that is not a '<" + MergeRulesDocument.TAG_NODE //$NON-NLS-1$
+            + ">' at all. EDT resolves a node by its key chain from that marker, so " //$NON-NLS-1$
             + (one ? "that rule applies" : "those rules apply") //$NON-NLS-1$ //$NON-NLS-2$
             + " to nothing and no request here can address " //$NON-NLS-1$
             + (one ? "it" : "them") + ", which is why " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -1037,8 +1041,8 @@ public class MergeRulesTool implements IMcpTool
         // The SAME disclosure the read report makes, for the same reason and against the same
         // counter. A rule at an unreachable node arrives through basedOn and the rewrite carries it
         // through verbatim - so the file this call just wrote holds it - while neither number above
-        // covers it: decisions() has no address to return it under and preservedSectionCount does
-        // not count a Node as a preserved block. Reported only by the read half, the write report
+        // covers it: decisions() has no address to return it under, and the preserved-section count
+        // measures BLOCKS rather than rules. Reported only by the read half, the write report
         // presented the file as holding exactly the rules it had listed, and the one rule nobody
         // can address stayed invisible to the caller who had just copied it forward.
         int unreachable = document.unreachableRuleCount();

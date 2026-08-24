@@ -145,7 +145,7 @@ public class MergeRulesToolTest
      * never prints makes such a pin pass on every behaviour, the always-emit one included.
      */
     private static final String UNREACHABLE_CLAUSE_MARK =
-        " in a part of the node tree addressing never enters"; //$NON-NLS-1$
+        " at no address"; //$NON-NLS-1$
 
     /** A rule on a {@code Node} sitting BESIDE the root: in the file, at no address. */
     private static final String RULE_BESIDE_THE_ROOT =
@@ -209,6 +209,57 @@ public class MergeRulesToolTest
             + QUOTE + "/>" //$NON-NLS-1$
             + "<Node Key=" + QUOTE + "two" + QUOTE + " MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /**
+     * The document from the review finding: an EMPTY first container, then a second carrying a
+     * rule on its own element and another on a {@code Properties} child. Two rules, and every
+     * counter used to miss both.
+     */
+    private static final String RULES_OUTSIDE_THE_NODE_TREE =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + "><MergeSettings/>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<MergeSettings MergeRule=" + QUOTE + "GetFromOther" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Properties MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$
+            + "/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** The same hole inside the container that IS read: a rule on a tag that is not a Node. */
+    private static final String A_RULE_ON_A_NON_NODE_ELEMENT =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + "><MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "$$Root$$" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Properties MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$
+            + "/></Node></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /** A rule on the {@code Settings} root itself - above every container, and above every
+     * walk that started at one. Nothing else in such a file is non-zero. */
+    private static final String A_RULE_ON_THE_SETTINGS_ROOT =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "GetFromOther" + QUOTE + "><MergeSettings><Node Key=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$
+            + "$$Root$$" + QUOTE + "/></MergeSettings></Settings>"; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * Ten rules in nine different hiding places plus one at a real address - the whole claim in
+     * one file. Its counterpart in {@code MergeRulesCodecTest} pins the document's own numbers;
+     * this one pins what a caller is told.
+     */
+    private static final String A_RULE_IN_EVERY_HIDING_PLACE =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "GetFromOther" + QUOTE + ">" //$NON-NLS-1$
+            + "<Correspondences><Correspondence MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$
+            + "/></Correspondences>" //$NON-NLS-1$
+            + "<MergeSettings MergeRule=" + QUOTE + "GetFromOther" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Properties MergeRule=" + QUOTE + "DoNotMerge" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "buried" + QUOTE + " MergeRule=" + QUOTE + "GetFromOther" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + QUOTE + "/></Properties>" //$NON-NLS-1$
+            + "<Node Key=" + QUOTE + "$$Root$$" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "commonModules" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "MergePrioritizingMain" + QUOTE + "/>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node><Node Key=" + QUOTE + "under-a-keyless-node" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "DoNotMerge" + QUOTE + "/></Node></Node>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "beside-the-root" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "GetFromOther" + QUOTE + "/></MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<MergeSettings MergeRule=" + QUOTE + "DoNotMerge" + QUOTE + "><Node Key=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "$$Root$$" + QUOTE + "/></MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<MergeSettings><Node Key=" + QUOTE + "$$Root$$" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "GetFromOther" + QUOTE + "/></MergeSettings></Settings>"; //$NON-NLS-1$ //$NON-NLS-2$
 
     /**
      * The entry name the stub authorities answer with - the shape
@@ -597,7 +648,7 @@ public class MergeRulesToolTest
         assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
             result.contains(CLAIMS_NO_RULE));
         assertTrue("and the report has to count it: " + result, //$NON-NLS-1$
-            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
     }
 
     /**
@@ -616,7 +667,7 @@ public class MergeRulesToolTest
         assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
             result.contains(CLAIMS_NO_RULE));
         assertTrue("and the report has to count it: " + result, //$NON-NLS-1$
-            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
     }
 
     /**
@@ -632,7 +683,7 @@ public class MergeRulesToolTest
             seed("two-unreachable.xml", TWO_UNREACHABLE_RULES).toString())); //$NON-NLS-1$
 
         assertTrue("both have to be counted: " + result, //$NON-NLS-1$
-            result.contains("2 merge rules in a part of the node tree addressing never enters")); //$NON-NLS-1$
+            result.contains("2 merge rules" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
         assertTrue("and spoken of in the plural: " + result, //$NON-NLS-1$
             result.contains("those rules apply")); //$NON-NLS-1$
         assertFalse("never in the singular, which would describe only one of them:\n" + result, //$NON-NLS-1$
@@ -648,7 +699,7 @@ public class MergeRulesToolTest
         assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
             result.contains(CLAIMS_NO_RULE));
         assertTrue("and the report has to say what it does carry: " + result, //$NON-NLS-1$
-            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
         assertTrue("naming the marker addressing enters at: " + result, //$NON-NLS-1$
             result.contains("$$Root$$")); //$NON-NLS-1$
         assertTrue("and that a rewrite keeps it: " + result, //$NON-NLS-1$
@@ -717,7 +768,7 @@ public class MergeRulesToolTest
         assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
             result.contains(CLAIMS_NO_RULE));
         assertTrue("and the report has to say what it does carry: " + result, //$NON-NLS-1$
-            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
         assertTrue("naming the reason a path cannot rest there: " + result, //$NON-NLS-1$
             result.contains("carries no 'Key'")); //$NON-NLS-1$
     }
@@ -736,7 +787,7 @@ public class MergeRulesToolTest
         assertTrue("the addressable rule is a decision and belongs in the table: " + result, //$NON-NLS-1$
             result.contains("| collection |")); //$NON-NLS-1$
         assertTrue("and the one at no address still has to be named: " + result, //$NON-NLS-1$
-            result.contains("1 merge rule in a part of the node tree addressing never enters")); //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
     }
 
     /**
@@ -775,8 +826,8 @@ public class MergeRulesToolTest
     //
     // A rewrite carries an unreachable rule through verbatim, so a write started from a basedOn
     // that holds one writes a file that holds it. Neither number the write report prints covers
-    // it - decisions() has no address to return it under, preservedSectionCount does not count a
-    // Node as a preserved block - so the report presented the file as holding exactly the rules it
+    // it - decisions() has no address to return it under, and the preserved-section count measures
+    // BLOCKS rather than rules - so the report presented the file as holding exactly the rules it
     // had just listed, and the rule nobody can address stayed invisible to the caller who had just
     // copied it forward. The read half had said so all along; only the write half was silent.
 
@@ -832,6 +883,150 @@ public class MergeRulesToolTest
         String written = read(file);
         assertEquals("the rewrite must have carried the second container through:\n" + written, 2, //$NON-NLS-1$
             written.split("<MergeSettings", -1).length - 1); //$NON-NLS-1$
+    }
+
+    // ============ the report accounts for every rule, wherever it hides ============
+    //
+    // The counters behind these reports no longer enumerate the places a stray rule may sit; they
+    // subtract the addressed rules from every merge rule the file spells, so a shape nobody has
+    // named lands in "unreachable" instead of vanishing. What is pinned here is the consequence at
+    // the WIRE: no document that carries a rule may produce the sentence that says it carries none.
+
+    /**
+     * The document from the review finding: an empty first container, then a second carrying a
+     * rule on its own element and another on a {@code Properties} child. Neither counter saw
+     * either rule, so the report claimed the file records none.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadDoesNotClaimNoRuleWhenTheRulesHideOutsideTheNodeTree() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("outside-the-node-tree.xml", RULES_OUTSIDE_THE_NODE_TREE).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries two rules, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to count both of them: " + result, //$NON-NLS-1$
+            result.contains("2 merge rules" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * The same hole inside the container the tool DOES read, which is what makes it more than a
+     * second-container defect: a rule on a {@code Properties} map hanging off the root marker was
+     * counted by nothing either.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadDoesNotClaimNoRuleWhenOneSitsOnANonNodeElement() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("non-node-element.xml", A_RULE_ON_A_NON_NODE_ELEMENT).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to count it: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * The clause has to name that shape too, or a caller told to look "outside the root subtree"
+     * would go hunting through {@code Node} elements for a rule that sits on none of them.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheUnreachableClauseNamesTheNonNodeShape() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("non-node-element.xml", A_RULE_ON_A_NON_NODE_ELEMENT).toString())); //$NON-NLS-1$
+
+        assertTrue("the clause must say an element that is not a Node is one of the places: " //$NON-NLS-1$
+            + result, result.contains("on an element that is not a '<Node>' at all")); //$NON-NLS-1$
+    }
+
+    /**
+     * And it must state the PARTITION rather than a list of places, because the list is the part
+     * that goes stale: the counter is a subtraction, so a shape nobody has named is already inside
+     * the number the sentence prints.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheUnreachableClauseStatesThePartitionRatherThanAnInventory() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("non-node-element.xml", A_RULE_ON_A_NON_NODE_ELEMENT).toString())); //$NON-NLS-1$
+
+        assertTrue("every rule the file spells is on one side of the partition or the other: " //$NON-NLS-1$
+            + result, result.contains("every 'MergeRule' this file spells is either one of the " //$NON-NLS-1$
+                + "decisions counted above or one of these")); //$NON-NLS-1$
+        assertTrue("and the places are examples, not an inventory: " + result, //$NON-NLS-1$
+            result.contains("among such places")); //$NON-NLS-1$
+    }
+
+    /**
+     * The whole claim in one read: a file with rules in nine different hiding places and one at a
+     * real address reports one decision and nine unreachable rules - ten, which is what the file
+     * spells.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadAccountsForEveryRuleInEveryHidingPlace() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("every-hiding-place.xml", A_RULE_IN_EVERY_HIDING_PLACE).toString())); //$NON-NLS-1$
+
+        assertTrue("one rule of the ten sits at an address: " + result, //$NON-NLS-1$
+            result.contains("- Decisions: 1\n")); //$NON-NLS-1$
+        assertTrue("and the other nine are reported, not dropped: " + result, //$NON-NLS-1$
+            result.contains("9 merge rules" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * The hardest case for the sentence, and the reason it has to follow the same total: a rule on
+     * the {@code Settings} root itself. Every OTHER number the read report prints is zero for this
+     * file - no decision, no preserved section - so the sentence is the only thing standing
+     * between the caller and "this file holds nothing", and the file holds a rule.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadDoesNotClaimNoRuleWhenTheOnlyRuleIsOnTheRootElement() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("rule-on-the-root-element.xml", A_RULE_ON_THE_SETTINGS_ROOT).toString())); //$NON-NLS-1$
+
+        assertTrue("nothing else in this report is non-zero, so the report must look empty " //$NON-NLS-1$
+            + "except for the clause: " + result, //$NON-NLS-1$
+            result.contains("- Decisions: 0\n") //$NON-NLS-1$
+                && result.contains("Preserved sections this tool does not interpret: 0")); //$NON-NLS-1$
+        assertFalse("and yet the file carries a rule, so this sentence is false about it:\n" //$NON-NLS-1$
+            + result, result.contains(CLAIMS_NO_RULE));
+        assertTrue("the clause is what has to say so: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * A write started from that file carries all nine forward, so its report owes the same number.
+     * This is the half that made the divided document dangerous rather than untidy: the rules end
+     * up in the file the caller just wrote.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAWriteCarryingEveryHiddenRuleForwardCountsThemAll() throws IOException
+    {
+        Path file = seed("write-every-hiding-place.xml", A_RULE_IN_EVERY_HIDING_PLACE); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the write report has to count what it carried forward: " + result, //$NON-NLS-1$
+            result.contains("9 merge rules" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
     }
 
     @Test
