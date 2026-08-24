@@ -119,6 +119,46 @@ public class DcsAddressTest
     }
 
     @Test
+    public void testDataSetLinksRequireIndices()
+    {
+        DcsAddress link = success("Report.Sales#/dataSetLinks/0"); //$NON-NLS-1$
+
+        assertTrue(link.isIndexSegment(1));
+        assertTrue(link.isIndexAddressed());
+        assertFailure("Report.Sales#/dataSetLinks/first", //$NON-NLS-1$
+            DcsAddress.FailureCode.INVALID_INDEX, "first", "'first'", "zero-based"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testEveryAuthorableOrderedReaderAddressIsIndexAddressed()
+    {
+        String root = "Report.Sales#/defaultSettings/"; //$NON-NLS-1$
+        for (String pointer : Arrays.asList(
+            "items/0", //$NON-NLS-1$
+            "items/0/items/0", //$NON-NLS-1$
+            "items/0/rows/0", //$NON-NLS-1$
+            "items/0/rows/0/items/0", //$NON-NLS-1$
+            "items/0/columns/0", //$NON-NLS-1$
+            "items/0/groupFields/items/0", //$NON-NLS-1$
+            "selection/items/0", //$NON-NLS-1$
+            "selection/items/0/items/0", //$NON-NLS-1$
+            "filter/items/0", //$NON-NLS-1$
+            "filter/items/0/items/0", //$NON-NLS-1$
+            "order/items/0", //$NON-NLS-1$
+            "conditionalAppearance/items/0", //$NON-NLS-1$
+            "conditionalAppearance/items/0/selection/items/0", //$NON-NLS-1$
+            "conditionalAppearance/items/0/filter/items/0", //$NON-NLS-1$
+            "dataParameters/items/0", //$NON-NLS-1$
+            "outputParameters/items/0", //$NON-NLS-1$
+            "userFields/items/0")) //$NON-NLS-1$
+        {
+            DcsAddress address = success(root + pointer);
+            assertTrue(pointer, address.isIndexSegment(address.segments().size() - 1));
+        }
+        assertTrue(success("Report.Sales#/dataSetLinks/0").isIndexSegment(1)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testZeroBasedIndexLexicalHelper()
     {
         assertTrue(DcsAddress.isZeroBasedIndex("0")); //$NON-NLS-1$

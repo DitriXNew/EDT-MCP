@@ -696,7 +696,8 @@ public class DcsTool implements IMcpTool
                 && BmTransactions.forceExportToDisk(context.project(), exports);
             if (!persisted)
             {
-                return ToolResult.error("DCS action='" + action + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
+                return ToolResult.errorAfterMutation("DCS action='" + action
+                    + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
                     + address + "', but force-export could not be scheduled for " + exports //$NON-NLS-1$
                     + ". Save or resync the project before refreshing it, then verify with dcs " //$NON-NLS-1$
                     + "action='get'.").toJson(); //$NON-NLS-1$
@@ -848,7 +849,8 @@ public class DcsTool implements IMcpTool
         DynamicWriteOutcome written = outcome.get();
         if (written == null)
         {
-            return ToolResult.error("DCS dynamic-list write committed without a model outcome for '" //$NON-NLS-1$
+            return ToolResult.errorAfterMutation(
+                "DCS dynamic-list write committed without a model outcome for '" //$NON-NLS-1$
                 + address + "'. Applied is withheld; re-run get before retrying.").toJson(); //$NON-NLS-1$
         }
         DynamicWriteVerification verified = FormElementWriter.readEditableForm(fctx,
@@ -863,13 +865,14 @@ public class DcsTool implements IMcpTool
             });
         if (verified.error != null)
         {
-            return ToolResult.error(verified.error).toJson();
+            return ToolResult.errorAfterMutation(verified.error).toJson();
         }
         boolean settingsPersisted = written.settingsFqn == null
             || BmTransactions.forceExportToDisk(context.project(), written.settingsFqn);
         if (!formPersisted || !settingsPersisted)
         {
-            return ToolResult.error("DCS action='" + action + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.errorAfterMutation("DCS action='" + action
+                + "' committed in EDT memory for '" //$NON-NLS-1$ //$NON-NLS-2$
                 + address + "', but force-export could not be scheduled for " //$NON-NLS-1$
                 + (!formPersisted ? "Form.form" : written.settingsFqn) //$NON-NLS-1$
                 + ". Save or resync the project, then verify with dcs action='get'.").toJson(); //$NON-NLS-1$

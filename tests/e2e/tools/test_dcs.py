@@ -1426,6 +1426,74 @@ def test_conditional_appearance_field_address_copied_from_read_updates_disk():
     on_disk = read_disk(dcs_rel)
     assert new_field in on_disk and old_field not in on_disk
 
+    selection_address = (root + "#/defaultSettings/conditionalAppearance/items/0/"
+                         "selection")
+    selection_before = _get(selection_address, "conditionalAppearance")
+    assert_ok(selection_before, "read the appearance selection holder before replacing it")
+    cleared = _write(selection_address, "replace", "conditionalAppearance", {},
+                     expectedHash=_hash(selection_before))
+    assert_ok(cleared, "replace the exact appearance selection holder with an empty body")
+    selection_after = _get(selection_address, "conditionalAppearance")
+    assert_ok(selection_after, "read back the cleared appearance selection holder")
+    assert new_field not in selection_after.text and old_field not in selection_after.text, \
+        "an authoritative holder replace must not retain omitted appearance fields"
+    poll_disk_lacks(dcs_rel, new_field,
+                    ctx="the omitted appearance field must leave Template.dcs on holder replace")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_nested_selection_item_address_copied_from_read_can_be_removed():
+    report_name = "E2EDcsNestedSelectionRemove"
+    root = _seed_report(report_name)
+    removed_field = "NestedSelectionRemoveMe"
+    retained_field = "NestedSelectionKeepMe"
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "selection": {"items": [{
+                "kind": "group",
+                "items": [{
+                    "kind": "group",
+                    "items": [
+                        {"kind": "field", "field": {
+                            "kind": "field", "value": removed_field,
+                        }},
+                        {"kind": "field", "field": {
+                            "kind": "field", "value": retained_field,
+                        }},
+                    ],
+                }],
+            }]},
+        },
+    })
+    assert_ok(authored, "author recursively nested selection groups")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the nested-selection removal fixture")
+    poll_disk_contains(dcs_rel, removed_field,
+                       ctx="the nested field must reach Template.dcs before removal")
+
+    selection = _get(root + "#/defaultSettings/selection", "selection")
+    assert_ok(selection, "read the selection tree containing the nested item address")
+    target = (root + "#/defaultSettings/selection/items/0/items/0/items/0")
+    assert target in selection.text, \
+        "the nested removal target must be an address printed by read: %s" % selection.text
+    before = _get(target, "selection")
+    assert_ok(before, "read the exact nested selection item before removal")
+    removed = call("dcs", {
+        "projectName": PROJECT,
+        "fqn": target,
+        "action": "remove",
+        "type": "selection",
+        "expectedHash": _hash(before),
+    })
+    assert_ok(removed, "remove the nested selection item through its copied address")
+
+    after = _get(root + "#/defaultSettings/selection", "selection")
+    assert_ok(after, "read back the nested selection tree after removal")
+    assert removed_field not in after.text and retained_field in after.text
+    poll_disk_lacks(dcs_rel, removed_field,
+                    ctx="the removed nested field must leave Template.dcs")
+    poll_disk_contains(dcs_rel, retained_field,
+                       ctx="the nested sibling must survive removal")
+
 
 @e2e_test(tool="dcs", kind="write-metadata")
 def test_default_settings_remove_refuses_mismatched_type_without_touching_disk():
@@ -1668,20 +1736,23 @@ def test_schema_summary_and_schema_collection_read_expose_data_set_links():
               "seed report for data-set-link reads")
     wait_for_project_ready()
     authored = _write(root, "upsert", "schema", {
+        "dataSources": [{"name": "MainSource", "type": "Local"}],
         "dataSets": [
-            {"name": "Source", "type": "query", "query": "SELECT 1 AS Key"},
-            {"name": "Destination", "type": "query", "query": "SELECT 1 AS Key"},
+            {"name": "Source", "type": "query", "dataSource": "mainsource",
+             "query": "SELECT 1 AS Key"},
+            {"name": "Destination", "type": "query", "dataSource": "MAINSOURCE",
+             "query": "SELECT 1 AS Key"},
         ],
         "parameters": [{"name": "LinkParameter"}],
         "dataSetLinks": [{
-            "sourceDataSet": "Source",
-            "destinationDataSet": "Destination",
+            "sourceDataSet": "source",
+            "destinationDataSet": "DESTINATION",
             "sourceExpression": "Key",
             "destinationExpression": "Key",
-            "parameter": "LinkParameter",
+            "parameter": "linkparameter",
         }],
     })
-    assert_ok(authored, "author two data sets and their link")
+    assert_ok(authored, "author caller-cased references to existing DCS identities")
     dcs_rel = _poll_report_dcs(report_name, ctx="the readable data-set-link fixture")
     poll_disk_contains(dcs_rel, "Destination",
                        ctx="the linked data sets must reach Template.dcs")
@@ -1692,13 +1763,22 @@ def test_schema_summary_and_schema_collection_read_expose_data_set_links():
     assert_ok(summary, "read the schema summary containing data-set links")
     assert "| Data set links | 1 | " + root + "#/dataSetLinks |" in summary.text
     assert root + "#/dataSetLinks/0" in summary.text
-    assert "Source → Destination" in summary.text
+    assert "source → DESTINATION" in summary.text
 
     page = _get(root + "#/dataSetLinks", "schema")
     assert_ok(page, "page data-set links through the schema public type")
     assert "# DCS collection: schema" in page.text
     assert "**Items:** 1" in page.text
     assert root + "#/dataSetLinks/0" in page.text
+
+    unguarded = _write(root + "#/dataSetLinks/0", "update", "schema", {
+        "sourceExpression": "ChangedKey",
+    })
+    unguarded_error = assert_error(unguarded,
+                                   "update an index-selected link without expectedHash")
+    assert_error_quality(unguarded_error, names=["expectedHash", "#/dataSetLinks/0"],
+                         suggests=["action='get'"],
+                         ctx="an ordered data-set link must require optimistic locking")
 
     before_disk = read_disk(dcs_rel)
     parameter = _get(root + "#/parameters/LinkParameter", "parameter")

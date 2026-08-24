@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFieldGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
@@ -1195,6 +1196,98 @@ public class DcsSettingsWriterTest
             .eINSTANCE.createDataCompositionAppearanceField();
         assertEquals("Replaced", replacedField.getField().getValue()); //$NON-NLS-1$
         assertEquals(defaults.isUse(), replacedField.isUse());
+    }
+
+    @Test
+    public void testExactConditionalAppearanceSelectionHolderReplaceClearsOmittedItems()
+    {
+        DataCompositionSettings settings = plan(json("{\"conditionalAppearance\":{\"items\":[" //$NON-NLS-1$
+            + "{\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Old\"}}]}," //$NON-NLS-1$
+            + "\"filter\":{\"items\":[{\"kind\":\"group\",\"items\":[{" //$NON-NLS-1$
+            + "\"left\":{\"kind\":\"field\",\"value\":\"Amount\"}," //$NON-NLS-1$
+            + "\"comparisonType\":\"Greater\"}]}]}}]}}")); //$NON-NLS-1$
+        java.util.List<String> selectionPath = Arrays.asList("conditionalAppearance", "items", //$NON-NLS-1$ //$NON-NLS-2$
+            "0", "selection"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        DcsSettingsWriter.SettingsResult replaced = DcsSettingsWriter.planSettings(settings,
+            selectionPath, "replace", "conditionalAppearance", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue(replaced.error(), replaced.isSuccess());
+        DataCompositionConditionalAppearanceItem rule = replaced.settings()
+            .getConditionalAppearance().getItems().get(0);
+        assertNotNull(rule.getSelection());
+        assertTrue("omitting items from an exact holder replace must clear the old fields", //$NON-NLS-1$
+            rule.getSelection().getItems().isEmpty());
+        assertEquals("the selection replacement must not disturb its sibling filter", //$NON-NLS-1$
+            1, rule.getFilter().getItems().size());
+
+        DcsSettingsWriter.SettingsResult nestedAppearanceFilter = DcsSettingsWriter.planSettings(
+            settings, Arrays.asList("conditionalAppearance", "items", "0", "filter", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "items", "0", "items", "0"), "remove", "filter", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertTrue(nestedAppearanceFilter.error(), nestedAppearanceFilter.isSuccess());
+        DataCompositionFilterItemGroup appearanceFilterGroup = (DataCompositionFilterItemGroup)
+            nestedAppearanceFilter.settings().getConditionalAppearance().getItems().get(0)
+                .getFilter().getItems().get(0);
+        assertTrue("conditional-appearance filter groups use the recursive filter remover", //$NON-NLS-1$
+            appearanceFilterGroup.getItems().isEmpty());
+
+        DcsSettingsWriter.SettingsResult ruleReplace = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("conditionalAppearance", "items", "0"), "replace", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "conditionalAppearance", json("{\"use\":false}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(ruleReplace.error(), ruleReplace.isSuccess());
+        DataCompositionConditionalAppearanceItem freshRule = ruleReplace.settings()
+            .getConditionalAppearance().getItems().get(0);
+        assertNull("rule replace already starts fresh for the selection sibling", //$NON-NLS-1$
+            freshRule.getSelection());
+        assertNull("rule replace already starts fresh for the filter sibling", freshRule.getFilter()); //$NON-NLS-1$
+        assertNull("rule replace already starts fresh for the appearance sibling", //$NON-NLS-1$
+            freshRule.getAppearance());
+    }
+
+    @Test
+    public void testRemoveRecursesThroughSelectionGroupsAndNestedTableAxes()
+    {
+        DataCompositionSettings selectionSettings = plan(json("{\"selection\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"group\",\"items\":[{\"kind\":\"group\",\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"Remove\"}}," //$NON-NLS-1$
+            + "{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"Keep\"}}]}]}]}}")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult nestedSelection = DcsSettingsWriter.planSettings(
+            selectionSettings, Arrays.asList("selection", "items", "0", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "items", "0"), "remove", "selection", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(nestedSelection.error(), nestedSelection.isSuccess());
+        DataCompositionSelectedFieldGroup outer = (DataCompositionSelectedFieldGroup)
+            nestedSelection.settings().getSelection().getItems().get(0);
+        DataCompositionSelectedFieldGroup inner = (DataCompositionSelectedFieldGroup)
+            outer.getItems().get(0);
+        assertEquals(1, inner.getItems().size());
+        assertEquals("Keep", ((DataCompositionSelectedField)inner.getItems().get(0)) //$NON-NLS-1$
+            .getField().getValue());
+
+        DataCompositionSettings tableSettings = plan(json("{\"items\":[{\"kind\":\"table\"," //$NON-NLS-1$
+            + "\"rows\":[{\"name\":\"OuterAxis\",\"items\":[{\"name\":\"InnerAxis\"}," //$NON-NLS-1$
+            + "{\"name\":\"KeepAxis\"}],\"selection\":{\"items\":[{\"kind\":\"group\"," //$NON-NLS-1$
+            + "\"items\":[{\"kind\":\"field\",\"field\":{\"kind\":\"field\"," //$NON-NLS-1$
+            + "\"value\":\"RemoveAxisField\"}},{\"kind\":\"field\",\"field\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"KeepAxisField\"}}] }]}}]}]}")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult axisSelection = DcsSettingsWriter.planSettings(tableSettings,
+            Arrays.asList("items", "0", "rows", "0", "selection", "items", "0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+                "items", "0"), "remove", "selection", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue(axisSelection.error(), axisSelection.isSuccess());
+        DataCompositionTable axisTable = (DataCompositionTable)axisSelection.settings().getItems().get(0);
+        DataCompositionSelectedFieldGroup axisSelectionGroup = (DataCompositionSelectedFieldGroup)
+            axisTable.getRows().get(0).getSelection().getItems().get(0);
+        assertEquals(1, axisSelectionGroup.getItems().size());
+        assertEquals("KeepAxisField", ((DataCompositionSelectedField) //$NON-NLS-1$
+            axisSelectionGroup.getItems().get(0)).getField().getValue());
+
+        DcsSettingsWriter.SettingsResult nestedAxis = DcsSettingsWriter.planSettings(
+            axisSelection.settings(),
+            Arrays.asList("items", "0", "rows", "0", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "remove", "table", json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(nestedAxis.error(), nestedAxis.isSuccess());
+        DataCompositionTable table = (DataCompositionTable)nestedAxis.settings().getItems().get(0);
+        assertEquals(1, table.getRows().get(0).getItems().size());
+        assertEquals("KeepAxis", table.getRows().get(0).getItems().get(0).getName()); //$NON-NLS-1$
     }
 
     @Test

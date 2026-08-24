@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
@@ -41,6 +42,41 @@ import com.google.gson.JsonParser;
 /** Unit contract for node-addressed schema upsert/update semantics. */
 public class DcsSchemaWriterTest
 {
+    @Test
+    public void testAssembledReferenceGuardMatchesIdentifiersCaseInsensitively()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSource source = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSource();
+        source.setName("Warehouse"); //$NON-NLS-1$
+        schema.getDataSources().add(source);
+
+        DataCompositionSchemaDataSetQuery sales = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetQuery();
+        sales.setName("Sales"); //$NON-NLS-1$
+        sales.setDataSource("warehouse"); //$NON-NLS-1$
+        schema.getDataSets().add(sales);
+        DataCompositionSchemaDataSetQuery returns = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetQuery();
+        returns.setName("Returns"); //$NON-NLS-1$
+        returns.setDataSource("WAREHOUSE"); //$NON-NLS-1$
+        schema.getDataSets().add(returns);
+
+        DataCompositionSchemaParameter parameter = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        parameter.setName("Threshold"); //$NON-NLS-1$
+        schema.getParameters().add(parameter);
+        DataCompositionSchemaDataSetLink link = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetLink();
+        link.setSourceDataSet("sales"); //$NON-NLS-1$
+        link.setDestinationDataSet("RETURNS"); //$NON-NLS-1$
+        link.setParameter("threshold"); //$NON-NLS-1$
+        schema.getDataSetLinks().add(link);
+
+        assertNull("guards follow 1C identity semantics even when caller casing differs", //$NON-NLS-1$
+            DcsSchemaWriter.validateAssembledReferences(schema, "Report.Sales")); //$NON-NLS-1$
+    }
+
     @Test
     public void testUpsertCreatesThenUpdatesNaturalKeyWithoutDuplicate()
     {

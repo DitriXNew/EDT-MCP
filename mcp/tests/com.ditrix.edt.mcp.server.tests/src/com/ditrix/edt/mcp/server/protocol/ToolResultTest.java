@@ -52,6 +52,20 @@ public class ToolResultTest
     }
 
     @Test
+    public void testErrorAfterMutationCarriesStructuralMarkerIndependentOfMessage()
+    {
+        JsonElement first = JsonParser.parseString(
+            ToolResult.errorAfterMutation("force export failed").toJson()); //$NON-NLS-1$
+        JsonElement renamed = JsonParser.parseString(
+            ToolResult.errorAfterMutation("post-commit verification disagreed").toJson()); //$NON-NLS-1$
+
+        assertTrue(first.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(renamed.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(first.getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(renamed.getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testPutString()
     {
         String json = ToolResult.success()

@@ -2901,7 +2901,10 @@ public final class DcsSettingsWriter
             }
             else if ("selection".equals(path.get(2))) //$NON-NLS-1$
             {
-                DataCompositionAppearanceFields fields = copy(item.getSelection());
+                // A holder-addressed replace is authoritative: starting from the retained holder
+                // let omitted items survive, unlike every sibling holder replacement.
+                DataCompositionAppearanceFields fields = ACTION_REPLACE.equals(action)
+                    && path.size() == 3 ? null : copy(item.getSelection());
                 if (fields == null)
                 {
                     if (ACTION_UPDATE.equals(action))
@@ -4507,8 +4510,7 @@ public final class DcsSettingsWriter
         }
         if ("selection".equals(head)) //$NON-NLS-1$
         {
-            return removeIndexed(settings.getSelection() == null ? null : settings.getSelection().getItems(),
-                tail, "selection"); //$NON-NLS-1$
+            return removeSelectionPath(settings.getSelection(), tail, "selection"); //$NON-NLS-1$
         }
         if ("order".equals(head)) //$NON-NLS-1$
         {
@@ -4517,8 +4519,8 @@ public final class DcsSettingsWriter
         }
         if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
         {
-            return removeIndexed(settings.getConditionalAppearance() == null ? null
-                : settings.getConditionalAppearance().getItems(), tail, "conditionalAppearance"); //$NON-NLS-1$
+            return removeConditionalAppearancePath(settings.getConditionalAppearance(), tail,
+                "conditionalAppearance"); //$NON-NLS-1$
         }
         if ("dataParameters".equals(head)) //$NON-NLS-1$
         {
@@ -4695,11 +4697,10 @@ public final class DcsSettingsWriter
             if ("outputParameters".equals(head)) { table.setOutputParameters(null); return null; } //$NON-NLS-1$
         }
         if ("selection".equals(head)) //$NON-NLS-1$
-            return removeIndexed(table.getSelection() == null ? null : table.getSelection().getItems(),
-                tail, where + "/selection"); //$NON-NLS-1$
+            return removeSelectionPath(table.getSelection(), tail, where + "/selection"); //$NON-NLS-1$
         if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
-            return removeIndexed(table.getConditionalAppearance() == null ? null
-                : table.getConditionalAppearance().getItems(), tail, where + "/conditionalAppearance"); //$NON-NLS-1$
+            return removeConditionalAppearancePath(table.getConditionalAppearance(), tail,
+                where + "/conditionalAppearance"); //$NON-NLS-1$
         return "Table child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' does not select exactly one authorable node."; //$NON-NLS-1$
     }
@@ -4749,8 +4750,7 @@ public final class DcsSettingsWriter
             return removeIndexed(owner.groupFields() == null ? null : owner.groupFields().getItems(),
                 tail, where + "/groupFields"); //$NON-NLS-1$
         if ("selection".equals(head)) //$NON-NLS-1$
-            return removeIndexed(owner.selection() == null ? null : owner.selection().getItems(),
-                tail, where + "/selection"); //$NON-NLS-1$
+            return removeSelectionPath(owner.selection(), tail, where + "/selection"); //$NON-NLS-1$
         if ("filter".equals(head)) //$NON-NLS-1$
             return removeFilterPath(owner.filter(), tail, where + "/filter"); //$NON-NLS-1$
         if ("order".equals(head)) //$NON-NLS-1$
@@ -4764,6 +4764,72 @@ public final class DcsSettingsWriter
     {
         if (filter == null) return "No filter exists at '" + where + "'. Re-run get."; //$NON-NLS-1$ //$NON-NLS-2$
         return removeFilterItems(filter.getItems(), path, where);
+    }
+
+    private static String removeSelectionPath(DataCompositionSelectedFields selection,
+        List<String> path, String where)
+    {
+        if (selection == null) return "No selection exists at '" + where + "'. Re-run get."; //$NON-NLS-1$ //$NON-NLS-2$
+        return removeSelectedItems(selection.getItems(), path, where);
+    }
+
+    /** Mirrors {@link #applySelectedItemsPath}: selection groups may contain selection groups. */
+    private static String removeSelectedItems(List<SelectedItem> items, List<String> path,
+        String where)
+    {
+        if (path.size() < 2 || !KEY_ITEMS.equals(path.get(0)))
+            return "Selection removal at '" + where //$NON-NLS-1$
+                + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$
+        int selected = index(path.get(1), items.size(), where + "/items"); //$NON-NLS-1$
+        if (indexError != null) return indexError;
+        if (path.size() == 2)
+        {
+            items.remove(selected);
+            return null;
+        }
+        SelectedItem item = items.get(selected);
+        if (item instanceof DataCompositionSelectedFieldGroup && path.size() > 2
+            && KEY_ITEMS.equals(path.get(2)))
+        {
+            return removeSelectedItems(((DataCompositionSelectedFieldGroup)item).getItems(),
+                path.subList(2, path.size()), where + "/items/" + path.get(1)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return "Selection address at '" + where //$NON-NLS-1$
+            + "' does not select exactly one removable node."; //$NON-NLS-1$
+    }
+
+    private static String removeConditionalAppearancePath(
+        DataCompositionConditionalAppearance holder, List<String> path, String where)
+    {
+        if (holder == null)
+            return "No conditional appearance exists at '" + where + "'. Re-run get."; //$NON-NLS-1$ //$NON-NLS-2$
+        if (path.size() < 2 || !KEY_ITEMS.equals(path.get(0)))
+            return "Conditional-appearance removal at '" + where //$NON-NLS-1$
+                + "' needs items/<index>. Copy it from get."; //$NON-NLS-1$
+        int selected = index(path.get(1), holder.getItems().size(), where + "/items"); //$NON-NLS-1$
+        if (indexError != null) return indexError;
+        if (path.size() == 2)
+        {
+            holder.getItems().remove(selected);
+            return null;
+        }
+        DataCompositionConditionalAppearanceItem item = holder.getItems().get(selected);
+        String child = path.get(2);
+        String childWhere = where + "/items/" + path.get(1) + "/" + child; //$NON-NLS-1$ //$NON-NLS-2$
+        if (path.size() == 3)
+        {
+            if ("selection".equals(child)) { item.setSelection(null); return null; } //$NON-NLS-1$
+            if ("filter".equals(child)) { item.setFilter(null); return null; } //$NON-NLS-1$
+            if ("appearance".equals(child)) { item.setAppearance(null); return null; } //$NON-NLS-1$
+        }
+        List<String> tail = path.subList(3, path.size());
+        if ("selection".equals(child)) //$NON-NLS-1$
+            return removeIndexed(item.getSelection() == null ? null : item.getSelection().getItems(),
+                tail, childWhere);
+        if ("filter".equals(child)) //$NON-NLS-1$
+            return removeFilterPath(item.getFilter(), tail, childWhere);
+        return "Conditional-appearance child address at '" + childWhere //$NON-NLS-1$
+            + "' does not select exactly one removable node."; //$NON-NLS-1$
     }
 
     private static String removeFilterItems(List<FilterItem> items, List<String> path, String where)

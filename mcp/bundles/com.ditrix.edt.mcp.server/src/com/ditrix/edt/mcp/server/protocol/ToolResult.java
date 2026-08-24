@@ -48,6 +48,21 @@ public class ToolResult
         result.data.put("error", message != null ? message : "Unknown error"); //$NON-NLS-1$
         return result;
     }
+
+    /**
+     * Creates an error returned after the tool has already committed a model mutation.
+     *
+     * <p>The boolean is a machine contract, independent of the human error wording. Test harnesses
+     * and clients can therefore require a reset after any such result without maintaining a list of
+     * phrases used by individual tools.</p>
+     *
+     * @param message error message
+     * @return a failed result carrying {@code mutationCommitted:true}
+     */
+    public static ToolResult errorAfterMutation(String message)
+    {
+        return error(message).put("mutationCommitted", true); //$NON-NLS-1$
+    }
     
     /**
      * Adds a string field.

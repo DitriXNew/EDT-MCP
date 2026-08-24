@@ -578,7 +578,7 @@ public final class DcsSchemaWriter
         {
             if (parameter.getName() != null && !parameter.getName().isEmpty())
             {
-                parameterNames.add(parameter.getName());
+                parameterNames.add(guardIdentity(parameter.getName()));
             }
         }
         for (int i = 0; i < schema.getDataSetLinks().size(); i++)
@@ -601,7 +601,7 @@ public final class DcsSchemaWriter
         {
             if (dataSource.getName() != null && !dataSource.getName().isEmpty())
             {
-                dataSourceNames.add(dataSource.getName());
+                dataSourceNames.add(guardIdentity(dataSource.getName()));
             }
         }
         for (DataSet dataSet : dataSets)
@@ -610,7 +610,8 @@ public final class DcsSchemaWriter
                 ? ((DataCompositionSchemaDataSetQuery)dataSet).getDataSource()
                 : dataSet instanceof DataCompositionSchemaDataSetObject
                     ? ((DataCompositionSchemaDataSetObject)dataSet).getDataSource() : null;
-            if (dataSource == null || dataSource.isEmpty() || dataSourceNames.contains(dataSource))
+            if (dataSource == null || dataSource.isEmpty()
+                || dataSourceNames.contains(guardIdentity(dataSource)))
             {
                 continue;
             }
@@ -634,7 +635,7 @@ public final class DcsSchemaWriter
             dataSets.add(dataSet);
             if (dataSet.getName() != null && !dataSet.getName().isEmpty())
             {
-                names.add(dataSet.getName());
+                names.add(guardIdentity(dataSet.getName()));
             }
             if (dataSet instanceof DataCompositionSchemaDataSetUnion)
             {
@@ -647,7 +648,8 @@ public final class DcsSchemaWriter
     private static String dataSetLinkReferenceError(String identity, String member, String address,
         Set<String> dataSetNames)
     {
-        if (identity == null || identity.isEmpty() || dataSetNames.contains(identity))
+        if (identity == null || identity.isEmpty()
+            || dataSetNames.contains(guardIdentity(identity)))
         {
             return null;
         }
@@ -661,7 +663,8 @@ public final class DcsSchemaWriter
     private static String dataSetLinkParameterReferenceError(String identity, String address,
         Set<String> parameterNames)
     {
-        if (identity == null || identity.isEmpty() || parameterNames.contains(identity))
+        if (identity == null || identity.isEmpty()
+            || parameterNames.contains(guardIdentity(identity)))
         {
             return null;
         }
@@ -669,6 +672,16 @@ public final class DcsSchemaWriter
             + "' after assembling the schema. Add or keep a parameter named '" + identity //$NON-NLS-1$
             + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
             + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
+    }
+
+    /**
+     * Normalizes identities only for conservative reference guards. Natural-key lookup, pointer
+     * resolution, duplicate detection and collision checks deliberately remain exact; changing
+     * those would alter which node an address selects rather than merely refusing a risky write.
+     */
+    private static String guardIdentity(String identity)
+    {
+        return identity.toLowerCase(Locale.ROOT);
     }
 
     private static String clearReplaceTarget(DataCompositionSchema schema, Request request)

@@ -170,6 +170,22 @@ public class DcsToolTest
     }
 
     @Test
+    public void testExactDataSetLinkMutationIsRefusedWithoutExpectedHash()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("fqn", "Report.Sales#/dataSetLinks/0"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("action", "update"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("type", "schema"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("body", "{\"sourceDataSet\":\"Current\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new DcsTool().execute(params);
+
+        assertTrue(result, result.contains("expectedHash is required")); //$NON-NLS-1$
+        assertTrue(result, result.contains("Report.Sales#/dataSetLinks/0")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testIdentityCollectionReplaceRequiresHashThroughStructuredErrorContract()
     {
         Map<String, String> params = new HashMap<>();

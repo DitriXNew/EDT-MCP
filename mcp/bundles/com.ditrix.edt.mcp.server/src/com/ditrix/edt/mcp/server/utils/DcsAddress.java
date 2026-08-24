@@ -355,7 +355,8 @@ public final class DcsAddress
             return false;
         }
         String collection = segments.get(position - 1);
-        if ("rows".equals(collection) || "columns".equals(collection)) //$NON-NLS-1$ //$NON-NLS-2$
+        if ("dataSetLinks".equals(collection) || "rows".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
+            || "columns".equals(collection)) //$NON-NLS-1$
         {
             return true;
         }
