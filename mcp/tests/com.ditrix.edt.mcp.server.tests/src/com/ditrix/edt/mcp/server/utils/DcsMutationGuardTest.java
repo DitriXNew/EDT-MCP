@@ -13,6 +13,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
@@ -51,6 +52,32 @@ public class DcsMutationGuardTest
         // ...and it still blocks when the address genuinely covers it.
         assertNotNull("a chart under the addressed node must still block", //$NON-NLS-1$
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/items"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNestedInputParameterValuesDeclareTheUnsupportedReadWriteLimit()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSchemaParameter parameter = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        parameter.setName("P"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.dcs.model.core.InputParameters inputs =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createInputParameters();
+        com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue item =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionParameterValue();
+        item.getNestedParameterValues().add(
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionParameterValue());
+        inputs.getItems().add(item);
+        parameter.setInputParameters(inputs);
+        schema.getParameters().add(parameter);
+
+        String error = DcsMutationGuard.replaceError(schema, address(ROOT));
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("DataCompositionParameterValue")); //$NON-NLS-1$
+        assertTrue(error, error.contains("#/parameters/P/inputParameters/items/0")); //$NON-NLS-1$
     }
 
     private static DcsAddress address(String raw)

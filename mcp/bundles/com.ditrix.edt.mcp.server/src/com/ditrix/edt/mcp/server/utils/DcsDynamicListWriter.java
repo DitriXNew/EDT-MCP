@@ -62,6 +62,15 @@ public final class DcsDynamicListWriter
         DcsAddress address, JsonObject body, DcsWriter.TypeResolver typeResolver,
         DcsPresentationParser.LanguageContext languages, Version version)
     {
+        return plan(current, action, type, address, body, typeResolver, languages, version, null);
+    }
+
+    /** Live-project planner variant with named style/palette color resolution. */
+    public static synchronized Result plan(DynamicListExtInfo current, String action, String type,
+        DcsAddress address, JsonObject body, DcsWriter.TypeResolver typeResolver,
+        DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
         // replace and remove are implemented by the SHARED settings writer, which a dynamic list's
         // listSettings uses unchanged - so they belong on the settings types addressed below
         // '#/listSettings', exactly as the tool guide advertises. Refusing them wholesale here made
@@ -140,7 +149,8 @@ public final class DcsDynamicListWriter
             // parameter keys are validated against the version's parameter list, so defaulting
             // would accept a key the project's platform does not have.
             DcsSettingsWriter.SettingsResult settings = DcsSettingsWriter.planDynamicList(
-                current.getListSettings(), action, type, address, body, languages, version);
+                current.getListSettings(), action, type, address, body, languages, version,
+                namedColors);
             return settings.isSuccess()
                 ? Result.success(Plan.settingsOnly(settings.settings(), settings.touched()))
                 : Result.failure(settings.error());
@@ -159,7 +169,7 @@ public final class DcsDynamicListWriter
         JsonObject itemMembers = itemMembers(normalized);
         DcsWriter.DynamicItemsResult items = DcsWriter.planDynamicListItems(current.getFields(),
             current.getCalculatedFields(), current.getParameters(), action, itemMembers,
-            typeResolver, languages);
+            typeResolver, languages, version, namedColors);
         if (!items.isSuccess())
         {
             return Result.failureJson(items.errorJson());
@@ -169,7 +179,7 @@ public final class DcsDynamicListWriter
         // concrete-settings branch alone left this path validating against Version.LATEST.
         DcsSettingsWriter.SettingsResult settings = DcsSettingsWriter.planDynamicList(
             current.getListSettings(), action, TYPE_DYNAMIC_LIST, address,
-            DcsSettingsWriter.dynamicListMembers(normalized), languages, version);
+            DcsSettingsWriter.dynamicListMembers(normalized), languages, version, namedColors);
         if (!settings.isSuccess())
         {
             return Result.failure(settings.error());

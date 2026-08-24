@@ -671,6 +671,19 @@ public class ModifyMetadataToolTest
             err.contains("get_metadata_objects")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testValidateReferenceTargetAllowsBasicTemplateMemberForReportMainSchema()
+    {
+        BasicTemplate template = MdClassFactory.eINSTANCE.createTemplate();
+        EStructuralFeature feature = MdClassFactory.eINSTANCE.createReport().eClass()
+            .getEStructuralFeature("mainDataCompositionSchema"); //$NON-NLS-1$
+
+        assertNotNull("precondition: Report must declare mainDataCompositionSchema", feature); //$NON-NLS-1$
+        assertNull("a BasicTemplate member has a BM id and is re-fetchable inside the write tx", //$NON-NLS-1$
+            ModifyMetadataTool.validateReferenceTarget("mainDataCompositionSchema", feature, //$NON-NLS-1$
+                template, "Report.Sales.Template.MainDCS")); //$NON-NLS-1$
+    }
+
     // ===== form-member extInfo routing (#235: a UsualGroup's layout props live under <extInfo>) =====
     //
     // A form group's grouping (`group`) + united / layout flags do NOT live on the group element but on

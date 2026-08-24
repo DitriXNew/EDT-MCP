@@ -19,9 +19,11 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
@@ -39,6 +41,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldCase;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldsCaseVariants;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldsVariant;
@@ -54,6 +57,45 @@ import com.google.gson.JsonParser;
 public class DcsReadProjectionTest
 {
     @Test
+    public void testTypedReadsRenderEveryDeliberatelyEmptyRequiredString()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSchemaCalculatedField calculated =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaCalculatedField();
+        calculated.setDataPath("RuntimeFilled"); //$NON-NLS-1$
+        calculated.setExpression(""); //$NON-NLS-1$
+        schema.getCalculatedFields().add(calculated);
+
+        DataCompositionSchemaDataSetQuery query = query("EmptyQuery", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        schema.getDataSets().add(query);
+        DataCompositionSchemaDataSetObject object =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createDataCompositionSchemaDataSetObject();
+        object.setName("EmptyObject"); //$NON-NLS-1$
+        object.setObjectName(""); //$NON-NLS-1$
+        schema.getDataSets().add(object);
+
+        assertTypedEmptyString(schema, "Report.Empty#/calculatedFields/RuntimeFilled", //$NON-NLS-1$
+            "calculatedField", "expression"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTypedEmptyString(schema, "Report.Empty#/dataSets/EmptyQuery", //$NON-NLS-1$
+            "dataSet", "query"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTypedEmptyString(schema, "Report.Empty#/dataSets/EmptyObject", //$NON-NLS-1$
+            "dataSet", "objectName"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void assertTypedEmptyString(DataCompositionSchema schema, String address,
+        String type, String member)
+    {
+        DcsReadProjection.Result result = DcsReadProjection.render("Report.Empty", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(), type,
+            "en", 100_000, 0); //$NON-NLS-1$
+        assertTrue(result.error(), result.isSuccess());
+        assertTrue(result.markdown(), result.markdown().contains("- " + member + ": \n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testSchemaSummaryPrintsCountsAndAddressesButOmitsQuery()
     {
         DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT SecretQueryText"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -63,6 +105,24 @@ public class DcsReadProjectionTest
         assertTrue(result.markdown().contains("Sales")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("| Data sets | 1 |")); //$NON-NLS-1$
         assertFalse(result.markdown().contains("SecretQueryText")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormConditionalAppearanceReadPrintsWritableRootRelativeAddresses()
+    {
+        String root = "Catalog.Products.Form.ListForm"; //$NON-NLS-1$
+        DataCompositionConditionalAppearance appearance = com._1c.g5.v8.dt.dcs.model.settings
+            .DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
+        appearance.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionConditionalAppearanceItem());
+
+        DcsReadProjection.Result result = DcsReadProjection.render(root, TargetKind.FORM,
+            appearance, DcsAddress.parse(root).address(), "conditionalAppearance", "en", //$NON-NLS-1$ //$NON-NLS-2$
+            100_000, 0);
+
+        assertTrue(result.error(), result.isSuccess());
+        assertTrue(result.markdown(), result.markdown().contains("**Address:** `" + root + "`")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.markdown(), result.markdown().contains(root + "#/items/0")); //$NON-NLS-1$
     }
 
     @Test
@@ -632,6 +692,40 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testExtendedSchemaMembersWrittenAtAParentAreRenderedBelowThatSameAddress()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DcsWriter.Result written = DcsWriter.apply(schema, JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"dataSets\":[{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT Code\"," //$NON-NLS-1$
+            + "\"fields\":[{\"dataPath\":\"Code\",\"attributeUseRestriction\":{\"field\":true}," //$NON-NLS-1$
+            + "\"presentationExpression\":\"Present(Code)\",\"availableValues\":[{" //$NON-NLS-1$
+            + "\"value\":{\"kind\":\"string\",\"value\":\"A\"},\"presentation\":\"Alpha\"}]}]}]," //$NON-NLS-1$
+            + "\"parameters\":[{\"name\":\"P\",\"values\":[{\"kind\":\"string\",\"value\":\"D\"}]," //$NON-NLS-1$
+            + "\"valueListAllowed\":true}]}" //$NON-NLS-1$
+        ).getAsJsonObject(), null);
+        assertFalse(written.error, written.hasError());
+
+        DcsReadProjection.Result field = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/dataSets/Sales/fields/Code").address(), //$NON-NLS-1$
+            "field", "en", 10_000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result parameter = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse("Report.Sales#/parameters/P").address(), //$NON-NLS-1$
+            "parameter", "en", 10_000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(field.error(), field.isSuccess());
+        assertTrue(field.markdown(), field.markdown().contains("attributeUseRestriction")); //$NON-NLS-1$
+        assertTrue(field.markdown(), field.markdown().contains(
+            "| presentationExpression | Present(Code) |")); //$NON-NLS-1$
+        assertTrue(field.markdown(), field.markdown().contains("#/dataSets/Sales/fields/Code/availableValues")); //$NON-NLS-1$
+        assertTrue(parameter.error(), parameter.isSuccess());
+        assertTrue(parameter.markdown(), parameter.markdown().contains("| valueListAllowed | true |")); //$NON-NLS-1$
+        assertTrue(parameter.markdown(), parameter.markdown().contains("#/parameters/P/values")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDataSetLinkParameterIsReportedAsAParameterReference()
     {
         DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -713,6 +807,45 @@ public class DcsReadProjectionTest
         assertEquals(java.util.Arrays.asList("Report.Sales#/dataSetLinks/0", //$NON-NLS-1$
             "Report.Sales#/dataSetLinks/1"), //$NON-NLS-1$
             DcsReadProjection.referenceAddresses(schema, "Report.Sales", "field", "Amount")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testUserFieldReferenceScanReadsDetailAndTotalExpressionsButNotPresentations()
+    {
+        String root = "Report.UserFieldExpressions"; //$NON-NLS-1$
+        DataCompositionSchema schema = schemaWithDataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings();
+        DataCompositionUserFields userFields = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionUserFields();
+
+        DataCompositionUserFieldExpression detail =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionUserFieldExpression();
+        detail.setDataPath("Net"); //$NON-NLS-1$
+        detail.setDetailExpression("Gross - Tax"); //$NON-NLS-1$
+        detail.setDetailExpressionPresentation("PresentationOnly"); //$NON-NLS-1$
+        userFields.getItems().add(detail);
+
+        DataCompositionUserFieldExpression total =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionUserFieldExpression();
+        total.setDataPath("GrossTotal"); //$NON-NLS-1$
+        total.setTotalExpression("SUM(Gross)"); //$NON-NLS-1$
+        total.setTotalExpressionPresentation("AlsoPresentationOnly"); //$NON-NLS-1$
+        userFields.getItems().add(total);
+        settings.setUserFields(userFields);
+        schema.setDefaultSettings(settings);
+
+        assertEquals(java.util.Arrays.asList(
+            root + "#/defaultSettings/userFields/items/0", //$NON-NLS-1$
+            root + "#/defaultSettings/userFields/items/1"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "userField", "Gross")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(java.util.Collections.singletonList(
+            root + "#/defaultSettings/userFields/items/0"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, root, "userField", "Tax")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(DcsReadProjection.referenceAddresses(schema, root, "userField", //$NON-NLS-1$
+            "PresentationOnly").isEmpty()); //$NON-NLS-1$
     }
 
     @Test
@@ -1011,6 +1144,12 @@ public class DcsReadProjectionTest
         settings.setConditionalAppearance(conditionalAppearance);
         DataCompositionGroup group = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionGroup();
+        DataCompositionConditionalAppearance groupAppearance =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionConditionalAppearance();
+        groupAppearance.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionConditionalAppearanceItem());
+        group.setConditionalAppearance(groupAppearance);
         group.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionGroup());
         settings.getItems().add(group);
@@ -1039,6 +1178,13 @@ public class DcsReadProjectionTest
             "conditionalAppearance"); //$NON-NLS-1$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items", "userSettings"); //$NON-NLS-1$ //$NON-NLS-2$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items/0/items", "grouping"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsReadProjection.Result groupAppearanceRead = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(
+                "Report.Sales#/defaultSettings/items/0/conditionalAppearance").address(), //$NON-NLS-1$
+            "conditionalAppearance", "en", 100_000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(groupAppearanceRead.error(), groupAppearanceRead.isSuccess());
+        assertTrue(groupAppearanceRead.markdown(), groupAppearanceRead.markdown().contains(
+            "Report.Sales#/defaultSettings/items/0/conditionalAppearance/items/0")); //$NON-NLS-1$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items/1/rows", "table"); //$NON-NLS-1$ //$NON-NLS-2$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items/1/columns", "table"); //$NON-NLS-1$ //$NON-NLS-2$
     }

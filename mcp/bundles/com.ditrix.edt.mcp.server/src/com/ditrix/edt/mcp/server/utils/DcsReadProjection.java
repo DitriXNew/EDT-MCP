@@ -23,11 +23,15 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
+import com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetFieldFolder;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
@@ -37,12 +41,19 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
+import com._1c.g5.v8.dt.mcore.BooleanValue;
+import com._1c.g5.v8.dt.mcore.DateValue;
+import com._1c.g5.v8.dt.mcore.NullValue;
+import com._1c.g5.v8.dt.mcore.NumberValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.Value;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 
 /**
  * Pure Markdown projection and pointer-resolution layer shared by report/template schemas and form
- * dynamic lists. In particular, both roots reach {@link #renderSettingsOutline} for their settings;
+ * dynamic lists/conditional appearance. In particular, schema and dynamic-list roots reach
+ * {@link #renderSettingsOutline} for their settings;
  * the tool layer only resolves a transaction-local root and adds the hash header.
  */
 public final class DcsReadProjection
@@ -54,7 +65,6 @@ public final class DcsReadProjection
     private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
     private static final String FEATURE_QUERY = "query"; //$NON-NLS-1$
     private static final String FEATURE_QUERY_TEXT = "queryText"; //$NON-NLS-1$
-    private static final String CHART_CLASS = "DataCompositionChart"; //$NON-NLS-1$
     private static final int ERROR_KEY_LIMIT = 20;
 
     private static final FeatureAlias[] FEATURE_ALIASES = {
@@ -130,6 +140,15 @@ public final class DcsReadProjection
         }
         if (!requestedAddress.hasPointer())
         {
+            if (kind == TargetKind.FORM)
+            {
+                if (!"conditionalAppearance".equals(type)) //$NON-NLS-1$
+                {
+                    return typeMismatch(type, "conditionalAppearance", canonicalRoot); //$NON-NLS-1$
+                }
+                return Result.success(renderFormConditionalAppearance(canonicalRoot, root,
+                    language, characterPageLimit(limit, maxPageChars), offset, maxPageChars));
+            }
             if (TYPE_SCHEMA.equals(type))
             {
                 if (kind == TargetKind.DYNAMIC_LIST)
@@ -161,7 +180,9 @@ public final class DcsReadProjection
         if (root == null)
         {
             return Result.failure("Pointer '" + requestedAddress + "' cannot be resolved because DCS root '" //$NON-NLS-1$ //$NON-NLS-2$
-                + rootFqn + "' has no schema content. Create the schema first, then re-run dcs action='get'."); //$NON-NLS-1$
+                + rootFqn + "' has no " + (kind == TargetKind.FORM //$NON-NLS-1$
+                    ? "conditional appearance" : "schema content") //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Create it first, then re-run dcs action='get'."); //$NON-NLS-1$
         }
         NodeResolution resolution = resolvePointer(rootFqn, root, requestedAddress.segments());
         if (!resolution.isSuccess())
@@ -169,6 +190,11 @@ public final class DcsReadProjection
             return Result.failure(resolution.error);
         }
         NodeRef node = resolution.node;
+        if (isChart(node.value))
+        {
+            return Result.success(renderTextPage(node.address, type, renderFullNode(node, language),
+                characterPageLimit(limit, maxPageChars), offset, false, maxPageChars));
+        }
         String actualType = typeOf(node);
         if (actualType == null)
         {
@@ -245,6 +271,25 @@ public final class DcsReadProjection
             DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind, identity);
     }
 
+    private static String renderFormConditionalAppearance(String address, EObject appearance,
+        String language, int limit, int offset, int maxPageChars)
+    {
+        String full;
+        if (appearance == null)
+        {
+            full = "**Address:** `" + address //$NON-NLS-1$
+                + "`\n\n_(conditional appearance is not present)_\n"; //$NON-NLS-1$
+        }
+        else
+        {
+            StringBuilder result = new StringBuilder();
+            appendObjectOutline(result, appearance, address, 0, language);
+            full = result.toString();
+        }
+        return renderTextPage(address, "conditionalAppearance", full, limit, offset, false, //$NON-NLS-1$
+            maxPageChars);
+    }
+
     static List<String> referenceAddressesAt(EObject root, String rootAddress, String kind,
         String identity)
     {
@@ -263,26 +308,38 @@ public final class DcsReadProjection
         if (root == null) return Collections.emptyList();
         List<String> result = new ArrayList<>();
         collectUnmodellable(root, DcsAddress.render(rootFqn, Collections.<String>emptyList()),
-            "", result); //$NON-NLS-1$
+            "", false, result); //$NON-NLS-1$
         return result;
     }
 
     private static void collectUnmodellable(EObject object, String address, String collection,
-        List<String> result)
+        boolean inAdditionalProperties, List<String> result)
     {
+        boolean additionalProperties = inAdditionalProperties
+            || "additionalProperties".equals(collection); //$NON-NLS-1$
         boolean unsupported = object instanceof DataSet
             && !(object instanceof DataCompositionSchemaDataSetQuery)
             && !(object instanceof DataCompositionSchemaDataSetObject)
             && !(object instanceof DataCompositionSchemaDataSetUnion)
             || object instanceof DataSetField
                 && !(object instanceof DataCompositionSchemaDataSetField)
+                && !(object instanceof DataCompositionSchemaDataSetFieldFolder)
             || object instanceof StructureItem && !(object instanceof DataCompositionGroup)
                 && !(object instanceof DataCompositionTable)
-            || "additionalProperties".equals(collection) //$NON-NLS-1$
             || "nestedSchemas".equals(collection) || "templates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
             || "totalFieldsTemplates".equals(collection); //$NON-NLS-1$
+        if (additionalProperties && object instanceof Value
+            && !isAuthorableAdditionalPropertyValue((Value)object))
+        {
+            unsupported = true;
+        }
+        if (object instanceof DataCompositionParameterValue
+            && !((DataCompositionParameterValue)object).getNestedParameterValues().isEmpty())
+        {
+            unsupported = true;
+        }
         if (unsupported)
         {
             result.add(object.eClass().getName() + " at " + address); //$NON-NLS-1$
@@ -302,16 +359,31 @@ public final class DcsReadProjection
                     if (contained instanceof EObject)
                     {
                         EObject childObject = (EObject)contained;
-                        collectUnmodellable(childObject, child(featureAddress,
-                            selector(feature, object, childObject, i)), feature, result);
+                        String childAddress = object instanceof DataSet
+                            && "fields".equals(feature) && childObject instanceof DataSetField //$NON-NLS-1$
+                                ? fieldAddress((DataSet)object, (DataSetField)childObject,
+                                    featureAddress)
+                                : child(featureAddress,
+                                    selector(feature, object, childObject, i));
+                        collectUnmodellable(childObject, childAddress, feature,
+                            additionalProperties, result);
                     }
                 }
             }
             else if (value instanceof EObject)
             {
-                collectUnmodellable((EObject)value, featureAddress, feature, result);
+                collectUnmodellable((EObject)value, featureAddress, feature,
+                    additionalProperties, result);
             }
         }
+    }
+
+    private static boolean isAuthorableAdditionalPropertyValue(Value value)
+    {
+        return value instanceof DataCompositionField || value instanceof DataCompositionParameter
+            || value instanceof DesignTimeValueValue || value instanceof StringValue
+            || value instanceof NumberValue || value instanceof BooleanValue
+            || value instanceof DateValue || value instanceof NullValue;
     }
 
     private static void collectReferences(EObject object, String address, String kind,
@@ -357,7 +429,8 @@ public final class DcsReadProjection
         // A schema expression names a field by its data path and a parameter as '&Name', and both
         // tokenize the same way, so one scan covers every identity an expression can strand.
         if ("field".equals(kind) || "calculatedField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
-            || "totalField".equals(kind) || "parameter".equals(kind)) //$NON-NLS-1$ //$NON-NLS-2$
+            || "totalField".equals(kind) || "userField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
+            || "parameter".equals(kind)) //$NON-NLS-1$
         {
             collectExpressionReferences(object, address, identity, result);
         }
@@ -375,8 +448,13 @@ public final class DcsReadProjection
                     if (contained instanceof EObject)
                     {
                         EObject childObject = (EObject)contained;
-                        collectReferences(childObject, child(featureAddress,
-                            selector(feature, object, childObject, i)), kind, identity, result);
+                        String childAddress = object instanceof DataSet
+                            && "fields".equals(feature) && childObject instanceof DataSetField //$NON-NLS-1$
+                                ? fieldAddress((DataSet)object, (DataSetField)childObject,
+                                    featureAddress)
+                                : child(featureAddress,
+                                    selector(feature, object, childObject, i));
+                        collectReferences(childObject, childAddress, kind, identity, result);
                     }
                 }
             }
@@ -638,6 +716,10 @@ public final class DcsReadProjection
     private static CollectionRef rootCollection(String rootFqn, TargetKind kind, EObject root,
         String type)
     {
+        if (kind == TargetKind.FORM)
+        {
+            return unsupportedCollection(rootFqn, type, kind);
+        }
         switch (type)
         {
             case "dataSource": //$NON-NLS-1$
@@ -649,6 +731,9 @@ public final class DcsReadProjection
             case "field": //$NON-NLS-1$
                 return kind == TargetKind.DYNAMIC_LIST ? directCollection(rootFqn, root, "fields") //$NON-NLS-1$
                     : schemaFields(rootFqn, root);
+            case "fieldFolder": //$NON-NLS-1$
+                return kind == TargetKind.DYNAMIC_LIST ? unsupportedCollection(rootFqn, type, kind)
+                    : schemaFieldFolders(rootFqn, root);
             case "parameter": //$NON-NLS-1$
                 return directCollection(rootFqn, root, "parameters"); //$NON-NLS-1$
             case "calculatedField": //$NON-NLS-1$
@@ -667,6 +752,16 @@ public final class DcsReadProjection
 
     private static CollectionRef schemaFields(String rootFqn, EObject root)
     {
+        return schemaFields(rootFqn, root, false);
+    }
+
+    private static CollectionRef schemaFieldFolders(String rootFqn, EObject root)
+    {
+        return schemaFields(rootFqn, root, true);
+    }
+
+    private static CollectionRef schemaFields(String rootFqn, EObject root, boolean foldersOnly)
+    {
         List<NodeRef> result = new ArrayList<>();
         Object value = featureValue(root, "dataSets"); //$NON-NLS-1$
         if (value instanceof List<?>)
@@ -681,16 +776,20 @@ public final class DcsReadProjection
                 }
                 String dataSetSelector = selector("dataSets", null, (EObject)dataSet, i); //$NON-NLS-1$
                 String dataSetAddress = child(child(rootFqn, "dataSets"), dataSetSelector); //$NON-NLS-1$
-                collectDataSetFields((EObject)dataSet, dataSetAddress, result);
+                collectDataSetFields((EObject)dataSet, dataSetAddress, result, foldersOnly);
             }
         }
         return CollectionRef.success(child(rootFqn, "dataSets"), result); //$NON-NLS-1$
     }
 
     private static void collectDataSetFields(EObject dataSet, String dataSetAddress,
-        List<NodeRef> result)
+        List<NodeRef> result, boolean foldersOnly)
     {
-        result.addAll(directItemsAt(dataSetAddress, dataSet, "fields")); //$NON-NLS-1$
+        if (dataSet instanceof DataSet)
+        {
+            collectFieldLevel((DataSet)dataSet, null, child(dataSetAddress, "fields"), //$NON-NLS-1$
+                result, foldersOnly);
+        }
         if (!(dataSet instanceof DataCompositionSchemaDataSetUnion))
         {
             return;
@@ -709,7 +808,31 @@ public final class DcsReadProjection
             {
                 EObject member = (EObject)item;
                 collectDataSetFields(member,
-                    child(itemsAddress, selector(FEATURE_ITEMS, dataSet, member, i)), result);
+                    child(itemsAddress, selector(FEATURE_ITEMS, dataSet, member, i)), result,
+                    foldersOnly);
+            }
+        }
+    }
+
+    private static void collectFieldLevel(DataSet dataSet,
+        DataCompositionSchemaDataSetFieldFolder parent, String collectionAddress,
+        List<NodeRef> result, boolean foldersOnly)
+    {
+        List<DataSetField> fields = DcsFieldFolders.children(dataSet, parent);
+        EObject owner = parent == null ? dataSet : parent;
+        for (int i = 0; i < fields.size(); i++)
+        {
+            DataSetField field = fields.get(i);
+            String address = child(collectionAddress, selector("fields", owner, field, i)); //$NON-NLS-1$
+            if (!foldersOnly || field instanceof DataCompositionSchemaDataSetFieldFolder)
+            {
+                result.add(new NodeRef(field, address, "fields", owner, //$NON-NLS-1$
+                    Collections.<NodeRef>emptyList()));
+            }
+            if (field instanceof DataCompositionSchemaDataSetFieldFolder)
+            {
+                collectFieldLevel(dataSet, (DataCompositionSchemaDataSetFieldFolder)field,
+                    child(address, "fields"), result, foldersOnly); //$NON-NLS-1$
             }
         }
     }
@@ -904,7 +1027,8 @@ public final class DcsReadProjection
         {
             return Collections.emptyList();
         }
-        Object value = featureValue(owner, featureName);
+        Object value = fieldChildren(owner, featureName);
+        if (value == null) value = featureValue(owner, featureName);
         if (!(value instanceof List<?>))
         {
             return Collections.emptyList();
@@ -928,7 +1052,8 @@ public final class DcsReadProjection
 
     private static CollectionRef unsupportedCollection(String rootFqn, String type, TargetKind kind)
     {
-        String rootType = kind == TargetKind.DYNAMIC_LIST ? TYPE_DYNAMIC_LIST : TYPE_SCHEMA;
+        String rootType = kind == TargetKind.DYNAMIC_LIST ? TYPE_DYNAMIC_LIST
+            : kind == TargetKind.FORM ? "form conditional-appearance" : TYPE_SCHEMA; //$NON-NLS-1$
         return CollectionRef.failure("Type '" + type + "' is not a collection on " + rootType //$NON-NLS-1$ //$NON-NLS-2$
             + " root '" + rootFqn + "'. Use a compatible type or pass an fqn pointer to a specific node; " //$NON-NLS-1$ //$NON-NLS-2$
             + "call get_tool_guide('dcs') for the address/type map."); //$NON-NLS-1$
@@ -967,7 +1092,10 @@ public final class DcsReadProjection
         for (NodeRef item : page)
         {
             String note = isChart(item.value)
-                ? "Read-only existing chart; chart authoring is unsupported." : ""; //$NON-NLS-1$ //$NON-NLS-2$
+                ? "Read-only existing chart; chart authoring is unsupported." //$NON-NLS-1$
+                : isNestedDataSet(item.value)
+                    ? "Read-only existing nested data set; nested-data-set authoring is unsupported." //$NON-NLS-1$
+                    : ""; //$NON-NLS-1$
             if (item.value instanceof EObject
                 && "SettingsVariant".equals(((EObject)item.value).eClass().getName())) //$NON-NLS-1$
             {
@@ -1130,6 +1258,30 @@ public final class DcsReadProjection
                 return failedSegment(segment, currentAddress, Collections.<String> emptyList());
             }
             EObject object = (EObject)current;
+            List<DataSetField> virtualFields = fieldChildren(object, segment);
+            if (virtualFields != null)
+            {
+                owner = object;
+                currentAddress = child(currentAddress, "fields"); //$NON-NLS-1$
+                collectionName = "fields"; //$NON-NLS-1$
+                if (i + 1 >= segments.size())
+                {
+                    return NodeResolution.success(new NodeRef(virtualFields, currentAddress,
+                        collectionName, object, nodeRefs(currentAddress, object, collectionName,
+                            virtualFields)));
+                }
+                String fieldSelector = segments.get(++i);
+                int selected = find(virtualFields, collectionName, object, fieldSelector);
+                if (selected < 0)
+                {
+                    return failedSegment(fieldSelector, currentAddress,
+                        selectors(virtualFields, collectionName, object));
+                }
+                current = virtualFields.get(selected);
+                currentAddress = child(currentAddress, selector(collectionName, object,
+                    (EObject)current, selected));
+                continue;
+            }
             String modelName = modelFeature(object, segment);
             EStructuralFeature feature = object.eClass().getEStructuralFeature(modelName);
             if (feature == null)
@@ -1137,6 +1289,10 @@ public final class DcsReadProjection
                 return failedSegment(segment, currentAddress, navigationKeys(object));
             }
             Object value = object.eGet(feature);
+            if (object instanceof DataSet && "fields".equals(segment)) //$NON-NLS-1$
+            {
+                value = DcsFieldFolders.children((DataSet)object, null);
+            }
             owner = object;
             currentAddress = child(currentAddress, canonicalFeature(object, feature.getName()));
             collectionName = canonicalFeature(object, feature.getName());
@@ -1237,6 +1393,10 @@ public final class DcsReadProjection
     private static List<String> navigationKeys(EObject object)
     {
         List<String> result = new ArrayList<>();
+        if (object instanceof DataCompositionSchemaDataSetFieldFolder)
+        {
+            result.add("fields"); //$NON-NLS-1$
+        }
         for (EReference reference : object.eClass().getEAllReferences())
         {
             if (reference.isContainment())
@@ -1245,6 +1405,22 @@ public final class DcsReadProjection
             }
         }
         return result;
+    }
+
+    private static List<DataSetField> fieldChildren(EObject owner, String featureName)
+    {
+        if (!"fields".equals(featureName)) return null; //$NON-NLS-1$
+        if (owner instanceof DataSet)
+        {
+            return DcsFieldFolders.children((DataSet)owner, null);
+        }
+        if (owner instanceof DataCompositionSchemaDataSetFieldFolder
+            && owner.eContainer() instanceof DataSet)
+        {
+            return DcsFieldFolders.children((DataSet)owner.eContainer(),
+                (DataCompositionSchemaDataSetFieldFolder)owner);
+        }
+        return null;
     }
 
     private static List<NodeRef> nodeRefs(String collectionAddress, EObject owner,
@@ -1277,6 +1453,11 @@ public final class DcsReadProjection
             return "# Existing DCS chart\n\n" //$NON-NLS-1$
                 + "This chart is visible read-only; chart authoring is unsupported.\n"; //$NON-NLS-1$
         }
+        if (isNestedDataSet(object))
+        {
+            return "# Existing DCS nested data set\n\n" //$NON-NLS-1$
+                + "This nested data set is visible read-only; nested-data-set authoring is unsupported.\n"; //$NON-NLS-1$
+        }
         StringBuilder result = new StringBuilder("# DCS node: ").append(itemKind(object)) //$NON-NLS-1$
             .append("\n\n"); //$NON-NLS-1$
 
@@ -1286,10 +1467,18 @@ public final class DcsReadProjection
             return result.toString();
         }
         appendScalarTable(result, object, language, FEATURE_QUERY, FEATURE_QUERY_TEXT);
+        appendExplicitEmptyStrings(result, object);
         appendQuerySummary(result, object, node.address);
         if (object instanceof DataSet)
         {
             appendFieldsTable(result, (DataSet)object, node.address, language);
+        }
+        else if (object instanceof DataCompositionSchemaDataSetFieldFolder
+            && object.eContainer() instanceof DataSet)
+        {
+            appendContainedOutline(result, object, node.address, language);
+            appendFolderFieldsTable(result, (DataSet)object.eContainer(),
+                (DataCompositionSchemaDataSetFieldFolder)object, node.address, language);
         }
         else if ("SettingsVariant".equals(object.eClass().getName())) //$NON-NLS-1$
         {
@@ -1328,7 +1517,7 @@ public final class DcsReadProjection
         List<String[]> rows = new ArrayList<>();
         for (EAttribute attribute : object.eClass().getEAllAttributes())
         {
-            if (!skip.contains(attribute.getName()))
+            if (!skip.contains(attribute.getName()) && !isExplicitEmptyString(object, attribute))
             {
                 rows.add(new String[] {attribute.getName(), displayValue(object.eGet(attribute), language)});
             }
@@ -1402,12 +1591,99 @@ public final class DcsReadProjection
         {
             DataSetField field = fields.get(i);
             String dataPath = stringFeature(field, "dataPath"); //$NON-NLS-1$
-            String selector = dataPath.isEmpty() ? Integer.toString(i) : dataPath;
             result.append(MarkdownUtils.tableRow(dataPath, stringFeature(field, "field"), //$NON-NLS-1$
                 presentationFeature(field, "title", language), itemKind(field), //$NON-NLS-1$
-                child(collection, selector)));
+                fieldAddress(dataSet, field, collection)));
         }
         result.append('\n');
+    }
+
+    /**
+     * The writer deliberately accepts empty strings for these required authoring members. EMF/XML
+     * may report an empty default as unset after re-load, but omitting it from the typed page would
+     * make the value impossible to copy back into a valid write body. Render it literally as an
+     * empty value; non-empty query text retains the normal omission/paging policy.
+     */
+    private static void appendExplicitEmptyStrings(StringBuilder result, EObject object)
+    {
+        String featureName = explicitEmptyStringFeature(object);
+        if (featureName == null)
+        {
+            return;
+        }
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        if (feature == null || !"".equals(object.eGet(feature))) //$NON-NLS-1$
+        {
+            return;
+        }
+        result.append("## Explicit empty strings\n\n- ").append(featureName) //$NON-NLS-1$
+            .append(": \n\n"); //$NON-NLS-1$
+    }
+
+    private static boolean isExplicitEmptyString(EObject object, EAttribute attribute)
+    {
+        String featureName = explicitEmptyStringFeature(object);
+        return featureName != null && featureName.equals(attribute.getName())
+            && "".equals(object.eGet(attribute)); //$NON-NLS-1$
+    }
+
+    private static String explicitEmptyStringFeature(EObject object)
+    {
+        if (object instanceof DataCompositionSchemaCalculatedField)
+        {
+            return "expression"; //$NON-NLS-1$
+        }
+        if (object instanceof DataCompositionSchemaDataSetObject)
+        {
+            return "objectName"; //$NON-NLS-1$
+        }
+        if (object instanceof DataCompositionSchemaDataSetQuery)
+        {
+            return FEATURE_QUERY;
+        }
+        return null;
+    }
+
+    private static void appendFolderFieldsTable(StringBuilder result, DataSet dataSet,
+        DataCompositionSchemaDataSetFieldFolder folder, String address, String language)
+    {
+        List<DataSetField> fields = DcsFieldFolders.children(dataSet, folder);
+        result.append("## Fields\n\n"); //$NON-NLS-1$
+        if (fields.isEmpty())
+        {
+            result.append("_(none)_\n"); //$NON-NLS-1$
+            return;
+        }
+        result.append(MarkdownUtils.tableHeader("Data path", "Field", "Title", "Kind", "Address")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        String collection = child(address, "fields"); //$NON-NLS-1$
+        for (int i = 0; i < fields.size(); i++)
+        {
+            DataSetField field = fields.get(i);
+            result.append(MarkdownUtils.tableRow(stringFeature(field, "dataPath"), //$NON-NLS-1$
+                stringFeature(field, "field"), presentationFeature(field, "title", language), //$NON-NLS-1$ //$NON-NLS-2$
+                itemKind(field), child(collection, selector("fields", folder, field, i)))); //$NON-NLS-1$
+        }
+        result.append('\n');
+    }
+
+    private static String fieldAddress(DataSet dataSet, DataSetField field,
+        String rootCollectionAddress)
+    {
+        String address = rootCollectionAddress;
+        DataCompositionSchemaDataSetFieldFolder parent = null;
+        for (DataCompositionSchemaDataSetFieldFolder ancestor :
+            DcsFieldFolders.ancestors(dataSet, field))
+        {
+            List<DataSetField> siblings = DcsFieldFolders.children(dataSet, parent);
+            EObject owner = parent == null ? dataSet : parent;
+            address = child(address, selector("fields", owner, ancestor, //$NON-NLS-1$
+                siblings.indexOf(ancestor)));
+            address = child(address, "fields"); //$NON-NLS-1$
+            parent = ancestor;
+        }
+        List<DataSetField> siblings = DcsFieldFolders.children(dataSet, parent);
+        EObject owner = parent == null ? dataSet : parent;
+        return child(address, selector("fields", owner, field, siblings.indexOf(field))); //$NON-NLS-1$
     }
 
     private static void appendContainedOutline(StringBuilder result, EObject object, String address,
@@ -1438,6 +1714,12 @@ public final class DcsReadProjection
         {
             result.append("- DataCompositionChart — `").append(address) //$NON-NLS-1$
                 .append("` — read-only; chart authoring is unsupported.\n"); //$NON-NLS-1$
+            return;
+        }
+        if (isNestedDataSet(object))
+        {
+            result.append("- DataCompositionSchemaNestedDataSet — `").append(address) //$NON-NLS-1$
+                .append("` — read-only; nested-data-set authoring is unsupported.\n"); //$NON-NLS-1$
             return;
         }
         result.append("- ").append(object.eClass().getName()).append(" — `").append(address) //$NON-NLS-1$ //$NON-NLS-2$
@@ -1587,6 +1869,10 @@ public final class DcsReadProjection
         {
             return "dataSet"; //$NON-NLS-1$
         }
+        if (object instanceof DataCompositionSchemaDataSetFieldFolder)
+        {
+            return "fieldFolder"; //$NON-NLS-1$
+        }
         if (object instanceof DataSetField)
         {
             return "field"; //$NON-NLS-1$
@@ -1682,6 +1968,8 @@ public final class DcsReadProjection
                 return "totalField"; //$NON-NLS-1$
             case FEATURE_VARIANTS:
                 return "variant"; //$NON-NLS-1$
+            case "additionalProperties": //$NON-NLS-1$
+                return "userSettings"; //$NON-NLS-1$
             default:
                 return null;
         }
@@ -1888,7 +2176,14 @@ public final class DcsReadProjection
 
     private static boolean isChart(Object value)
     {
-        return value instanceof EObject && CHART_CLASS.equals(((EObject)value).eClass().getName());
+        return value instanceof EObject && DcsUnsupportedAuthoring.CHART_CLASS
+            .equals(((EObject)value).eClass().getName());
+    }
+
+    private static boolean isNestedDataSet(Object value)
+    {
+        return value instanceof EObject && DcsUnsupportedAuthoring.NESTED_DATA_SET_CLASS
+            .equals(((EObject)value).eClass().getName());
     }
 
     private static String canonicalFeature(EObject owner, String modelName)

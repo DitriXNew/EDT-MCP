@@ -4659,7 +4659,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
-                return prepareStyleValue(name, prop, target, info, out);
+                return prepareStyleValue(ctx.config, name, prop, target, info, out);
             case ADJUSTABLE_BOOLEAN:
                 return prepareAdjustableBoolean(name, value, info, out);
             case STRING:
@@ -4962,10 +4962,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code type} feature consistent with the value). Returns a JSON error on failure, or {@code null}
      * on success. Read-only: it only builds and queues the change (no model mutation).
      */
-    private String prepareStyleValue(String name, JsonObject prop, EObject target, PropertyInfo info,
-        List<PreparedChange> out)
+    private String prepareStyleValue(Configuration configuration, String name, JsonObject prop,
+        EObject target, PropertyInfo info, List<PreparedChange> out)
     {
-        StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE));
+        StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE),
+            StyleValueBuilder.forConfiguration(configuration));
         if (sv.error != null)
         {
             return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -5061,10 +5062,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Validates a reference target: it must resolve, be re-fetchable (a top object, OR a FORM member -
-     * {@code defaultForm} / {@code auxiliaryForm} legitimately reference a form owned by another object,
-     * issue #262 - both re-fetch fine by {@code bmGetId()} inside the write tx), and have a type
-     * assignable to the reference feature's target type. Returns a JSON error or {@code null} on OK.
+     * Validates a reference target: it must resolve, be re-fetchable (a top object, a FORM member, or a
+     * {@link BasicTemplate} member). Forms ({@code defaultForm} / {@code auxiliaryForm}) and templates
+     * ({@code mainDataCompositionSchema}) legitimately cross-reference members owned by another object;
+     * both are BM objects with stable {@code bmGetId()} values and are re-fetched with
+     * {@link IBmTransaction#getObjectById(long)} inside the write transaction. The target must also be
+     * assignable to the reference feature's declared type. Returns a JSON error or {@code null} on OK.
      */
     // Package-visible (not private) so ModifyMetadataToolTest can exercise the not-found hint headlessly
     // (target==null never touches IBmObject, so no live BM model is needed for that branch).
@@ -5082,11 +5085,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "top-level object; references to members are not supported.").toJson(); //$NON-NLS-1$
         }
         boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
-        if (!((IBmObject)target).bmIsTop() && !isForm)
+        boolean isTemplate = target instanceof BasicTemplate;
+        if (!isForm && !isTemplate && !((IBmObject)target).bmIsTop())
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
-                + "top-level object; references to members are not supported (forms are the one " //$NON-NLS-1$
-                + "supported member reference).").toJson(); //$NON-NLS-1$
+                + "top-level object; references to members are not supported (forms and templates " //$NON-NLS-1$
+                + "are the supported member references because BM can re-fetch both by id).").toJson(); //$NON-NLS-1$
         }
         EClass targetType = ((EReference)feature).getEReferenceType();
         if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))

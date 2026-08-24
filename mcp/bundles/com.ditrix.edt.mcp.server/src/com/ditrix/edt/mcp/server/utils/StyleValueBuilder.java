@@ -9,12 +9,18 @@ package com.ditrix.edt.mcp.server.utils;
 import com._1c.g5.v8.dt.mcore.AutoColor;
 import com._1c.g5.v8.dt.mcore.Color;
 import com._1c.g5.v8.dt.mcore.ColorDef;
+import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.Font;
 import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.NamedElement;
+import com._1c.g5.v8.dt.mcore.PaletteColor;
+import com._1c.g5.v8.dt.mcore.StyleColor;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -23,20 +29,21 @@ import com.google.gson.JsonPrimitive;
 /**
  * Builds the mcore {@link Value} (a {@link ColorValue} or a {@link FontValue}) of a
  * {@link com._1c.g5.v8.dt.metadata.mdclass.StyleItem StyleItem} from the structured JSON a client
- * passes to {@code modify_metadata}'s {@code value} property, and the matching
- * {@link StyleElementType} (so the style item's {@code type} is kept consistent with its value).
+ * passes to {@code modify_metadata}'s {@code value} property or a typed DCS parameter, and the
+ * matching {@link StyleElementType} (so a style item's {@code type} stays consistent with its value).
  *
  * <p>Accepted shapes (exactly one of {@code color} / {@code font}):</p>
  * <ul>
  * <li><b>Color</b> {@code {color:{red:0-255, green:0-255, blue:0-255}}} - an explicit RGB color;
- * or {@code {color:"auto"}} - the platform automatic color.</li>
+ * {@code {color:"auto"}} - the platform automatic color; or
+ * {@code {color:{style:"Name"}}} / {@code {color:{palette:"Name"}}} - a named project color.</li>
  * <li><b>Font</b> {@code {font:{faceName?, height?, bold?, italic?, underline?, strikeout?}}} -
  * at least one of the listed members must be present.</li>
  * </ul>
  *
- * <p>The build is pure (no EMF containment / transaction concern): it only instantiates the mcore
- * objects via {@link McoreFactory}. The caller sets the resulting {@link Result#value} as the style
- * item's {@code value} and {@link Result#type} as its {@code type} inside the write transaction.</p>
+ * <p>The build never mutates the project model: it instantiates the value wrapper via
+ * {@link McoreFactory}; for a named color it reads and references the resolved appearance item.
+ * The caller attaches the resulting {@link Result#value} inside its own write transaction.</p>
  */
 public final class StyleValueBuilder
 {
@@ -46,6 +53,16 @@ public final class StyleValueBuilder
     private static final int RGB_MAX = 255;
     /** Error-message fragment between the expected range/value and the actual one. */
     private static final String GOT_SEPARATOR = ", got "; //$NON-NLS-1$
+
+    /** Resolves the mcore appearance object owned by a named project style/palette item. */
+    public interface NamedColorResolver
+    {
+        /** @return the style item's {@link StyleColor}, or {@code null} when it is absent/not a color. */
+        StyleColor resolveStyle(String name);
+
+        /** @return the palette item's {@link PaletteColor}, or {@code null} when it is absent/not a color. */
+        PaletteColor resolvePalette(String name);
+    }
 
     /** A successfully built style value (the mcore {@link Value} + the matching element {@link StyleElementType}),
      * or an actionable {@link #error} message. Exactly one of {@code error} / {@code value} is set. */
@@ -92,6 +109,18 @@ public final class StyleValueBuilder
      */
     public static Result build(JsonElement raw)
     {
+        return build(raw, null);
+    }
+
+    /**
+     * Builds a style value, resolving named colors against the caller's project model.
+     *
+     * @param raw structured style value JSON
+     * @param namedColors project color resolver; required only for style/palette forms
+     * @return built value or an actionable refusal
+     */
+    public static Result build(JsonElement raw, NamedColorResolver namedColors)
+    {
         if (raw == null || !raw.isJsonObject())
         {
             return Result.error("A StyleItem 'value' must be a structured object: " //$NON-NLS-1$
@@ -107,7 +136,7 @@ public final class StyleValueBuilder
         }
         if (hasColor)
         {
-            return buildColor(obj.get("color")); //$NON-NLS-1$
+            return buildColor(obj.get("color"), namedColors); //$NON-NLS-1$
         }
         if (hasFont)
         {
@@ -117,7 +146,7 @@ public final class StyleValueBuilder
             + "{color:{red:255,green:0,blue:0}} or {font:{faceName:'Arial',height:12,bold:true}}."); //$NON-NLS-1$
     }
 
-    private static Result buildColor(JsonElement colorEl)
+    private static Result buildColor(JsonElement colorEl, NamedColorResolver namedColors)
     {
         // The automatic color is expressed as the string "auto" (or {auto:true}); anything else is an
         // explicit RGB object.
@@ -133,6 +162,41 @@ public final class StyleValueBuilder
                 + "the string 'auto'."); //$NON-NLS-1$
         }
         JsonObject color = colorEl.getAsJsonObject();
+        boolean hasStyle = color.has("style"); //$NON-NLS-1$
+        boolean hasPalette = color.has("palette"); //$NON-NLS-1$
+        if (hasStyle || hasPalette)
+        {
+            if (hasStyle && hasPalette || color.size() != 1)
+            {
+                return Result.error("A named 'color' must be exactly {style:'<name>'} or " //$NON-NLS-1$
+                    + "{palette:'<name>'}, with no RGB or other members."); //$NON-NLS-1$
+            }
+            String member = hasStyle ? "style" : "palette"; //$NON-NLS-1$ //$NON-NLS-2$
+            String name = strictStringMember(color, member);
+            if (name == null || name.trim().isEmpty())
+            {
+                return Result.error("A named 'color' needs a non-empty string name: " //$NON-NLS-1$
+                    + "{color:{" + member + ":'<name>'}}."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            name = name.trim();
+            Color resolved = hasStyle && namedColors != null ? namedColors.resolveStyle(name)
+                : !hasStyle && namedColors != null ? namedColors.resolvePalette(name) : null;
+            if (resolved == null)
+            {
+                String kind = hasStyle ? "style color" : "palette color"; //$NON-NLS-1$ //$NON-NLS-2$
+                String location = hasStyle
+                    ? "Configuration > Style items (Common/StyleItems)" //$NON-NLS-1$
+                    : "Configuration > Palette colors (Common/PaletteColors)"; //$NON-NLS-1$
+                return Result.error("Named " + kind + " '" + name + "' cannot be resolved. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "Such items are defined in the project's " + location + "."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            ColorRef colorRef = McoreFactory.eINSTANCE.createColorRef();
+            colorRef.setColor(resolved);
+            ColorValue colorValue = McoreFactory.eINSTANCE.createColorValue();
+            colorValue.setValue(colorRef);
+            return Result.ok(colorValue, StyleElementType.COLOR,
+                "Color=" + (hasStyle ? "Style." : "Palette.") + name); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
         Integer red = intMember(color, "red"); //$NON-NLS-1$
         Integer green = intMember(color, "green"); //$NON-NLS-1$
         Integer blue = intMember(color, "blue"); //$NON-NLS-1$
@@ -230,7 +294,66 @@ public final class StyleValueBuilder
             ColorDef def = (ColorDef)color;
             return "RGB(" + def.getRed() + ", " + def.getGreen() + ", " + def.getBlue() + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         }
+        if (color instanceof ColorRef)
+        {
+            Color referenced = ((ColorRef)color).getColor();
+            if (referenced instanceof NamedElement)
+            {
+                String prefix = referenced instanceof StyleColor ? "Style." //$NON-NLS-1$
+                    : referenced instanceof PaletteColor ? "Palette." : ""; //$NON-NLS-1$ //$NON-NLS-2$
+                return prefix + ((NamedElement)referenced).getName();
+            }
+        }
         return color.eClass().getName();
+    }
+
+    /**
+     * Creates the resolver used by both DCS typed values and {@code modify_metadata}. The platform
+     * stores the serializable named color on the metadata item's {@code appearanceItem}; a style
+     * item is usable here only when that object is an mcore {@link StyleColor}, and a palette item
+     * only when it is an mcore {@link PaletteColor}.
+     */
+    public static NamedColorResolver forConfiguration(Configuration configuration)
+    {
+        return new NamedColorResolver()
+        {
+            @Override
+            public StyleColor resolveStyle(String name)
+            {
+                if (configuration == null || name == null)
+                {
+                    return null;
+                }
+                for (StyleItem item : configuration.getStyleItems())
+                {
+                    if (item != null && name.equalsIgnoreCase(item.getName())
+                        && item.getAppearanceItem() instanceof StyleColor)
+                    {
+                        return (StyleColor)item.getAppearanceItem();
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            public PaletteColor resolvePalette(String name)
+            {
+                if (configuration == null || name == null)
+                {
+                    return null;
+                }
+                for (com._1c.g5.v8.dt.metadata.mdclass.PaletteColor item
+                    : configuration.getPaletteColors())
+                {
+                    if (item != null && name.equalsIgnoreCase(item.getName())
+                        && item.getAppearanceItem() instanceof PaletteColor)
+                    {
+                        return (PaletteColor)item.getAppearanceItem();
+                    }
+                }
+                return null;
+            }
+        };
     }
 
     /**
@@ -342,6 +465,17 @@ public final class StyleValueBuilder
         }
         JsonElement el = obj.get(name);
         return (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
+    }
+
+    private static String strictStringMember(JsonObject obj, String name)
+    {
+        if (obj == null || !obj.has(name))
+        {
+            return null;
+        }
+        JsonElement el = obj.get(name);
+        return el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isString()
+            ? el.getAsString() : null;
     }
 
     private static Boolean boolMember(JsonObject obj, String name)

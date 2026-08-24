@@ -18,8 +18,14 @@ import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.dcs.model.common.DataCompositionDataSetFieldRole;
+import com._1c.g5.v8.dt.dcs.model.common.DataCompositionOrderExpression;
 import com._1c.g5.v8.dt.dcs.model.common.DataCompositionPeriodType;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionAppearance;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterUse;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionSortDirection;
+import com._1c.g5.v8.dt.dcs.model.core.InputParameters;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
@@ -31,9 +37,13 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestriction;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
+import com._1c.g5.v8.dt.dcs.model.schema.AvailableValue;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -154,6 +164,26 @@ public final class DcsWriter
     private static final String KEY_LINK_CONDITION = "linkCondition"; //$NON-NLS-1$
     private static final String KEY_START_EXPRESSION = "startExpression"; //$NON-NLS-1$
     private static final String KEY_REQUIRED = "required"; //$NON-NLS-1$
+    private static final String KEY_APPEARANCE = "appearance"; //$NON-NLS-1$
+    private static final String KEY_ATTRIBUTE_USE_RESTRICTION = "attributeUseRestriction"; //$NON-NLS-1$
+    private static final String KEY_PRESENTATION_EXPRESSION = "presentationExpression"; //$NON-NLS-1$
+    private static final String KEY_ORDER_EXPRESSIONS = "orderExpressions"; //$NON-NLS-1$
+    private static final String KEY_ORDER_EXPRESSION = "orderExpression"; //$NON-NLS-1$
+    private static final String KEY_IN_HIERARCHY_DATA_SET = "inHierarchyDataSet"; //$NON-NLS-1$
+    private static final String KEY_IN_HIERARCHY_DATA_SET_PARAMETER = "inHierarchyDataSetParameter"; //$NON-NLS-1$
+    private static final String KEY_AVAILABLE_VALUES = "availableValues"; //$NON-NLS-1$
+    private static final String KEY_INPUT_PARAMETERS = "inputParameters"; //$NON-NLS-1$
+    private static final String KEY_VALUES = "values"; //$NON-NLS-1$
+    private static final String KEY_PRESENTATION = "presentation"; //$NON-NLS-1$
+    private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+    private static final String KEY_USE_RESTRICTION_FLAG = "useRestriction"; //$NON-NLS-1$
+    private static final String KEY_VALUE_LIST_ALLOWED = "valueListAllowed"; //$NON-NLS-1$
+    private static final String KEY_AVAILABLE_AS_FIELD = "availableAsField"; //$NON-NLS-1$
+    private static final String KEY_DENY_INCOMPLETE_VALUES = "denyIncompleteValues"; //$NON-NLS-1$
+    private static final String KEY_FUNCTIONAL_OPTIONS_PARAMETER = "functionalOptionsParameter"; //$NON-NLS-1$
+    private static final String KEY_LINK_CONDITION_EXPRESSION = "linkConditionExpression"; //$NON-NLS-1$
+    private static final String KEY_ORDER_TYPE = "orderType"; //$NON-NLS-1$
+    private static final String KEY_AUTO_ORDER = "autoOrder"; //$NON-NLS-1$
 
     // ---- validation error-message stems (java:S1192) --------------------------------------------
 
@@ -377,6 +407,14 @@ public final class DcsWriter
     public static Result apply(DataCompositionSchema schema, JsonObject spec, TypeResolver typeResolver,
         DcsPresentationParser.LanguageContext languages)
     {
+        return apply(schema, spec, typeResolver, languages, Version.LATEST, null);
+    }
+
+    /** Applies schema members that also need the project's appearance catalogue and named colors. */
+    public static Result apply(DataCompositionSchema schema, JsonObject spec, TypeResolver typeResolver,
+        DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
         if (schema == null)
         {
             return Result.failed(ToolResult.error(
@@ -395,29 +433,10 @@ public final class DcsWriter
             return Result.failed(ToolResult.error(modelError).toJson());
         }
 
-        // Resolve every parameter value type BEFORE any mutation, so a bad type spec mutates nothing.
-        TypeDescription[] paramTypes = new TypeDescription[plan.parameters.size()];
-        for (int i = 0; i < plan.parameters.size(); i++)
-        {
-            ParameterPlan param = plan.parameters.get(i);
-            if (param.valueTypeSpec == null)
-            {
-                continue;
-            }
-            if (typeResolver == null)
-            {
-                return Result.failed(ToolResult.error("Parameter '" + param.name //$NON-NLS-1$
-                    + "' declares a 'valueType' but no type resolver is available in this context.") //$NON-NLS-1$
-                    .toJson());
-            }
-            TypeResolution resolution = typeResolver.resolve(param.valueTypeSpec);
-            if (resolution.error != null)
-            {
-                return Result.failed(ToolResult.error("Parameter '" + param.name + "' valueType: " //$NON-NLS-1$ //$NON-NLS-2$
-                    + resolution.error).toJson());
-            }
-            paramTypes[i] = resolution.typeDescription;
-        }
+        String memberError = resolveMembers(schema, plan, typeResolver, languages, version,
+            namedColors);
+        if (memberError != null)
+            return Result.failed(ToolResult.error(memberError).toJson());
 
         int sources = applyDataSets(schema, plan);
         int fields = applyFields(schema, plan);
@@ -426,11 +445,500 @@ public final class DcsWriter
         int totalFields = applyTotalFields(schema, plan);
         for (int i = 0; i < plan.parameters.size(); i++)
         {
-            applyParameter(schema, plan.parameters.get(i), paramTypes[i]);
+            applyParameter(schema, plan.parameters.get(i));
         }
 
         return Result.ok(sources, plan.dataSets.size(), fields, plan.parameters.size(), calculatedFields,
             totalFields);
+    }
+
+    /** Resolves every new member on detached values before any schema mutation. */
+    private static String resolveMembers(DataCompositionSchema schema, Plan plan,
+        TypeResolver typeResolver, DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        String error = resolveDataSetMembers(schema.getDataSets(), plan.dataSets, typeResolver,
+            languages, version, namedColors, KEY_DATA_SETS);
+        if (error != null) return error;
+        for (int i = 0; i < plan.calculatedFields.size(); i++)
+        {
+            CalculatedFieldPlan item = plan.calculatedFields.get(i);
+            DataCompositionSchemaCalculatedField current = findCalculatedField(schema, item.dataPath);
+            item.resolved = new ResolvedMembers();
+            error = resolveCommonMembers(item.members, item.resolved,
+                current == null ? null : current.getValueType(),
+                current == null ? null : current.getAppearance(), typeResolver, languages, version,
+                namedColors, KEY_CALCULATED_FIELDS + "[" + i + "]", true); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+            UseRestrictionResult restriction = parseUseRestrictionMember(item.members,
+                KEY_USE_RESTRICTION, KEY_CALCULATED_FIELDS + "[" + i + "]", //$NON-NLS-1$ //$NON-NLS-2$
+                current == null ? null : current.getUseRestriction());
+            if (restriction.error != null) return restriction.error;
+            item.resolved.attributeUseRestriction = restriction.plan == null
+                ? null : buildUseRestriction(restriction.plan);
+            error = resolveOrderExpressions(item.members, KEY_ORDER_EXPRESSION,
+                item.resolved, KEY_CALCULATED_FIELDS + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        for (int i = 0; i < plan.parameters.size(); i++)
+        {
+            ParameterPlan item = plan.parameters.get(i);
+            DataCompositionSchemaParameter current = findParameter(schema, item.name);
+            item.resolved = new ResolvedMembers();
+            error = resolveCommonMembers(item.members, item.resolved,
+                current == null ? null : current.getValueType(), null, typeResolver, languages,
+                version, namedColors, KEY_PARAMETERS + "[" + i + "]", false); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+            TypeDescription effectiveType = item.members.has(KEY_VALUE_TYPE)
+                ? item.resolved.valueType : current == null ? null : current.getValueType();
+            if (item.members.has(KEY_VALUES))
+            {
+                ValuesResult values = values(item.members.get(KEY_VALUES), effectiveType,
+                    languages, KEY_PARAMETERS + "[" + i + "]." + KEY_VALUES); //$NON-NLS-1$ //$NON-NLS-2$
+                if (values.error != null) return values.error;
+                item.resolved.values = values.values;
+            }
+            error = resolveParameterScalars(item.members, item.resolved,
+                KEY_PARAMETERS + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String resolveDataSetMembers(List<DataSet> existing, List<DataSetPlan> plans,
+        TypeResolver typeResolver, DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, String path)
+    {
+        for (int i = 0; i < plans.size(); i++)
+        {
+            DataSetPlan setPlan = plans.get(i);
+            DataSet currentSet = findDataSet(existing, setPlan.name);
+            for (int j = 0; j < setPlan.fields.size(); j++)
+            {
+                FieldPlan item = setPlan.fields.get(j);
+                DataCompositionSchemaDataSetField current = currentSet == null ? null
+                    : findField(currentSet, item.dataPath);
+                item.resolved = new ResolvedMembers();
+                String itemPath = path + "[" + i + "]." + KEY_FIELDS + "[" + j + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                String error = resolveCommonMembers(item.members, item.resolved,
+                    current == null ? null : current.getValueType(),
+                    current == null ? null : current.getAppearance(), typeResolver, languages,
+                    version, namedColors, itemPath, false);
+                if (error != null) return error;
+                UseRestrictionResult restriction = parseUseRestrictionMember(item.members,
+                    KEY_ATTRIBUTE_USE_RESTRICTION, itemPath,
+                    current == null ? null : current.getAttributeUseRestriction());
+                if (restriction.error != null) return restriction.error;
+                item.resolved.attributeUseRestriction = restriction.plan == null
+                    ? null : buildUseRestriction(restriction.plan);
+                error = resolveOrderExpressions(item.members, KEY_ORDER_EXPRESSIONS,
+                    item.resolved, itemPath);
+                if (error != null) return error;
+                StringResult hierarchy = optionalString(item.members, KEY_IN_HIERARCHY_DATA_SET,
+                    itemPath);
+                if (hierarchy.error != null) return hierarchy.error;
+                item.resolved.inHierarchyDataSet = hierarchy.value;
+                hierarchy = optionalString(item.members, KEY_IN_HIERARCHY_DATA_SET_PARAMETER,
+                    itemPath);
+                if (hierarchy.error != null) return hierarchy.error;
+                item.resolved.inHierarchyDataSetParameter = hierarchy.value;
+            }
+            if (currentSet instanceof DataCompositionSchemaDataSetUnion)
+            {
+                String error = resolveDataSetMembers(
+                    ((DataCompositionSchemaDataSetUnion)currentSet).getItems(), setPlan.items,
+                    typeResolver, languages, version, namedColors,
+                    path + "[" + i + "]." + KEY_ITEMS); //$NON-NLS-1$ //$NON-NLS-2$
+                if (error != null) return error;
+            }
+            else if (!setPlan.items.isEmpty())
+            {
+                String error = resolveDataSetMembers(Collections.<DataSet>emptyList(), setPlan.items,
+                    typeResolver, languages, version, namedColors,
+                    path + "[" + i + "]." + KEY_ITEMS); //$NON-NLS-1$ //$NON-NLS-2$
+                if (error != null) return error;
+            }
+        }
+        return null;
+    }
+
+    private static String resolveCommonMembers(JsonObject members, ResolvedMembers resolved,
+        TypeDescription currentType, DataCompositionAppearance currentAppearance,
+        TypeResolver typeResolver, DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, String path, boolean calculated)
+    {
+        if (members.has(KEY_VALUE_TYPE) && !members.get(KEY_VALUE_TYPE).isJsonNull())
+        {
+            JsonElement spec = members.get(KEY_VALUE_TYPE);
+            if (!spec.isJsonObject()) return "Member '" + KEY_VALUE_TYPE + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + "' must be an object like {types:[{kind:'String'}]}."; //$NON-NLS-1$
+            if (typeResolver == null) return "Member '" + KEY_VALUE_TYPE + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + "' needs the project type resolver; retry through the dcs tool."; //$NON-NLS-1$
+            TypeResolution type = typeResolver.resolve(spec);
+            if (type.error != null) return "Member '" + KEY_VALUE_TYPE + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + "' is invalid: " + type.error; //$NON-NLS-1$
+            resolved.valueType = type.typeDescription;
+        }
+        if (members.has(KEY_APPEARANCE))
+        {
+            JsonElement appearance = members.get(KEY_APPEARANCE);
+            if (appearance == null || appearance.isJsonNull())
+            {
+                resolved.appearance = null;
+            }
+            else if (!appearance.isJsonObject())
+            {
+                return "Member '" + KEY_APPEARANCE + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' must be an object of typed appearance keys, or null to clear it."; //$NON-NLS-1$
+            }
+            else
+            {
+                DcsSettingsWriter.AppearanceResult built = DcsSettingsWriter.buildAppearance(
+                    appearance.getAsJsonObject(), currentAppearance, languages, version,
+                    namedColors, path + "." + KEY_APPEARANCE); //$NON-NLS-1$
+                if (built.error != null) return built.error;
+                resolved.appearance = built.value;
+            }
+        }
+        StringResult presentation = optionalString(members, KEY_PRESENTATION_EXPRESSION, path);
+        if (presentation.error != null) return presentation.error;
+        resolved.presentationExpression = presentation.value;
+        TypeDescription effectiveType = members.has(KEY_VALUE_TYPE) ? resolved.valueType : currentType;
+        if (members.has(KEY_AVAILABLE_VALUES))
+        {
+            AvailableValuesResult available = availableValues(members.get(KEY_AVAILABLE_VALUES),
+                effectiveType, languages, path + "." + KEY_AVAILABLE_VALUES); //$NON-NLS-1$
+            if (available.error != null) return available.error;
+            resolved.availableValues = available.values;
+        }
+        if (members.has(KEY_INPUT_PARAMETERS))
+        {
+            InputParametersResult inputs = inputParameters(members.get(KEY_INPUT_PARAMETERS),
+                languages, path + "." + KEY_INPUT_PARAMETERS); //$NON-NLS-1$
+            if (inputs.error != null) return inputs.error;
+            resolved.inputParameters = inputs.value;
+        }
+        return null;
+    }
+
+    private static String resolveParameterScalars(JsonObject members, ResolvedMembers resolved,
+        String path)
+    {
+        StringResult expression = optionalString(members, KEY_EXPRESSION, path);
+        if (expression.error != null) return expression.error;
+        resolved.expression = expression.value;
+        StringResult functional = optionalString(members, KEY_FUNCTIONAL_OPTIONS_PARAMETER, path);
+        if (functional.error != null) return functional.error;
+        resolved.functionalOptionsParameter = functional.value;
+        BooleanResult flag = optionalBoolean(members, KEY_USE_RESTRICTION_FLAG, path);
+        if (flag.error != null) return flag.error;
+        resolved.useRestriction = flag.value;
+        flag = optionalBoolean(members, KEY_VALUE_LIST_ALLOWED, path);
+        if (flag.error != null) return flag.error;
+        resolved.valueListAllowed = flag.value;
+        flag = optionalBoolean(members, KEY_AVAILABLE_AS_FIELD, path);
+        if (flag.error != null) return flag.error;
+        resolved.availableAsField = flag.value;
+        flag = optionalBoolean(members, KEY_DENY_INCOMPLETE_VALUES, path);
+        if (flag.error != null) return flag.error;
+        resolved.denyIncompleteValues = flag.value;
+        return null;
+    }
+
+    private static UseRestrictionResult parseUseRestrictionMember(JsonObject members, String key,
+        String path, DataCompositionSchemaFieldUseRestriction current)
+    {
+        if (!members.has(key) || members.get(key).isJsonNull())
+            return UseRestrictionResult.ok(null);
+        JsonObject wrapper = new JsonObject();
+        JsonElement supplied = members.get(key);
+        if (supplied.isJsonObject() && current != null)
+        {
+            JsonObject merged = supplied.getAsJsonObject().deepCopy();
+            if (!merged.has(RESTRICTION_FIELD))
+                merged.addProperty(RESTRICTION_FIELD, current.isField());
+            if (!merged.has(RESTRICTION_CONDITION))
+                merged.addProperty(RESTRICTION_CONDITION, current.isCondition());
+            if (!merged.has(RESTRICTION_GROUP))
+                merged.addProperty(RESTRICTION_GROUP, current.isGroup());
+            if (!merged.has(RESTRICTION_ORDER))
+                merged.addProperty(RESTRICTION_ORDER, current.isOrder());
+            supplied = merged;
+        }
+        wrapper.add(KEY_USE_RESTRICTION, supplied);
+        return parseUseRestriction(wrapper, path + "." + key); //$NON-NLS-1$
+    }
+
+    private static String resolveOrderExpressions(JsonObject members, String key,
+        ResolvedMembers resolved, String path)
+    {
+        if (!members.has(key)) return null;
+        JsonElement raw = members.get(key);
+        if (raw == null || !raw.isJsonArray())
+            return "Member '" + key + "' at '" + path + "' must be an array of " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "{expression, orderType, autoOrder} objects."; //$NON-NLS-1$
+        List<DataCompositionOrderExpression> values = new ArrayList<>();
+        int index = 0;
+        for (JsonElement element : raw.getAsJsonArray())
+        {
+            String itemPath = path + "." + key + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            if (element == null || !element.isJsonObject())
+                return "Order expression at '" + itemPath + "' must be an object."; //$NON-NLS-1$ //$NON-NLS-2$
+            JsonObject item = element.getAsJsonObject();
+            String unknown = unknownMembers(item, itemPath, KEY_EXPRESSION, KEY_ORDER_TYPE,
+                KEY_AUTO_ORDER);
+            if (unknown != null) return unknown;
+            StringResult expression = optionalString(item, KEY_EXPRESSION, itemPath);
+            if (expression.error != null) return expression.error;
+            if (!item.has(KEY_EXPRESSION) || expression.value == null || expression.value.isEmpty())
+                return "Order expression at '" + itemPath //$NON-NLS-1$
+                    + "' needs a non-empty 'expression'."; //$NON-NLS-1$
+            DataCompositionSortDirection direction = null;
+            if (item.has(KEY_ORDER_TYPE))
+            {
+                direction = resolveEnum(DataCompositionSortDirection.values(),
+                    stringMember(item, KEY_ORDER_TYPE));
+                if (direction == null) return "Order expression member 'orderType' at '" //$NON-NLS-1$
+                    + itemPath + "' must be one of " //$NON-NLS-1$
+                    + enumTokens(DataCompositionSortDirection.values()) + "."; //$NON-NLS-1$
+            }
+            BooleanResult auto = optionalBoolean(item, KEY_AUTO_ORDER, itemPath);
+            if (auto.error != null) return auto.error;
+            DataCompositionOrderExpression value =
+                com._1c.g5.v8.dt.dcs.model.common.DcsFactory.eINSTANCE
+                    .createDataCompositionOrderExpression();
+            value.setExpression(expression.value);
+            if (direction != null) value.setOrderType(direction);
+            if (auto.value != null) value.setAutoOrder(auto.value.booleanValue());
+            values.add(value);
+            index++;
+        }
+        resolved.orderExpressions = values;
+        return null;
+    }
+
+    private static AvailableValuesResult availableValues(JsonElement raw, TypeDescription declared,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        if (raw == null || !raw.isJsonArray())
+            return AvailableValuesResult.failure("Member at '" + path //$NON-NLS-1$
+                + "' must be an array of {value, presentation} objects."); //$NON-NLS-1$
+        List<AvailableValue> result = new ArrayList<>();
+        int index = 0;
+        for (JsonElement element : raw.getAsJsonArray())
+        {
+            String itemPath = path + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (element == null || !element.isJsonObject())
+                return AvailableValuesResult.failure("Available value at '" + itemPath //$NON-NLS-1$
+                    + "' must be an object with 'value' and optional 'presentation'."); //$NON-NLS-1$
+            JsonObject item = element.getAsJsonObject();
+            String unknown = unknownMembers(item, itemPath, KEY_VALUE, KEY_PRESENTATION);
+            if (unknown != null) return AvailableValuesResult.failure(unknown);
+            if (!item.has(KEY_VALUE)) return AvailableValuesResult.failure("Available value at '" //$NON-NLS-1$
+                + itemPath + "' needs a 'value' ValueSpec."); //$NON-NLS-1$
+            ValueBuildResult built = declaredValue(item.get(KEY_VALUE), declared, languages,
+                itemPath + "." + KEY_VALUE); //$NON-NLS-1$
+            if (built.error != null) return AvailableValuesResult.failure(built.error);
+            AvailableValue value = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+                .createAvailableValue();
+            value.setValue(built.value);
+            if (item.has(KEY_PRESENTATION) && !item.get(KEY_PRESENTATION).isJsonNull())
+            {
+                DcsPresentationParser.ParseResult presentation = DcsPresentationParser.parse(
+                    item.get(KEY_PRESENTATION), languages, itemPath + "." + KEY_PRESENTATION); //$NON-NLS-1$
+                if (!presentation.isSuccess())
+                    return AvailableValuesResult.failure(presentation.error());
+                value.setPresentation(DcsPresentationParser.build(presentation.plan()));
+            }
+            result.add(value);
+            index++;
+        }
+        return AvailableValuesResult.success(result);
+    }
+
+    private static ValuesResult values(JsonElement raw, TypeDescription declared,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        if (raw == null || !raw.isJsonArray())
+            return ValuesResult.failure("Member at '" + path + "' must be an array of ValueSpec objects."); //$NON-NLS-1$ //$NON-NLS-2$
+        List<Value> result = new ArrayList<>();
+        int index = 0;
+        for (JsonElement element : raw.getAsJsonArray())
+        {
+            ValueBuildResult built = declaredValue(element, declared, languages,
+                path + "[" + index + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (built.error != null) return ValuesResult.failure(built.error);
+            result.add(built.value);
+            index++;
+        }
+        return ValuesResult.success(result);
+    }
+
+    private static ValueBuildResult declaredValue(JsonElement raw, TypeDescription declared,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        if (declared == null)
+        {
+            DcsSettingsWriter.ValueResult value = DcsSettingsWriter.buildValue(raw, path);
+            return value.error == null ? ValueBuildResult.success(value.value)
+                : ValueBuildResult.failure(value.error);
+        }
+        Value expected = expectedValue(declared, raw);
+        if (expected == null)
+            return ValueBuildResult.failure("Value at '" + path //$NON-NLS-1$
+                + "' cannot be mapped to the declared valueType. Supported declared default/available " //$NON-NLS-1$
+                + "types are String, Number, Boolean, Date, and Null/Undefined; change the ValueSpec " //$NON-NLS-1$
+                + "or remove this member."); //$NON-NLS-1$
+        DcsSettingsWriter.ValueResult value = DcsSettingsWriter.buildTypedParameterValue(raw,
+            expected, languages, path);
+        return value.error == null ? ValueBuildResult.success(value.value)
+            : ValueBuildResult.failure(value.error);
+    }
+
+    private static Value expectedValue(TypeDescription declared, JsonElement raw)
+    {
+        String kind = raw != null && raw.isJsonObject()
+            ? stringMember(raw.getAsJsonObject(), "kind") : null; //$NON-NLS-1$
+        if (kind == null) return null;
+        String canonical = kind.toLowerCase(java.util.Locale.ROOT);
+        boolean allowed = declaredTypeNames(declared).contains(canonical);
+        if (!allowed)
+        {
+            allowed = "string".equals(canonical) && declared.getStringQualifiers() != null //$NON-NLS-1$
+                || "number".equals(canonical) && declared.getNumberQualifiers() != null //$NON-NLS-1$
+                || "date".equals(canonical) && declared.getDateQualifiers() != null; //$NON-NLS-1$
+        }
+        if (!allowed) return null;
+        switch (canonical)
+        {
+            case "string": return McoreFactory.eINSTANCE.createStringValue(); //$NON-NLS-1$
+            case "number": return McoreFactory.eINSTANCE.createNumberValue(); //$NON-NLS-1$
+            case "boolean": return McoreFactory.eINSTANCE.createBooleanValue(); //$NON-NLS-1$
+            case "date": return McoreFactory.eINSTANCE.createDateValue(); //$NON-NLS-1$
+            case "null": return McoreFactory.eINSTANCE.createNullValue(); //$NON-NLS-1$
+            default: return null;
+        }
+    }
+
+    private static Set<String> declaredTypeNames(TypeDescription declared)
+    {
+        Set<String> result = new HashSet<>();
+        for (TypeItem type : declared.getTypes())
+        {
+            String name = type.getName();
+            String normalized = name == null && type.eIsProxy()
+                ? EcoreUtil.getURI(type).toString().toLowerCase(java.util.Locale.ROOT)
+                : name == null ? "" : name.toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
+            result.add(normalized);
+            if (normalized.contains("string")) result.add("string"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (normalized.contains("number") || normalized.contains("decimal")) result.add("number"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            if (normalized.contains("boolean")) result.add("boolean"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (normalized.contains("date")) result.add("date"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (normalized.contains("null") || normalized.contains("undefined")) result.add("null"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        return result;
+    }
+
+    private static InputParametersResult inputParameters(JsonElement raw,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        if (raw == null || raw.isJsonNull()) return InputParametersResult.success(null);
+        if (!raw.isJsonObject()) return InputParametersResult.failure("Member at '" + path //$NON-NLS-1$
+            + "' must be {items:[...]}, or null to clear it."); //$NON-NLS-1$
+        JsonObject body = raw.getAsJsonObject();
+        String unknown = unknownMembers(body, path, KEY_ITEMS);
+        if (unknown != null) return InputParametersResult.failure(unknown);
+        if (!body.has(KEY_ITEMS) || !body.get(KEY_ITEMS).isJsonArray())
+            return InputParametersResult.failure("Input parameters at '" + path //$NON-NLS-1$
+                + "' need an 'items' array."); //$NON-NLS-1$
+        InputParameters result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createInputParameters();
+        int index = 0;
+        for (JsonElement element : body.getAsJsonArray(KEY_ITEMS))
+        {
+            String itemPath = path + "." + KEY_ITEMS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (element == null || !element.isJsonObject())
+                return InputParametersResult.failure("Input parameter at '" + itemPath //$NON-NLS-1$
+                    + "' must be an object."); //$NON-NLS-1$
+            JsonObject item = element.getAsJsonObject();
+            unknown = unknownMembers(item, itemPath, KEY_PARAMETER, KEY_VALUES, KEY_USE);
+            if (unknown != null) return InputParametersResult.failure(unknown);
+            if (!item.has(KEY_PARAMETER))
+                return InputParametersResult.failure("Input parameter at '" + itemPath //$NON-NLS-1$
+                    + "' needs a parameter ValueSpec."); //$NON-NLS-1$
+            DcsSettingsWriter.ValueResult parameter = DcsSettingsWriter.buildValue(
+                item.get(KEY_PARAMETER), itemPath + "." + KEY_PARAMETER); //$NON-NLS-1$
+            if (parameter.error != null) return InputParametersResult.failure(parameter.error);
+            if (!(parameter.value instanceof DataCompositionParameter))
+                return InputParametersResult.failure("Input parameter at '" + itemPath //$NON-NLS-1$
+                    + ".parameter' must use kind='parameter'."); //$NON-NLS-1$
+            ValuesResult values = item.has(KEY_VALUES)
+                ? values(item.get(KEY_VALUES), null, languages, itemPath + "." + KEY_VALUES) //$NON-NLS-1$
+                : ValuesResult.success(Collections.<Value>emptyList());
+            if (values.error != null) return InputParametersResult.failure(values.error);
+            BooleanResult use = optionalBoolean(item, KEY_USE, itemPath);
+            if (use.error != null) return InputParametersResult.failure(use.error);
+            DataCompositionParameterValue value =
+                com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                    .createDataCompositionParameterValue();
+            value.setParameter((DataCompositionParameter)parameter.value);
+            value.getValues().addAll(values.values);
+            if (use.value != null) value.setUse(use.value.booleanValue());
+            result.getItems().add(value);
+            index++;
+        }
+        return InputParametersResult.success(result);
+    }
+
+    private static StringResult optionalString(JsonObject body, String member, String path)
+    {
+        if (!body.has(member) || body.get(member).isJsonNull()) return StringResult.success(null);
+        JsonElement raw = body.get(member);
+        return raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isString()
+            ? StringResult.success(raw.getAsString())
+            : StringResult.failure("Member '" + member + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + "' must be a string or null."); //$NON-NLS-1$
+    }
+
+    private static BooleanResult optionalBoolean(JsonObject body, String member, String path)
+    {
+        if (!body.has(member)) return BooleanResult.success(null);
+        JsonElement raw = body.get(member);
+        return raw != null && raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isBoolean()
+            ? BooleanResult.success(Boolean.valueOf(raw.getAsBoolean()))
+            : BooleanResult.failure("Member '" + member + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + "' must be true or false."); //$NON-NLS-1$
+    }
+
+    private static DataSet findDataSet(List<DataSet> dataSets, String name)
+    {
+        for (DataSet item : dataSets) if (name.equals(item.getName())) return item;
+        return null;
+    }
+
+    private static DataCompositionSchemaDataSetField findField(DataSet dataSet, String dataPath)
+    {
+        for (DataSetField item : dataSet.getFields())
+            if (item instanceof DataCompositionSchemaDataSetField
+                && dataPath.equals(((DataCompositionSchemaDataSetField)item).getDataPath()))
+                return (DataCompositionSchemaDataSetField)item;
+        return null;
+    }
+
+    private static DataCompositionSchemaCalculatedField findCalculatedField(
+        DataCompositionSchema schema, String dataPath)
+    {
+        for (DataCompositionSchemaCalculatedField item : schema.getCalculatedFields())
+            if (dataPath.equals(item.getDataPath())) return item;
+        return null;
+    }
+
+    private static DataCompositionSchemaParameter findParameter(DataCompositionSchema schema,
+        String name)
+    {
+        for (DataCompositionSchemaParameter item : schema.getParameters())
+            if (name.equals(item.getName())) return item;
+        return null;
     }
 
     /**
@@ -453,6 +961,16 @@ public final class DcsWriter
         List<DataCompositionSchemaCalculatedField> calculatedFields,
         List<DataCompositionSchemaParameter> parameters, String action, JsonObject body,
         TypeResolver typeResolver, DcsPresentationParser.LanguageContext languages)
+    {
+        return planDynamicListItems(fields, calculatedFields, parameters, action, body,
+            typeResolver, languages, Version.LATEST, null);
+    }
+
+    public static DynamicItemsResult planDynamicListItems(List<DataSetField> fields,
+        List<DataCompositionSchemaCalculatedField> calculatedFields,
+        List<DataCompositionSchemaParameter> parameters, String action, JsonObject body,
+        TypeResolver typeResolver, DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
     {
         JsonObject normalized = body.deepCopy();
         String updateError = dynamicUpdateKeysError(fields, calculatedFields, parameters, action,
@@ -514,7 +1032,7 @@ public final class DcsWriter
         }
 
         Result applied = adapted.size() == 0 ? Result.ok(0, 0, 0, 0, 0, 0)
-            : apply(scratch, adapted, typeResolver, languages);
+            : apply(scratch, adapted, typeResolver, languages, version, namedColors);
         if (applied.hasError())
         {
             return DynamicItemsResult.failure(applied.error);
@@ -830,6 +1348,7 @@ public final class DcsWriter
         {
             field.setUseRestriction(buildUseRestriction(plan.useRestriction));
         }
+        applyResolvedFieldMembers(field, plan.resolved, plan.members);
     }
 
     /**
@@ -880,6 +1399,7 @@ public final class DcsWriter
         {
             field.setTitle(buildPresentation(plan.title));
         }
+        applyResolvedCalculatedMembers(field, plan.resolved, plan.members);
     }
 
     /**
@@ -887,13 +1407,13 @@ public final class DcsWriter
      * sets its (already-resolved) value type, an optional {@code title} {@link Presentation}, and an
      * optional {@link DataCompositionParameterUse use}.
      */
-    private static void applyParameter(DataCompositionSchema schema, ParameterPlan plan,
-        TypeDescription valueType)
+    private static void applyParameter(DataCompositionSchema schema, ParameterPlan plan)
     {
         DataCompositionSchemaParameter parameter = getOrCreateParameter(schema, plan.name);
-        if (valueType != null)
+        ResolvedMembers resolved = plan.resolved;
+        if (plan.members.has(KEY_VALUE_TYPE))
         {
-            parameter.setValueType(valueType);
+            parameter.setValueType(resolved.valueType);
         }
         if (plan.title != null)
         {
@@ -903,6 +1423,68 @@ public final class DcsWriter
         {
             parameter.setUse(plan.use);
         }
+        if (plan.members.has(KEY_VALUES)) replace(parameter.getValues(), resolved.values);
+        if (plan.members.has(KEY_AVAILABLE_VALUES))
+            replace(parameter.getAvailableValues(), resolved.availableValues);
+        if (plan.members.has(KEY_EXPRESSION)) parameter.setExpression(resolved.expression);
+        if (resolved.useRestriction != null)
+            parameter.setUseRestriction(resolved.useRestriction.booleanValue());
+        if (resolved.valueListAllowed != null)
+            parameter.setValueListAllowed(resolved.valueListAllowed.booleanValue());
+        if (resolved.availableAsField != null)
+            parameter.setAvailableAsField(resolved.availableAsField.booleanValue());
+        if (resolved.denyIncompleteValues != null)
+            parameter.setDenyIncompleteValues(resolved.denyIncompleteValues.booleanValue());
+        if (plan.members.has(KEY_FUNCTIONAL_OPTIONS_PARAMETER))
+            parameter.setFunctionalOptionsParameter(resolved.functionalOptionsParameter);
+        if (plan.members.has(KEY_INPUT_PARAMETERS))
+            parameter.setInputParameters(resolved.inputParameters);
+    }
+
+    private static void applyResolvedFieldMembers(DataCompositionSchemaDataSetField field,
+        ResolvedMembers resolved, JsonObject members)
+    {
+        if (resolved == null) return;
+        if (members.has(KEY_VALUE_TYPE))
+            field.setValueType(resolved.valueType);
+        if (members.has(KEY_APPEARANCE)) field.setAppearance(resolved.appearance);
+        if (members.has(KEY_ATTRIBUTE_USE_RESTRICTION))
+            field.setAttributeUseRestriction(resolved.attributeUseRestriction);
+        if (members.has(KEY_PRESENTATION_EXPRESSION))
+            field.setPresentationExpression(resolved.presentationExpression);
+        if (members.has(KEY_ORDER_EXPRESSIONS))
+            replace(field.getOrderExpressions(), resolved.orderExpressions);
+        if (members.has(KEY_IN_HIERARCHY_DATA_SET))
+            field.setInHierarchyDataSet(resolved.inHierarchyDataSet);
+        if (members.has(KEY_IN_HIERARCHY_DATA_SET_PARAMETER))
+            field.setInHierarchyDataSetParameter(resolved.inHierarchyDataSetParameter);
+        if (members.has(KEY_AVAILABLE_VALUES))
+            replace(field.getAvailableValues(), resolved.availableValues);
+        if (members.has(KEY_INPUT_PARAMETERS)) field.setInputParameters(resolved.inputParameters);
+    }
+
+    private static void applyResolvedCalculatedMembers(DataCompositionSchemaCalculatedField field,
+        ResolvedMembers resolved, JsonObject members)
+    {
+        if (resolved == null) return;
+        if (members.has(KEY_VALUE_TYPE))
+            field.setValueType(resolved.valueType);
+        if (members.has(KEY_APPEARANCE)) field.setAppearance(resolved.appearance);
+        if (members.has(KEY_USE_RESTRICTION))
+            field.setUseRestriction(resolved.attributeUseRestriction);
+        if (members.has(KEY_PRESENTATION_EXPRESSION))
+            field.setPresentationExpression(resolved.presentationExpression);
+        if (members.has(KEY_ORDER_EXPRESSION))
+            replace(field.getOrderExpression(), resolved.orderExpressions);
+        if (members.has(KEY_AVAILABLE_VALUES))
+            replace(field.getAvailableValues(), resolved.availableValues);
+        if (members.has(KEY_INPUT_PARAMETERS)) field.setInputParameters(resolved.inputParameters);
+    }
+
+    private static <T> void replace(List<T> target, List<T> values)
+    {
+        target.clear();
+        if (values != null) target.addAll(values);
     }
 
     /** Builds a {@link DataCompositionDataSetFieldRole} from a validated role plan (only set flags). */
@@ -1564,9 +2146,17 @@ public final class DcsWriter
         if (TYPE_QUERY.equalsIgnoreCase(type) && !entry.has(KEY_QUERY))
             return DataSetParseResult.failed("A query data set (" + where //$NON-NLS-1$
                 + ") needs a 'query' member. Pass an empty string only when intentionally resetting it."); //$NON-NLS-1$
+        if (TYPE_QUERY.equalsIgnoreCase(type) && !isStringMember(entry, KEY_QUERY))
+            return DataSetParseResult.failed("A query data set (" + where //$NON-NLS-1$
+                + ") member 'query' must be a string. Pass an empty string only when intentionally " //$NON-NLS-1$
+                + "resetting it."); //$NON-NLS-1$
         if (TYPE_OBJECT.equalsIgnoreCase(type) && !entry.has(KEY_OBJECT_NAME))
             return DataSetParseResult.failed("An object data set (" + where //$NON-NLS-1$
                 + ") needs an 'objectName' member. Pass an empty string only when intentionally resetting it."); //$NON-NLS-1$
+        if (TYPE_OBJECT.equalsIgnoreCase(type) && !isStringMember(entry, KEY_OBJECT_NAME))
+            return DataSetParseResult.failed("An object data set (" + where //$NON-NLS-1$
+                + ") member 'objectName' must be a string. Pass an empty string only when intentionally " //$NON-NLS-1$
+                + "resetting it."); //$NON-NLS-1$
         if (TYPE_UNION.equalsIgnoreCase(type) && entry.has(KEY_QUERY))
             return DataSetParseResult.failed("Union data set '" + name + "' at " + where //$NON-NLS-1$ //$NON-NLS-2$
                 + " cannot declare 'query'. Remove 'query'; put each query in a nested data set " //$NON-NLS-1$
@@ -1626,9 +2216,10 @@ public final class DcsWriter
         {
             JsonObject entry = entries.get(i);
             String where = KEY_DATA_SET_LINKS + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-            String unknown = unknownMembers(entry, where, KEY_SOURCE_DATA_SET, KEY_DESTINATION_DATA_SET,
-                KEY_SOURCE_EXPRESSION, KEY_DESTINATION_EXPRESSION, KEY_PARAMETER,
-                KEY_PARAMETER_LIST_ALLOWED, KEY_LINK_CONDITION, KEY_START_EXPRESSION, KEY_REQUIRED);
+        String unknown = unknownMembers(entry, where, KEY_SOURCE_DATA_SET, KEY_DESTINATION_DATA_SET,
+            KEY_SOURCE_EXPRESSION, KEY_DESTINATION_EXPRESSION, KEY_PARAMETER,
+                KEY_PARAMETER_LIST_ALLOWED, KEY_LINK_CONDITION_EXPRESSION, KEY_LINK_CONDITION,
+                KEY_START_EXPRESSION, KEY_REQUIRED);
             if (unknown != null) return unknown;
             String source = nonEmptyString(entry, KEY_SOURCE_DATA_SET);
             String destination = nonEmptyString(entry, KEY_DESTINATION_DATA_SET);
@@ -1653,9 +2244,29 @@ public final class DcsWriter
                 return "Data-set link '" + where + "' member '" + KEY_REQUIRED //$NON-NLS-1$ //$NON-NLS-2$
                     + "' must be true or false."; //$NON-NLS-1$
             }
+            for (String member : new String[] {KEY_PARAMETER, KEY_LINK_CONDITION_EXPRESSION,
+                KEY_LINK_CONDITION, KEY_START_EXPRESSION})
+            {
+                if (entry.has(member) && !entry.get(member).isJsonNull()
+                    && !isStringMember(entry, member))
+                {
+                    return "Data-set link '" + where + "' member '" + member //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' must be a string or null."; //$NON-NLS-1$
+                }
+            }
+            if (entry.has(KEY_LINK_CONDITION_EXPRESSION) && entry.has(KEY_LINK_CONDITION)
+                && !java.util.Objects.equals(stringMember(entry, KEY_LINK_CONDITION_EXPRESSION),
+                    stringMember(entry, KEY_LINK_CONDITION)))
+            {
+                return "Data-set link '" + where + "' supplies both canonical '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + KEY_LINK_CONDITION_EXPRESSION + "' and legacy '" + KEY_LINK_CONDITION //$NON-NLS-1$
+                    + "' with different values. Keep only the canonical member."; //$NON-NLS-1$
+            }
+            String linkCondition = stringMember(entry, KEY_LINK_CONDITION_EXPRESSION);
+            if (linkCondition == null) linkCondition = stringMember(entry, KEY_LINK_CONDITION);
             plan.dataSetLinks.add(new DataSetLinkPlan(source, destination, sourceExpression,
                 destinationExpression, stringMember(entry, KEY_PARAMETER),
-                parameterListAllowed, stringMember(entry, KEY_LINK_CONDITION),
+                parameterListAllowed, linkCondition,
                 stringMember(entry, KEY_START_EXPRESSION), required));
         }
         return null;
@@ -1665,7 +2276,10 @@ public final class DcsWriter
         DcsPresentationParser.LanguageContext languages)
     {
         String unknown = unknownMembers(entry, where, KEY_DATA_PATH, KEY_FIELD, KEY_NAME,
-            KEY_TITLE, KEY_ROLE, KEY_USE_RESTRICTION);
+            KEY_TITLE, KEY_ROLE, KEY_USE_RESTRICTION, KEY_VALUE_TYPE, KEY_APPEARANCE,
+            KEY_ATTRIBUTE_USE_RESTRICTION, KEY_PRESENTATION_EXPRESSION, KEY_ORDER_EXPRESSIONS,
+            KEY_IN_HIERARCHY_DATA_SET, KEY_IN_HIERARCHY_DATA_SET_PARAMETER,
+            KEY_AVAILABLE_VALUES, KEY_INPUT_PARAMETERS);
         if (unknown != null)
         {
             return FieldParseResult.failed(unknown);
@@ -1697,7 +2311,7 @@ public final class DcsWriter
             return FieldParseResult.failed(restriction.error);
         }
         return FieldParseResult.ok(new FieldPlan(dataPath, field, title.plan, role.plan,
-            restriction.plan));
+            restriction.plan, entry.deepCopy()));
     }
 
     private static String parseParameters(JsonObject spec, Plan plan,
@@ -1727,7 +2341,10 @@ public final class DcsWriter
         DcsPresentationParser.LanguageContext languages)
     {
         String where = KEY_PARAMETERS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-        String unknown = unknownMembers(entry, where, KEY_NAME, KEY_VALUE_TYPE, KEY_TITLE, KEY_USE);
+        String unknown = unknownMembers(entry, where, KEY_NAME, KEY_VALUE_TYPE, KEY_TITLE, KEY_USE,
+            KEY_VALUES, KEY_AVAILABLE_VALUES, KEY_EXPRESSION, KEY_USE_RESTRICTION_FLAG,
+            KEY_VALUE_LIST_ALLOWED, KEY_AVAILABLE_AS_FIELD, KEY_DENY_INCOMPLETE_VALUES,
+            KEY_FUNCTIONAL_OPTIONS_PARAMETER, KEY_INPUT_PARAMETERS);
         if (unknown != null)
         {
             return unknown;
@@ -1763,7 +2380,7 @@ public final class DcsWriter
                     + stringMember(entry, KEY_USE) + "'."; //$NON-NLS-1$
             }
         }
-        plan.parameters.add(new ParameterPlan(name, valueTypeSpec, title.plan, use));
+        plan.parameters.add(new ParameterPlan(name, valueTypeSpec, title.plan, use, entry.deepCopy()));
         return null;
     }
 
@@ -1787,15 +2404,19 @@ public final class DcsWriter
     }
 
     /**
-     * Parses + validates one {@code calculatedFields[index]} entry (a non-empty {@code dataPath}, a
-     * non-empty {@code expression}, an optional {@code title}) into a {@link CalculatedFieldPlan}, or a
-     * ready error naming the exact offending entry.
+     * Parses + validates one {@code calculatedFields[index]} entry (a non-empty {@code dataPath}, an
+     * explicitly supplied string {@code expression}, and an optional {@code title}) into a
+     * {@link CalculatedFieldPlan}, or a ready error naming the exact offending entry. An empty
+     * expression is meaningful for a run-time-filled calculated field and must be preserved.
      */
     private static String parseCalculatedField(JsonObject entry, int index, Plan plan,
         DcsPresentationParser.LanguageContext languages)
     {
         String where = KEY_CALCULATED_FIELDS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-        String unknown = unknownMembers(entry, where, KEY_DATA_PATH, KEY_EXPRESSION, KEY_TITLE);
+        String unknown = unknownMembers(entry, where, KEY_DATA_PATH, KEY_EXPRESSION, KEY_TITLE,
+            KEY_VALUE_TYPE, KEY_APPEARANCE, KEY_USE_RESTRICTION,
+            KEY_PRESENTATION_EXPRESSION, KEY_ORDER_EXPRESSION, KEY_AVAILABLE_VALUES,
+            KEY_INPUT_PARAMETERS);
         if (unknown != null)
         {
             return unknown;
@@ -1805,17 +2426,24 @@ public final class DcsWriter
         {
             return ERR_CALCULATED_FIELD + where + ") needs a non-empty '" + KEY_DATA_PATH + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        String expression = nonEmptyString(entry, KEY_EXPRESSION);
-        if (expression == null)
+        if (!entry.has(KEY_EXPRESSION))
         {
-            return ERR_CALCULATED_FIELD + where + ") needs a non-empty '" + KEY_EXPRESSION + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return ERR_CALCULATED_FIELD + where + ") needs an '" + KEY_EXPRESSION //$NON-NLS-1$
+                + "' member. Pass an empty string only when intentionally resetting it."; //$NON-NLS-1$
         }
+        if (!isStringMember(entry, KEY_EXPRESSION))
+        {
+            return ERR_CALCULATED_FIELD + where + ") member '" + KEY_EXPRESSION //$NON-NLS-1$
+                + "' must be a string. Pass an empty string only when intentionally resetting it."; //$NON-NLS-1$
+        }
+        String expression = stringMember(entry, KEY_EXPRESSION);
         TitleResult title = parseTitle(entry, where, languages);
         if (title.error != null)
         {
             return title.error;
         }
-        plan.calculatedFields.add(new CalculatedFieldPlan(dataPath, expression, title.plan));
+        plan.calculatedFields.add(new CalculatedFieldPlan(dataPath, expression, title.plan,
+            entry.deepCopy()));
         return null;
     }
 
@@ -2107,6 +2735,17 @@ public final class DcsWriter
         return (element != null && element.isJsonPrimitive()) ? element.getAsString() : null;
     }
 
+    private static boolean isStringMember(JsonObject obj, String name)
+    {
+        if (obj == null || !obj.has(name))
+        {
+            return false;
+        }
+        JsonElement element = obj.get(name);
+        return element != null && element.isJsonPrimitive()
+            && element.getAsJsonPrimitive().isString();
+    }
+
     private static String nonEmptyString(JsonObject obj, String name)
     {
         String value = stringMember(obj, name);
@@ -2289,15 +2928,18 @@ public final class DcsWriter
         final DcsPresentationParser.Plan title;
         final RolePlan role;
         final UseRestrictionPlan useRestriction;
+        final JsonObject members;
+        ResolvedMembers resolved;
 
         FieldPlan(String dataPath, String field, DcsPresentationParser.Plan title, RolePlan role,
-            UseRestrictionPlan useRestriction)
+            UseRestrictionPlan useRestriction, JsonObject members)
         {
             this.dataPath = dataPath;
             this.field = field;
             this.title = title;
             this.role = role;
             this.useRestriction = useRestriction;
+            this.members = members;
         }
     }
 
@@ -2308,14 +2950,17 @@ public final class DcsWriter
         final JsonElement valueTypeSpec;
         final DcsPresentationParser.Plan title;
         final DataCompositionParameterUse use;
+        final JsonObject members;
+        ResolvedMembers resolved;
 
         ParameterPlan(String name, JsonElement valueTypeSpec, DcsPresentationParser.Plan title,
-            DataCompositionParameterUse use)
+            DataCompositionParameterUse use, JsonObject members)
         {
             this.name = name;
             this.valueTypeSpec = valueTypeSpec;
             this.title = title;
             this.use = use;
+            this.members = members;
         }
     }
 
@@ -2325,13 +2970,97 @@ public final class DcsWriter
         final String dataPath;
         final String expression;
         final DcsPresentationParser.Plan title;
+        final JsonObject members;
+        ResolvedMembers resolved;
 
         CalculatedFieldPlan(String dataPath, String expression, DcsPresentationParser.Plan title)
+        {
+            this(dataPath, expression, title, new JsonObject());
+        }
+
+        CalculatedFieldPlan(String dataPath, String expression, DcsPresentationParser.Plan title,
+            JsonObject members)
         {
             this.dataPath = dataPath;
             this.expression = expression;
             this.title = title;
+            this.members = members;
         }
+    }
+
+    /** Detached, fully validated member values built before the first schema mutation. */
+    static final class ResolvedMembers
+    {
+        TypeDescription valueType;
+        DataCompositionAppearance appearance;
+        DataCompositionSchemaFieldUseRestriction attributeUseRestriction;
+        String presentationExpression;
+        List<DataCompositionOrderExpression> orderExpressions;
+        String inHierarchyDataSet;
+        String inHierarchyDataSetParameter;
+        List<AvailableValue> availableValues;
+        InputParameters inputParameters;
+        List<Value> values;
+        String expression;
+        Boolean useRestriction;
+        Boolean valueListAllowed;
+        Boolean availableAsField;
+        Boolean denyIncompleteValues;
+        String functionalOptionsParameter;
+    }
+
+    private static final class StringResult
+    {
+        final String value; final String error;
+        private StringResult(String value, String error) { this.value = value; this.error = error; }
+        static StringResult success(String value) { return new StringResult(value, null); }
+        static StringResult failure(String error) { return new StringResult(null, error); }
+    }
+
+    private static final class BooleanResult
+    {
+        final Boolean value; final String error;
+        private BooleanResult(Boolean value, String error) { this.value = value; this.error = error; }
+        static BooleanResult success(Boolean value) { return new BooleanResult(value, null); }
+        static BooleanResult failure(String error) { return new BooleanResult(null, error); }
+    }
+
+    private static final class ValueBuildResult
+    {
+        final Value value; final String error;
+        private ValueBuildResult(Value value, String error) { this.value = value; this.error = error; }
+        static ValueBuildResult success(Value value) { return new ValueBuildResult(value, null); }
+        static ValueBuildResult failure(String error) { return new ValueBuildResult(null, error); }
+    }
+
+    private static final class ValuesResult
+    {
+        final List<Value> values; final String error;
+        private ValuesResult(List<Value> values, String error) { this.values = values; this.error = error; }
+        static ValuesResult success(List<Value> values) { return new ValuesResult(values, null); }
+        static ValuesResult failure(String error) { return new ValuesResult(null, error); }
+    }
+
+    private static final class AvailableValuesResult
+    {
+        final List<AvailableValue> values; final String error;
+        private AvailableValuesResult(List<AvailableValue> values, String error)
+        { this.values = values; this.error = error; }
+        static AvailableValuesResult success(List<AvailableValue> values)
+        { return new AvailableValuesResult(values, null); }
+        static AvailableValuesResult failure(String error)
+        { return new AvailableValuesResult(null, error); }
+    }
+
+    private static final class InputParametersResult
+    {
+        final InputParameters value; final String error;
+        private InputParametersResult(InputParameters value, String error)
+        { this.value = value; this.error = error; }
+        static InputParametersResult success(InputParameters value)
+        { return new InputParametersResult(value, null); }
+        static InputParametersResult failure(String error)
+        { return new InputParametersResult(null, error); }
     }
 
     /** A validated total field. */

@@ -126,11 +126,104 @@ public class MetadataTypeBuilderTest
             "length", 0, "kind, ref"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testKindMustBeANonEmptyString()
+    {
+        for (String value : new String[] { "1", "true", "{}", "[]", "null", "\"   \"" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "kind", "a non-empty string"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testStringQualifierValuesAndCombinationsAreValidated()
+    {
+        for (String value : new String[] { "\"50\"", "1.5", "-1", "1025", "{}", "true" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"length\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "length", "integer from 0 to 1024"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        for (String value : new String[] { "\"true\"", "1", "{}", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"length\":10,\"fixed\":" //$NON-NLS-1$
+                + value + "}]}", "fixed", "true or false"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"fixed\":true}]}", //$NON-NLS-1$
+            "fixed", "together with a 'length' member"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"length\":0,\"fixed\":true}]}", //$NON-NLS-1$
+            "fixed", "true only with a positive 'length'"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"String\",\"length\":0,\"fixed\":false}," //$NON-NLS-1$
+                + "{\"kind\":\"String\",\"length\":1024,\"fixed\":true}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNumberQualifierValuesRangesAndCombinationsAreValidated()
+    {
+        for (String value : new String[] { "\"10\"", "1.5", "0", "39", "{}", "true" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"precision\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "precision", "integer from 1 to 38"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        for (String value : new String[] { "\"2\"", "1.5", "-1", "11", "{}", "true" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"precision\":10,\"scale\":" //$NON-NLS-1$
+                + value + "}]}", "scale", "integer from 0"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"scale\":2}]}", //$NON-NLS-1$
+            "scale", "together with a 'precision' member"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String value : new String[] { "\"true\"", "1", "{}", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"precision\":10," //$NON-NLS-1$
+                + "\"nonNegative\":" + value + "}]}", "nonNegative", "true or false"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"nonNegative\":true}]}", //$NON-NLS-1$
+            "nonNegative", "together with a 'precision' member"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"Number\",\"precision\":1,\"scale\":0," //$NON-NLS-1$
+                + "\"nonNegative\":false},{\"kind\":\"Number\",\"precision\":38," //$NON-NLS-1$
+                + "\"scale\":38,\"nonNegative\":true}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDateFractionsValueIsValidatedForTypeAndEnumMembership()
+    {
+        for (String value : new String[] { "\"bogus\"", "\"\"", "1", "true", "{}", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Date\",\"fractions\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "fractions", "DateTime, Date, or Time"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"Date\",\"fractions\":\"datetime\"}," //$NON-NLS-1$
+                + "{\"kind\":\"Date\",\"fractions\":\" Date \"}," //$NON-NLS-1$
+                + "{\"kind\":\"Date\",\"fractions\":\"TIME\"}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReferenceTargetMustBeANonEmptyString()
+    {
+        for (String suffix : new String[] { "", ",\"ref\":\"\"", ",\"ref\":\"   \"", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ",\"ref\":1", ",\"ref\":true", ",\"ref\":{}", ",\"ref\":null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"CatalogRef\"" + suffix + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "ref", "non-empty reference target string"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
     private static void assertUnknownMember(String spec, String member, int index, String accepted)
     {
         assertEquals("Unknown member '" + member + "' in type.types[" + index //$NON-NLS-1$ //$NON-NLS-2$
             + "]. Accepted members: " + accepted + ". Remove '" + member + "' or use one of them.", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             MetadataTypeBuilder.validateShape(json(spec)));
+    }
+
+    private static void assertInvalidMember(String spec, String member, String expected)
+    {
+        String error = MetadataTypeBuilder.validateShape(json(spec));
+        assertNotNull(spec, error);
+        assertTrue(error, error.contains("Invalid member '" + member + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error, error.contains(expected));
     }
 
     @Test

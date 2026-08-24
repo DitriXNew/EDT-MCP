@@ -21,13 +21,14 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 
 /**
- * Resolves the four DCS root forms to transaction-stable BM ids and their persistence targets. Metadata
+ * Resolves the DCS root forms to transaction-stable BM ids and their persistence targets. Metadata
  * and form navigation stays in the shared resolvers; no workspace path or configuration tree is
  * traversed here by hand.
  *
@@ -53,6 +54,7 @@ public final class DcsTargetResolver
         REPORT_MAIN_DCS,
         COMMON_TEMPLATE,
         OWNED_TEMPLATE,
+        FORM,
         DYNAMIC_LIST
     }
 
@@ -159,6 +161,8 @@ public final class DcsTargetResolver
                 case DYNAMIC_LIST:
                     return resolveDynamicList(projectContext, bmModel, address, classification,
                         allowPlainDynamicList);
+                case FORM:
+                    return resolveForm(projectContext, bmModel, address, classification);
                 default:
                     return failure(FailureCode.UNSUPPORTED_ROOT, classification.normalizedRoot, null,
                         unsupportedRootMessage(classification.normalizedRoot));
@@ -199,6 +203,12 @@ public final class DcsTargetResolver
             return RootClassification.success(TargetKind.OWNED_TEMPLATE, normalized, null);
         }
 
+        String formPath = FormElementWriter.parseFormPath(normalized);
+        if (formPath != null)
+        {
+            return RootClassification.success(TargetKind.FORM, normalized, null);
+        }
+
         FormElementWriter.FormMemberRef ref = FormElementWriter.parse(normalized);
         if (ref != null && !ref.isAttributeColumn() && !ref.isItemLevel()
             && FormElementWriter.kindForToken(ref.kindToken) == FormElementWriter.Kind.ATTRIBUTE)
@@ -212,6 +222,10 @@ public final class DcsTargetResolver
     /** Pure mapping that makes every root kind's required persistence targets explicit. */
     static List<ExportRole> requiredExportRoles(TargetKind kind)
     {
+        if (kind == TargetKind.FORM)
+        {
+            return Collections.singletonList(ExportRole.FORM_CONTENT);
+        }
         if (kind == TargetKind.DYNAMIC_LIST)
         {
             List<ExportRole> roles = new ArrayList<>();
@@ -444,6 +458,55 @@ public final class DcsTargetResolver
             TargetKind.DYNAMIC_LIST, ids, exports, classification.formMemberRef));
     }
 
+    private static Resolution resolveForm(ProjectContext.ConfigurationResult context,
+        IBmModel bmModel, DcsAddress address, RootClassification classification)
+    {
+        String formPath = FormElementWriter.parseFormPath(classification.normalizedRoot);
+        MdObject mdForm = FormStructureReader.resolveMdForm(context.scope(), formPath);
+        if (mdForm == null)
+        {
+            return notFound(classification.normalizedRoot,
+                "Verify the form programmatic Name with get_metadata_details, then retry."); //$NON-NLS-1$
+        }
+        if (!(mdForm instanceof IBmObject))
+        {
+            return bmObjectUnavailable(classification.normalizedRoot, mdForm);
+        }
+
+        IBmObject mdFormBm = (IBmObject)mdForm;
+        FormInspection inspection = BmTransactions.executeAndRollback(bmModel,
+            "ResolveFormConditionalAppearance", (tx, monitor) -> //$NON-NLS-1$
+        {
+            EObject txMdForm = tx.getObjectById(mdFormBm.bmGetId());
+            EObject content = txMdForm == null ? null : FormElementWriter.getEditableForm(txMdForm);
+            if (!(content instanceof Form))
+            {
+                return FormInspection.failure(new Failure(FailureCode.FORM_CONTENT_UNAVAILABLE,
+                    classification.normalizedRoot, typeName(content),
+                    "Form '" + classification.normalizedRoot //$NON-NLS-1$
+                        + "' has no editable managed-form content. Open and save it in the form " //$NON-NLS-1$
+                        + "designer, then retry.")); //$NON-NLS-1$
+            }
+            String contentFqn = ownTopFqn(content);
+            if (contentFqn == null)
+            {
+                return FormInspection.failure(new Failure(FailureCode.BM_OBJECT_UNAVAILABLE,
+                    classification.normalizedRoot, typeName(content),
+                    "Editable content Form for '" + classification.normalizedRoot //$NON-NLS-1$
+                        + "' has no top-object FQN to export. Re-open and save the form, then retry.")); //$NON-NLS-1$
+            }
+            return FormInspection.success(contentFqn);
+        });
+        if (inspection.failure != null) return Resolution.failure(inspection.failure);
+
+        EnumMap<BmRole, Long> ids = new EnumMap<>(BmRole.class);
+        putId(ids, BmRole.MD_FORM, mdFormBm);
+        List<ExportTarget> exports = Collections.singletonList(
+            new ExportTarget(ExportRole.FORM_CONTENT, inspection.formContentFqn));
+        return Resolution.success(new Target(address, classification.normalizedRoot,
+            TargetKind.FORM, ids, exports, null));
+    }
+
     private static DcsInspection inspectTemplate(BasicTemplate template, String fqn)
     {
         EObject content = template.getTemplate();
@@ -647,7 +710,8 @@ public final class DcsTargetResolver
     {
         return "FQN '" + fqn + "' is not a supported DCS root. Use Report.<Name>, " //$NON-NLS-1$ //$NON-NLS-2$
             + "CommonTemplate.<Name>, <Type>.<Owner>.Template.<Name>, or " //$NON-NLS-1$
-            + "<Type>.<Owner>.Form.<Name>.Attribute.<Name>."; //$NON-NLS-1$
+            + "<Type>.<Owner>.Form.<Name> (for conditional appearance), or " //$NON-NLS-1$
+            + "<Type>.<Owner>.Form.<Name>.Attribute.<Name> (for a dynamic list)."; //$NON-NLS-1$
     }
 
     /** Successful target or structured failure; neither branch throws across the utility boundary. */
@@ -764,6 +828,35 @@ public final class DcsTargetResolver
         public FormElementWriter.FormMemberRef formMemberRef()
         {
             return formMemberRef;
+        }
+
+        /** Form path in the shape accepted by {@link FormElementWriter#resolveForEdit}. */
+        public String formPath()
+        {
+            return formMemberRef == null ? FormElementWriter.parseFormPath(normalizedRootFqn)
+                : formMemberRef.formPath;
+        }
+    }
+
+    private static final class FormInspection
+    {
+        final String formContentFqn;
+        final Failure failure;
+
+        private FormInspection(String formContentFqn, Failure failure)
+        {
+            this.formContentFqn = formContentFqn;
+            this.failure = failure;
+        }
+
+        static FormInspection success(String fqn)
+        {
+            return new FormInspection(fqn, null);
+        }
+
+        static FormInspection failure(Failure failure)
+        {
+            return new FormInspection(null, failure);
         }
     }
 

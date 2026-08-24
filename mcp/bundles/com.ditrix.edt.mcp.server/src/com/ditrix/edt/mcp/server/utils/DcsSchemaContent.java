@@ -57,13 +57,21 @@ public final class DcsSchemaContent
         IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
         IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
         IV8Project project = manager == null ? null : manager.getProject(context.project());
-        if (generator == null || factory == null || project == null)
+        return resolveServices(model, generator, factory, project);
+    }
+
+    /** Package-visible readiness seam: a V8 project is not usable until its version is available. */
+    static Services resolveServices(IBmModel model, ITopObjectFqnGenerator generator,
+        IModelObjectFactory factory, IV8Project project)
+    {
+        Version version = project == null ? null : project.getVersion();
+        if (model == null || generator == null || factory == null || project == null || version == null)
         {
             return Services.failure("EDT services needed to materialize DCS content are unavailable " //$NON-NLS-1$
-                + "(external-property FQN generator, model factory, or V8 project). Re-open the " //$NON-NLS-1$
-                + "project and retry."); //$NON-NLS-1$
+                + "(BM model, external-property FQN generator, model factory, V8 project, or " //$NON-NLS-1$
+                + "platform version). Wait for EDT to finish loading the project, then retry."); //$NON-NLS-1$
         }
-        return Services.success(model, generator, factory, project.getVersion());
+        return Services.success(model, generator, factory, version);
     }
 
     /** Re-fetches/materializes one schema inside the caller's active write transaction. */

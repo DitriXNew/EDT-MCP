@@ -25,6 +25,7 @@ public final class DcsMutationGuard
         if (root == null || target == null) return null;
         String targetAddress = target.toString();
         List<String> blocked = new ArrayList<>();
+        String deliberateRefusal = null;
         for (String node : DcsReadProjection.unmodellableNodes(root, target.rootFqn()))
         {
             int marker = node.indexOf(" at "); //$NON-NLS-1$
@@ -33,9 +34,15 @@ public final class DcsMutationGuard
                 || address.startsWith(targetAddress + "/")) //$NON-NLS-1$
             {
                 blocked.add(node);
+                if (deliberateRefusal == null)
+                {
+                    String className = marker < 0 ? node : node.substring(0, marker);
+                    deliberateRefusal = DcsUnsupportedAuthoring.refusal(className, address);
+                }
             }
         }
         if (blocked.isEmpty()) return null;
+        if (deliberateRefusal != null) return deliberateRefusal;
         return "action='replace' refuses target '" + target //$NON-NLS-1$
             + "' because it contains content this writer cannot model: " //$NON-NLS-1$
             + String.join(", ", blocked) //$NON-NLS-1$

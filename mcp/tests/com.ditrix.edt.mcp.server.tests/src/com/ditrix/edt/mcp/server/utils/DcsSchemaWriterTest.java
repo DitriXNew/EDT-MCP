@@ -27,6 +27,8 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestriction;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaNestedDataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
@@ -200,6 +202,40 @@ public class DcsSchemaWriterTest
         assertEquals(1, retail(schema).getFields().size());
         assertEquals("Amount", //$NON-NLS-1$
             ((DataCompositionSchemaDataSetField)retail(schema).getFields().get(0)).getDataPath());
+    }
+
+    @Test
+    public void testFieldAttributeUseRestrictionUpdateMergesOmittedFlags()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery set = dataSet("Sales", "SELECT 1 AS Code"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetField field = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetField();
+        field.setDataPath("Code"); //$NON-NLS-1$
+        field.setField("Code"); //$NON-NLS-1$
+        DataCompositionSchemaFieldUseRestriction restriction = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaFieldUseRestriction();
+        restriction.setField(true);
+        restriction.setCondition(true);
+        restriction.setGroup(true);
+        restriction.setOrder(true);
+        field.setAttributeUseRestriction(restriction);
+        set.getFields().add(field);
+        schema.getDataSets().add(set);
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Code", //$NON-NLS-1$
+            "{\"attributeUseRestriction\":{\"field\":false}}"); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        DataCompositionSchemaDataSetQuery updatedSet =
+            (DataCompositionSchemaDataSetQuery)schema.getDataSets().get(0);
+        DataCompositionSchemaFieldUseRestriction updated =
+            ((DataCompositionSchemaDataSetField)updatedSet.getFields().get(0)).getAttributeUseRestriction();
+        assertFalse(updated.isField());
+        assertTrue(updated.isCondition());
+        assertTrue(updated.isGroup());
+        assertTrue(updated.isOrder());
     }
 
     @Test
@@ -438,30 +474,70 @@ public class DcsSchemaWriterTest
     }
 
     @Test
-    public void testFieldFolderRenameIsUnsupportedAndLeavesHashUnchanged()
+    public void testFieldFolderRoundTripAndNestedFieldAddressIsWritable()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsSchemaWriter.Result created = apply(schema, "upsert", "dataSet", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"fields\":[{\"kind\":\"folder\",\"dataPath\":\"Customer\"," //$NON-NLS-1$
+                + "\"title\":{\"en\":\"Customer\"},\"useRestriction\":{\"field\":true}," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Customer.Name\",\"field\":\"Name\"}]}]}"); //$NON-NLS-1$
+
+        assertTrue(created.error(), created.isSuccess());
+        DataCompositionSchemaDataSetQuery dataSet = query(schema);
+        assertEquals(2, dataSet.getFields().size());
+        DataCompositionSchemaDataSetFieldFolder folder = (DataCompositionSchemaDataSetFieldFolder)
+            dataSet.getFields().get(1);
+        assertEquals("Customer", folder.getDataPath()); //$NON-NLS-1$
+        assertEquals("Customer", folder.getTitle().getLocalValue().getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(folder.getUseRestriction().isField());
+        assertTrue("a fully authorable folder must leave the losslessness guard", //$NON-NLS-1$
+            DcsReadProjection.unmodellableNodes(schema, "Report.Sales").isEmpty()); //$NON-NLS-1$
+
+        String folderAddress = "Report.Sales#/dataSets/Sales/fields/Customer"; //$NON-NLS-1$
+        String fieldAddress = folderAddress + "/fields/Customer.Name"; //$NON-NLS-1$
+        DcsReadProjection.Result page = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            DcsTargetResolver.TargetKind.REPORT_MAIN_DCS, schema,
+            DcsAddress.parse(folderAddress).address(), "fieldFolder", "en", 1000, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(page.error(), page.isSuccess());
+        assertTrue(page.markdown(), page.markdown().contains(fieldAddress));
+
+        DcsSchemaWriter.Result updated = apply(schema, "update", "field", fieldAddress, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"title\":{\"en\":\"Customer name\"}}"); //$NON-NLS-1$
+
+        assertTrue(updated.error(), updated.isSuccess());
+        DataCompositionSchemaDataSetField nested = (DataCompositionSchemaDataSetField)
+            query(schema).getFields().get(0);
+        assertEquals("Customer name", nested.getTitle().getLocalValue().getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNestedDataSetRefusalIsArticulateAtNodeParentBodyAndCollectionReplace()
     {
         DataCompositionSchema schema = newSchema();
         DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
-        DataCompositionSchemaDataSetFieldFolder folder = DcsFactory.eINSTANCE
-            .createDataCompositionSchemaDataSetFieldFolder();
-        folder.setDataPath("Folder"); //$NON-NLS-1$
-        dataSet.getFields().add(folder);
+        DataCompositionSchemaNestedDataSet nested = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaNestedDataSet();
+        nested.setDataPath("Nested"); //$NON-NLS-1$
+        dataSet.getFields().add(nested);
         schema.getDataSets().add(dataSet);
-        String address = "Report.Sales#/dataSets/Sales/fields/Folder"; //$NON-NLS-1$
-        DcsReadProjection.Result page = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
-            DcsTargetResolver.TargetKind.REPORT_MAIN_DCS, schema,
-            DcsAddress.parse("Report.Sales").address(), "field", "en", 100, 0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertTrue(page.error(), page.isSuccess());
-        assertTrue(page.markdown(), page.markdown().contains(address));
-        String beforeHash = DcsHash.compute(schema);
+        String nodeAddress = "Report.Sales#/dataSets/Sales/fields/Nested"; //$NON-NLS-1$
 
-        DcsSchemaWriter.Result result = apply(schema, "update", "field", address, //$NON-NLS-1$ //$NON-NLS-2$
-            "{\"dataPath\":\"RenamedFolder\"}"); //$NON-NLS-1$
+        DcsSchemaWriter.Result atNode = apply(schema, "update", "field", nodeAddress, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"title\":\"Never applied\"}"); //$NON-NLS-1$
+        assertFalse(atNode.isSuccess());
+        assertUnsupportedNestedDataSet(atNode.error());
 
-        assertFalse(result.isSuccess());
-        assertTrue(result.error(), result.error().contains("DataCompositionSchemaDataSetFieldFolder")); //$NON-NLS-1$
-        assertTrue(result.error(), result.error().contains("folders are not authorable")); //$NON-NLS-1$
-        assertEquals(beforeHash, DcsHash.compute(schema));
+        DcsSchemaWriter.Result parentBody = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales", //$NON-NLS-1$
+            "{\"fields\":[{\"kind\":\"nestedDataSet\",\"dataPath\":\"Another\"}]}"); //$NON-NLS-1$
+        assertFalse(parentBody.isSuccess());
+        assertUnsupportedNestedDataSet(parentBody.error());
+
+        String collection = DcsMutationGuard.replaceError(schema,
+            address("Report.Sales#/dataSets/Sales/fields")); //$NON-NLS-1$
+        assertNotNull(collection);
+        assertUnsupportedNestedDataSet(collection);
     }
 
     @Test
@@ -813,10 +889,28 @@ public class DcsSchemaWriterTest
 
         assertFalse(calculated.isSuccess());
         assertTrue(calculated.error(), calculated.error().contains("must carry 'expression'")); //$NON-NLS-1$
-        assertTrue(calculated.error(), calculated.error().contains("action='get'")); //$NON-NLS-1$
+        assertTrue(calculated.error(), calculated.error().contains(
+            "Pass an empty string only when intentionally resetting it")); //$NON-NLS-1$
         assertFalse(total.isSuccess());
         assertTrue(total.error(), total.error().contains("must carry 'expression'")); //$NON-NLS-1$
         assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testEmptyCalculatedExpressionSurvivesReplaceAndPartialUpdate()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsSchemaWriter.Result created = apply(schema, "upsert", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", "{\"dataPath\":\"RuntimeValue\",\"expression\":\"\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result updated = apply(schema, "update", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields/RuntimeValue", "{\"title\":\"Runtime\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result replaced = apply(schema, "replace", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields/RuntimeValue", "{\"expression\":\"\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(created.error(), created.isSuccess());
+        assertTrue(updated.error(), updated.isSuccess());
+        assertTrue(replaced.error(), replaced.isSuccess());
+        assertEquals("", schema.getCalculatedFields().get(0).getExpression()); //$NON-NLS-1$
     }
 
     @Test
@@ -1380,6 +1474,16 @@ public class DcsSchemaWriterTest
         assertTrue(result.error(), result.error().contains("matches 2 existing nodes")); //$NON-NLS-1$
         assertTrue(result.error(), result.error().contains("disambiguate")); //$NON-NLS-1$
         assertTrue(result.error(), result.error().contains("DCS designer")); //$NON-NLS-1$
+    }
+
+    private static void assertUnsupportedNestedDataSet(String error)
+    {
+        assertTrue(error, error.contains("DataCompositionSchemaNestedDataSet")); //$NON-NLS-1$
+        assertTrue(error, error.contains("nested data set")); //$NON-NLS-1$
+        assertTrue(error, error.contains("authoring it is not supported by this tool")); //$NON-NLS-1$
+        assertTrue(error, error.contains("action='replace', type='schema'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("body={xml:...}")); //$NON-NLS-1$
+        assertFalse(error, error.contains("no public DCS type")); //$NON-NLS-1$
     }
 
     private static DataCompositionSchema newSchema()

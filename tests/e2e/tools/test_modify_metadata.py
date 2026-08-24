@@ -48,6 +48,36 @@ from harness import (
 )
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_report_main_data_composition_schema_accepts_owned_template_member_reference():
+    report_name = "E2EMainDcsReference"
+    report = "Report." + report_name
+    template = report + ".Template.AgentMainSchema"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": report}),
+              "create report for main DCS reference")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": template}),
+              "create the report-owned template member")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": template,
+        "properties": [{"name": "templateType", "value": "DataCompositionSchema"}],
+    }), "declare the owned template as a DCS")
+    wait_for_project_ready()
+
+    wired = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": report,
+        "properties": [{"name": "mainDataCompositionSchema", "value": template}],
+    })
+    assert_ok(wired, "wire the report main schema to its BasicTemplate member")
+    assert "mainDataCompositionSchema" in (wired.structured.get("applied") or [])
+    poll_disk_contains("src/Reports/%s/%s.mdo" % (report_name, report_name),
+                       "AgentMainSchema",
+                       ctx="the report mainDataCompositionSchema reference must reach disk")
+
+
 # The fixture form every form-member test writes to.
 _ITEM_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 

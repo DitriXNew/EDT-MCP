@@ -20,9 +20,12 @@ import java.util.Arrays;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionTotalPlacement;
+import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemGroup;
@@ -30,16 +33,25 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFieldGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
-import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
+import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
+import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
+import com._1c.g5.v8.dt.dcs.path.DcsPathException;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.mcore.EnumValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Structure;
+import com._1c.g5.v8.dt.mcore.StructureProperty;
+import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -49,6 +61,29 @@ public class DcsSettingsWriterTest
 {
     private static final DcsPresentationParser.LanguageContext LANGUAGES =
         new DcsPresentationParser.LanguageContext(Arrays.asList("en", "uk")); //$NON-NLS-1$ //$NON-NLS-2$
+
+    @Test
+    public void testSmallSettableSettingsMembersAreAuthoredAndRetained()
+    {
+        DcsSettingsWriter.SettingsResult result = DcsSettingsWriter.planSettings(null,
+            java.util.Collections.<String>emptyList(), "upsert", "userSettings", json("{" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "\"items\":[{\"kind\":\"grouping\",\"name\":\"G\",\"id\":\"group-id\"," //$NON-NLS-1$
+                + "\"groupState\":\"Disabled\"},{\"kind\":\"table\",\"name\":\"T\"," //$NON-NLS-1$
+                + "\"id\":\"table-id\"}],\"additionalProperties\":{" //$NON-NLS-1$
+                + "\"AgentMarker\":{\"kind\":\"string\",\"value\":\"kept\"}}}"), LANGUAGES); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        DataCompositionGroup group = (DataCompositionGroup)result.settings().getItems().get(0);
+        DataCompositionTable table = (DataCompositionTable)result.settings().getItems().get(1);
+        assertEquals("group-id", group.getId()); //$NON-NLS-1$
+        assertEquals(DataCompositionSettingsItemState.DISABLED, group.getGroupState());
+        assertEquals("table-id", table.getId()); //$NON-NLS-1$
+        StructureProperty property = result.settings().getAdditionalProperties().getProperty().get(0);
+        assertEquals("AgentMarker", property.getName()); //$NON-NLS-1$
+        assertEquals("kept", ((StringValue)property.getValue()).getValue()); //$NON-NLS-1$
+        assertTrue("all authored members must be reproducible by authoritative replace", //$NON-NLS-1$
+            DcsReadProjection.unmodellableNodes(result.settings(), "Report.Small").isEmpty()); //$NON-NLS-1$
+    }
 
     @Test
     public void testReportVariantAndDynamicListUseEquivalentSharedSettingsTree()
@@ -133,7 +168,6 @@ public class DcsSettingsWriterTest
         assertEquals(ukrainianSelection, settings.getSelection().getUserSettingPresentation()
             .getLocalValue().getContent().get("uk")); //$NON-NLS-1$
         assertEquals(1, settings.getDataParameters().getItems().size());
-        assertEquals(1, settings.getOutputParameters().getItems().size());
     }
 
     @Test
@@ -210,6 +244,117 @@ public class DcsSettingsWriterTest
             java.util.Collections.emptyList(), "upsert", "userSettings", body, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("an appearance block must never be accepted unvalidated", result.isSuccess()); //$NON-NLS-1$
         assertTrue(result.error(), result.error().contains("appearance")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownOutputParameterNamesAreRefusedWithValidTypedKeys()
+    {
+        SettingsParameterValue item = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        String error = DcsSettingsWriter.applyOutputParameterItemForTest(item,
+            json("{\"parameter\":{\"kind\":\"parameter\"," //$NON-NLS-1$
+                + "\"value\":\"ThisParameterDoesNotExist\"},\"value\":\"x\"}"), //$NON-NLS-1$
+            LANGUAGES, outputParameters());
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("Unknown output parameter 'ThisParameterDoesNotExist'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("VerticalOverallPlacement")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Title")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputEnumUsesDeclaredTypeAndRejectsUnknownLiteral()
+    {
+        SettingsParameterValue item = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        String error = DcsSettingsWriter.applyOutputParameterItemForTest(item,
+            json("{\"parameter\":{\"kind\":\"parameter\"," //$NON-NLS-1$
+                + "\"value\":\"VerticalOverallPlacement\"},\"value\":\"None\"}"), //$NON-NLS-1$
+            LANGUAGES, outputParameters());
+        assertNull(error);
+        assertTrue(item.getValues().get(0) instanceof EnumValue);
+        assertEquals("None", ((EnumValue)item.getValues().get(0)).getValue().getLiteral()); //$NON-NLS-1$
+
+        SettingsParameterValue invalid = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        error = DcsSettingsWriter.applyOutputParameterItemForTest(invalid,
+            json("{\"parameter\":{\"kind\":\"parameter\"," //$NON-NLS-1$
+                + "\"value\":\"VerticalOverallPlacement\"},\"value\":\"Sideways\"}"), //$NON-NLS-1$
+            LANGUAGES, outputParameters());
+        assertNotNull(error);
+        assertTrue(error, error.contains("Sideways")); //$NON-NLS-1$
+        assertTrue(error, error.contains("None")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Auto")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputEnumAcceptsStringValueSpecAndExplainsMalformedShape()
+    {
+        SettingsParameterValue item = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        String error = DcsSettingsWriter.applyOutputParameterItemForTest(item,
+            json("{\"parameter\":{\"kind\":\"parameter\","
+                + "\"value\":\"VerticalOverallPlacement\"},"
+                + "\"value\":{\"kind\":\"string\",\"value\":\"None\"}}"),
+            LANGUAGES, outputParameters());
+
+        assertNull(error);
+        assertTrue(item.getValues().get(0) instanceof EnumValue);
+        assertEquals("None", ((EnumValue)item.getValues().get(0)).getValue().getLiteral()); //$NON-NLS-1$
+
+        SettingsParameterValue malformed = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        error = DcsSettingsWriter.applyOutputParameterItemForTest(malformed,
+            json("{\"parameter\":{\"kind\":\"parameter\","
+                + "\"value\":\"VerticalOverallPlacement\"},"
+                + "\"value\":{\"kind\":\"number\",\"value\":1}}"),
+            LANGUAGES, outputParameters());
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("{\"kind\":\"string\",\"value\":\"<literal>\"}")); //$NON-NLS-1$
+        assertTrue(error, error.contains("None")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Auto")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLocalizedOutputParameterAcceptsMapAndBareDefaultLanguageString()
+    {
+        DcsPresentationParser.LanguageContext languages =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("ru", "en"), "ru"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        SettingsParameterValue localized = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        String error = DcsSettingsWriter.applyOutputParameterItemForTest(localized,
+            json("{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Title\"}," //$NON-NLS-1$
+                + "\"value\":{\"ru\":\"Russian report\",\"en\":\"English report\"}}"), //$NON-NLS-1$
+            languages, outputParameters());
+        assertNull(error);
+        LocalString localizedValue = (LocalString)localized.getValues().get(0);
+        assertEquals("Russian report", localizedValue.getContent().get("ru")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("English report", localizedValue.getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        SettingsParameterValue bare = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        error = DcsSettingsWriter.applyOutputParameterItemForTest(bare,
+            json("{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Title\"}," //$NON-NLS-1$
+                + "\"value\":\"Default-language report\"}"), languages, outputParameters()); //$NON-NLS-1$
+        assertNull(error);
+        LocalString bareValue = (LocalString)bare.getValues().get(0);
+        assertEquals("Default-language report", bareValue.getContent().get("ru")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, bareValue.getContent().size());
+    }
+
+    @Test
+    public void testOutputParameterTypeMismatchIsRefused()
+    {
+        SettingsParameterValue item = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        String error = DcsSettingsWriter.applyOutputParameterItemForTest(item,
+            json("{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Title\"}," //$NON-NLS-1$
+                + "\"value\":{\"kind\":\"string\",\"value\":\"wrong type\"}}"), //$NON-NLS-1$
+            LANGUAGES, outputParameters());
+        assertNotNull(error);
+        assertTrue(error, error.contains("LocalString")); //$NON-NLS-1$
+        assertTrue(error, error.contains("StringValue")); //$NON-NLS-1$
     }
 
     @Test
@@ -500,9 +645,34 @@ public class DcsSettingsWriterTest
             java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             json("{\"kind\":\"chart\"}"), LANGUAGES); //$NON-NLS-1$
         assertFalse(unknown.isSuccess());
-        assertTrue(unknown.error(), unknown.error().contains("chart")); //$NON-NLS-1$
-        assertTrue(unknown.error(), unknown.error().contains("grouping")); //$NON-NLS-1$
-        assertTrue(unknown.error(), unknown.error().contains("table")); //$NON-NLS-1$
+        assertUnsupportedChart(unknown.error());
+    }
+
+    @Test
+    public void testChartRefusalIsArticulateAtNodeParentBodyAndRemove()
+    {
+        DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSettings();
+        settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChart());
+
+        DcsSettingsWriter.SettingsResult atNode = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"name\":\"NeverApplied\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(atNode.isSuccess());
+        assertUnsupportedChart(atNode.error());
+
+        DcsSettingsWriter.SettingsResult remove = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "remove", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            new JsonObject(), LANGUAGES);
+        assertFalse(remove.isSuccess());
+        assertUnsupportedChart(remove.error());
+
+        DcsSettingsWriter.SettingsResult parentBody = DcsSettingsWriter.planSettings(null,
+            java.util.Collections.emptyList(), "upsert", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"items\":[{\"kind\":\"chart\"}]}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(parentBody.isSuccess());
+        assertUnsupportedChart(parentBody.error());
     }
 
     @Test
@@ -641,9 +811,9 @@ public class DcsSettingsWriterTest
             + "\"selection\":{\"items\":[{\"use\":true,\"field\":{\"kind\":\"field\",\"value\":\"Direct\"}}]}," //$NON-NLS-1$
             + "\"filter\":{\"items\":[{\"left\":{\"kind\":\"field\",\"value\":\"Direct\"}," //$NON-NLS-1$
             + "\"comparisonType\":\"Equal\",\"use\":true}]}}]}," //$NON-NLS-1$
-            + "\"outputParameters\":{\"items\":[{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Direct\"},\"use\":true}]}," //$NON-NLS-1$
             + "\"rows\":[" + tableAxisJson("Row") + "]," //$NON-NLS-1$ //$NON-NLS-2$
             + "\"columns\":[" + tableAxisJson("Column") + "]}]}")); //$NON-NLS-1$ //$NON-NLS-2$
+        seedTableOutputParameters((DataCompositionTable)settings.getItems().get(0));
 
         assertIndexedUpdateAndRemove(settings,
             Arrays.asList("items", "0", "selection", "items", "0"), "selection"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
@@ -681,6 +851,56 @@ public class DcsSettingsWriterTest
                 Arrays.asList("items", "0", axis, "0", "outputParameters", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
                 "outputParameter"); //$NON-NLS-1$
         }
+    }
+
+    @Test
+    public void testGroupingConditionalAppearanceIsAddressableWithSharedMergeSemantics()
+    {
+        DataCompositionSettings settings = plan(json(
+            "{\"items\":[{\"name\":\"G\",\"items\":[{\"name\":\"Nested\"}]}]}")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult created = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("items", "0", "conditionalAppearance"), "upsert", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "conditionalAppearance", json("{\"items\":[{\"use\":true}]}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(created.error(), created.isSuccess());
+        DataCompositionGroup group = (DataCompositionGroup)created.settings().getItems().get(0);
+        assertEquals(1, group.getConditionalAppearance().getItems().size());
+
+        DcsSettingsWriter.SettingsResult patched = DcsSettingsWriter.planSettings(created.settings(),
+            Arrays.asList("items", "0", "conditionalAppearance", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "update", "conditionalAppearance", json("{\"presentation\":\"Rule\"}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(patched.error(), patched.isSuccess());
+        DataCompositionConditionalAppearance holder = ((DataCompositionGroup)patched.settings()
+            .getItems().get(0)).getConditionalAppearance();
+        assertTrue(holder.getItems().get(0).isUse());
+        assertEquals("Rule", holder.getItems().get(0).getPresentation().getValue()); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult nested = DcsSettingsWriter.planSettings(patched.settings(),
+            Arrays.asList("items", "0", "items", "0", "conditionalAppearance"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "upsert", "conditionalAppearance", json("{\"items\":[{}]}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(nested.error(), nested.isSuccess());
+        DataCompositionGroup outer = (DataCompositionGroup)nested.settings().getItems().get(0);
+        assertEquals(1, ((DataCompositionGroup)outer.getItems().get(0))
+            .getConditionalAppearance().getItems().size());
+    }
+
+    @Test
+    public void testFormConditionalAppearancePlannerCreatesAndRemovesHolder()
+    {
+        DcsAddress root = address("Catalog.Products.Form.ListForm"); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult planned =
+            DcsSettingsWriter.planFormConditionalAppearance(null, "upsert", //$NON-NLS-1$
+                "conditionalAppearance", root, json("{\"items\":[{\"use\":true}]}"), //$NON-NLS-1$ //$NON-NLS-2$
+                LANGUAGES, Version.LATEST, null);
+
+        assertTrue(planned.error(), planned.isSuccess());
+        DataCompositionConditionalAppearance holder = planned.settings().getConditionalAppearance();
+        assertTrue(holder.getItems().get(0).isUse());
+
+        DcsSettingsWriter.SettingsResult removed =
+            DcsSettingsWriter.planFormConditionalAppearance(holder, "remove", //$NON-NLS-1$
+                "conditionalAppearance", root, null, LANGUAGES, Version.LATEST, null); //$NON-NLS-1$
+        assertTrue(removed.error(), removed.isSuccess());
+        assertNull(removed.settings().getConditionalAppearance());
     }
 
     @Test
@@ -943,7 +1163,7 @@ public class DcsSettingsWriterTest
     }
 
     @Test
-    public void testSettingsRootReplaceRefusesAdditionalPropertiesAndSupportedRootStillReplaces()
+    public void testSettingsRootReplaceModelsSupportedAdditionalPropertiesAndRefusesUnknownValueKinds()
     {
         DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
         DataCompositionSettings settings = plan(settingsBody());
@@ -951,14 +1171,17 @@ public class DcsSettingsWriterTest
         settings.setAdditionalProperties(additionalProperties);
         schema.setDefaultSettings(settings);
         DcsAddress target = address("Report.Sales#/defaultSettings"); //$NON-NLS-1$
-        String beforeHash = DcsHash.compute(schema);
+        assertNull("an empty/supported Structure is fully modelled", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, target));
 
+        StructureProperty unsupported = McoreFactory.eINSTANCE.createStructureProperty();
+        unsupported.setName("DesignerColor"); //$NON-NLS-1$
+        unsupported.setValue(McoreFactory.eINSTANCE.createColorValue());
+        additionalProperties.getProperty().add(unsupported);
         String refusal = DcsMutationGuard.replaceError(schema, target);
-
         assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("ColorValue")); //$NON-NLS-1$
         assertTrue(refusal, refusal.contains("additionalProperties")); //$NON-NLS-1$
-        assertTrue(refusal, refusal.contains(additionalProperties.eClass().getName()));
-        assertEquals(beforeHash, DcsHash.compute(schema));
 
         DataCompositionSchema supported = DcsFactory.eINSTANCE.createDataCompositionSchema();
         supported.setDefaultSettings(plan(settingsBody()));
@@ -1599,9 +1822,37 @@ public class DcsSettingsWriterTest
             + name + "\"},\"comparisonType\":\"Equal\",\"use\":true}]}," //$NON-NLS-1$
             + "\"order\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"" //$NON-NLS-1$
             + name + "\"},\"use\":true}]}," //$NON-NLS-1$
-            + "\"conditionalAppearance\":{\"items\":[{\"use\":true}]}," //$NON-NLS-1$
-            + "\"outputParameters\":{\"items\":[{\"parameter\":{\"kind\":\"parameter\"," //$NON-NLS-1$
-            + "\"value\":\"" + name + "\"},\"use\":true}]}}"; //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"conditionalAppearance\":{\"items\":[{\"use\":true}]}}"; //$NON-NLS-1$
+    }
+
+    private static void seedTableOutputParameters(DataCompositionTable table)
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableOutputParameterValues tableValues =
+            factory.createDataCompositionTableOutputParameterValues();
+        tableValues.getItems().add(settingsParameter("Title")); //$NON-NLS-1$
+        table.setOutputParameters(tableValues);
+        for (DataCompositionTableGroup group : Arrays.asList(table.getRows().get(0),
+            table.getColumns().get(0)))
+        {
+            com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroupOutputParameterValues values =
+                factory.createDataCompositionTableGroupOutputParameterValues();
+            values.getItems().add(settingsParameter("Title")); //$NON-NLS-1$
+            group.setOutputParameters(values);
+        }
+    }
+
+    private static SettingsParameterValue settingsParameter(String name)
+    {
+        SettingsParameterValue result = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter parameter =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
+        parameter.setValue(name);
+        result.setParameter(parameter);
+        result.setUse(true);
+        return result;
     }
 
     private static JsonObject settingsBody()
@@ -1636,15 +1887,50 @@ public class DcsSettingsWriterTest
             + "\"userSettingID\":\"appearance\",\"items\":[]}," //$NON-NLS-1$
             + "\"dataParameters\":{\"items\":[{\"parameter\":{\"kind\":\"parameter\",\"value\":\"StartDate\"}," //$NON-NLS-1$
             + "\"value\":{\"kind\":\"string\",\"value\":\"2026-01-01\"},\"use\":true," //$NON-NLS-1$
-            + "\"viewMode\":\"Normal\",\"userSettingID\":\"start\"}]}," //$NON-NLS-1$
-            + "\"outputParameters\":{\"items\":[{\"parameter\":{\"kind\":\"parameter\",\"value\":\"Title\"}," //$NON-NLS-1$
-            + "\"value\":{\"kind\":\"string\",\"value\":\"Sales\"},\"use\":true}]}}" //$NON-NLS-1$
+            + "\"viewMode\":\"Normal\",\"userSettingID\":\"start\"}]}}" //$NON-NLS-1$
         );
     }
 
     private static JsonObject json(String source)
     {
         return JsonParser.parseString(source).getAsJsonObject();
+    }
+
+    private static void assertUnsupportedChart(String error)
+    {
+        assertTrue(error, error.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertTrue(error, error.contains("authoring it is not supported by this tool")); //$NON-NLS-1$
+        assertTrue(error, error.contains("action='replace', type='schema'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("body={xml:...}")); //$NON-NLS-1$
+        assertTrue(error, error.contains("bare schema root")); //$NON-NLS-1$
+        assertFalse(error, error.contains("no public DCS type")); //$NON-NLS-1$
+    }
+
+    private static DcsAvailableParameterCollection outputParameters()
+    {
+        DcsAvailableParameterCollection result = new DcsAvailableParameterCollection();
+        EnumValue placement = McoreFactory.eINSTANCE.createEnumValue();
+        placement.setValue(DataCompositionTotalPlacement.AUTO);
+        addOutputParameter(result, "VerticalOverallPlacement", placement); //$NON-NLS-1$
+        addOutputParameter(result, "Title", //$NON-NLS-1$
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString());
+        return result;
+    }
+
+    private static void addOutputParameter(DcsAvailableParameterCollection parameters,
+        String name, Value defaultValue)
+    {
+        DcsAvailableParameter parameter = parameters.addItem();
+        try
+        {
+            parameter.init(new String[] {name, ""}, null, null, name, defaultValue, false, null, //$NON-NLS-1$
+                true, false, null, Version.LATEST, null);
+        }
+        catch (DcsPathException e)
+        {
+            throw new AssertionError("Could not create the synthetic output parameter '" //$NON-NLS-1$
+                + name + "'", e); //$NON-NLS-1$
+        }
     }
 
     private static DcsAddress address(String source)

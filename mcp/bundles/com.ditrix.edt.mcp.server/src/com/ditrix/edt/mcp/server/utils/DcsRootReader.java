@@ -13,6 +13,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
+import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.BmRole;
@@ -48,6 +49,10 @@ public final class DcsRootReader
         {
             return readDynamicList(transaction, target, false);
         }
+        if (target.kind() == TargetKind.FORM)
+        {
+            return readFormConditionalAppearance(transaction, target);
+        }
         return readSchema(transaction, target);
     }
 
@@ -59,7 +64,9 @@ public final class DcsRootReader
             return Result.failure("The resolved DCS target is unavailable. Re-run dcs action='get'."); //$NON-NLS-1$
         }
         return target.kind() == TargetKind.DYNAMIC_LIST
-            ? readDynamicList(transaction, target, true) : readSchema(transaction, target);
+            ? readDynamicList(transaction, target, true)
+            : target.kind() == TargetKind.FORM
+                ? readFormConditionalAppearance(transaction, target) : readSchema(transaction, target);
     }
 
     private static Result readSchema(IBmTransaction transaction, Target target)
@@ -117,6 +124,26 @@ public final class DcsRootReader
                 target.normalizedRootFqn(), actual));
         }
         return Result.success((DynamicListExtInfo)extInfo);
+    }
+
+    private static Result readFormConditionalAppearance(IBmTransaction transaction, Target target)
+    {
+        Long id = target.bmId(BmRole.MD_FORM);
+        EObject mdForm = id == null ? null : transaction.getObjectById(id.longValue());
+        EObject content = mdForm == null ? null : FormElementWriter.getEditableForm(mdForm);
+        if (!(content instanceof Form))
+        {
+            return Result.failure("Form '" + target.normalizedRootFqn() //$NON-NLS-1$
+                + "' has no editable managed-form content. Re-run dcs action='get'."); //$NON-NLS-1$
+        }
+        Form form = (Form)content;
+        DcsFormAppearanceContent.Result appearance =
+            DcsFormAppearanceContent.resolve(transaction, form);
+        if (!appearance.isSuccess())
+        {
+            return Result.failure(appearance.error());
+        }
+        return Result.success(appearance.appearance());
     }
 
     private static EObject singleReference(EObject object, String featureName)

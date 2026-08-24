@@ -12,7 +12,9 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.EList;
@@ -27,6 +29,7 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionSortDirection;
+import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.core.ParameterValues;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
@@ -55,6 +58,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFieldGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemViewMode;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
@@ -76,7 +80,15 @@ import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
+import com._1c.g5.v8.dt.dcs.parameters.DcsParameterValuesBase;
 import com._1c.g5.v8.dt.dcs.parameters.appearance.DcsAppearanceParameters;
+import com._1c.g5.v8.dt.dcs.parameters.appearance.FormAppearanceParameters;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsChartGroupOutputParameters;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsChartOutputParameters;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsGroupOutputParameters;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsOutputParameters;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsTableGroupOutputParameters;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsTableOutputParameters;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
@@ -88,6 +100,8 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NullValue;
 import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.Structure;
+import com._1c.g5.v8.dt.mcore.StructureProperty;
 import com._1c.g5.v8.dt.mcore.Value;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -104,6 +118,14 @@ import com.google.gson.JsonObject;
  */
 public final class DcsSettingsWriter
 {
+    /**
+     * One planner invocation's project lookup. Planning is synchronous and every public entry is
+     * synchronized; a ThreadLocal keeps nested schema/dynamic-list planner calls supplied without
+     * turning the already-wide recursive settings API into another parallel parameter chain.
+     */
+    private static final ThreadLocal<StyleValueBuilder.NamedColorResolver> NAMED_COLOR_RESOLVER =
+        new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> FORM_APPEARANCE_PARAMETERS = new ThreadLocal<>();
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
     private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$
@@ -133,6 +155,9 @@ public final class DcsSettingsWriter
     private static final String KEY_VIEW_MODE = "viewMode"; //$NON-NLS-1$
     private static final String KEY_USER_SETTING_ID = "userSettingID"; //$NON-NLS-1$
     private static final String KEY_USER_SETTING_PRESENTATION = "userSettingPresentation"; //$NON-NLS-1$
+    private static final String KEY_ID = "id"; //$NON-NLS-1$
+    private static final String KEY_GROUP_STATE = "groupState"; //$NON-NLS-1$
+    private static final String KEY_ADDITIONAL_PROPERTIES = "additionalProperties"; //$NON-NLS-1$
 
     private DcsSettingsWriter()
     {
@@ -175,11 +200,24 @@ public final class DcsSettingsWriter
     public static void commitSettings(DataCompositionSettings target,
         DataCompositionSettings planned)
     {
+        commitModel(target, planned);
+    }
+
+    /** Copies a validated form-appearance plan while preserving its external BM top-object identity. */
+    public static void commitConditionalAppearance(DataCompositionConditionalAppearance target,
+        DataCompositionConditionalAppearance planned)
+    {
+        commitModel(target, planned);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void commitModel(EObject target, EObject planned)
+    {
         if (target == null || planned == null || target == planned)
         {
             return;
         }
-        DataCompositionSettings copy = EcoreUtil.copy(planned);
+        EObject copy = EcoreUtil.copy(planned);
         for (EStructuralFeature targetFeature : target.eClass().getEAllStructuralFeatures())
         {
             if (!targetFeature.isChangeable() || targetFeature.isDerived())
@@ -408,12 +446,51 @@ public final class DcsSettingsWriter
             variantsTouched));
     }
 
+    /** Live-project entry that additionally resolves style/palette named colors. */
+    public static synchronized SchemaResult planSchema(DataCompositionSchema schema, String action, String type,
+        DcsAddress address, JsonObject body, DcsPresentationParser.LanguageContext languages,
+        Version version, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        return withNamedColors(namedColors,
+            () -> planSchema(schema, action, type, address, body, languages, version));
+    }
+
     /** Builds a detached dynamic-list settings mutation through the same {@link #planSettings} path. */
     public static synchronized SettingsResult planDynamicList(DataCompositionSettings current, String action,
         String type, DcsAddress address, JsonObject body,
         DcsPresentationParser.LanguageContext languages)
     {
         return planDynamicList(current, action, type, address, body, languages, Version.LATEST);
+    }
+
+    /**
+     * Builds a detached mutation of a form's own conditional appearance. Form addresses are rooted
+     * directly at the holder, so their pointer segments are prefixed with the wrapper feature used
+     * by the shared settings machinery. Appearance keys deliberately come from EDT's
+     * {@link FormAppearanceParameters}, while every holder/item mutation retains the same semantics
+     * as schema and dynamic-list conditional appearance.
+     */
+    public static synchronized SettingsResult planFormConditionalAppearance(
+        DataCompositionConditionalAppearance current, String action, String type,
+        DcsAddress address, JsonObject body, DcsPresentationParser.LanguageContext languages,
+        Version version, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        if (!TYPE_CONDITIONAL_APPEARANCE.equals(type))
+        {
+            return SettingsResult.failure("A form DCS root supports only " //$NON-NLS-1$
+                + "type='conditionalAppearance'; got type='" + type + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String common = validateCommon(action, type, address, body, languages);
+        if (common != null) return SettingsResult.failure(common);
+
+        DataCompositionSettings wrapper = DcsFactory.eINSTANCE.createDataCompositionSettings();
+        wrapper.setConditionalAppearance(copy(current));
+        List<String> relative = new ArrayList<>();
+        relative.add("conditionalAppearance"); //$NON-NLS-1$
+        relative.addAll(address.segments());
+        return withNamedColors(namedColors, () -> withFormAppearanceParameters(() ->
+            planSettings(wrapper, relative, action, type, body, languages, version,
+                address, address.rootFqn())));
     }
 
     /** Version-aware dynamic-list settings entry used by the live tool. */
@@ -468,6 +545,16 @@ public final class DcsSettingsWriter
             address, dynamicListSettingsRootAddress(address)));
     }
 
+    /** Live-project dynamic-list entry that additionally resolves style/palette named colors. */
+    public static synchronized SettingsResult planDynamicList(DataCompositionSettings current, String action,
+        String type, DcsAddress address, JsonObject body,
+        DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        return withNamedColors(namedColors,
+            () -> planDynamicList(current, action, type, address, body, languages, version));
+    }
+
     /**
      * Shared owner-independent settings planner. This is deliberately public for the equivalence unit
      * test: both report and dynamic-list entry points must produce this same settings tree.
@@ -503,6 +590,9 @@ public final class DcsSettingsWriter
                 return SettingsResult.failure("action='remove' refuses a settings root. Address exactly " //$NON-NLS-1$
                     + "one child node returned by dcs action='get'."); //$NON-NLS-1$
             }
+            String typeError = resolvedMutationTypeError(current, path, action, type,
+                targetAddress);
+            if (typeError != null) return SettingsResult.failure(typeError);
             DataCompositionSettings working = copy(current);
             String error = removeSettingsPath(working, path, type);
             if (error != null)
@@ -525,7 +615,7 @@ public final class DcsSettingsWriter
         {
             path = defaultPath(type);
         }
-        String typeError = resolvedMutationTypeError(current, path, action, type);
+        String typeError = resolvedMutationTypeError(current, path, action, type, targetAddress);
         if (typeError != null)
         {
             return SettingsResult.failure(typeError);
@@ -828,7 +918,7 @@ public final class DcsSettingsWriter
             case "filter": //$NON-NLS-1$
                 return applyFilterPath(settings, tail, body, action, languages);
             case "dataParameters": //$NON-NLS-1$
-                return applyParameterPath(settings, tail, body, action, languages, true);
+                return applyParameterPath(settings, tail, body, action, languages, version, true);
             case "order": //$NON-NLS-1$
                 return applyOrderPath(settings, tail, body, action, languages);
             case "conditionalAppearance": //$NON-NLS-1$
@@ -836,11 +926,15 @@ public final class DcsSettingsWriter
             case "userFields": //$NON-NLS-1$
                 return applyUserFieldsPath(settings, tail, body, action, languages, version);
             case "outputParameters": //$NON-NLS-1$
-                return applyParameterPath(settings, tail, body, action, languages, false);
+                return applyParameterPath(settings, tail, body, action, languages, version, false);
+            case KEY_ADDITIONAL_PROPERTIES:
+                return applyAdditionalPropertiesPath(settings, tail, body, action,
+                    "settings.additionalProperties"); //$NON-NLS-1$
             default:
                 return "Settings path segment '" + head + "' is not authorable for type='" //$NON-NLS-1$ //$NON-NLS-2$
                     + type + "'. Use items, selection, filter, dataParameters, order, or " //$NON-NLS-1$
-                    + "conditionalAppearance, outputParameters, or userFields, copying the address " //$NON-NLS-1$
+                    + "conditionalAppearance, outputParameters, userFields, or additionalProperties, " //$NON-NLS-1$
+                    + "copying the address " //$NON-NLS-1$
                     + "from dcs action='get'."; //$NON-NLS-1$
         }
     }
@@ -850,6 +944,7 @@ public final class DcsSettingsWriter
     {
         String members = checkMembers(body, path, KEY_ITEMS, "selection", "filter", //$NON-NLS-1$ //$NON-NLS-2$
             "dataParameters", "order", "conditionalAppearance", "outputParameters", "userFields", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            KEY_ADDITIONAL_PROPERTIES,
             "itemsViewMode", //$NON-NLS-1$
             "itemsUserSettingID", "itemsUserSettingPresentation"); //$NON-NLS-1$ //$NON-NLS-2$
         if (members != null)
@@ -981,7 +1076,7 @@ public final class DcsSettingsWriter
             {
                 holder = DcsFactory.eINSTANCE.createDataCompositionDataParameterValues();
             }
-            String error = applyParameters(holder, value, action, languages,
+            String error = applyParameters(holder, value, action, languages, version, null,
                 path + ".dataParameters"); //$NON-NLS-1$
             if (error != null)
             {
@@ -1004,8 +1099,8 @@ public final class DcsSettingsWriter
             {
                 holder = DcsFactory.eINSTANCE.createDataCompositionOutputParameterValues();
             }
-            String error = applyParameters(holder, value, action, languages,
-                path + ".outputParameters"); //$NON-NLS-1$
+            String error = applyParameters(holder, value, action, languages, version,
+                OutputParameterCatalogue.SETTINGS, path + ".outputParameters"); //$NON-NLS-1$
             if (error != null)
             {
                 return error;
@@ -1035,6 +1130,84 @@ public final class DcsSettingsWriter
                 return error;
             }
             settings.setUserFields(holder);
+        }
+        if (body.has(KEY_ADDITIONAL_PROPERTIES))
+        {
+            JsonObject properties = object(body, KEY_ADDITIONAL_PROPERTIES, path);
+            if (properties == null)
+            {
+                return objectError;
+            }
+            String error = applyAdditionalProperties(settings, properties, action,
+                path + "." + KEY_ADDITIONAL_PROPERTIES); //$NON-NLS-1$
+            if (error != null)
+            {
+                return error;
+            }
+        }
+        return null;
+    }
+
+    private static String applyAdditionalPropertiesPath(DataCompositionSettings settings,
+        List<String> path, JsonObject body, String action, String where)
+    {
+        if (!path.isEmpty())
+        {
+            return "Additional-properties address '" + where //$NON-NLS-1$
+                + "' authors the holder as one name-to-ValueSpec object. Remove the trailing " //$NON-NLS-1$
+                + "segments and retry."; //$NON-NLS-1$
+        }
+        return applyAdditionalProperties(settings, body, action, where);
+    }
+
+    /** Authors the genuinely settable {@link DataCompositionSettings#getAdditionalProperties()} map. */
+    private static String applyAdditionalProperties(DataCompositionSettings settings, JsonObject body,
+        String action, String path)
+    {
+        Structure existing = settings.getAdditionalProperties();
+        if (ACTION_UPDATE.equals(action) && existing == null)
+        {
+            return "action='update' cannot find additionalProperties at '" + path //$NON-NLS-1$
+                + "'. Use action='upsert' to create them."; //$NON-NLS-1$
+        }
+        Structure structure = ACTION_REPLACE.equals(action) ? null : copy(existing);
+        if (structure == null)
+        {
+            structure = McoreFactory.eINSTANCE.createStructure();
+        }
+        for (Map.Entry<String, JsonElement> entry : body.entrySet())
+        {
+            String name = entry.getKey();
+            if (name == null || name.isEmpty())
+            {
+                return "Additional-property names at '" + path + "' must be non-empty strings."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            ValueResult parsed = value(entry.getValue(), path + "." + name); //$NON-NLS-1$
+            if (parsed.error != null)
+            {
+                return parsed.error;
+            }
+            StructureProperty property = findStructureProperty(structure, name);
+            if (property == null)
+            {
+                property = McoreFactory.eINSTANCE.createStructureProperty();
+                property.setName(name);
+                structure.getProperty().add(property);
+            }
+            property.setValue(parsed.value);
+        }
+        settings.setAdditionalProperties(structure);
+        return null;
+    }
+
+    private static StructureProperty findStructureProperty(Structure structure, String name)
+    {
+        for (StructureProperty property : structure.getProperty())
+        {
+            if (name.equals(property.getName()))
+            {
+                return property;
+            }
         }
         return null;
     }
@@ -1094,6 +1267,9 @@ public final class DcsSettingsWriter
             if (!(selected instanceof DataCompositionGroup)
                 && !(selected instanceof DataCompositionTable))
             {
+                String refusal = DcsUnsupportedAuthoring.refusal(selected,
+                    where + "/" + selector); //$NON-NLS-1$
+                if (refusal != null) return refusal;
                 return "Structure item '" + selector + "' is " + selected.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                     + ", not a supported grouping or table. Replace a grouping or table address " //$NON-NLS-1$
                     + "returned by get."; //$NON-NLS-1$
@@ -1106,6 +1282,11 @@ public final class DcsSettingsWriter
             if (kind == null)
             {
                 kind = selected instanceof DataCompositionTable ? "table" : "grouping"; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (DcsUnsupportedAuthoring.isChartKind(kind))
+            {
+                return DcsUnsupportedAuthoring.refusal(DcsUnsupportedAuthoring.CHART_CLASS,
+                    where + "/" + selector); //$NON-NLS-1$
             }
             if ("table".equalsIgnoreCase(kind)) //$NON-NLS-1$
             {
@@ -1137,6 +1318,9 @@ public final class DcsSettingsWriter
         }
         if (!(selected instanceof DataCompositionGroup))
         {
+            String refusal = DcsUnsupportedAuthoring.refusal(selected,
+                where + "/" + selector); //$NON-NLS-1$
+            if (refusal != null) return refusal;
             return "Structure item '" + selector + "' is " + selected.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                 + ", not DataCompositionGroup. Group authoring cannot replace tables, charts, or " //$NON-NLS-1$
                 + "nested settings; address a group returned by get."; //$NON-NLS-1$
@@ -1167,12 +1351,30 @@ public final class DcsSettingsWriter
             case "groupFields": //$NON-NLS-1$
                 return applyGroupingHolderPath(new GroupSettingsAccess(group), head, tail, body,
                     action, languages, where);
+            case "conditionalAppearance": //$NON-NLS-1$
+                DataCompositionConditionalAppearance existing = group.getConditionalAppearance();
+                if (ACTION_UPDATE.equals(action) && existing == null)
+                {
+                    return "action='update' cannot find conditionalAppearance at '" + where //$NON-NLS-1$
+                        + "/conditionalAppearance'. Use action='upsert' to create it."; //$NON-NLS-1$
+                }
+                DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action)
+                    && tail.isEmpty() ? null : copy(existing);
+                if (holder == null)
+                {
+                    holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
+                }
+                String error = applyConditionalAppearancePath(holder, tail, body, action,
+                    languages, version, where + "/conditionalAppearance"); //$NON-NLS-1$
+                if (error == null) group.setConditionalAppearance(holder);
+                return error;
             case "outputParameters": //$NON-NLS-1$
                 return "Group output-parameter node updates are not addressable separately. Update " //$NON-NLS-1$
                     + "the group body and pass outputParameters there."; //$NON-NLS-1$
             default:
                 return "Grouping path segment '" + head + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
-                    + "' is not authorable. Use items, groupFields, selection, filter, or order."; //$NON-NLS-1$
+                    + "' is not authorable. Use items, groupFields, selection, filter, order, " //$NON-NLS-1$
+                    + "conditionalAppearance, or outputParameters."; //$NON-NLS-1$
         }
     }
 
@@ -1241,6 +1443,10 @@ public final class DcsSettingsWriter
             items.add(table);
             return applyTable(table, body, action, languages, version, where, items);
         }
+        if (DcsUnsupportedAuthoring.isChartKind(kind))
+        {
+            return DcsUnsupportedAuthoring.refusal(DcsUnsupportedAuthoring.CHART_CLASS, where);
+        }
         if (kind != null && !"grouping".equalsIgnoreCase(kind)) //$NON-NLS-1$
         {
             return "Structure item kind '" + kind + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
@@ -1263,7 +1469,8 @@ public final class DcsSettingsWriter
         String members = checkMembers(body, path, KEY_KIND, KEY_NAME, KEY_USE, "groupFields", //$NON-NLS-1$
             "selection", "filter", "order", "outputParameters", KEY_ITEMS, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION,
-            "itemsViewMode", "itemsUserSettingID", "itemsUserSettingPresentation"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "itemsViewMode", "itemsUserSettingID", "itemsUserSettingPresentation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            KEY_ID, KEY_GROUP_STATE);
         if (members != null)
         {
             return members;
@@ -1294,6 +1501,19 @@ public final class DcsSettingsWriter
                 return booleanError;
             }
             group.setUse(use.booleanValue());
+        }
+        if (body.has(KEY_ID))
+        {
+            String id = optionalString(body, KEY_ID, path);
+            if (stringError != null) return stringError;
+            group.setId(id);
+        }
+        if (body.has(KEY_GROUP_STATE))
+        {
+            EnumResult<DataCompositionSettingsItemState> state = enumValue(body, KEY_GROUP_STATE,
+                path, DataCompositionSettingsItemState.values());
+            if (state.error != null) return state.error;
+            group.setGroupState(state.value);
         }
         String scaffold = applyGroupScaffold(group, body, languages, path);
         if (scaffold != null)
@@ -1402,8 +1622,8 @@ public final class DcsSettingsWriter
             {
                 holder = DcsFactory.eINSTANCE.createDataCompositionGroupOutputParameterValues();
             }
-            String error = applyParameters(holder, value, action, languages,
-                path + ".outputParameters"); //$NON-NLS-1$
+            String error = applyParameters(holder, value, action, languages, version,
+                OutputParameterCatalogue.GROUP, path + ".outputParameters"); //$NON-NLS-1$
             if (error != null)
             {
                 return error;
@@ -1442,7 +1662,7 @@ public final class DcsSettingsWriter
             "selection", "conditionalAppearance", "outputParameters", KEY_VIEW_MODE, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION, "rowsViewMode", //$NON-NLS-1$
             "rowsUserSettingID", "rowsUserSettingPresentation", "columnsViewMode", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "columnsUserSettingID", "columnsUserSettingPresentation"); //$NON-NLS-1$ //$NON-NLS-2$
+            "columnsUserSettingID", "columnsUserSettingPresentation", KEY_ID); //$NON-NLS-1$ //$NON-NLS-2$
         if (members != null)
         {
             return members;
@@ -1473,6 +1693,12 @@ public final class DcsSettingsWriter
                 return booleanError;
             }
             table.setUse(use.booleanValue());
+        }
+        if (body.has(KEY_ID))
+        {
+            String id = optionalString(body, KEY_ID, path);
+            if (stringError != null) return stringError;
+            table.setId(id);
         }
         String scaffold = applyTableScaffold(table, body, languages, path);
         if (scaffold != null)
@@ -1553,7 +1779,8 @@ public final class DcsSettingsWriter
             {
                 holder = DcsFactory.eINSTANCE.createDataCompositionTableOutputParameterValues();
             }
-            error = applyParameters(holder, value, action, languages, path + ".outputParameters"); //$NON-NLS-1$
+            error = applyParameters(holder, value, action, languages, version,
+                OutputParameterCatalogue.TABLE, path + ".outputParameters"); //$NON-NLS-1$
             if (error != null)
             {
                 return error;
@@ -1629,8 +1856,8 @@ public final class DcsSettingsWriter
             {
                 holder = DcsFactory.eINSTANCE.createDataCompositionTableOutputParameterValues();
             }
-            String error = applyParameterValuesPath(holder, tail, body, action, languages,
-                where + "/outputParameters"); //$NON-NLS-1$
+            String error = applyParameterValuesPath(holder, tail, body, action, languages, version,
+                OutputParameterCatalogue.TABLE, where + "/outputParameters"); //$NON-NLS-1$
             if (error == null) table.setOutputParameters(holder);
             return error;
         }
@@ -1727,7 +1954,8 @@ public final class DcsSettingsWriter
             {
                 holder = DcsFactory.eINSTANCE.createDataCompositionTableGroupOutputParameterValues();
             }
-            String error = applyParameterValuesPath(holder, tail, body, action, languages,
+            String error = applyParameterValuesPath(holder, tail, body, action, languages, version,
+                OutputParameterCatalogue.TABLE_GROUP,
                 where + "/" + path.get(0) + "/outputParameters"); //$NON-NLS-1$ //$NON-NLS-2$
             if (error == null) group.setOutputParameters(holder);
             return error;
@@ -1860,7 +2088,8 @@ public final class DcsSettingsWriter
             DataCompositionTableGroupOutputParameterValues holder = ACTION_REPLACE.equals(action) ? null
                 : copy(group.getOutputParameters());
             if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionTableGroupOutputParameterValues();
-            String error = applyParameters(holder, value, action, languages, path + ".outputParameters"); //$NON-NLS-1$
+            String error = applyParameters(holder, value, action, languages, version,
+                OutputParameterCatalogue.TABLE_GROUP, path + ".outputParameters"); //$NON-NLS-1$
             if (error != null) return error;
             group.setOutputParameters(holder);
         }
@@ -3112,7 +3341,10 @@ public final class DcsSettingsWriter
         {
             JsonObject value = object(body, "appearance", path); //$NON-NLS-1$
             if (value == null) return objectError;
-            AppearanceResult appearance = appearance(value, languages, version, path + ".appearance"); //$NON-NLS-1$
+            DataCompositionAppearance current = ACTION_REPLACE.equals(action)
+                ? null : item.getAppearance();
+            AppearanceResult appearance = appearance(value, current, languages, version,
+                path + ".appearance"); //$NON-NLS-1$
             if (appearance.error != null) return appearance.error;
             item.setAppearance(appearance.value);
         }
@@ -3207,17 +3439,26 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    private static AppearanceResult appearance(JsonObject body,
+    private static AppearanceResult appearance(JsonObject body, DataCompositionAppearance current,
         DcsPresentationParser.LanguageContext languages, Version version, String path)
     {
         String language = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
         try
         {
+            DcsAppearanceParameters catalogue = Boolean.TRUE.equals(FORM_APPEARANCE_PARAMETERS.get())
+                ? new FormAppearanceParameters(version == null ? Version.LATEST : version, language)
+                : new DcsAppearanceParameters(version == null ? Version.LATEST : version, language);
             DcsAvailableParameterCollection available =
-                new DcsAppearanceParameters(version == null ? Version.LATEST : version, language)
-                    .getAvailableParameters().getParameters();
-            DataCompositionAppearance result =
-                com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionAppearance();
+                catalogue.getAvailableParameters().getParameters();
+            // Update and exact-target upsert are PATCH operations. Start from a detached copy so an
+            // omitted appearance key survives and a later conversion error cannot mutate the input.
+            // Replace deliberately passes no current value and therefore retains its clearing contract.
+            DataCompositionAppearance result = copy(current);
+            if (result == null)
+            {
+                result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                    .createDataCompositionAppearance();
+            }
             for (String key : body.keySet())
             {
                 DcsAvailableParameter parameter = available.findItem(key);
@@ -3225,10 +3466,10 @@ public final class DcsSettingsWriter
                 {
                     return AppearanceResult.failure("Unknown appearance key '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
                         + path + "'. Use one of the typed keys for platform " + version + ": " //$NON-NLS-1$ //$NON-NLS-2$
-                        + appearanceKeys(available) + ". Remove '" + key + "' or correct its spelling."); //$NON-NLS-1$ //$NON-NLS-2$
+                        + parameterKeys(available) + ". Remove '" + key + "' or correct its spelling."); //$NON-NLS-1$ //$NON-NLS-2$
                 }
-                ValueResult mapped = appearanceValue(body.get(key), parameter.defValue(),
-                    path + "." + key); //$NON-NLS-1$
+                ValueResult mapped = typedParameterValue(body.get(key), parameter.defValue(),
+                    languages, path + "." + key); //$NON-NLS-1$
                 if (mapped.error != null) return AppearanceResult.failure(mapped.error);
                 DataCompositionParameterValue item =
                     com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
@@ -3239,7 +3480,7 @@ public final class DcsSettingsWriter
                 name.setValue(parameter.key(0));
                 item.setParameter(name);
                 item.getValues().add(mapped.value);
-                result.getItems().add(item);
+                putAppearanceParameter(result, item);
             }
             return AppearanceResult.success(result);
         }
@@ -3251,19 +3492,81 @@ public final class DcsSettingsWriter
         }
     }
 
-    private static ValueResult appearanceValue(JsonElement raw, Value expected, String path)
+    /** Shared schema/settings seam for the platform-typed, merge-on-update appearance builder. */
+    static AppearanceResult buildAppearance(JsonObject body, DataCompositionAppearance current,
+        DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, String path)
     {
+        return withNamedColors(namedColors,
+            () -> appearance(body, current, languages, version, path));
+    }
+
+    /** Replaces one named appearance parameter in place, or appends it when the patch adds a new key. */
+    private static void putAppearanceParameter(DataCompositionAppearance appearance,
+        DataCompositionParameterValue replacement)
+    {
+        String name = replacement.getParameter() == null
+            ? null : replacement.getParameter().getValue();
+        for (int i = 0; i < appearance.getItems().size(); i++)
+        {
+            DataCompositionParameterValue existing = appearance.getItems().get(i);
+            String existingName = existing.getParameter() == null
+                ? null : existing.getParameter().getValue();
+            if (name != null && name.equals(existingName))
+            {
+                appearance.getItems().set(i, replacement);
+                return;
+            }
+        }
+        appearance.getItems().add(replacement);
+    }
+
+    /** Maps a JSON value to the platform-declared parameter type for every typed parameter path. */
+    private static ValueResult typedParameterValue(JsonElement raw, Value expected,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        if (expected instanceof LocalString)
+        {
+            if (raw != null && raw.isJsonObject() && raw.getAsJsonObject().has(KEY_KIND)
+                && raw.getAsJsonObject().has("value")) //$NON-NLS-1$
+            {
+                ValueResult supplied = value(raw, path);
+                if (supplied.error != null) return supplied;
+                return typedValueMismatch(expected, supplied.value, path);
+            }
+            JsonElement localized = raw;
+            if (raw != null && raw.isJsonPrimitive()
+                && raw.getAsJsonPrimitive().isString())
+            {
+                JsonObject map = new JsonObject();
+                map.addProperty(languages == null ? "en" : languages.resolvedCode(), //$NON-NLS-1$
+                    raw.getAsString());
+                localized = map;
+            }
+            DcsPresentationParser.ParseResult parsed =
+                DcsPresentationParser.parse(localized, languages, path);
+            if (!parsed.isSuccess()) return ValueResult.failure(parsed.error());
+            if (parsed.plan() == null)
+            {
+                return ValueResult.failure("Localized parameter value at '" + path //$NON-NLS-1$
+                    + "' must be a string or a non-empty {languageCode:text} object."); //$NON-NLS-1$
+            }
+            LocalString value = DcsPresentationParser.build(parsed.plan()).getLocalValue();
+            return value == null ? ValueResult.failure("Localized parameter value at '" + path //$NON-NLS-1$
+                + "' could not be represented as LocalString. Pass a string or " //$NON-NLS-1$
+                + "{languageCode:text} object.") : ValueResult.success(value); //$NON-NLS-1$
+        }
         if (expected instanceof ColorValue || expected instanceof FontValue)
         {
-            StyleValueBuilder.Result built = StyleValueBuilder.build(raw);
+            StyleValueBuilder.Result built = StyleValueBuilder.build(raw, NAMED_COLOR_RESOLVER.get());
             if (built.error != null)
             {
-                return ValueResult.failure("Appearance value at '" + path + "' is invalid: " //$NON-NLS-1$ //$NON-NLS-2$
+                return ValueResult.failure("Typed parameter value at '" + path + "' is invalid: " //$NON-NLS-1$ //$NON-NLS-2$
                     + built.error);
             }
             if (expected instanceof ColorValue != built.value instanceof ColorValue)
             {
-                return ValueResult.failure("Appearance key '" + path + "' expects " //$NON-NLS-1$ //$NON-NLS-2$
+                return ValueResult.failure("Parameter at '" + path + "' expects " //$NON-NLS-1$ //$NON-NLS-2$
                     + (expected instanceof ColorValue ? "a color" : "a font") //$NON-NLS-1$ //$NON-NLS-2$
                     + ". Pass the matching {color:...} or {font:...} object."); //$NON-NLS-1$
             }
@@ -3271,15 +3574,18 @@ public final class DcsSettingsWriter
         }
         if (expected instanceof EnumValue)
         {
-            if (raw == null || !raw.isJsonPrimitive() || !raw.getAsJsonPrimitive().isString())
+            String literal = enumParameterLiteral(raw);
+            if (literal == null)
             {
-                return ValueResult.failure("Enum appearance value at '" + path //$NON-NLS-1$
-                    + "' must be a platform literal string."); //$NON-NLS-1$
+                return ValueResult.failure("Enum parameter value at '" + path //$NON-NLS-1$
+                    + "' must be either a bare platform literal string or a ValueSpec " //$NON-NLS-1$
+                    + "{\"kind\":\"string\",\"value\":\"<literal>\"}. Allowed literals: " //$NON-NLS-1$
+                    + enumeratorValues(((EnumValue)expected).getValue()) + "."); //$NON-NLS-1$
             }
-            Enumerator selected = findEnumerator(((EnumValue)expected).getValue(), raw.getAsString());
+            Enumerator selected = findEnumerator(((EnumValue)expected).getValue(), literal);
             if (selected == null)
             {
-                return ValueResult.failure("Enum appearance value '" + raw.getAsString() + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
+                return ValueResult.failure("Enum parameter value '" + literal + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
                     + path + "' is invalid. Use one of: " //$NON-NLS-1$
                     + enumeratorValues(((EnumValue)expected).getValue()) + "."); //$NON-NLS-1$
             }
@@ -3289,19 +3595,158 @@ public final class DcsSettingsWriter
         }
         ValueResult value = value(raw, path);
         if (value.error != null) return value;
-        if (expected != null && !expected.getClass().isInstance(value.value)
-            && !expected.eClass().isSuperTypeOf(value.value.eClass()))
+        if (!hasExpectedType(expected, value.value))
         {
-            return ValueResult.failure("Appearance key '" + path + "' expects " //$NON-NLS-1$ //$NON-NLS-2$
-                + expected.eClass().getName() + ", but got " + value.value.eClass().getName() //$NON-NLS-1$
-                + ". Pass the matching typed ValueSpec."); //$NON-NLS-1$
+            return typedValueMismatch(expected, value.value, path);
         }
         return value;
     }
 
+    /** Shared schema/settings seam for a ValueSpec constrained by a declared platform value type. */
+    static ValueResult buildTypedParameterValue(JsonElement raw, Value expected,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        return typedParameterValue(raw, expected, languages, path);
+    }
+
+    /** Shared schema/settings seam for an unconstrained ValueSpec. */
+    static ValueResult buildValue(JsonElement raw, String path)
+    {
+        return value(raw, path);
+    }
+
+    /** The two accepted enum wire forms: a bare string, or the ordinary string ValueSpec. */
+    private static String enumParameterLiteral(JsonElement raw)
+    {
+        if (raw != null && raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isString())
+        {
+            return raw.getAsString();
+        }
+        if (raw == null || !raw.isJsonObject())
+        {
+            return null;
+        }
+        JsonObject spec = raw.getAsJsonObject();
+        if (spec.size() != 2 || !spec.has(KEY_KIND) || !spec.has("value")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        JsonElement kind = spec.get(KEY_KIND);
+        JsonElement value = spec.get("value"); //$NON-NLS-1$
+        return kind != null && kind.isJsonPrimitive() && kind.getAsJsonPrimitive().isString()
+            && "string".equalsIgnoreCase(kind.getAsString()) //$NON-NLS-1$
+            && value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+                ? value.getAsString() : null;
+    }
+
+    private static <T> T withNamedColors(StyleValueBuilder.NamedColorResolver resolver,
+        Supplier<T> operation)
+    {
+        StyleValueBuilder.NamedColorResolver previous = NAMED_COLOR_RESOLVER.get();
+        if (resolver == null)
+        {
+            NAMED_COLOR_RESOLVER.remove();
+        }
+        else
+        {
+            NAMED_COLOR_RESOLVER.set(resolver);
+        }
+        try
+        {
+            return operation.get();
+        }
+        finally
+        {
+            if (previous == null)
+            {
+                NAMED_COLOR_RESOLVER.remove();
+            }
+            else
+            {
+                NAMED_COLOR_RESOLVER.set(previous);
+            }
+        }
+    }
+
+    private static <T> T withFormAppearanceParameters(Supplier<T> operation)
+    {
+        Boolean previous = FORM_APPEARANCE_PARAMETERS.get();
+        FORM_APPEARANCE_PARAMETERS.set(Boolean.TRUE);
+        try
+        {
+            return operation.get();
+        }
+        finally
+        {
+            if (previous == null) FORM_APPEARANCE_PARAMETERS.remove();
+            else FORM_APPEARANCE_PARAMETERS.set(previous);
+        }
+    }
+
+    private static boolean hasExpectedType(Value expected, Value supplied)
+    {
+        return expected == null || expected.getClass().isInstance(supplied)
+            || expected.eClass().isSuperTypeOf(supplied.eClass());
+    }
+
+    private static ValueResult typedValueMismatch(Value expected, Value supplied, String path)
+    {
+        return ValueResult.failure("Parameter at '" + path + "' expects " //$NON-NLS-1$ //$NON-NLS-2$
+            + expected.eClass().getName() + ", but got " + supplied.eClass().getName() //$NON-NLS-1$
+            + ". Pass the matching typed value."); //$NON-NLS-1$
+    }
+
+    private static AvailableParametersResult availableOutputParameters(
+        OutputParameterCatalogue catalogue, Version version,
+        DcsPresentationParser.LanguageContext languages, String path)
+    {
+        if (catalogue == null) return AvailableParametersResult.success(null);
+        Version platform = platformVersion(version);
+        String language = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
+        try
+        {
+            return AvailableParametersResult.success(catalogue.create(platform, language)
+                .getAvailableParameters().getParameters());
+        }
+        catch (DcsPathException | RuntimeException e)
+        {
+            return AvailableParametersResult.failure("Could not load the typed output parameter " //$NON-NLS-1$
+                + "model for platform " + platform + " at '" + path + "': " + e.getMessage() //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ". Verify the project platform version and retry."); //$NON-NLS-1$
+        }
+    }
+
+    private static Version platformVersion(Version version)
+    {
+        return version == null ? Version.LATEST : version;
+    }
+
+    private enum OutputParameterCatalogue
+    {
+        SETTINGS,
+        GROUP,
+        TABLE,
+        TABLE_GROUP,
+        CHART,
+        CHART_GROUP;
+
+        DcsParameterValuesBase create(Version version, String language) throws DcsPathException
+        {
+            switch (this)
+            {
+                case SETTINGS: return new DcsOutputParameters(version, language);
+                case GROUP: return new DcsGroupOutputParameters(version, language);
+                case TABLE: return new DcsTableOutputParameters(version, language);
+                case TABLE_GROUP: return new DcsTableGroupOutputParameters(version, language);
+                case CHART: return new DcsChartOutputParameters(version, language);
+                default: return new DcsChartGroupOutputParameters(version, language);
+            }
+        }
+    }
+
     private static String applyParameterPath(DataCompositionSettings settings, List<String> path,
         JsonObject body, String action, DcsPresentationParser.LanguageContext languages,
-        boolean dataParameters)
+        Version version, boolean dataParameters)
     {
         ParameterValues holder = ACTION_REPLACE.equals(action) && path.isEmpty() ? null
             : dataParameters ? copy(settings.getDataParameters()) : copy(settings.getOutputParameters());
@@ -3316,7 +3761,8 @@ public final class DcsSettingsWriter
                 : DcsFactory.eINSTANCE.createDataCompositionOutputParameterValues();
         }
         String where = dataParameters ? "dataParameters" : "outputParameters"; //$NON-NLS-1$ //$NON-NLS-2$
-        String error = applyParameterValuesPath(holder, path, body, action, languages, where);
+        String error = applyParameterValuesPath(holder, path, body, action, languages, version,
+            dataParameters ? null : OutputParameterCatalogue.SETTINGS, where);
         if (error == null)
         {
             if (dataParameters)
@@ -3332,11 +3778,12 @@ public final class DcsSettingsWriter
     }
 
     private static String applyParameterValuesPath(ParameterValues holder, List<String> path,
-        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, String where)
+        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, Version version,
+        OutputParameterCatalogue catalogue, String where)
     {
         if (path.isEmpty())
         {
-            return applyParameters(holder, body, action, languages, where);
+            return applyParameters(holder, body, action, languages, version, catalogue, where);
         }
         if (path.size() == 2 && KEY_ITEMS.equals(path.get(0)))
         {
@@ -3352,27 +3799,35 @@ public final class DcsSettingsWriter
                     + item.eClass().getName() + ", not SettingsParameterValue. Choose an address from get."; //$NON-NLS-1$
             }
             String at = where + "/items/" + path.get(1); //$NON-NLS-1$
+            boolean needsTypedDefinition = body.has("parameter") || body.has("value"); //$NON-NLS-1$ //$NON-NLS-2$
+            AvailableParametersResult typed = needsTypedDefinition
+                ? availableOutputParameters(catalogue, version, languages, at)
+                : AvailableParametersResult.success(null);
+            if (typed.error != null) return typed.error;
             if (ACTION_REPLACE.equals(action))
             {
                 // Rebuilt, not patched: value, use, viewMode and the user-setting scaffolding must
                 // not survive a replace that never named them. There is only one shape here, so
                 // the rebuild is the factory call itself.
                 SettingsParameterValue fresh = DcsFactory.eINSTANCE.createSettingsParameterValue();
-                String error = applyParameterItem(fresh, body, languages, at);
+                String error = applyParameterItem(fresh, body, languages, typed.parameters,
+                    platformVersion(version), at);
                 if (error == null)
                 {
                     holder.getItems().set(selected, fresh);
                 }
                 return error;
             }
-            return applyParameterItem((SettingsParameterValue)item, body, languages, at);
+            return applyParameterItem((SettingsParameterValue)item, body, languages,
+                typed.parameters, platformVersion(version), at);
         }
         return "Parameter-settings address at '" + where //$NON-NLS-1$
             + "' must end at the holder or items/<index>. Copy it from get."; //$NON-NLS-1$
     }
 
     private static String applyParameters(ParameterValues holder, JsonObject body, String action,
-        DcsPresentationParser.LanguageContext languages, String path)
+        DcsPresentationParser.LanguageContext languages, Version version,
+        OutputParameterCatalogue catalogue, String path)
     {
         String members = checkMembers(body, path, KEY_ITEMS);
         if (members != null)
@@ -3388,12 +3843,16 @@ public final class DcsSettingsWriter
         {
             return arrayError;
         }
-        if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         if (ACTION_UPDATE.equals(action) && !items.isEmpty())
         {
             return "action='update' needs an exact parameter item index at '" + path //$NON-NLS-1$
                 + "'. Copy it from get; use upsert to append an item."; //$NON-NLS-1$
         }
+        AvailableParametersResult typed = items.isEmpty()
+            ? AvailableParametersResult.success(null)
+            : availableOutputParameters(catalogue, version, languages, path);
+        if (typed.error != null) return typed.error;
+        if (ACTION_REPLACE.equals(action)) holder.getItems().clear();
         for (int i = 0; i < items.size(); i++)
         {
             JsonObject bodyItem = arrayObject(items, i, path + ".items"); //$NON-NLS-1$
@@ -3402,8 +3861,8 @@ public final class DcsSettingsWriter
                 return arrayObjectError;
             }
             SettingsParameterValue item = DcsFactory.eINSTANCE.createSettingsParameterValue();
-            String error = applyParameterItem(item, bodyItem, languages,
-                path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = applyParameterItem(item, bodyItem, languages, typed.parameters,
+                platformVersion(version), path + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
             if (error != null)
             {
                 return error;
@@ -3765,7 +4224,8 @@ public final class DcsSettingsWriter
     }
 
     private static String applyParameterItem(SettingsParameterValue item, JsonObject body,
-        DcsPresentationParser.LanguageContext languages, String path)
+        DcsPresentationParser.LanguageContext languages,
+        DcsAvailableParameterCollection available, Version version, String path)
     {
         String members = checkMembers(body, path, "parameter", "value", KEY_USE, //$NON-NLS-1$ //$NON-NLS-2$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION);
@@ -3773,6 +4233,7 @@ public final class DcsSettingsWriter
         {
             return members;
         }
+        DcsAvailableParameter declared = null;
         if (body.has("parameter")) //$NON-NLS-1$
         {
             ValueResult parameter = value(body.get("parameter"), path + ".parameter"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -3785,17 +4246,52 @@ public final class DcsSettingsWriter
                 return "Value at '" + path //$NON-NLS-1$
                     + ".parameter' must use kind='parameter'. Change its kind and retry."; //$NON-NLS-1$
             }
+            if (available != null)
+            {
+                String name = ((DataCompositionParameter)parameter.value).getValue();
+                declared = available.findItem(name);
+                if (declared == null)
+                {
+                    return unknownOutputParameter(name, available, version,
+                        path + ".parameter"); //$NON-NLS-1$
+                }
+                ((DataCompositionParameter)parameter.value).setValue(declared.key(0));
+            }
             item.setParameter((DataCompositionParameter)parameter.value);
+        }
+        else if (available != null && body.has("value")) //$NON-NLS-1$
+        {
+            String name = item.getParameter() == null ? null : item.getParameter().getValue();
+            if (name == null || name.isEmpty())
+            {
+                return "Output parameter value at '" + path //$NON-NLS-1$
+                    + ".value' needs a declared 'parameter'. Pass a typed parameter name."; //$NON-NLS-1$
+            }
+            declared = available.findItem(name);
+            if (declared == null)
+            {
+                return unknownOutputParameter(name, available, version,
+                    path + ".parameter"); //$NON-NLS-1$
+            }
         }
         if (body.has("value")) //$NON-NLS-1$
         {
-            ValueResult value = value(body.get("value"), path + ".value"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (value.error != null)
+            ValueResult mapped = available == null
+                ? value(body.get("value"), path + ".value") //$NON-NLS-1$ //$NON-NLS-2$
+                : typedParameterValue(body.get("value"), declared.defValue(), languages, //$NON-NLS-1$
+                    path + ".value"); //$NON-NLS-1$
+            if (mapped.error != null)
             {
-                return value.error;
+                return mapped.error;
             }
             item.getValues().clear();
-            item.getValues().add(value.value);
+            item.getValues().add(mapped.value);
+        }
+        else if (declared != null && !item.getValues().isEmpty()
+            && !hasExpectedType(declared.defValue(), item.getValues().get(0)))
+        {
+            return typedValueMismatch(declared.defValue(), item.getValues().get(0),
+                path + ".value").error; //$NON-NLS-1$
         }
         if (body.has(KEY_USE))
         {
@@ -3808,6 +4304,15 @@ public final class DcsSettingsWriter
         }
         String scaffold = applyParameterScaffold(item, body, languages, path);
         return scaffold;
+    }
+
+    /** Headless unit seam: production obtains this same collection from the holder catalogue. */
+    static String applyOutputParameterItemForTest(SettingsParameterValue item, JsonObject body,
+        DcsPresentationParser.LanguageContext languages,
+        DcsAvailableParameterCollection available)
+    {
+        return applyParameterItem(item, body, languages, available, Version.LATEST,
+            "outputParameters.items[0]"); //$NON-NLS-1$
     }
 
     // ---- scaffolding ------------------------------------------------------------------------
@@ -4399,14 +4904,26 @@ public final class DcsSettingsWriter
         }
     }
 
-    private static String appearanceKeys(DcsAvailableParameterCollection parameters)
+    private static String unknownOutputParameter(String name,
+        DcsAvailableParameterCollection parameters, Version version, String path)
     {
+        return "Unknown output parameter '" + name + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+            + "'. Use one of the typed keys for platform " + version + ": " //$NON-NLS-1$ //$NON-NLS-2$
+            + parameterKeys(parameters) + ". Remove '" + name + "' or correct its spelling."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String parameterKeys(DcsAvailableParameterCollection parameters)
+    {
+        final int limit = 24;
         List<String> keys = new ArrayList<>();
-        for (int i = 0; i < parameters.itemsCount(); i++)
+        int shown = Math.min(parameters.itemsCount(), limit);
+        for (int i = 0; i < shown; i++)
         {
             keys.add(parameters.getItemAt(i).key(0));
         }
-        return String.join(", ", keys); //$NON-NLS-1$
+        String result = String.join(", ", keys); //$NON-NLS-1$
+        int remaining = parameters.itemsCount() - shown;
+        return remaining == 0 ? result : result + ", ... (" + remaining + " more)"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static Enumerator findEnumerator(Enumerator sample, String raw)
@@ -4654,7 +5171,10 @@ public final class DcsSettingsWriter
             return "action='remove' could not resolve target '" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$
                 + "'. Re-run dcs action='get' and copy an existing node address."; //$NON-NLS-1$
         }
-        String typeError = resolvedSettingsTypeError(target, path, ACTION_REMOVE, type);
+        boolean additionalProperties = !path.isEmpty()
+            && KEY_ADDITIONAL_PROPERTIES.equals(path.get(0)) && TYPE_USER_SETTINGS.equals(type);
+        String typeError = additionalProperties ? null
+            : resolvedSettingsTypeError(target, path, ACTION_REMOVE, type);
         if (typeError != null) return typeError;
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
@@ -4673,6 +5193,7 @@ public final class DcsSettingsWriter
                 case "conditionalAppearance": settings.setConditionalAppearance(null); return null; //$NON-NLS-1$
                 case "outputParameters": settings.setOutputParameters(null); return null; //$NON-NLS-1$
                 case "userFields": settings.setUserFields(null); return null; //$NON-NLS-1$
+                case KEY_ADDITIONAL_PROPERTIES: settings.setAdditionalProperties(null); return null;
                 default: break;
             }
         }
@@ -4748,9 +5269,14 @@ public final class DcsSettingsWriter
     }
 
     private static String resolvedMutationTypeError(DataCompositionSettings settings,
-        List<String> path, String action, String type)
+        List<String> path, String action, String type, DcsAddress targetAddress)
     {
         if (settings == null) return null;
+        if (!path.isEmpty() && KEY_ADDITIONAL_PROPERTIES.equals(path.get(0))
+            && TYPE_USER_SETTINGS.equals(type))
+        {
+            return null;
+        }
         EObject target = resolveSettingsNode(settings, path);
         if (target == null)
         {
@@ -4758,13 +5284,23 @@ public final class DcsSettingsWriter
             // to the action-specific dispatch, which creates for upsert and refuses for update.
             return null;
         }
-        return resolvedSettingsTypeError(target, path, action, type);
+        return resolvedSettingsTypeError(target, path, action, type,
+            targetAddress == null ? null : targetAddress.toString());
     }
 
     private static String resolvedSettingsTypeError(EObject target, List<String> path,
         String action, String type)
     {
+        return resolvedSettingsTypeError(target, path, action, type, null);
+    }
+
+    private static String resolvedSettingsTypeError(EObject target, List<String> path,
+        String action, String type, String targetAddress)
+    {
         String renderedPath = path.isEmpty() ? "settings root" : String.join("/", path); //$NON-NLS-1$ //$NON-NLS-2$
+        String refusal = DcsUnsupportedAuthoring.refusal(target,
+            targetAddress == null ? renderedPath : targetAddress);
+        if (refusal != null) return refusal;
         String actualType = DcsReadProjection.typeOf(target, target.eContainer());
         if (actualType == null)
         {
@@ -4837,10 +5373,14 @@ public final class DcsSettingsWriter
         {
             switch (head)
             {
+                case "conditionalAppearance": group.setConditionalAppearance(null); return null; //$NON-NLS-1$
                 case "outputParameters": group.setOutputParameters(null); return null; //$NON-NLS-1$
                 default: break;
             }
         }
+        if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
+            return removeConditionalAppearancePath(group.getConditionalAppearance(), tail,
+                where + "/conditionalAppearance"); //$NON-NLS-1$
         if ("outputParameters".equals(head)) //$NON-NLS-1$
             return removeIndexed(group.getOutputParameters() == null ? null
                 : group.getOutputParameters().getItems(), tail, where + "/outputParameters"); //$NON-NLS-1$
@@ -5381,12 +5921,23 @@ public final class DcsSettingsWriter
         { return new SettingsLocation(null, null, -1, error); }
     }
 
-    private static final class ValueResult
+    static final class ValueResult
     {
         final Value value; final String error;
         private ValueResult(Value value, String error) { this.value = value; this.error = error; }
         static ValueResult success(Value value) { return new ValueResult(value, null); }
         static ValueResult failure(String error) { return new ValueResult(null, error); }
+    }
+
+    private static final class AvailableParametersResult
+    {
+        final DcsAvailableParameterCollection parameters; final String error;
+        private AvailableParametersResult(DcsAvailableParameterCollection parameters, String error)
+        { this.parameters = parameters; this.error = error; }
+        static AvailableParametersResult success(DcsAvailableParameterCollection parameters)
+        { return new AvailableParametersResult(parameters, null); }
+        static AvailableParametersResult failure(String error)
+        { return new AvailableParametersResult(null, error); }
     }
 
     private static final class FieldResult
@@ -5397,7 +5948,7 @@ public final class DcsSettingsWriter
         static FieldResult failure(String error) { return new FieldResult(null, error); }
     }
 
-    private static final class AppearanceResult
+    static final class AppearanceResult
     {
         final DataCompositionAppearance value; final String error;
         private AppearanceResult(DataCompositionAppearance value, String error)

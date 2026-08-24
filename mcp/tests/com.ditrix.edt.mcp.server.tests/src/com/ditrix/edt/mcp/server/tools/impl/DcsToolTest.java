@@ -51,7 +51,8 @@ public class DcsToolTest
         "get", "upsert", "update", "replace", "remove")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
     private static final Set<String> TYPES = new LinkedHashSet<>(Arrays.asList(
-        "schema", "dynamicList", "dataSource", "dataSet", "field", "parameter", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        "schema", "dynamicList", "dataSource", "dataSet", "field", "fieldFolder", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        "parameter", //$NON-NLS-1$
         "calculatedField", "totalField", "variant", "grouping", "selection", "filter", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "dataParameter", "order", "conditionalAppearance", "table", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         "outputParameter", "userSettings")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -272,7 +273,7 @@ public class DcsToolTest
         String reportSettingsRefusal =
             DcsTool.replaceRefusal(schema, settings, "userSettings", address); //$NON-NLS-1$
         assertNotNull(reportSettingsRefusal);
-        assertTrue(reportSettingsRefusal, reportSettingsRefusal.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertArticulateChartRefusal(reportSettingsRefusal);
 
         SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createSettingsVariant();
@@ -288,7 +289,7 @@ public class DcsToolTest
         variantSettings.getItems().add(variantChart);
         String variantRefusal = DcsTool.replaceRefusal(schema, settings, "variant", address); //$NON-NLS-1$
         assertNotNull(variantRefusal);
-        assertTrue(variantRefusal, variantRefusal.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertArticulateChartRefusal(variantRefusal);
 
         DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
         dynamic.getFields().add(com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
@@ -303,7 +304,7 @@ public class DcsToolTest
         String listSettingsRefusal =
             DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address); //$NON-NLS-1$
         assertNotNull(listSettingsRefusal);
-        assertTrue(listSettingsRefusal, listSettingsRefusal.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertArticulateChartRefusal(listSettingsRefusal);
     }
 
     @Test
@@ -320,7 +321,7 @@ public class DcsToolTest
         String bare = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
             address(root));
         assertNotNull("the established bare-root scan must remain guarded", bare); //$NON-NLS-1$
-        assertTrue(bare, bare.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertArticulateChartRefusal(bare);
 
         String settingsPointer = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
             address(root + "#/listSettings")); //$NON-NLS-1$
@@ -437,6 +438,16 @@ public class DcsToolTest
         assertTrue(result, result.contains(address));
         assertTrue(result, result.contains("only with action='get', type='schema'")); //$NON-NLS-1$
         assertTrue(result, result.contains("bare root FQN")); //$NON-NLS-1$
+    }
+
+    private static void assertArticulateChartRefusal(String error)
+    {
+        assertTrue(error, error.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertTrue(error, error.contains("authoring it is not supported by this tool")); //$NON-NLS-1$
+        assertTrue(error, error.contains("action='replace', type='schema'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("body={xml:...}")); //$NON-NLS-1$
+        assertTrue(error, error.contains("bare schema root")); //$NON-NLS-1$
+        assertFalse(error, error.contains("no public DCS type")); //$NON-NLS-1$
     }
 
     private static Set<String> strings(JsonArray values)

@@ -20,7 +20,11 @@ import org.eclipse.swt.widgets.Display;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -33,6 +37,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
 import com.ditrix.edt.mcp.server.utils.DcsDynamicListWriter;
+import com.ditrix.edt.mcp.server.utils.DcsFormAppearanceContent;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
 import com.ditrix.edt.mcp.server.utils.DcsModelComparison;
 import com.ditrix.edt.mcp.server.utils.DcsMutationGuard;
@@ -45,17 +50,19 @@ import com.ditrix.edt.mcp.server.utils.DcsSettingsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver;
 import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
+import com.ditrix.edt.mcp.server.utils.DcsXmlRoundTripComparator;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-/** Reads and authors DCS schemas, shared settings, and form dynamic lists. */
+/** Reads and authors DCS schemas, shared settings, form conditional appearance, and dynamic lists. */
 public class DcsTool implements IMcpTool
 {
     public static final String NAME = "dcs"; //$NON-NLS-1$
@@ -84,7 +91,7 @@ public class DcsTool implements IMcpTool
 
     private static final String[] TYPES = {
         "schema", "dynamicList", //$NON-NLS-1$ //$NON-NLS-2$
-        "dataSource", "dataSet", "field", "parameter", "calculatedField", "totalField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        "dataSource", "dataSet", "field", "fieldFolder", "parameter", "calculatedField", "totalField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
         "variant", "grouping", "selection", "filter", "dataParameter", "order", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "conditionalAppearance", "table", "userField", "outputParameter", "userSettings" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
     };
@@ -103,7 +110,7 @@ public class DcsTool implements IMcpTool
     public String getDescription()
     {
         return "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, " //$NON-NLS-1$
-            + "and form dynamic lists. " //$NON-NLS-1$
+            + "form conditional appearance, and form dynamic lists. " //$NON-NLS-1$
             + "Call action='get' first; replace, remove and any index-addressed edit require its " //$NON-NLS-1$
             + "hash as expectedHash. Call get_tool_guide('dcs') for body shapes."; //$NON-NLS-1$
     }
@@ -352,9 +359,11 @@ public class DcsTool implements IMcpTool
         {
             if (hasBody)
             {
-                return ToolResult.error("body is not allowed for action='remove'. Omit body and address exactly one node with fqn '#/...'.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("body is not allowed for action='remove'. Omit body and " //$NON-NLS-1$
+                    + "address exactly one node (a form's conditional-appearance holder is its " //$NON-NLS-1$
+                    + "bare form FQN).").toJson(); //$NON-NLS-1$
             }
-            if (!address.hasPointer())
+            if (!address.hasPointer() && !"conditionalAppearance".equals(type)) //$NON-NLS-1$
             {
                 return ToolResult.error("action='remove' refuses bare root '" + address //$NON-NLS-1$
                     + "'. Append the exact '#/...' node pointer returned by get.").toJson(); //$NON-NLS-1$
@@ -474,10 +483,14 @@ public class DcsTool implements IMcpTool
             DcsXmlCodec codec = null;
             if (FORMAT_XML.equals(format))
             {
-                if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
+                if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST
+                    || target.kind() == DcsTargetResolver.TargetKind.FORM)
                 {
-                    return ToolResult.error("format='xml' with type='schema' cannot read dynamic-list root '" //$NON-NLS-1$
-                        + target.normalizedRootFqn() + "'. Use format='md' with type='dynamicList'; " //$NON-NLS-1$ //$NON-NLS-2$
+                    String expected = target.kind() == DcsTargetResolver.TargetKind.FORM
+                        ? "conditionalAppearance" : "dynamicList"; //$NON-NLS-1$ //$NON-NLS-2$
+                    return ToolResult.error("format='xml' cannot read form-backed DCS root '" //$NON-NLS-1$
+                        + target.normalizedRootFqn() + "'. Use format='md' with type='" //$NON-NLS-1$
+                        + expected + "'; " //$NON-NLS-1$
                         + "XML is only available for a DataCompositionSchema root.").toJson(); //$NON-NLS-1$
                 }
                 DcsXmlCodec.ResolveResult codecResult = DcsXmlCodec.resolve(context.project());
@@ -565,13 +578,20 @@ public class DcsTool implements IMcpTool
             DcsPresentationParser.LanguageContext languages =
                 new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
                     effectiveLanguage);
-            DcsSchemaContent.Services services = DcsSchemaContent.resolveServices(context, model);
-            if (!services.isSuccess())
+            IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+            IV8Project v8Project = v8ProjectManager == null
+                ? null : v8ProjectManager.getProject(context.project());
+            Version version = v8Project == null ? null : v8Project.getVersion();
+            if (version == null)
             {
-                return ToolResult.error(services.error()).toJson();
+                return ToolResult.error("The platform version is unavailable for DCS target '" //$NON-NLS-1$
+                    + target.normalizedRootFqn()
+                    + "'. Wait for EDT to finish loading the project, then retry.").toJson(); //$NON-NLS-1$
             }
             DcsWriter.TypeResolver typeResolver =
-                DcsWriter.typeResolver(context.configuration(), services.version());
+                DcsWriter.typeResolver(context.configuration(), version);
+            StyleValueBuilder.NamedColorResolver namedColors =
+                StyleValueBuilder.forConfiguration(context.configuration());
             if (target.kind() == DcsTargetResolver.TargetKind.DYNAMIC_LIST)
             {
                 if (body != null && body.has(FORMAT_XML))
@@ -581,10 +601,29 @@ public class DcsTool implements IMcpTool
                         + "author this dynamic list with its structured body and type='dynamicList'.").toJson(); //$NON-NLS-1$
                 }
                 return executeDynamicListWrite(context, target, address, action, type, body,
-                    expectedHash, languages, typeResolver, services.version());
+                    expectedHash, languages, typeResolver, version, namedColors);
+            }
+            if (target.kind() == DcsTargetResolver.TargetKind.FORM)
+            {
+                if (body != null && body.has(FORMAT_XML))
+                {
+                    return ToolResult.error("body.xml cannot replace form conditional appearance at '" //$NON-NLS-1$
+                        + target.normalizedRootFqn() + "'. Use the structured " //$NON-NLS-1$
+                        + "type='conditionalAppearance' body.").toJson(); //$NON-NLS-1$
+                }
+                return executeFormConditionalAppearanceWrite(context, target, address, action,
+                    type, body, expectedHash, languages, version, namedColors);
+            }
+
+            DcsSchemaContent.Services services = DcsSchemaContent.resolveServices(context, model);
+            if (!services.isSuccess())
+            {
+                return ToolResult.error(services.error()).toJson();
             }
 
             com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema importedSchema = null;
+            DcsXmlCodec importCodec = null;
+            String submittedXml = null;
             if (body != null && body.has(FORMAT_XML))
             {
                 DcsXmlCodec.ResolveResult codecResult = DcsXmlCodec.resolve(context.project());
@@ -592,7 +631,9 @@ public class DcsTool implements IMcpTool
                 {
                     return ToolResult.error(codecResult.error()).toJson();
                 }
-                DcsXmlCodec.SchemaResult decoded = codecResult.codec().deserialize(body.get(FORMAT_XML).getAsString());
+                importCodec = codecResult.codec();
+                submittedXml = body.get(FORMAT_XML).getAsString();
+                DcsXmlCodec.SchemaResult decoded = importCodec.deserialize(submittedXml);
                 if (!decoded.isSuccess())
                 {
                     return ToolResult.error(decoded.error()).toJson();
@@ -606,6 +647,8 @@ public class DcsTool implements IMcpTool
                 }
             }
             com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema detachedImport = importedSchema;
+            DcsXmlCodec detachedImportCodec = importCodec;
+            String detachedSubmittedXml = submittedXml;
             String schemaMembersError = detachedImport == null && "schema".equals(type) && body != null //$NON-NLS-1$
                 ? schemaRootMembersError(body) : null;
             if (schemaMembersError != null)
@@ -659,6 +702,31 @@ public class DcsTool implements IMcpTool
                     if (detachedImport != null)
                     {
                         DcsXmlCodec.replaceContent(content.schema(), detachedImport);
+                        DcsXmlCodec.XmlResult serialized = detachedImportCodec.serialize(content.schema());
+                        if (!serialized.isSuccess())
+                        {
+                            throw DcsWriteFailure.message("XML replacement was refused because EDT " //$NON-NLS-1$
+                                + "could not re-serialize the imported schema for its loss check: " //$NON-NLS-1$
+                                + serialized.error());
+                        }
+                        String missing;
+                        try
+                        {
+                            missing = DcsXmlRoundTripComparator.firstMissingPath(
+                                detachedSubmittedXml, serialized.xml());
+                        }
+                        catch (IllegalArgumentException e)
+                        {
+                            throw DcsWriteFailure.message("XML replacement was refused because its " //$NON-NLS-1$
+                                + "deserialize/serialize loss check failed: " + e.getMessage()); //$NON-NLS-1$
+                        }
+                        if (missing != null)
+                        {
+                            throw DcsWriteFailure.message("XML replacement was refused because EDT's " //$NON-NLS-1$
+                                + "deserialize/serialize round trip removed submitted content at '" //$NON-NLS-1$
+                                + missing + "'. Correct the unrecognized type or namespace at that " //$NON-NLS-1$
+                                + "path and retry; nothing was written."); //$NON-NLS-1$
+                        }
                         return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
                             null, false, true);
                     }
@@ -674,7 +742,7 @@ public class DcsTool implements IMcpTool
                         JsonObject settingsBody = "schema".equals(type) //$NON-NLS-1$
                             ? DcsSettingsWriter.schemaMembers(body) : body;
                         settings = DcsSettingsWriter.planSchema(content.schema(), action, type,
-                            address, settingsBody, languages, services.version());
+                            address, settingsBody, languages, services.version(), namedColors);
                         if (!settings.isSuccess())
                         {
                             throw DcsWriteFailure.message(settings.error());
@@ -684,7 +752,8 @@ public class DcsTool implements IMcpTool
                     if (prepared != null)
                     {
                         DcsSchemaWriter.Result applied =
-                            DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver);
+                            DcsSchemaWriter.apply(content.schema(), prepared.request(), typeResolver,
+                                services.version(), namedColors);
                         if (!applied.isSuccess())
                         {
                             throw applied.isErrorJson() ? DcsWriteFailure.json(applied.error())
@@ -753,7 +822,8 @@ public class DcsTool implements IMcpTool
     private static String executeDynamicListWrite(ProjectContext.ConfigurationResult context,
         DcsTargetResolver.Target target, DcsAddress address, String action, String type, JsonObject body,
         String expectedHash, DcsPresentationParser.LanguageContext languages,
-        DcsWriter.TypeResolver typeResolver, com._1c.g5.v8.dt.platform.version.Version version)
+        DcsWriter.TypeResolver typeResolver, com._1c.g5.v8.dt.platform.version.Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
     {
         FormElementWriter.FormMemberRef ref = target.formMemberRef();
         FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(context.project(),
@@ -771,7 +841,7 @@ public class DcsTool implements IMcpTool
                 }
                 DynamicListExtInfo extInfo = dynamicListExtInfo(member);
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
-                    type, address, body, typeResolver, languages, version);
+                    type, address, body, typeResolver, languages, version, namedColors);
                 if (!planned.isSuccess())
                 {
                     return dynamicPlanError(planned);
@@ -841,7 +911,7 @@ public class DcsTool implements IMcpTool
                     }
                 }
                 DcsDynamicListWriter.Result planned = DcsDynamicListWriter.plan(extInfo, action,
-                    type, address, body, typeResolver, languages, version);
+                    type, address, body, typeResolver, languages, version, namedColors);
                 if (!planned.isSuccess())
                 {
                     throw new FormValidationException(dynamicPlanError(planned));
@@ -905,6 +975,121 @@ public class DcsTool implements IMcpTool
             + (written.settingsFqn != null) + "`\n\n**Applied:** " //$NON-NLS-1$
             + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)) //$NON-NLS-1$ //$NON-NLS-2$
             + localeUnusedNote(context, languages);
+    }
+
+    private static String executeFormConditionalAppearanceWrite(
+        ProjectContext.ConfigurationResult context, DcsTargetResolver.Target target,
+        DcsAddress address, String action, String type, JsonObject body, String expectedHash,
+        DcsPresentationParser.LanguageContext languages,
+        com._1c.g5.v8.dt.platform.version.Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(context.project(),
+            context.scope(), target.formPath(), "Form target '" + target.normalizedRootFqn() //$NON-NLS-1$
+                + "' was not found. Verify the form FQN and retry."); //$NON-NLS-1$
+        AtomicReference<FormWriteOutcome> outcome = new AtomicReference<>();
+        boolean persisted = FormElementWriter.writeEditableForm(fctx,
+            "DcsFormConditionalAppearanceWrite", (formModel, tx) -> //$NON-NLS-1$
+            {
+                if (!(formModel instanceof Form))
+                {
+                    throw new FormValidationException(ToolResult.error("Form target '" //$NON-NLS-1$
+                        + target.normalizedRootFqn()
+                        + "' has no editable Form model. Re-run dcs action='get'.").toJson()); //$NON-NLS-1$
+                }
+                Form form = (Form)formModel;
+                DcsFormAppearanceContent.Result resolved =
+                    DcsFormAppearanceContent.resolve(tx, form);
+                if (!resolved.isSuccess())
+                {
+                    throw new FormValidationException(
+                        ToolResult.error(resolved.error()).toJson());
+                }
+                com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance current =
+                    resolved.appearance();
+                String currentHash = DcsHash.compute(current);
+                String hashError = validateExpectedHash(expectedHash, currentHash, address);
+                if (hashError != null)
+                {
+                    throw new FormValidationException(ToolResult.error(hashError).toJson());
+                }
+                if (ACTION_REPLACE.equals(action))
+                {
+                    String refusal = DcsMutationGuard.replaceError(
+                        current, address);
+                    if (refusal != null)
+                    {
+                        throw new FormValidationException(ToolResult.error(refusal).toJson());
+                    }
+                }
+                DcsSettingsWriter.SettingsResult planned =
+                    DcsSettingsWriter.planFormConditionalAppearance(
+                        current, action, type, address, body, languages,
+                        version, namedColors);
+                if (!planned.isSuccess())
+                {
+                    throw new FormValidationException(ToolResult.error(planned.error()).toJson());
+                }
+                com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance value =
+                    planned.settings().getConditionalAppearance();
+                DcsFormAppearanceContent.Result committed =
+                    DcsFormAppearanceContent.commit(tx, form, value);
+                if (!committed.isSuccess())
+                {
+                    throw new FormValidationException(
+                        ToolResult.error(committed.error()).toJson());
+                }
+                outcome.set(new FormWriteOutcome(DcsHash.compute(committed.appearance()),
+                    committed.fqn()));
+            });
+        FormWriteOutcome written = outcome.get();
+        if (written == null)
+        {
+            return ToolResult.errorAfterMutation("Form conditional-appearance write committed " //$NON-NLS-1$
+                + "without a model outcome for '" + address //$NON-NLS-1$
+                + "'. Re-run get before retrying.").toJson(); //$NON-NLS-1$
+        }
+        FormWriteVerification verified = FormElementWriter.readEditableForm(fctx,
+            "DcsFormConditionalAppearanceVerify", (formModel, tx) -> //$NON-NLS-1$
+            {
+                if (!(formModel instanceof Form))
+                {
+                    return new FormWriteVerification(null,
+                        "The committed form no longer has editable Form content."); //$NON-NLS-1$
+                }
+                DcsFormAppearanceContent.Result effective =
+                    DcsFormAppearanceContent.resolve(tx, (Form)formModel);
+                return effective.isSuccess()
+                    ? new FormWriteVerification(DcsHash.compute(effective.appearance()), null)
+                    : new FormWriteVerification(null, effective.error());
+            });
+        if (verified.error != null || !written.hash.equals(verified.hash))
+        {
+            return ToolResult.errorAfterMutation("DCS action committed for '" + address //$NON-NLS-1$
+                + "', but a post-commit read did not find the form conditional appearance that " //$NON-NLS-1$
+                + "was written. " + (verified.error == null ? "" : verified.error + " ") //$NON-NLS-1$ //$NON-NLS-2$
+                + "Re-run dcs action='get' before any retry.").toJson(); //$NON-NLS-1$
+        }
+        boolean appearancePersisted = written.appearanceFqn == null
+            || BmTransactions.forceExportToDisk(context.project(), written.appearanceFqn);
+        if (!persisted || !appearancePersisted)
+        {
+            return ToolResult.errorAfterMutation("DCS action='" + action //$NON-NLS-1$
+                + "' committed in EDT memory for '" + address //$NON-NLS-1$
+                + "', but force-export could not be scheduled for " //$NON-NLS-1$
+                + (!persisted ? "Form.form" : written.appearanceFqn) //$NON-NLS-1$
+                + ". Save or resync the " //$NON-NLS-1$
+                + "project, then verify with dcs action='get'.").toJson(); //$NON-NLS-1$
+        }
+        return "**Action:** `" + action + "`\n\n**Target:** `" + address //$NON-NLS-1$ //$NON-NLS-2$
+            + "`\n\n**Hash:** `" + verified.hash //$NON-NLS-1$
+            + "`\n\n**Form.form export scheduled:** `true`\n\n**Applied:** " //$NON-NLS-1$
+            + (plannedActionLabel(action)) + localeUnusedNote(context, languages);
+    }
+
+    private static String plannedActionLabel(String action)
+    {
+        return "conditionalAppearance (" + action + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     static String dynamicCommitVerificationError(DynamicListExtInfo expected,
@@ -1121,6 +1306,30 @@ public class DcsTool implements IMcpTool
             this.modelSnapshot = modelSnapshot;
             this.settingsFqn = settingsFqn;
             this.applied = applied;
+        }
+    }
+
+    private static final class FormWriteOutcome
+    {
+        final String hash;
+        final String appearanceFqn;
+
+        FormWriteOutcome(String hash, String appearanceFqn)
+        {
+            this.hash = hash;
+            this.appearanceFqn = appearanceFqn;
+        }
+    }
+
+    private static final class FormWriteVerification
+    {
+        final String hash;
+        final String error;
+
+        FormWriteVerification(String hash, String error)
+        {
+            this.hash = hash;
+            this.error = error;
         }
     }
 

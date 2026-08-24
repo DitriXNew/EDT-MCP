@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -86,6 +87,16 @@ public final class MetadataTypeBuilder
     private static final String[] REF_ITEM_MEMBERS = {"kind", "ref"}; //$NON-NLS-1$ //$NON-NLS-2$
     private static final String[] MEMBERLESS_ITEM_MEMBERS = {"kind"}; //$NON-NLS-1$
 
+    /**
+     * The WIDEST qualifier the platform accepts anywhere: a variable String of 1024, a Number of 38
+     * digits. EDT narrows both PER CONTEXT (a fixed String to 100, most attribute kinds to a Number
+     * of 32, while a DCS type is capped nowhere), and that context is unknown at shape-validation
+     * time - so validating against the widest limit refuses only what no context can hold, and leaves
+     * the narrower per-context rule to EDT`s own validator, which surfaces it as a project error.
+     */
+    private static final int MAX_STRING_LENGTH = 1024;
+    private static final int MAX_NUMBER_PRECISION = 38;
+
     /** The build outcome: exactly one of {@link #typeDescription} / {@link #error} is non-null. */
     public static final class Result
     {
@@ -138,10 +149,11 @@ public final class MetadataTypeBuilder
                 return "each entry of type.types must be an object like {kind:'String'}."; //$NON-NLS-1$
             }
             JsonObject item = itemEl.getAsJsonObject();
-            String kind = asString(item.get("kind")); //$NON-NLS-1$
-            if (kind == null || kind.isEmpty())
+            String kind = jsonString(item.get("kind")); //$NON-NLS-1$
+            if (kind == null || kind.trim().isEmpty())
             {
-                return "each type item needs a non-empty 'kind' (String/Number/Boolean/Date or a Ref)."; //$NON-NLS-1$
+                return "Invalid member 'kind' in type.types[" + i + "]. Expected a non-empty " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "string naming String/Number/Boolean/Date, a Ref, or a platform type."; //$NON-NLS-1$
             }
             String memberError = validateItemMembers(item, kind, i);
             if (memberError != null)
@@ -196,7 +208,164 @@ public final class MetadataTypeBuilder
                     + member + "' or use one of them."; //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
+        if ("String".equals(primitive)) //$NON-NLS-1$
+        {
+            return validateStringItem(item, index);
+        }
+        if ("Number".equals(primitive)) //$NON-NLS-1$
+        {
+            return validateNumberItem(item, index);
+        }
+        if ("Date".equals(primitive)) //$NON-NLS-1$
+        {
+            return validateDateItem(item, index);
+        }
+        if (isRefKind(kind))
+        {
+            return validateRefItem(item, index);
+        }
+        // Boolean and platform/memberless kinds have no value-bearing member beyond the already
+        // validated non-empty string `kind`.
         return null;
+    }
+
+    private static String validateStringItem(JsonObject item, int index)
+    {
+        Integer length = null;
+        if (item.has("length")) //$NON-NLS-1$
+        {
+            length = strictInt(item.get("length")); //$NON-NLS-1$
+            if (length == null || length.intValue() < 0 || length.intValue() > MAX_STRING_LENGTH)
+            {
+                return invalidMember("length", index, //$NON-NLS-1$
+                    "an integer from 0 to " + MAX_STRING_LENGTH + " (0 means unlimited)"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (item.has("fixed")) //$NON-NLS-1$
+        {
+            if (!isBoolean(item.get("fixed"))) //$NON-NLS-1$
+            {
+                return invalidMember("fixed", index, "true or false"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (!item.has("length")) //$NON-NLS-1$
+            {
+                return invalidMember("fixed", index, //$NON-NLS-1$
+                    "true or false together with a 'length' member"); //$NON-NLS-1$
+            }
+            if (item.get("fixed").getAsBoolean() && length.intValue() == 0) //$NON-NLS-1$
+            {
+                return invalidMember("fixed", index, //$NON-NLS-1$
+                    "false when 'length' is 0 (unlimited), or true only with a positive 'length'"); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static String validateNumberItem(JsonObject item, int index)
+    {
+        Integer precision = null;
+        if (item.has("precision")) //$NON-NLS-1$
+        {
+            precision = strictInt(item.get("precision")); //$NON-NLS-1$
+            if (precision == null || precision.intValue() < 1
+                || precision.intValue() > MAX_NUMBER_PRECISION)
+            {
+                return invalidMember("precision", index, //$NON-NLS-1$
+                    "an integer from 1 to " + MAX_NUMBER_PRECISION); //$NON-NLS-1$
+            }
+        }
+        if (item.has("scale")) //$NON-NLS-1$
+        {
+            Integer scale = strictInt(item.get("scale")); //$NON-NLS-1$
+            if (scale == null)
+            {
+                return invalidMember("scale", index, "an integer from 0 to precision"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (precision == null)
+            {
+                return invalidMember("scale", index, //$NON-NLS-1$
+                    "an integer from 0 to precision together with a 'precision' member"); //$NON-NLS-1$
+            }
+            if (scale.intValue() < 0 || scale.intValue() > precision.intValue())
+            {
+                return invalidMember("scale", index, //$NON-NLS-1$
+                    "an integer from 0 to the requested precision (" + precision + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (item.has("nonNegative")) //$NON-NLS-1$
+        {
+            if (!isBoolean(item.get("nonNegative"))) //$NON-NLS-1$
+            {
+                return invalidMember("nonNegative", index, "true or false"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (precision == null)
+            {
+                return invalidMember("nonNegative", index, //$NON-NLS-1$
+                    "true or false together with a 'precision' member"); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static String validateDateItem(JsonObject item, int index)
+    {
+        if (!item.has("fractions")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        String fractions = jsonString(item.get("fractions")); //$NON-NLS-1$
+        if (fractions == null || !("date".equalsIgnoreCase(fractions.trim()) //$NON-NLS-1$
+            || "time".equalsIgnoreCase(fractions.trim()) //$NON-NLS-1$
+            || "datetime".equalsIgnoreCase(fractions.trim()))) //$NON-NLS-1$
+        {
+            return invalidMember("fractions", index, //$NON-NLS-1$
+                "one of the strings DateTime, Date, or Time"); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    private static String validateRefItem(JsonObject item, int index)
+    {
+        String ref = jsonString(item.get("ref")); //$NON-NLS-1$
+        if (ref == null || ref.trim().isEmpty())
+        {
+            return invalidMember("ref", index, //$NON-NLS-1$
+                "a non-empty reference target string such as 'Catalog.Products'"); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    private static String invalidMember(String member, int index, String expected)
+    {
+        return "Invalid member '" + member + "' in type.types[" + index + "]. Expected " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + expected + "."; //$NON-NLS-1$
+    }
+
+    private static Integer strictInt(JsonElement value)
+    {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber())
+        {
+            return null;
+        }
+        try
+        {
+            return Integer.valueOf(new BigDecimal(value.getAsString()).intValueExact());
+        }
+        catch (ArithmeticException | NumberFormatException e)
+        {
+            return null;
+        }
+    }
+
+    private static boolean isBoolean(JsonElement value)
+    {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean();
+    }
+
+    private static String jsonString(JsonElement value)
+    {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+            ? value.getAsString() : null;
     }
 
     /**

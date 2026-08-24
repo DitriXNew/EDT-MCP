@@ -393,6 +393,11 @@ def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk
                 }]},
                 "conditionalAppearance": {"items": [{
                     "use": True,
+                    "appearance": {
+                        "BackColor": {
+                            "color": {"red": 255, "green": 0, "blue": 0},
+                        },
+                    },
                     "selection": {"items": [{
                         "field": {"kind": "field", "value": "Amount"},
                     }]},
@@ -444,6 +449,27 @@ def test_small_lossless_xml_schema_round_trip_is_one_chunk_and_identical_on_disk
         "the copied small schema must still fit in one XML chunk"
     assert _xml_structure(target_xml) == _xml_structure(source_xml), \
         "the target model must contain the complete source schema after wholesale replacement"
+
+    before_lossy_replace = read_disk(target_rel)
+    current = _get(target_root, "schema")
+    assert_ok(current, "read the target hash before the lossy-type replacement")
+    undeclared_style_xml = re.sub(
+        r'\s+xmlns:style="[^"]+"', "", source_xml, count=1)
+    lossy_xml, replacements = re.subn(
+        r'xsi:type="v8ui:Color"', 'xsi:type="style:StyleColor"',
+        undeclared_style_xml, count=1)
+    assert replacements == 1, \
+        "the serialized fixture must expose one typed color value for the loss reproduction"
+    refused = _write(target_root, "replace", "schema", {"xml": lossy_xml},
+                     expectedHash=_hash(current))
+    refusal = assert_error(refused, "replace schema XML with an undeclared-prefix color type")
+    assert_error_quality(
+        refusal,
+        names=["value"],
+        suggests=["round trip", "nothing was written"],
+        ctx="the deserialize/serialize loss refusal names the first missing value path")
+    assert read_disk(target_rel) == before_lossy_replace, \
+        "a lossy wholesale replacement must roll back and leave Template.dcs byte-identical"
 
     before_invalid_replace = read_disk(target_rel)
     current = _get(target_root, "schema")
@@ -930,6 +956,75 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_schema_member_bodies_persist_typed_default_field_type_appearance_and_attribute_restriction():
+    report_name = "E2EDcsSchemaMembers"
+    root = _seed_report(report_name)
+    parameter = "TypedDefaultDate"
+    field_address = root + "#/dataSets/DataSet1/fields/Amount1"
+
+    authored_parameter = _write(root, "upsert", "parameter", {
+        "name": parameter,
+        "valueType": {"types": [{"kind": "Date", "fractions": "Date"}]},
+        "values": [{"kind": "date", "value": "2026-08-24T00:00:00"}],
+    })
+    assert_ok(authored_parameter, "author a schema parameter carrying a typed default value")
+
+    authored_field = _write(field_address, "update", "field", {
+        "valueType": {"types": [{"kind": "String", "length": 40}]},
+        "appearance": {
+            "BackColor": {
+                "color": {"red": 17, "green": 34, "blue": 51},
+            },
+            "TextColor": {
+                "color": {"red": 238, "green": 221, "blue": 204},
+            },
+        },
+        "attributeUseRestriction": {
+            "field": True,
+            "condition": False,
+            "group": True,
+            "order": False,
+        },
+    })
+    assert_ok(authored_field, "author field valueType, appearance, and attribute restriction")
+
+    patched_field = _write(field_address, "update", "field", {
+        "appearance": {
+            "BackColor": {
+                "color": {"red": 51, "green": 34, "blue": 17},
+            },
+        },
+    })
+    assert_ok(patched_field, "patch one field appearance key without dropping its sibling")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the extended schema-member write")
+    for needle, why in (
+            (parameter, "the parameter default"),
+            ("2026-08-24", "the parameter default value"),
+            ("BackColor", "the field appearance"),
+            ("TextColor", "the omitted field appearance key retained by merge-on-update"),
+            ("valueType", "the field String value type"),
+            ("attributeUseRestriction", "the field attribute-use restriction")):
+        poll_disk_contains(dcs_rel, needle, ctx=why + " must reach Template.dcs")
+
+    on_disk = read_disk(dcs_rel)
+    parameter_start = on_disk.index(parameter)
+    parameter_window = on_disk[parameter_start:parameter_start + 3000]
+    assert re.search(r'<(?:\w+:)?values?\s+xsi:type="[^"]*[Dd]ate[^"]*"',
+                     parameter_window), \
+        "the default below %s must carry a Date XML type, not an inferred string: %s" % (
+            parameter, parameter_window[:800])
+    field_start = on_disk.index("Amount1")
+    field_window = on_disk[field_start:field_start + 6000]
+    assert "BackColor" in field_window and "TextColor" in field_window \
+        and "valueType" in field_window \
+        and "String" in field_window and "40" in field_window, \
+        "the field appearance and value type must stay on the same field: %s" % field_window[:1200]
+    assert "attributeUseRestriction" in field_window, \
+        "the field-level attribute-use restriction must survive export: %s" % field_window[:1200]
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_number_value_type_qualifiers_round_trip_through_typed_calls():
     report_name = "E2EDcsNumberQualifiers"
     root = "Report." + report_name
@@ -1006,6 +1101,138 @@ def test_calculated_field_upserts_in_place_and_persists_to_disk():
     assert first_expression not in second_disk, "the old expression must be removed from %s" % dcs_rel
     assert second_disk.count(data_path) == 1, \
         "the calculated field must be updated in place, never duplicated in %s" % dcs_rel
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_calculated_field_empty_expression_survives_write_export_and_read():
+    report_name = "E2EDcsEmptyCalculatedExpression"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for empty calculated-field expression")
+    wait_for_project_ready()
+
+    data_path = "RuntimeFilledValue"
+    written = _write(root, "upsert", "calculatedField", {
+        "dataPath": data_path,
+        "expression": "",
+    })
+    assert_ok(written, "author a deliberately empty calculated-field expression")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the empty calculated-field write")
+    poll_disk_contains(dcs_rel, data_path,
+                       ctx="the empty-expression field must reach Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert re.search(r"<expression\s*/>", on_disk), \
+        "the deliberate empty expression must serialize as an empty XML element in %s" % dcs_rel
+
+    read_back = _get(root + "#/calculatedFields/" + data_path, "calculatedField")
+    assert_ok(read_back, "read back the calculated field with an empty expression")
+    assert "- expression: \n" in read_back.text, \
+        "the typed read must expose the deliberately empty expression:\n%s" % read_back.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_small_settings_members_survive_write_export_and_typed_read():
+    report_name = "E2EDcsSmallSettingsMembers"
+    root = _seed_report(report_name)
+    authored = _write(root, "upsert", "userSettings", {
+        "items": [
+            {"kind": "grouping", "name": "SmallGroup", "id": "AgentGroupId",
+             "groupState": "Disabled"},
+            {"kind": "table", "name": "SmallTable", "id": "AgentTableId"},
+        ],
+        "additionalProperties": {
+            "AgentMarker": {"kind": "string", "value": "SmallSettingsRoundTrip"},
+        },
+    })
+    assert_ok(authored, "author settable group/table/settings members")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the small settings members")
+    for marker in ("AgentGroupId", "AgentTableId", "SmallSettingsRoundTrip"):
+        poll_disk_contains(dcs_rel, marker,
+                           ctx="%s must reach Template.dcs" % marker)
+
+    read_back = _get(root + "#/defaultSettings", "userSettings")
+    assert_ok(read_back, "read back all small settings members")
+    for marker in ("AgentGroupId", "AgentTableId", "Disabled",
+                   "AgentMarker", "SmallSettingsRoundTrip"):
+        assert marker in read_back.text, \
+            "the typed read must expose %s:\n%s" % (marker, read_back.text)
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_grouping_conditional_appearance_address_reaches_template_dcs():
+    report_name = "E2EDcsGroupingAppearance"
+    root = _seed_report(report_name)
+    authored = _write(root, "upsert", "grouping", {"name": "AppearanceGroup"})
+    assert_ok(authored, "seed a grouping for conditional appearance")
+
+    grouping_address = root + "#/defaultSettings/items/0"
+    grouping = _get(grouping_address, "grouping")
+    assert_ok(grouping, "read the grouping before its indexed child write")
+    appearance_address = grouping_address + "/conditionalAppearance"
+    marker = "GroupingAppearanceField"
+    written = _write(appearance_address, "upsert", "conditionalAppearance", {
+        "items": [{
+            "selection": {"items": [{
+                "use": True,
+                "field": {"kind": "field", "value": marker},
+            }]},
+        }],
+    }, expectedHash=_hash(grouping))
+    assert_ok(written, "author grouping-level conditional appearance by its child address")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the grouping appearance fixture")
+    poll_disk_contains(dcs_rel, marker,
+                       ctx="grouping conditional appearance must reach Template.dcs")
+    read_back = _get(appearance_address, "conditionalAppearance")
+    assert_ok(read_back, "read grouping conditional appearance through the accepted address")
+    assert marker in read_back.text
+    assert appearance_address + "/items/0" in read_back.text, \
+        "the read must expose writable addresses below the grouping holder"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_form_conditional_appearance_reaches_form_file_and_reads_back():
+    catalog_name = "E2EDcsFormAppearance"
+    catalog = "Catalog." + catalog_name
+    form = catalog + ".Form.ItemForm"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": catalog}),
+              "seed catalog for form conditional appearance")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form}),
+              "seed managed form for conditional appearance")
+    wait_for_project_ready()
+
+    marker = "AcceptedUnvalidatedFormField"
+    written = _write(form, "upsert", "conditionalAppearance", {
+        "items": [{
+            "selection": {"items": [{
+                "use": True,
+                "field": {"kind": "field", "value": marker},
+            }]},
+            "appearance": {
+                "Visible": {"kind": "boolean", "value": False},
+            },
+        }],
+    })
+    assert_ok(written, "author the form's own conditional appearance")
+    assert "**Form.form export scheduled:** `true`" in written.text
+
+    # A form owns its appearance as a BM EXTERNAL PROPERTY, so EDT exports it beside the form
+    # rather than inside it - the same way a dynamic list gets its own ListSettings.dcss.
+    appearance_rel = "src/Catalogs/%s/Forms/ItemForm/ConditionalAppearance.dcssca" % catalog_name
+    poll_disk_contains(appearance_rel, marker,
+                       ctx="form conditional appearance must reach ConditionalAppearance.dcssca")
+    appearance_disk = read_disk(appearance_rel)
+    assert "Visible" in appearance_disk, \
+        "the form-only appearance key must persist through FormAppearanceParameters"
+
+    read_back = _get(form, "conditionalAppearance")
+    assert_ok(read_back, "read back the form conditional appearance")
+    assert marker in read_back.text and "Visible" in read_back.text
+    assert form + "#/items/0" in read_back.text, \
+        "a form read must expose the same root-relative rule address accepted by write"
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -1479,6 +1706,203 @@ def test_conditional_appearance_field_address_copied_from_read_updates_disk():
         "an authoritative holder replace must not retain omitted appearance fields"
     poll_disk_lacks(dcs_rel, new_field,
                     ctx="the omitted appearance field must leave Template.dcs on holder replace")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_conditional_appearance_parameter_patch_preserves_omitted_keys_on_disk():
+    report_name = "E2EDcsAppearanceParameterPatch"
+    root = _seed_report(report_name)
+    rule_address = root + "#/defaultSettings/conditionalAppearance/items/0"
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "conditionalAppearance": {
+                "items": [{
+                    "appearance": {
+                        "BackColor": {
+                            "color": {"red": 255, "green": 0, "blue": 0},
+                        },
+                        "TextColor": {
+                            "color": {"red": 0, "green": 128, "blue": 0},
+                        },
+                    },
+                }],
+            },
+        },
+    })
+    assert_ok(authored, "author two conditional-appearance parameters")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the appearance-parameter patch fixture")
+    poll_disk_contains(dcs_rel, "TextColor",
+                       ctx="both initial appearance parameters must reach Template.dcs")
+
+    before_update = _get(rule_address, "conditionalAppearance")
+    assert_ok(before_update, "read the conditional-appearance rule before update")
+    updated = _write(rule_address, "update", "conditionalAppearance", {
+        "appearance": {
+            "BackColor": {
+                "color": {"red": 0, "green": 0, "blue": 255},
+            },
+        },
+    }, expectedHash=_hash(before_update))
+    assert_ok(updated, "patch one appearance parameter with update")
+    after_update = _get(rule_address, "conditionalAppearance")
+    assert_ok(after_update, "read the conditional-appearance rule after update")
+    assert "BackColor" in after_update.text and "TextColor" in after_update.text, \
+        "update must retain the omitted TextColor parameter: %s" % after_update.text
+    poll_disk_contains(dcs_rel, "TextColor",
+                       ctx="update must retain the omitted appearance parameter on disk")
+
+    before_upsert = _get(rule_address, "conditionalAppearance")
+    assert_ok(before_upsert, "read the conditional-appearance rule before exact upsert")
+    upserted = _write(rule_address, "upsert", "conditionalAppearance", {
+        "appearance": {
+            "BackColor": {
+                "color": {"red": 255, "green": 255, "blue": 0},
+            },
+        },
+    }, expectedHash=_hash(before_upsert))
+    assert_ok(upserted, "patch one appearance parameter with exact-target upsert")
+    after_upsert = _get(rule_address, "conditionalAppearance")
+    assert_ok(after_upsert, "read the conditional-appearance rule after exact upsert")
+    assert "BackColor" in after_upsert.text and "TextColor" in after_upsert.text, \
+        "exact-target upsert must retain the omitted TextColor parameter: %s" % after_upsert.text
+    poll_disk_contains(dcs_rel, "TextColor",
+                       ctx="exact-target upsert must retain the omitted parameter on disk")
+
+    replaced = _write(rule_address, "replace", "conditionalAppearance", {
+        "appearance": {
+            "BackColor": {
+                "color": {"red": 0, "green": 0, "blue": 0},
+            },
+        },
+    }, expectedHash=_hash(after_upsert))
+    assert_ok(replaced, "replace the appearance rule from one parameter")
+    after_replace = _get(rule_address, "conditionalAppearance")
+    assert_ok(after_replace, "read the conditional-appearance rule after replace")
+    assert "BackColor" in after_replace.text and "TextColor" not in after_replace.text, \
+        "replace must clear omitted appearance parameters: %s" % after_replace.text
+    poll_disk_lacks(dcs_rel, "TextColor",
+                    ctx="replace must clear the omitted appearance parameter on disk")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_variant_output_parameters_use_declared_xml_types_and_refuse_unknown_names():
+    language = "Language.E2EDcsOutputRussian"
+    report_name = "E2EDcsTypedOutputParameters"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": language}),
+              "add the output-parameter test language")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": language,
+        "properties": [{"name": "languageCode", "value": "ru"}],
+    }), "assign the output-parameter test language code")
+    wait_for_project_ready()
+    root = _seed_report(report_name)
+
+    authored = _write(root, "upsert", "variant", {
+        "name": "TypedOutput",
+        "presentation": "Typed output",
+        "settings": {
+            "outputParameters": {
+                "items": [{
+                    "parameter": {
+                        "kind": "parameter",
+                        "value": "VerticalOverallPlacement",
+                    },
+                    "value": "None",
+                }, {
+                    "parameter": {"kind": "parameter", "value": "Title"},
+                    "value": {
+                        "ru": "Russian output title",
+                        "en": "English output title",
+                    },
+                }],
+            },
+        },
+    }, language="en")
+    assert_ok(authored, "author enum and localized output parameters")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the typed output-parameter fixture")
+    poll_disk_contains(dcs_rel, "English output title",
+                       ctx="the typed output parameters must reach Template.dcs")
+    on_disk = read_disk(dcs_rel)
+
+    placement = re.compile(
+        r"<dcscor:parameter>VerticalOverallPlacement</dcscor:parameter>\s*"
+        r'<dcscor:value xsi:type="dcscor:DataCompositionTotalPlacement">None</dcscor:value>')
+    assert placement.search(on_disk), \
+        "the placement value must carry DataCompositionTotalPlacement on disk: %s" % on_disk[:1800]
+    title = re.search(
+        r"<dcscor:parameter>Title</dcscor:parameter>\s*"
+        r'<dcscor:value xsi:type="v8:LocalStringType">(.*?)</dcscor:value>',
+        on_disk, re.DOTALL)
+    assert title, "the title value must carry v8:LocalStringType on disk: %s" % on_disk[:1800]
+    for code, text in (("ru", "Russian output title"), ("en", "English output title")):
+        item = re.compile(
+            r"<v8:item>\s*<v8:lang>%s</v8:lang>\s*<v8:content>%s</v8:content>"
+            % (re.escape(code), re.escape(text)))
+        assert item.search(title.group(1)), \
+            "the LocalString title must carry the %s item: %s" % (code, title.group(1))
+
+    before_refusal = read_disk(dcs_rel)
+    refused = _write(root + "#/variants/TypedOutput/settings/outputParameters",
+                     "upsert", "outputParameter", {
+                         "items": [{
+                             "parameter": {
+                                 "kind": "parameter",
+                                 "value": "ThisParameterDoesNotExist",
+                             },
+                             "value": "must not land",
+                         }],
+                     }, language="en")
+    error = assert_error(refused, "an unknown output-parameter name")
+    assert_error_quality(
+        error,
+        names=["ThisParameterDoesNotExist", "VerticalOverallPlacement", "Title"],
+        suggests=["typed keys"],
+        ctx="the output-parameter error names the bad and valid platform keys")
+    assert read_disk(dcs_rel) == before_refusal, \
+        "a refused output parameter must leave Template.dcs byte-for-byte unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_typed_conditional_appearance_resolves_named_style_color_to_style_literal():
+    style_name = "E2EDcsNamedBackColor"
+    style_fqn = "StyleItem." + style_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": style_fqn}),
+              "create the named color style item")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": style_fqn,
+        "properties": [{
+            "name": "value",
+            "value": {"color": {"red": 240, "green": 80, "blue": 80}},
+        }],
+    }), "make the named style item a color")
+    wait_for_project_ready()
+
+    report_name = "E2EDcsNamedStyleColor"
+    root = _seed_report(report_name)
+    authored = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "conditionalAppearance": {"items": [{
+                "appearance": {
+                    "BackColor": {"color": {"style": style_name}},
+                },
+            }]},
+        },
+    })
+    assert_ok(authored, "author a typed conditional-appearance style color")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the named style-color DCS fixture")
+    poll_disk_contains(dcs_rel, "style:" + style_name,
+                       ctx="the named style color must reach Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert re.search(
+        r'<dcscor:value xsi:type="v8ui:Color">style:%s</dcscor:value>'
+        % re.escape(style_name), on_disk), \
+        "the typed path must serialize the resolved style item as style:<name>: %s" \
+        % on_disk[:2400]
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
@@ -2427,6 +2851,129 @@ def test_dynamic_list_settings_change_refuses_the_pre_change_hash():
     assert_error_quality(error, names=[first_hash, current_hash],
                          suggests=["Re-run dcs action='get'", "expectedHash"],
                          ctx="dynamic-list settings must participate in the stale-index guard")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_field_folder_and_its_addressed_child_reach_exported_dcs():
+    report_name = "E2EDcsFieldFolder"
+    root = "Report." + report_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "create the field-folder report")
+    wait_for_project_ready()
+    authored = _write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "Sales",
+            "type": "query",
+            "query": "SELECT 1 AS CustomerName",
+            "autoFillFields": False,
+            "fields": [{
+                "kind": "folder",
+                "dataPath": "Customer",
+                "title": {"en": "Customer"},
+                "useRestriction": {"field": True},
+                "fields": [{
+                    "dataPath": "Customer.Name",
+                    "field": "CustomerName",
+                }],
+            }],
+        }],
+    }, language="en")
+    assert_ok(authored, "author a DCS field folder with one field")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the field-folder report")
+    poll_disk_contains(dcs_rel, "DataSetFieldFolder",
+                       ctx="the field-folder subtype must reach Template.dcs")
+    poll_disk_contains(dcs_rel, "<dataPath>Customer.Name</dataPath>",
+                       ctx="the field inside the folder must reach Template.dcs")
+
+    folder_address = root + "#/dataSets/Sales/fields/Customer"
+    child_address = folder_address + "/fields/Customer.Name"
+    folder = _get(folder_address, "fieldFolder")
+    assert_ok(folder, "read the authored folder through its public type")
+    assert child_address in folder.text, \
+        "the folder read must advertise the exact child address: %s" % folder.text
+
+    updated = _write(child_address, "update", "field", {
+        "title": {"en": "Customer name"},
+    }, language="en")
+    assert_ok(updated, "write the field through the address returned inside its folder")
+    poll_disk_contains(dcs_rel, "Customer name",
+                       ctx="the addressed child update must reach Template.dcs")
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_chart_schema_survives_xml_copy_and_typed_chart_write_is_articulately_refused():
+    schema_ns = "http://v8.1c.ru/8.1/data-composition-system/schema"
+    settings_ns = "http://v8.1c.ru/8.1/data-composition-system/settings"
+    xsi_ns = "http://www.w3.org/2001/XMLSchema-instance"
+    ET.register_namespace("", schema_ns)
+    ET.register_namespace("dcsset", settings_ns)
+    ET.register_namespace("xsi", xsi_ns)
+
+    source_name = "E2EDcsChartXmlSource"
+    source_root = "Report." + source_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": source_root}),
+              "create the chart XML source report")
+    wait_for_project_ready()
+    seeded = _write(source_root, "upsert", "schema", {
+        "defaultSettings": {"items": []},
+    })
+    assert_ok(seeded, "materialize default settings for the chart XML fixture")
+
+    plain_xml, _pages = _read_all_xml(source_root)
+    document = ET.fromstring(plain_xml)
+    default_settings = next(
+        (node for node in document.iter()
+         if node.tag.rsplit("}", 1)[-1] == "defaultSettings"), None)
+    assert default_settings is not None, \
+        "the typed seed must serialize a defaultSettings node"
+    chart = ET.Element("{%s}item" % settings_ns)
+    chart.set("{%s}type" % xsi_ns, "dcsset:StructureItemChart")
+    default_settings.append(chart)
+    chart_xml = ET.tostring(document, encoding="unicode")
+
+    current = _get(source_root, "schema")
+    imported = _write(source_root, "replace", "schema", {"xml": chart_xml},
+                      expectedHash=_hash(current))
+    assert_ok(imported, "seed an intentionally typed-unsupported chart through XML")
+    source_rel = _poll_report_dcs(source_name, ctx="the chart XML source")
+    poll_disk_contains(source_rel, "StructureItemChart",
+                       ctx="the chart-bearing source must reach Template.dcs")
+
+    chart_address = source_root + "#/defaultSettings/items/0"
+    settings = _get(source_root, "userSettings")
+    assert_ok(settings, "read settings containing the chart")
+    assert "DataCompositionChart" in settings.text and chart_address in settings.text, \
+        "the read must expose the chart and its write address: %s" % settings.text
+
+    refused = _write(chart_address, "update", "grouping", {"name": "NoChartWrite"},
+                     expectedHash=_hash(settings))
+    error = assert_error(refused, "typed write addressed at an existing chart")
+    assert_error_quality(
+        error,
+        names=["DataCompositionChart", "chart"],
+        suggests=["authoring it is not supported by this tool",
+                  "action='replace', type='schema'", "body={xml:...}",
+                  "bare schema root"],
+        ctx="the chart refusal must name the deliberate exclusion and XML escape hatch")
+    assert "no public DCS type" not in error
+
+    source_chart_xml, _pages = _read_all_xml(source_root)
+    target_name = "E2EDcsChartXmlTarget"
+    target_root = "Report." + target_name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": target_root}),
+              "create the chart XML target report")
+    wait_for_project_ready()
+    target_before = _get(target_root, "schema")
+    copied = _write(target_root, "replace", "schema", {"xml": source_chart_xml},
+                    expectedHash=_hash(target_before))
+    assert_ok(copied, "copy the chart-bearing schema through lossless XML")
+    target_rel = _poll_report_dcs(target_name, ctx="the chart XML target")
+    poll_disk_contains(target_rel, "StructureItemChart",
+                       ctx="the copied chart must reach the target Template.dcs")
+    target_chart_xml, _pages = _read_all_xml(target_root)
+    assert _xml_structure(target_chart_xml) == _xml_structure(source_chart_xml), \
+        "the chart-bearing schema must survive the XML copy unchanged"
 
 
 @e2e_test(tool="dcs", kind="read")
