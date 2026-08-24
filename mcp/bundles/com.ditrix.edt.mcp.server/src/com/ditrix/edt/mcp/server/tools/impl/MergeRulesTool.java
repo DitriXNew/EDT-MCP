@@ -13,8 +13,12 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -741,14 +745,23 @@ public class MergeRulesTool implements IMcpTool
         // already proved the tree finished, so an unfinished comparison lost the address with it
         // and a zip write was refused as if no comparison existed - while the very comparison the
         // refusal told the caller to start was the one holding EDT's single slot.
-        Optional<MergeRuleAuthority> validating = Optional.empty();
+        //
+        // ONE snapshot for the WHOLE document, and that is what makes the report true. The tree's
+        // readiness and the rules of each decision used to be read in SEPARATE boundaries - the
+        // readiness once, then one boundary per decision - so a file carrying several decisions
+        // could be accepted against a mixture of an old tree, a half-rebuilt one and a new one
+        // while the report said every decision had been checked against the comparison. A rule
+        // accepted against a stale node is one the finished comparison can refuse.
+        boolean validated = false;
         String refusal;
         try
         {
             comparison = authoritySupplier.authority(idGiven ? comparisonId : null);
-            validating = comparison.filter(MergeRuleAuthority::answersRules);
-            refusal = validating.isPresent()
-                ? firstRefusedDecision(validating.get(), document, requestedPaths) : null;
+            RuleSnapshot snapshot = comparison.isPresent()
+                ? comparison.get().rulesFor(decisionPaths(document)) : RuleSnapshot.unreadable();
+            validated = snapshot.checked();
+            refusal = validated ? firstRefusedDecision(comparison.get().comparisonId(), snapshot,
+                document, requestedPaths) : null;
         }
         catch (RuntimeException e)
         {
@@ -799,7 +812,7 @@ public class MergeRulesTool implements IMcpTool
         // one that validated - an unfinished tree still names its own projects.
         String zipEntryId =
             zipped ? comparison.map(MergeRuleAuthority::mergeRulesEntryId).orElse(null) : null;
-        if (idGiven && comparison.isPresent() && validating.isEmpty())
+        if (idGiven && comparison.isPresent() && !validated)
         {
             // The caller asked for validation against a comparison that IS there and cannot give a
             // verdict. Said as itself rather than as "nothing answered for that id": the id is
@@ -899,7 +912,7 @@ public class MergeRulesTool implements IMcpTool
             return ToolResult.error("Could not write the merge-rules file " + file + ": " //$NON-NLS-1$ //$NON-NLS-2$
                 + describe(e)).toJson();
         }
-        return renderWrite(file, basedOn, existingDecisions, requested, replaced, comparison, validating,
+        return renderWrite(file, basedOn, existingDecisions, requested, replaced, comparison, validated,
             document, limit, zipEntryId);
     }
 
@@ -954,16 +967,22 @@ public class MergeRulesTool implements IMcpTool
     }
 
     private String renderWrite(Path file, String basedOn, int existingDecisions, List<RequestedDecision> requested,
-        int replaced, Optional<MergeRuleAuthority> comparison, Optional<MergeRuleAuthority> validating,
+        int replaced, Optional<MergeRuleAuthority> comparison, boolean validated,
         MergeRulesDocument document, int limit, String zipEntryId)
     {
         StringBuilder out = new StringBuilder("# Merge rules written: ").append(file).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (validating.isPresent())
+        if (validated)
         {
-            out.append("**Validated against comparison `").append(validating.get().comparisonId()) //$NON-NLS-1$
+            // "ONE reading" is claimed because it is now true, and it was the missing half of this
+            // sentence: the decisions used to be checked one boundary each, against a tree the
+            // engine may rebuild in between, so "checked against the comparison" named a state of
+            // the comparison that never existed as a whole at any instant.
+            out.append("**Validated against comparison `").append(comparison.get().comparisonId()) //$NON-NLS-1$
                 .append("`.** Every decision IN THE FILE was checked against the rules its own " //$NON-NLS-1$
                     + "node allows before anything was written - the ones written now and the " //$NON-NLS-1$
-                    + "ones carried in from " + KEY_BASED_ON + " alike. The table below lists " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "ones carried in from " + KEY_BASED_ON + " alike - and all of them against " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "ONE reading of a tree that reported itself FINISHED, so no two of them " //$NON-NLS-1$
+                    + "were judged by different states of it. The table below lists " //$NON-NLS-1$
                     + "only what this call requested.\n\n"); //$NON-NLS-1$
         }
         else if (comparison.isPresent())
@@ -1585,20 +1604,28 @@ public class MergeRulesTool implements IMcpTool
      * inherited half nobody had looked at, and an inherited rule the comparison does not allow is
      * exactly as inapplicable as a fresh one.
      *
-     * @param authority the comparison to check against
+     * <p>
+     * It reads ONE snapshot and never the live tree: the snapshot was taken in a single boundary,
+     * so the whole document is judged by one state of the comparison. Asking the tree per decision
+     * - which is what this used to do - let successive decisions be judged by successive states of
+     * a tree the engine rebuilds as it goes, while the report claimed one comparison had checked
+     * them all.
+     *
+     * @param comparisonId the comparison the snapshot was taken from, as refusals name it
+     * @param snapshot the one reading every decision is judged by
      * @param document the document as it would be written
      * @param requestedPaths the full key chains this call set, so a refusal can say where the
      *            offending decision came from
      * @return the refusal for the first decision the comparison does not allow, or {@code null}
      *         when the whole document passed
      */
-    private String firstRefusedDecision(MergeRuleAuthority authority, MergeRulesDocument document,
-        Set<List<String>> requestedPaths)
+    private String firstRefusedDecision(String comparisonId, RuleSnapshot snapshot,
+        MergeRulesDocument document, Set<List<String>> requestedPaths)
     {
         for (Decision decision : document.decisions())
         {
-            String refusal = validateAgainstNode(authority, decision.path(), decision.rule(),
-                !requestedPaths.contains(decision.path()));
+            String refusal = validateAgainstNode(comparisonId, snapshot, decision.path(),
+                decision.rule(), !requestedPaths.contains(decision.path()));
             if (refusal != null)
             {
                 return refusal;
@@ -1608,22 +1635,23 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
-     * @param authority the comparison to check against
+     * @param comparisonId the comparison the snapshot was taken from
+     * @param snapshot the one reading this decision is judged by
      * @param fullPath the key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
      * @param rule the rule literal recorded at that node
      * @param inherited whether the decision came from {@code basedOn} rather than from this call
      * @return the refusal, or {@code null} when the comparison allows the rule
      */
-    private String validateAgainstNode(MergeRuleAuthority authority, List<String> fullPath,
-        String rule, boolean inherited)
+    private String validateAgainstNode(String comparisonId, RuleSnapshot snapshot,
+        List<String> fullPath, String rule, boolean inherited)
     {
         String node = renderFullPath(fullPath);
         String origin = inherited ? originNote(fullPath) : ""; //$NON-NLS-1$
-        Optional<List<String>> allowed = authority.availableRules(fullPath);
+        Optional<List<String>> allowed = snapshot.rulesAt(fullPath);
         if (allowed.isEmpty())
         {
             return ToolResult.error("Node '" + node + "' is not in comparison '" //$NON-NLS-1$ //$NON-NLS-2$
-                + authority.comparisonId() + "'. A rule on a node the comparison does not have " //$NON-NLS-1$
+                + comparisonId + "'. A rule on a node the comparison does not have " //$NON-NLS-1$
                 + "would never be applied - check the keys with get_comparison_node, or omit " //$NON-NLS-1$
                 + KEY_COMPARISON_ID + " to author the file unvalidated." + origin).toJson(); //$NON-NLS-1$
         }
@@ -1633,7 +1661,7 @@ public class MergeRulesTool implements IMcpTool
             // node and offers no rule on it. Falling through would print "That node allows: " with
             // nothing after it, which reads as a broken message rather than as the platform's
             // verdict.
-            return ToolResult.error("Comparison '" + authority.comparisonId() //$NON-NLS-1$
+            return ToolResult.error("Comparison '" + comparisonId //$NON-NLS-1$
                 + "' offers no merge rule on node '" + node //$NON-NLS-1$
                 + "': the platform offers a choice only where a node may be merged. Nothing was " //$NON-NLS-1$
                 + "written - set the rule on a node that does carry a choice (get_comparison_node " //$NON-NLS-1$
@@ -1643,7 +1671,7 @@ public class MergeRulesTool implements IMcpTool
         if (!allowed.get().contains(rule))
         {
             return ToolResult.error("Rule '" + rule + "' is not allowed for node '" //$NON-NLS-1$ //$NON-NLS-2$
-                + node + "' in comparison '" + authority.comparisonId() //$NON-NLS-1$
+                + node + "' in comparison '" + comparisonId //$NON-NLS-1$
                 + "'. That node allows: " + String.join(", ", allowed.get()) //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Nothing was written - the whole set is applied only once every decision " //$NON-NLS-1$
                 + "passes." + origin).toJson(); //$NON-NLS-1$
@@ -1667,6 +1695,27 @@ public class MergeRulesTool implements IMcpTool
     }
 
     // ==================== helpers ====================
+
+    /**
+     * Every address the file WOULD carry, deduplicated and in document order.
+     * <p>
+     * The whole set travels to the comparison at once, because the point of the batch is that ONE
+     * boundary answers for all of them. Duplicates are dropped here rather than in the walk: two
+     * decisions at one address are one question, and asking it twice would only widen the window
+     * the batch exists to close.
+     *
+     * @param document the document as it would be written
+     * @return the full key chains, each starting at {@link MergeRulesDocument#ROOT_KEY}
+     */
+    private static Set<List<String>> decisionPaths(MergeRulesDocument document)
+    {
+        Set<List<String>> paths = new LinkedHashSet<>();
+        for (Decision decision : document.decisions())
+        {
+            paths.add(decision.path());
+        }
+        return paths;
+    }
 
     private static boolean isSet(String value)
     {
@@ -1861,6 +1910,98 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
+     * ONE reading of a comparison tree: whether it reported itself FINISHED, and what every asked
+     * for node allows - both taken inside a single read boundary.
+     *
+     * <h2>Why the answer is a snapshot and not a getter</h2>
+     * The comparison tree is rebuilt as the engine works, and its readiness is a property of the
+     * whole tree rather than of a node. Reading the readiness in one boundary and then each node in
+     * a boundary of its own means the decisions of one file can be judged by an old tree, a
+     * half-rebuilt one and a new one in turn - and the report would still say every decision had
+     * been checked against the comparison, which would name a state the comparison was never in.
+     * Carrying both halves out of ONE boundary is the only shape in which that sentence is true,
+     * and it is also the cheaper one: the walk visits each node of the requested chains once
+     * instead of descending from the root once per decision.
+     *
+     * <h2>Three answers, and the middle one is not the missing one</h2>
+     * {@link #checked()} {@code false} means the tree could not be read as a whole - absent, not
+     * finished, or no view at all - and NOTHING in it may be read as a verdict about a node. When
+     * it is {@code true}, an address that is ABSENT from the snapshot is the comparison saying it
+     * has no such node, while an address present with an EMPTY list is the comparison saying it
+     * has the node and offers no choice on it. Those two are different refusals, and folding them
+     * together is a defect this tool has already had once.
+     */
+    public static final class RuleSnapshot
+    {
+        /** The one reading that answers nothing: no verdict may be drawn from it. */
+        private static final RuleSnapshot UNREADABLE = new RuleSnapshot(false, Map.of());
+
+        private final boolean checked;
+
+        private final Map<List<String>, List<String>> allowed;
+
+        private RuleSnapshot(boolean checked, Map<List<String>, List<String>> allowed)
+        {
+            this.checked = checked;
+            this.allowed = allowed;
+        }
+
+        /**
+         * The reading that carries no verdict: the tree was not readable as a whole, so no
+         * decision may be refused - or accepted - on the strength of it.
+         *
+         * @return the snapshot, never {@code null}
+         */
+        public static RuleSnapshot unreadable()
+        {
+            return UNREADABLE;
+        }
+
+        /**
+         * A reading taken from a FINISHED tree.
+         *
+         * @param allowed what each asked-for address offers; an address the tree does not have is
+         *            ABSENT from the map, and one it has but offers nothing on maps to an EMPTY
+         *            list
+         * @return the snapshot, never {@code null}
+         */
+        public static RuleSnapshot of(Map<List<String>, List<String>> allowed)
+        {
+            Map<List<String>, List<String>> copy = new HashMap<>();
+            if (allowed != null)
+            {
+                for (Map.Entry<List<String>, List<String>> entry : allowed.entrySet())
+                {
+                    if (entry.getKey() != null && entry.getValue() != null)
+                    {
+                        copy.put(Collections.unmodifiableList(new ArrayList<>(entry.getKey())),
+                            Collections.unmodifiableList(new ArrayList<>(entry.getValue())));
+                    }
+                }
+            }
+            return new RuleSnapshot(true, copy);
+        }
+
+        /**
+         * @return {@code true} when this reading came from a tree that reported itself FINISHED,
+         *         and its addresses may therefore be read as verdicts
+         */
+        public boolean checked()
+        {
+            return checked;
+        }
+
+        /**
+         * @param nodePath the full key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
+         * @return the allowed literals, or empty when this reading has no such node
+         */
+        public Optional<List<String>> rulesAt(List<String> nodePath)
+        {
+            return nodePath == null ? Optional.empty() : Optional.ofNullable(allowed.get(nodePath));
+        }
+    }
+
+    /**
      * The one question this tool asks a live comparison: which merge rules does a node allow?
      * <p>
      * Deliberately this narrow. The tool never holds the comparison manager, so it has no way to
@@ -1901,53 +2042,50 @@ public class MergeRulesTool implements IMcpTool
         String mergeRulesEntryId();
 
         /**
-         * Whether this comparison can answer {@link #availableRules(List)} at all.
+         * What every address the file would carry allows, read in ONE go.
          * <p>
-         * A comparison answers two different things, and only one of them needs its tree. The
+         * A BATCH and not a getter, and that is the contract rather than an optimisation: the
+         * returned {@link RuleSnapshot} carries the tree's own readiness beside the per-node
+         * answers, so the caller judges the whole document by one state of the comparison. Asked
+         * one address at a time - which is what this used to be - the readiness was established in
+         * a boundary of its own and each address in another, and a file with several decisions
+         * could be accepted against a tree that was rebuilt between two of them while the report
+         * said one comparison had checked them all.
+         * <p>
+         * A comparison answers two separable things, and only one of them needs its tree. The
          * ADDRESS ({@link #comparisonId()}, {@link #mergeRulesEntryId()}) is a fact about which
          * projects the run covers and is known as soon as the session is found; a RULE VERDICT
-         * needs a FINISHED tree, because the tree is lazy and a node that has not been compared
-         * yet is indistinguishable from a node the comparison does not have. Folding the two
-         * together is what made an unfinished comparison lose its address as well, so a zip write
-         * was refused for want of a name the live handle was holding all along.
+         * needs a FINISHED tree, because the tree is lazy and a node that has not been compared yet
+         * is indistinguishable from a node the comparison does not have. Folding the two together
+         * is what made an unfinished comparison lose its address as well, so a zip write was
+         * refused for want of a name the live handle was holding all along. An authority that
+         * cannot read the tree therefore still answers here - with
+         * {@link RuleSnapshot#unreadable()}, which refuses nothing.
          * <p>
-         * {@code false} never refuses a RULE - {@link #availableRules(List)} is not consulted at
-         * all in that state, so no decision is called illegal on the strength of a tree that
-         * could not be read. Whether the WRITE proceeds depends on what the caller asked for, and
-         * the two answers are deliberately different: with no {@code comparisonId} the write
-         * degrades to the NOT VALIDATED report, which still says which comparison named the file;
-         * with a {@code comparisonId} it is REFUSED, because a validated write is what was asked
-         * for and quietly downgrading it would report an unchecked file to a caller who requested
-         * a checked one. Both branches are in {@code writeUnderMutex}.
+         * Whether the WRITE then proceeds depends on what the caller asked for, and the two
+         * answers are deliberately different: with no {@code comparisonId} the write degrades to
+         * the NOT VALIDATED report, which still says which comparison named the file; with a
+         * {@code comparisonId} it is REFUSED, because a validated write is what was asked for and
+         * quietly downgrading it would report an unchecked file to a caller who requested a
+         * checked one. Both branches are in {@code writeUnderMutex}.
          *
-         * @return {@code true} when a rule verdict can be asked of this comparison; {@code true}
-         *         by default, because an authority that exists only to answer rules always can
+         * @param nodePaths the full key chains to answer for, each starting at
+         *            {@link MergeRulesDocument#ROOT_KEY}
+         * @return the one reading, never {@code null}
          */
-        default boolean answersRules()
-        {
-            return true;
-        }
-
-        /**
-         * The rules a node allows, as camel-case rule literals. Asked only when
-         * {@link #answersRules()} is {@code true}.
-         *
-         * @param nodePath the full key chain, starting at {@link MergeRulesDocument#ROOT_KEY}
-         * @return the allowed literals, or empty when the comparison has no such node
-         */
-        Optional<List<String>> availableRules(List<String> nodePath);
+        RuleSnapshot rulesFor(Collection<List<String>> nodePaths);
 
         /**
          * Ends whatever the authority held open for the length of the validation pass.
          * <p>
-         * It exists because the pass is not one question but one per decision in the FILE, each of
-         * them its own read on the comparison's BM store, and a file built from {@code basedOn} can
-         * carry hundreds. Between two of those reads the idle sweep can reclaim the very session
-         * being read - it fires from any comparison-tool call in another thread, and its TTL is
-         * counted from the last touch, not from the start of this pass - which would stop the
-         * comparison under an active validation and fail the write half way through. The production
-         * binding therefore holds a {@code ComparisonSessionRegistry.Lease} from the first lookup
-         * to this call.
+         * It exists because the pass outlives the lookup that found the session: the walk that
+         * answers for every decision in the FILE is one read on the comparison's BM store, and a
+         * file built from {@code basedOn} can carry hundreds of addresses for it to resolve. While
+         * that read runs the idle sweep can reclaim the very session being walked - it fires from
+         * any comparison-tool call in another thread, and its TTL is counted from the last touch,
+         * not from the start of this pass - which would stop the comparison under an active
+         * validation and fail the write half way through. The production binding therefore holds a
+         * {@code ComparisonSessionRegistry.Lease} from the first lookup to this call.
          * <p>
          * Declared with no checked exception, and empty by default: an authority that holds nothing
          * has nothing to end, and a caller must be able to close one in a {@code finally} without
@@ -1977,10 +2115,11 @@ public class MergeRulesTool implements IMcpTool
          * all. Callers must therefore report the absence of validation, never a cause they did not
          * observe.
          * <p>
-         * A PRESENT authority is not by itself a promise of validation: ask
-         * {@link MergeRuleAuthority#answersRules()}. An authority that names the comparison but
-         * cannot read its tree is a third state, and it exists because the address a zip needs is
-         * knowable exactly when the session is - not when its tree happens to be finished.
+         * A PRESENT authority is not by itself a promise of validation: what it answers with is
+         * a {@link RuleSnapshot}, and one that is not {@link RuleSnapshot#checked()} carries no
+         * verdict at all. An authority that names the comparison but cannot read its tree is a
+         * third state, and it exists because the address a zip needs is knowable exactly when the
+         * session is - not when its tree happens to be finished.
          * <p>
          * <b>A failed attempt is THROWN, never collapsed into empty.</b> "Nothing answered" and
          * "something was asked and broke" are different facts, and only the first entitles a
@@ -2007,13 +2146,16 @@ public class MergeRulesTool implements IMcpTool
      * holds {@link ComparisonEngine} and the read-only {@link ComparisonView} it hands out, which
      * is one of the three independent layers that make a merge unreachable from a tool.</p>
      *
-     * <p><b>It answers RULES only for a FINISHED tree.</b> The comparison tree is lazy, so a node
-     * that has not been compared yet is simply absent from its parent's children -
-     * indistinguishable from a node the comparison does not have. Answering from a half-built tree
-     * would turn "not compared yet" into the refusal "that node is not in this comparison", which
-     * is a statement the tool would not have observed. While the tree is still building this
-     * supplier therefore answers no RULES, and the write degrades to the honest NOT VALIDATED
-     * report.</p>
+     * <p><b>RULES are answered only from a FINISHED tree, and the readiness is read in the SAME
+     * boundary as the rules.</b> The comparison tree is lazy, so a node that has not been compared
+     * yet is simply absent from its parent's children - indistinguishable from a node the
+     * comparison does not have. Answering from a half-built tree would turn "not compared yet"
+     * into the refusal "that node is not in this comparison", which is a statement the tool would
+     * not have observed. This supplier no longer decides that on its own: it used to prove the
+     * tree finished in a boundary of its own and then answer each node in another, so the proof
+     * and the answers could describe different trees. It hands back an authority that can read the
+     * tree at all, and that authority's ONE read reports both - see
+     * {@link MergeRuleAuthority#rulesFor(java.util.Collection)}.</p>
      *
      * <p><b>The ADDRESS is answered whenever the session is found.</b> The zip entry name is
      * {@code <main>_<other>_<ancestor>}, read straight off the handle's three descriptors, so it
@@ -2127,13 +2269,20 @@ public class MergeRulesTool implements IMcpTool
                 // report states, so it draws no conclusion from either and needs to tell them apart
                 // nowhere.
                 ComparisonView view = engine == null ? null : engine.view(handle).orElse(null);
-                if (view == null || !isTreeFinished(engine, view))
+                if (view == null)
                 {
                     // The comparison is REGISTERED and names its own projects; only the verdict is
                     // missing. Answering empty here - which is what this used to do - threw the
                     // address away with the verdict and left a zip write refused for want of a
                     // name that was in hand. The lease is given back on the way out: nothing below
                     // this line reads the tree.
+                    //
+                    // Whether the tree has FINISHED is deliberately NOT asked here any more. It
+                    // used to be, in a read of its own, and the rules were then read in further
+                    // reads - so "the tree was finished" and "these are its rules" were statements
+                    // about different instants. The readiness now comes back from the same
+                    // boundary as the rules, which is the only place it can be true of the same
+                    // tree.
                     return Optional.of(new AddressOnlyAuthority(id, entryId));
                 }
                 handedOver = true;
@@ -2151,17 +2300,6 @@ public class MergeRulesTool implements IMcpTool
             }
         }
 
-        /** Whether the whole tree has been compared, read inside the comparison's own boundary. */
-        private static boolean isTreeFinished(ComparisonEngine engine, ComparisonView view)
-        {
-            Boolean finished = engine.read(view, "Check comparison tree readiness", //$NON-NLS-1$
-                (transaction, monitor) -> {
-                    ComparisonNode root = view.rootNode();
-                    return Boolean.valueOf(root != null
-                        && view.topNodeStatus(root.bmGetId()) == ComparisonNodeStatus.FINISHED);
-                });
-            return Boolean.TRUE.equals(finished);
-        }
     }
 
     /**
@@ -2198,24 +2336,18 @@ public class MergeRulesTool implements IMcpTool
             return mergeRulesEntryId;
         }
 
-        @Override
-        public boolean answersRules()
-        {
-            return false;
-        }
-
         /**
          * {@inheritDoc}
          * <p>
-         * Never reached: the caller filters on {@link #answersRules()} first. Empty rather than an
-         * exception, so that a caller which somehow lost that guard lands on the REFUSING side -
-         * empty is read as "the comparison has no such node", which refuses the decision and
-         * writes nothing - instead of on the side that writes a file described as checked.
+         * The reading that carries no verdict, and it is an ANSWER rather than a silence: this
+         * comparison exists and its tree could not be read, so nothing here refuses a decision and
+         * nothing here accepts one. The caller reports NOT VALIDATED, or refuses the write when a
+         * checked one was asked for - never an illegal-rule refusal drawn from a tree nobody read.
          */
         @Override
-        public Optional<List<String>> availableRules(List<String> nodePath)
+        public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
         {
-            return Optional.empty();
+            return RuleSnapshot.unreadable();
         }
     }
 
@@ -2270,26 +2402,80 @@ public class MergeRulesTool implements IMcpTool
             lease.close();
         }
 
+        /**
+         * {@inheritDoc}
+         * <p>
+         * ONE {@code engine.read}, and everything the verdict rests on comes out of it: the root's
+         * own status, and the rules at every address that resolved. Inside it the tree is walked
+         * ONCE along the requested chains rather than descended from the root once per address -
+         * a file built from {@code basedOn} can carry hundreds of them, and repeating the descent
+         * inside a single boundary would hold that boundary open for a multiple of the work it
+         * needs. Nothing from the comparison's store leaves: only rule literals come back.
+         */
         @Override
-        public Optional<List<String>> availableRules(List<String> nodePath)
+        public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
         {
-            if (nodePath == null || nodePath.isEmpty()
-                || !MergeRulesDocument.ROOT_KEY.equals(nodePath.get(0)))
-            {
-                return Optional.empty();
-            }
-            List<String> relative = new ArrayList<>(nodePath.subList(1, nodePath.size()));
-            List<String> literals = engine.read(view, "Read the rules a comparison node allows", //$NON-NLS-1$
-                (transaction, monitor) -> rulesAt(relative));
-            return Optional.ofNullable(literals);
+            Map<List<String>, List<String>> byFull = addressable(nodePaths);
+            RuleSnapshot snapshot = engine.read(view, "Read the rules a comparison allows", //$NON-NLS-1$
+                (transaction, monitor) -> readSnapshot(byFull));
+            // The facade answers null only if the platform handed the task back without running
+            // it; that is not a reading either, so it degrades to the one that refuses nothing.
+            return snapshot == null ? RuleSnapshot.unreadable() : snapshot;
         }
 
-        /** @return the allowed literals, or {@code null} when the tree has no such node */
-        private List<String> rulesAt(List<String> relativePath)
+        /**
+         * The addresses this pass will answer for, each mapped to the chain BELOW the root that
+         * the walk matches. An address that is not rooted at {@link MergeRulesDocument#ROOT_KEY}
+         * is dropped here: it addresses nothing the walk could reach, so it comes back absent,
+         * which the caller renders as "the comparison has no such node".
+         *
+         * @param nodePaths the full key chains
+         * @return full chain to relative chain, in the order they were asked
+         */
+        private static Map<List<String>, List<String>> addressable(Collection<List<String>> nodePaths)
         {
-            ComparisonNode node = findNode(view.rootNode(), relativePath, this::featureNameOf);
-            return allowedRulesOf(node,
-                node == null ? List.of() : view.availableMergeRules(node));
+            Map<List<String>, List<String>> byFull = new LinkedHashMap<>();
+            if (nodePaths == null)
+            {
+                return byFull;
+            }
+            for (List<String> path : nodePaths)
+            {
+                if (path != null && !path.isEmpty()
+                    && MergeRulesDocument.ROOT_KEY.equals(path.get(0)))
+                {
+                    byFull.put(new ArrayList<>(path),
+                        new ArrayList<>(path.subList(1, path.size())));
+                }
+            }
+            return byFull;
+        }
+
+        /** The one reading: the tree's own status and the rules at every address that resolved. */
+        private RuleSnapshot readSnapshot(Map<List<String>, List<String>> byFull)
+        {
+            ComparisonNode root = view.rootNode();
+            if (root == null || view.topNodeStatus(root.bmGetId()) != ComparisonNodeStatus.FINISHED)
+            {
+                // Read HERE and not before: the status and the rules below it are one observation
+                // of one tree, which is the whole point of the batch.
+                return RuleSnapshot.unreadable();
+            }
+            Map<List<String>, ComparisonNode> found =
+                findNodes(root, byFull.values(), this::featureNameOf);
+            Map<List<String>, List<String>> allowed = new LinkedHashMap<>();
+            for (Map.Entry<List<String>, List<String>> asked : byFull.entrySet())
+            {
+                ComparisonNode node = found.get(asked.getValue());
+                if (node != null)
+                {
+                    // Absent from the map is "no such node"; an EMPTY list is "the node is here and
+                    // offers no choice". allowedRulesOf keeps the two apart.
+                    allowed.put(asked.getKey(),
+                        allowedRulesOf(node, view.availableMergeRules(node)));
+                }
+            }
+            return RuleSnapshot.of(allowed);
         }
 
         private String featureNameOf(ComparisonNode node)
@@ -2340,37 +2526,110 @@ public class MergeRulesTool implements IMcpTool
     // ==================== key chain -> node ====================
 
     /**
-     * Walks a key chain down from the root, matching each key against the key the PLATFORM would
-     * serialize that child under. The two must agree, or a rule validated against one node would
-     * be written under a key addressing another.
+     * Resolves MANY key chains in ONE walk down from the root, matching each key against the key
+     * the PLATFORM would serialize that child under. The two must agree, or a rule validated
+     * against one node would be written under a key addressing another.
+     *
+     * <h2>One walk, and why it is not an optimisation</h2>
+     * This used to resolve ONE chain, and the pass called it once per decision - so every decision
+     * re-scanned the children of every node on its way down, and each of those descents ran in a
+     * read boundary of its own. The boundaries are the defect the batch exists to close; the
+     * repeated descents are what would have made keeping them in ONE boundary expensive. Folding
+     * the chains into a prefix tree makes the walk visit each node of the requested chains exactly
+     * once, so the single boundary is held for less work than the old sequence of boundaries did
+     * in total.
+     *
+     * <h2>Which child a key resolves to</h2>
+     * The FIRST child carrying that key, exactly as the one-chain walk did: siblings are scanned in
+     * the platform's own order and the first match wins. A key already taken at this level is not
+     * matched again by a later sibling, so two children keyed alike cannot both claim one branch.
      *
      * @param root the comparison tree's root node
-     * @param relativePath the keys below the root (empty addresses the root itself)
+     * @param relativePaths the chains of keys below the root; an EMPTY chain addresses the root
+     *            itself
      * @param featureNameOf resolves a node's model feature name, which only the session knows
-     * @return the node, or {@code null} when no child carries the next key
+     * @return the node each chain resolved to; a chain no child carries is ABSENT from the map
      */
-    static ComparisonNode findNode(ComparisonNode root, List<String> relativePath,
-        Function<ComparisonNode, String> featureNameOf)
+    static Map<List<String>, ComparisonNode> findNodes(ComparisonNode root,
+        Collection<List<String>> relativePaths, Function<ComparisonNode, String> featureNameOf)
     {
-        ComparisonNode current = root;
-        for (String key : relativePath)
+        Map<List<String>, ComparisonNode> found = new HashMap<>();
+        if (root == null || relativePaths == null || relativePaths.isEmpty())
         {
-            ComparisonNode match = null;
-            for (ComparisonNode child : childrenOf(current))
-            {
-                if (key.equals(serializedKey(child, featureNameOf)))
-                {
-                    match = child;
-                    break;
-                }
-            }
-            if (match == null)
-            {
-                return null;
-            }
-            current = match;
+            return found;
         }
-        return current;
+        PathNode wanted = new PathNode();
+        for (List<String> path : relativePaths)
+        {
+            if (path != null)
+            {
+                wanted.want(path);
+            }
+        }
+        walk(root, wanted, featureNameOf, found);
+        return found;
+    }
+
+    /**
+     * Descends into the children this level still wants, and records the nodes the chains ending
+     * here resolved to.
+     *
+     * @param node the node reached so far
+     * @param wanted the chains still to satisfy below it
+     * @param featureNameOf resolves a node's model feature name
+     * @param found collects chain to node
+     */
+    private static void walk(ComparisonNode node, PathNode wanted,
+        Function<ComparisonNode, String> featureNameOf, Map<List<String>, ComparisonNode> found)
+    {
+        if (wanted.chain != null)
+        {
+            found.put(wanted.chain, node);
+        }
+        if (wanted.children.isEmpty())
+        {
+            return;
+        }
+        Set<String> taken = new HashSet<>();
+        for (ComparisonNode child : childrenOf(node))
+        {
+            String key = serializedKey(child, featureNameOf);
+            PathNode next = key == null ? null : wanted.children.get(key);
+            if (next == null || !taken.add(key))
+            {
+                continue;
+            }
+            walk(child, next, featureNameOf, found);
+        }
+    }
+
+    /**
+     * The requested chains folded into a prefix tree, so one walk answers all of them.
+     * <p>
+     * Depth is bounded by the LONGEST requested chain and not by the comparison, because the walk
+     * only descends where a chain still wants a child - a document addresses a handful of levels,
+     * whatever the size of the tree beside it.
+     */
+    private static final class PathNode
+    {
+        private final Map<String, PathNode> children = new HashMap<>();
+
+        /** The chain that ends here, or {@code null} when nothing was asked for this node. */
+        private List<String> chain;
+
+        /**
+         * @param path the keys below this node
+         */
+        void want(List<String> path)
+        {
+            PathNode current = this;
+            for (String key : path)
+            {
+                current = current.children.computeIfAbsent(key, k -> new PathNode());
+            }
+            // The chain as the CALLER spelled it, so the answer is keyed by what was asked for.
+            current.chain = Collections.unmodifiableList(new ArrayList<>(path));
+        }
     }
 
     /**

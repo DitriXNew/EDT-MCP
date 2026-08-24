@@ -14,6 +14,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
@@ -22,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -51,6 +54,7 @@ import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.EngineRuleAuthority;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.MergeRuleAuthority;
+import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.RuleSnapshot;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -1446,9 +1450,10 @@ public class MergeRulesToolTest
             }
 
             @Override
-            public Optional<List<String>> availableRules(List<String> nodePath)
+            public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
             {
-                return Optional.empty();
+                // A FINISHED tree that simply has no such node: checked, and the address absent.
+                return RuleSnapshot.of(Map.of());
             }
         }));
         String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -1523,9 +1528,173 @@ public class MergeRulesToolTest
             "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}," //$NON-NLS-1$ //$NON-NLS-2$
                 + "{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
 
-        assertEquals("both decisions must be checked", 2, authority.reads); //$NON-NLS-1$
+        assertEquals("both decisions must be checked, and in ONE batch", 1, authority.reads); //$NON-NLS-1$
+        assertEquals("both addresses must travel to the comparison together", 2, //$NON-NLS-1$
+            authority.asked.size());
         assertEquals("no rule may be checked once the pass has released its hold", 0, //$NON-NLS-1$
             authority.readsAfterClose);
+    }
+
+    // ======== every decision is judged by ONE reading of ONE tree ========
+    //
+    // The tree's readiness was established in a boundary of its own, and then each decision was
+    // resolved in a boundary of its own. Nothing held those boundaries together, so a file with
+    // several decisions could be accepted against an old tree, a half-rebuilt one and a new one in
+    // turn - while the report said every decision had been checked against the comparison, which
+    // named a state the comparison was never in as a whole. The pass now takes ONE snapshot and
+    // judges the whole document by it.
+
+    @Test
+    public void testTheWholeDocumentTravelsToTheComparisonInOneQuestion()
+    {
+        RecordingAuthority authority = new RecordingAuthority("cmp-7", List.of("DoNotMerge")); //$NON-NLS-1$ //$NON-NLS-2$
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(authority));
+
+        tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}," //$NON-NLS-1$ //$NON-NLS-2$
+                + "{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}," //$NON-NLS-1$
+                + "{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertEquals("one question, not one per decision - anything else lets two decisions be " //$NON-NLS-1$
+            + "judged by two different trees", 1, authority.reads); //$NON-NLS-1$
+        assertEquals("and all three addresses have to be IN it, or the ones left out would need " //$NON-NLS-1$
+            + "a second question", 3, authority.asked.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASecondReadingIsNeverTakenSoNoVerdictCanBeAssembledFromTwoTrees()
+    {
+        // The comparison's tree finishes between the first question and any second one. Under the
+        // old shape that difference decided the outcome: the readiness read said "not ready" while
+        // a later per-decision read answered from the finished tree, or the other way about. One
+        // question means the LATER state is never consulted, so the report cannot straddle two.
+        Path target = file("r.xml"); //$NON-NLS-1$
+        AtomicReference<Integer> asked = new AtomicReference<>(Integer.valueOf(0));
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(new MergeRuleAuthority()
+        {
+            @Override
+            public String comparisonId()
+            {
+                return "cmp-7"; //$NON-NLS-1$
+            }
+
+            @Override
+            public String mergeRulesEntryId()
+            {
+                return ENTRY_ID;
+            }
+
+            @Override
+            public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
+            {
+                int count = asked.get().intValue() + 1;
+                asked.set(Integer.valueOf(count));
+                if (count == 1)
+                {
+                    return RuleSnapshot.unreadable();
+                }
+                Map<List<String>, List<String>> answer = new LinkedHashMap<>();
+                for (List<String> path : nodePaths)
+                {
+                    answer.put(path, List.of("DoNotMerge")); //$NON-NLS-1$
+                }
+                return RuleSnapshot.of(answer);
+            }
+        }));
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}," //$NON-NLS-1$ //$NON-NLS-2$
+                + "{\"path\":[\"commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertEquals("the comparison must be asked exactly once", 1, asked.get().intValue()); //$NON-NLS-1$
+        assertTrue("the one reading carried no verdict, so the report says so: " + result, //$NON-NLS-1$
+            result.contains("NOT VALIDATED")); //$NON-NLS-1$
+        assertFalse("and it must not claim the later, finished tree checked anything: " + result, //$NON-NLS-1$
+            result.contains("Validated against comparison")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheValidatedReportSaysTheDecisionsShareOneReading()
+    {
+        // Its own literal. The claim "every decision was checked against the comparison" was true
+        // of no single state of it while the readings were separate, and the sentence said nothing
+        // about that - so the report has to carry the fact that now makes it true.
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", List.of("DoNotMerge")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", file("r.xml").toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the report must say the decisions share one reading: " + result, //$NON-NLS-1$
+            result.contains("ONE reading of a tree that reported itself FINISHED")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSiblingAddressesShareOneWalkOfTheirParentsChildren()
+    {
+        // The cost side of holding ONE boundary. Resolving one chain at a time re-scanned the
+        // children of every node on the way down, once per decision; inside a single boundary that
+        // would hold the comparison's own read open for a multiple of the work it needs, which is
+        // the risk this shape had to answer for.
+        ComparisonNode alpha = topNode("CommonModule.Alpha", "CommonModule.Alpha", null); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode beta = topNode("CommonModule.Beta", "CommonModule.Beta", null); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode collection = plainNode();
+        withChildren(collection, alpha, beta);
+        ComparisonNode root = plainNode();
+        withChildren(root, collection);
+
+        List<String> first = List.of("commonModules", "Alpha:Alpha:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> second = List.of("commonModules", "Beta:Beta:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<List<String>, ComparisonNode> found =
+            MergeRulesTool.findNodes(root, List.of(first, second), node -> "commonModules"); //$NON-NLS-1$
+
+        assertSame("both chains must still resolve", alpha, found.get(first)); //$NON-NLS-1$
+        assertSame("both chains must still resolve", beta, found.get(second)); //$NON-NLS-1$
+        verify(collection, times(1)).<ComparisonNode> getChildren();
+    }
+
+    @Test
+    public void testAChainNoChildCarriesIsAbsentWhileItsSiblingStillResolves()
+    {
+        // The walk must not let one unresolvable chain take its siblings down with it, and must
+        // not answer for it either: absent is what the caller renders as "not in comparison".
+        ComparisonNode alpha = topNode("CommonModule.Alpha", "CommonModule.Alpha", null); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode collection = plainNode();
+        withChildren(collection, alpha);
+        ComparisonNode root = plainNode();
+        withChildren(root, collection);
+
+        List<String> here = List.of("commonModules", "Alpha:Alpha:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> nowhere = List.of("catalogs", "Nothing:Nothing:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<List<String>, ComparisonNode> found =
+            MergeRulesTool.findNodes(root, List.of(here, nowhere), node -> "commonModules"); //$NON-NLS-1$
+
+        assertSame(alpha, found.get(here));
+        assertNull("a chain no child carries has no answer, not an empty one", //$NON-NLS-1$
+            found.get(nowhere));
+    }
+
+    // ======== the snapshot keeps "no such node" apart from "no choice on it" ========
+
+    @Test
+    public void testASnapshotThatCouldNotBeReadCarriesNoVerdict()
+    {
+        assertFalse("nothing may be refused - or accepted - on the strength of it", //$NON-NLS-1$
+            RuleSnapshot.unreadable().checked());
+        assertTrue("and it answers for no address either", //$NON-NLS-1$
+            RuleSnapshot.unreadable().rulesAt(List.of("$$Root$$")).isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASnapshotTellsAnAbsentAddressFromOneThatOffersNothing()
+    {
+        RuleSnapshot snapshot = RuleSnapshot.of(Map.of(List.of("$$Root$$"), List.of())); //$NON-NLS-1$
+
+        assertTrue("a FINISHED tree was read, so its addresses are verdicts", snapshot.checked()); //$NON-NLS-1$
+        assertEquals("the node is HERE and offers nothing - an empty ALLOWED SET", List.of(), //$NON-NLS-1$
+            snapshot.rulesAt(List.of("$$Root$$")).orElse(null)); //$NON-NLS-1$
+        assertTrue("the node the tree does not have is ABSENT, which is a different refusal", //$NON-NLS-1$
+            snapshot.rulesAt(List.of("$$Root$$", "commonModules")).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1582,7 +1751,7 @@ public class MergeRulesToolTest
             }
 
             @Override
-            public Optional<List<String>> availableRules(List<String> nodePath)
+            public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
             {
                 throw new IllegalStateException("the comparison store is closed"); //$NON-NLS-1$
             }
@@ -1765,7 +1934,7 @@ public class MergeRulesToolTest
     // EngineRuleAuthority#resolve reads ComparisonSessionRegistry#activeComparisonId whenever the
     // caller named no id, so an omitted comparisonId does NOT mean "no comparison": it means
     // "whichever one is running". And the write reports NOT VALIDATED in two different states -
-    // comparison.isEmpty(), and a comparison that answered while answersRules() is false. Every
+    // comparison.isEmpty(), and a comparison whose one reading is not RuleSnapshot#checked(). Every
     // sentence that named one of the two as the whole of it described a mode the tool lacks.
     //
     // One literal per @Test: JUnit abandons a method at its first failed assertion, so a single
@@ -2024,8 +2193,9 @@ public class MergeRulesToolTest
         ComparisonNode root = plainNode();
         withChildren(root, collection);
 
-        assertSame(module, MergeRulesTool.findNode(root,
-            List.of("commonModules", "Alpha:Beta:Gamma"), node -> "commonModules")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        List<String> chain = List.of("commonModules", "Alpha:Beta:Gamma"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame(module,
+            MergeRulesTool.findNodes(root, List.of(chain), node -> "commonModules").get(chain)); //$NON-NLS-1$
     }
 
     @Test
@@ -2053,7 +2223,8 @@ public class MergeRulesToolTest
         ComparisonNode root = plainNode();
         withChildren(root, plainNode());
 
-        assertNull(MergeRulesTool.findNode(root, List.of("catalogs"), node -> "commonModules")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(MergeRulesTool.findNodes(root, List.of(List.of("catalogs")), //$NON-NLS-1$
+            node -> "commonModules").get(List.of("catalogs"))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ============ a node with no choice on it is an ANSWER, not a missing node ============
@@ -2177,6 +2348,8 @@ public class MergeRulesToolTest
     {
         private final String id;
         private final List<String> allowed;
+        /** Every address the pass handed over, so a test can see it was ONE batch and not many. */
+        final List<List<String>> asked = new ArrayList<>();
         int reads;
         int readsAfterClose;
         int closes;
@@ -2201,9 +2374,10 @@ public class MergeRulesToolTest
         }
 
         @Override
-        public Optional<List<String>> availableRules(List<String> nodePath)
+        public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
         {
             reads++;
+            asked.addAll(nodePaths);
             if (closes > 0)
             {
                 readsAfterClose++;
@@ -2212,7 +2386,12 @@ public class MergeRulesToolTest
             {
                 throw new IllegalStateException("the comparison store is closed"); //$NON-NLS-1$
             }
-            return Optional.of(allowed);
+            Map<List<String>, List<String>> answer = new LinkedHashMap<>();
+            for (List<String> path : nodePaths)
+            {
+                answer.put(path, allowed);
+            }
+            return RuleSnapshot.of(answer);
         }
 
         @Override
@@ -2247,17 +2426,11 @@ public class MergeRulesToolTest
             }
 
             @Override
-            public boolean answersRules()
+            public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
             {
-                return false;
-            }
-
-            @Override
-            public Optional<List<String>> availableRules(List<String> nodePath)
-            {
-                // Never consulted; answering empty keeps a caller that lost the guard on the
-                // refusing side rather than on the writing one.
-                return Optional.empty();
+                // The reading that carries no verdict: this comparison exists and its tree could
+                // not be read, so nothing here refuses a decision and nothing here accepts one.
+                return RuleSnapshot.unreadable();
             }
         };
     }
@@ -2279,9 +2452,14 @@ public class MergeRulesToolTest
             }
 
             @Override
-            public Optional<List<String>> availableRules(List<String> nodePath)
+            public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
             {
-                return Optional.of(allowed);
+                Map<List<String>, List<String>> answer = new LinkedHashMap<>();
+                for (List<String> path : nodePaths)
+                {
+                    answer.put(path, allowed);
+                }
+                return RuleSnapshot.of(answer);
             }
         };
     }

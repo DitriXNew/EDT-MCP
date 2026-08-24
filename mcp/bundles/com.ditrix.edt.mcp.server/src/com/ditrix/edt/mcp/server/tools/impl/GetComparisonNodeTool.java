@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import com._1c.g5.v8.dt.compare.core.ComparisonContext;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
@@ -100,6 +101,8 @@ public class GetComparisonNodeTool implements IMcpTool
 
     private final NodeSource source;
 
+    private final Ticker ticker;
+
     /** Production constructor: resolves the engine lazily, so construction touches no EDT service. */
     public GetComparisonNodeTool()
     {
@@ -108,7 +111,115 @@ public class GetComparisonNodeTool implements IMcpTool
 
     GetComparisonNodeTool(NodeSource source)
     {
+        this(source, System::nanoTime);
+    }
+
+    /**
+     * @param source the read port
+     * @param ticker the elapsed-time source this call's budget is spent against
+     */
+    GetComparisonNodeTool(NodeSource source, Ticker ticker)
+    {
         this.source = source;
+        this.ticker = ticker;
+    }
+
+    // ==================== The call's own budget ====================
+
+    /**
+     * The elapsed-time source a call budget is measured against - {@code System::nanoTime} in
+     * production, a scripted one in a test.
+     *
+     * <h2>Why not the system clock</h2>
+     * {@code waitSeconds} is an upper bound on how long this MCP call may block, and a bound is
+     * only a bound if the thing measuring it cannot be moved. The system's wall clock can be:
+     * NTP corrects it, an operator sets it, and a virtual machine resumed from a snapshot hands
+     * the JVM a reading from before the call started. Every one of those STEPS IT BACK, and a
+     * deadline computed as "the reading at the start plus the budget" then sits that much further
+     * into the future - a 25-second promise becomes minutes or hours of a blocked call, with
+     * nothing in the log to say why. That is what this file used to do, and the name of the wall
+     * clock is deliberately not written down anywhere in it any more, so that grepping for it
+     * keeps returning nothing - {@code GetComparisonNodeToolTest} fails the build if it comes
+     * back.
+     *
+     * <h2>What it is used for, and what it is not</h2>
+     * Elapsed time inside one call, and nothing else. It is not a timestamp, it cannot be
+     * rendered, and it must not be compared against a reading taken from any other source - the
+     * origin of {@code nanoTime} is arbitrary and may be negative, which is exactly why
+     * {@link Budget} accumulates DIFFERENCES rather than comparing against an absolute instant.
+     */
+    @FunctionalInterface
+    interface Ticker
+    {
+        /**
+         * @return a monotonically advancing reading in nanoseconds, whose origin is arbitrary
+         */
+        long nanoTime();
+    }
+
+    /**
+     * How much of one call's {@code waitSeconds} is left, spent against a {@link Ticker}.
+     *
+     * <h2>Differences, not an absolute deadline</h2>
+     * The budget is spent by the FORWARD progress of the time source: each reading charges
+     * {@code now - last}, and the sum is compared against the budget. Two things follow, and both
+     * are the reason this is not the one-liner {@code start + budget}:
+     * <ul>
+     *   <li>the origin of {@code System.nanoTime()} is arbitrary and may sit anywhere in the
+     *       {@code long} range, so {@code start + budget} can overflow and {@code now < deadline}
+     *       is then simply the wrong comparison - the platform's own javadoc says to subtract;</li>
+     *   <li>a reading that goes BACKWARDS spends nothing. It cannot refund what was already spent,
+     *       so no step of the source can push the end of the wait further away than the budget the
+     *       caller asked for. That is the property that has to hold for {@code waitSeconds} to be
+     *       a bound at all, and it is a property of this class rather than of the machine.</li>
+     * </ul>
+     *
+     * <h2>One budget, several waits</h2>
+     * One instance is shared by every wait in a call - the address resolution and the node status
+     * alike - so the sum of them is bounded, not each one separately. Time spent between two
+     * {@link #expired()} calls is charged by the next one, because it is charged from the previous
+     * READING and not from the previous loop.
+     */
+    static final class Budget
+    {
+        private final Ticker ticker;
+
+        private final long budgetNanos;
+
+        private long lastReading;
+
+        private long spentNanos;
+
+        /**
+         * @param ticker the elapsed-time source
+         * @param budgetNanos how many nanoseconds this call may spend waiting; negative is read as
+         *            zero
+         */
+        Budget(Ticker ticker, long budgetNanos)
+        {
+            this.ticker = ticker;
+            this.budgetNanos = Math.max(0L, budgetNanos);
+            this.lastReading = ticker.nanoTime();
+        }
+
+        /**
+         * Charges the time since the previous reading and says whether the budget is gone.
+         *
+         * @return {@code true} when nothing is left to wait with
+         */
+        boolean expired()
+        {
+            long now = ticker.nanoTime();
+            long step = now - lastReading;
+            lastReading = now;
+            if (step > 0L)
+            {
+                // Saturating, so that one enormous step cannot wrap the total back to "plenty
+                // left" - the failure this whole class exists to make unreachable.
+                spentNanos = spentNanos > Long.MAX_VALUE - step ? Long.MAX_VALUE : spentNanos + step;
+            }
+            return spentNanos >= budgetNanos;
+        }
     }
 
     // ==================== The read port ====================
@@ -408,14 +519,16 @@ public class GetComparisonNodeTool implements IMcpTool
 
         // ONE budget for the whole call, and it is spent in two places: first on the address
         // resolving at all, then on the node it named finishing. Both are the same lazy tree.
-        long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
+        // Spent against a MONOTONIC source: a wall-clock deadline stops bounding the call the
+        // moment the system clock steps back. See Budget.
+        Budget budget = new Budget(ticker, TimeUnit.SECONDS.toNanos(waitSeconds));
 
         // First read: resolve the address to plain IDs. Nothing from the comparison's BM store is
         // allowed out of the boundary, so the node itself stays inside. Retried until the budget
         // runs out, because an address that resolves to nothing RIGHT AFTER a launch usually means
         // the engine has not built that node yet - and answering "no such object" to that is a
         // verdict about the caller's address that nothing observed supports.
-        Attempt attempt = locateWithin(comparisonId, symlink, explicitNodeId, side, deadline);
+        Attempt attempt = locateWithin(comparisonId, symlink, explicitNodeId, side, budget);
         if (attempt.located == null)
         {
             // The refusal is built from the SNAPSHOT, never from a fresh look: see notLocatedError.
@@ -426,7 +539,7 @@ public class GetComparisonNodeTool implements IMcpTool
 
         // Waited on, and the result deliberately NOT carried into the render: it is a reading taken
         // in a boundary that has since closed. See below.
-        awaitNode(comparisonId, located.statusNodeId, deadline);
+        awaitNode(comparisonId, located.statusNodeId, budget);
 
         String address = located.address != null ? located.address
             : (objectFqn != null ? objectFqn : "nodeId " + located.nodeId); //$NON-NLS-1$
@@ -479,17 +592,17 @@ public class GetComparisonNodeTool implements IMcpTool
      * @param symlink the canonical symlink, or {@code null} when addressing by node id
      * @param explicitNodeId the node id, or {@code null} when addressing by FQN
      * @param side the addressed side
-     * @param deadline the wall-clock millisecond deadline shared with the node wait
+     * @param budget the call's own elapsed-time budget, shared with the node wait
      * @return the LAST look, whole: the resolved ids, or their absence together with the tree
      *     status read beside it in the same boundary
      * @throws InterruptedException when the wait is interrupted
      */
     private Attempt locateWithin(String comparisonId, String symlink, Long explicitNodeId,
-        ComparisonSide side, long deadline) throws InterruptedException
+        ComparisonSide side, Budget budget) throws InterruptedException
     {
         Attempt attempt = attemptLocate(comparisonId, symlink, explicitNodeId, side);
         while (attempt.located == null && attempt.treeStatus != ComparisonNodeStatus.FINISHED
-            && System.currentTimeMillis() < deadline)
+            && !budget.expired())
         {
             Thread.sleep(POLL_INTERVAL_MILLIS);
             attempt = attemptLocate(comparisonId, symlink, explicitNodeId, side);
@@ -565,11 +678,11 @@ public class GetComparisonNodeTool implements IMcpTool
      *
      * @param comparisonId the comparison id
      * @param statusNodeId the top node id whose status governs the subtree
-     * @param deadline the wall-clock millisecond deadline shared with the address resolution
+     * @param budget the call's own elapsed-time budget, shared with the address resolution
      * @return the last status observed
      * @throws InterruptedException when the wait is interrupted
      */
-    private ComparisonNodeStatus awaitNode(String comparisonId, long statusNodeId, long deadline)
+    private ComparisonNodeStatus awaitNode(String comparisonId, long statusNodeId, Budget budget)
         throws InterruptedException
     {
         ComparisonNodeStatus status = statusOf(comparisonId, statusNodeId);
@@ -578,7 +691,7 @@ public class GetComparisonNodeTool implements IMcpTool
             return status;
         }
         source.prioritize(comparisonId, Collections.singletonList(Long.valueOf(statusNodeId)));
-        while (status != ComparisonNodeStatus.FINISHED && System.currentTimeMillis() < deadline)
+        while (status != ComparisonNodeStatus.FINISHED && !budget.expired())
         {
             Thread.sleep(POLL_INTERVAL_MILLIS);
             status = statusOf(comparisonId, statusNodeId);
@@ -1034,12 +1147,24 @@ public class GetComparisonNodeTool implements IMcpTool
             }
         }
 
+        /**
+         * {@inheritDoc}
+         * <p>
+         * <b>The ATTACHED facade, not {@link ComparisonEngine#get()}, and that is the fix for a
+         * refusal that named the wrong fact.</b> {@code get()} answers empty while EDT's
+         * comparison service is momentarily unregistered - the same gap the facade's own javadoc
+         * describes - and this method used to turn that empty into a bare
+         * {@code IllegalStateException}. It escaped BEFORE {@link #viewOf} could answer
+         * {@link PlatformAnswer#unavailable()}, so the caller was told to check its id or start a
+         * new comparison while the id was alive, the lease was open and its nodeIds still
+         * resolved. Going through the attached facade lets the READ answer for itself: the
+         * platform's three answers reach {@code ComparisonFailures.unreadableTree}, and a
+         * momentary gap comes back as the retryable "could not be asked just now".
+         */
         @Override
         public <T> T read(String comparisonId, ReadTask<T> task)
         {
-            ComparisonEngine engine = ComparisonEngine.get()
-                .orElseThrow(() -> new IllegalStateException(
-                    "EDT's comparison service is not available in this workbench")); //$NON-NLS-1$
+            ComparisonEngine engine = ComparisonEngine.attached().orElse(null);
             // LEASED for the whole read. The registry's idle sweep measures idleness from the last
             // LOOKUP, and a node expansion is one lookup followed by an arbitrarily long BM read;
             // without the lease a comparison whose read outlasts the idle TTL would be ended
@@ -1071,6 +1196,8 @@ public class GetComparisonNodeTool implements IMcpTool
                 {
                     throw new ComparisonUnreadableException(refusal);
                 }
+                // Not null, and not by luck: unreadableTree above refuses every answer that does
+                // not carry a view, and an absent facade is one of them.
                 ComparisonView view = answer.orElse(null);
                 // The comparison's OWN read boundary - the tree is in its private BM store.
                 return engine.read(view, "Read comparison node", (transaction, monitor) -> { //$NON-NLS-1$
@@ -1098,12 +1225,26 @@ public class GetComparisonNodeTool implements IMcpTool
          * comparison", and the caller then told somebody their comparison had been ended outside
          * this server while the lease on it was still open, its nodeIds still resolved and it
          * still held EDT's single slot.</p>
+         *
+         * <p>The two absences it can meet are kept apart for the same reason. NO HANDLE is an
+         * answer THIS server gives - the lease holds nothing, so EDT was never asked - and it
+         * says the comparison is gone. NO FACADE is not an answer about the comparison at all:
+         * the bundle is starting or stopping, nothing was asked of anybody, and reporting it as a
+         * comparison EDT has forgotten would send the caller to start a new one over a live
+         * session. It is {@code unavailable()}, which is retryable.</p>
          */
         private static PlatformAnswer<ComparisonView> viewOf(ComparisonEngine engine,
             ComparisonSessionRegistry.Lease lease)
         {
+            if (engine == null)
+            {
+                // Nothing was asked, and not because the comparison is gone: there is no facade to
+                // ask with. A fact about this server's reach, exactly like a service that did not
+                // answer.
+                return PlatformAnswer.unavailable();
+            }
             ComparisonProcessHandle handle = lease.handle();
-            if (engine == null || handle == null)
+            if (handle == null)
             {
                 // An ANSWERED absence, and answered by THIS server rather than by EDT: the lease
                 // holds nothing, so there is no handle to ask EDT about and no question was put

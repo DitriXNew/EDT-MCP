@@ -15,6 +15,10 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -25,6 +29,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
+import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
+import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.core.PotentialMergeProblemDescription;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
@@ -33,9 +40,11 @@ import com._1c.g5.v8.dt.compare.model.ComparisonSide;
 import com._1c.g5.v8.dt.compare.model.IComparedObjects;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
+import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.google.gson.JsonObject;
@@ -899,11 +908,291 @@ public class GetComparisonNodeToolTest
         assertEquals(Long.valueOf(42L), source.requestedNodeId);
     }
 
+    // ==================== the call budget is a BOUND, whatever the machine's clock does ====================
+    //
+    // waitSeconds promises an upper bound on how long this MCP call blocks. The deadline used to be
+    // "the system clock at the start, plus the budget", and that stops being a bound the moment the
+    // clock is stepped BACK - NTP, an operator, a virtual machine resumed from a snapshot. The
+    // budget is now spent against a monotonic source, through a seam, so these run in milliseconds
+    // and prove the arithmetic rather than the machine.
+
+    /**
+     * The origin of {@code System.nanoTime()} is arbitrary and may sit anywhere in the
+     * {@code long} range, so {@code start + budget} can OVERFLOW and the comparison
+     * {@code now < deadline} is then simply the wrong question - it answers "already expired"
+     * before a single retry. Spending the budget by DIFFERENCES is correct across the wrap, which
+     * is what the platform's own javadoc tells callers to do.
+     */
+    @Test
+    public void testTheBudgetSurvivesATimeOriginThatWrapsAroundTheEndOfLong()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.UNFINISHED;
+        // The origin is close enough to the end of long that "origin + budget" WRAPS to a large
+        // negative, while the first reading after it is still positive - so a deadline comparison
+        // reads "already expired" on the very first check. The differences stay right across the
+        // wrap the second reading does make.
+        SteppingTicker ticker = new SteppingTicker(Long.MAX_VALUE - 800_000_000L, 600_000_000L);
+
+        call(source, ticker, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products", "waitSeconds", "1")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertEquals("a 1s budget spent 600ms at a time must buy exactly one retry - a deadline " //$NON-NLS-1$
+            + "computed as origin+budget would have wrapped and bought none", 2, source.lookups); //$NON-NLS-1$
+    }
+
+    /**
+     * The defect, expressed through the seam: a time source that STEPS BACK must not push the end
+     * of the wait further away. A reading that goes backwards spends nothing and refunds nothing,
+     * so the caller's bound holds whatever the machine does to its clock.
+     *
+     * <p>The numbers are chosen so that the broken shape is bounded too, and merely LONGER: a
+     * plain {@code now - start} against a 3-second step back needs five further readings to climb
+     * back to where it was, so it takes 8 lookups where this takes 3. A test that hung instead
+     * would prove nothing about which shape it was measuring.</p>
+     */
+    @Test
+    public void testATimeSourceSteppedBackwardsDoesNotExtendTheWait()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.UNFINISHED;
+        // +600ms, then 3 seconds BACKWARDS, then +600ms again and onwards.
+        SteppingTicker ticker = new SteppingTicker(1_000_000_000L, 600_000_000L,
+            -3_000_000_000L, 600_000_000L);
+
+        call(source, ticker, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products", "waitSeconds", "1")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertEquals("the step back must cost the wait nothing and buy it nothing: 600ms + 600ms " //$NON-NLS-1$
+            + "of FORWARD progress is the whole 1s budget", 3, source.lookups); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal, because stopping on the budget must not change WHAT is answered.
+     */
+    @Test
+    public void testAWaitEndedByTheBudgetStillReportsTheTreeItSaw()
+    {
+        StubSource source = knownSource();
+        source.node = null;
+        source.treeStatus = ComparisonNodeStatus.UNFINISHED;
+        SteppingTicker ticker = new SteppingTicker(0L, 600_000_000L);
+
+        String message = errorMessage(call(source, ticker, args("comparisonId", "cmp-1", //$NON-NLS-1$ //$NON-NLS-2$
+            "objectFqn", "Catalog.Products", "waitSeconds", "1"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertTrue("a budget that ran out over an unfinished tree says so: " + message, //$NON-NLS-1$
+            message.contains("still being built")); //$NON-NLS-1$
+    }
+
+    /**
+     * The production BINDING, pinned where no behavioural test can reach it: a fake ticker proves
+     * the arithmetic, and cannot prove which clock the shipped tool hands it. This is the same
+     * shape {@code NoMergeStarterRatchetTest} uses for the merge starters - the value of the rule
+     * is that grepping the file for the name keeps returning nothing, so the javadoc says "the
+     * wall clock" in words rather than spelling the call.
+     *
+     * @throws IOException when the source cannot be read
+     */
+    @Test
+    public void testTheCallBudgetIsNotMeasuredWithTheSystemWallClock() throws IOException
+    {
+        String source = new String(Files.readAllBytes(sourceFile("tools/impl/GetComparisonNodeTool.java")), //$NON-NLS-1$
+            StandardCharsets.UTF_8);
+
+        // Positive control first: a scan that read the wrong file - or nothing - would pass the
+        // absence assertion over an empty string and prove nothing at all.
+        assertTrue("the scan did not read GetComparisonNodeTool", //$NON-NLS-1$
+            source.contains("class GetComparisonNodeTool")); //$NON-NLS-1$
+        assertTrue("the shipped tool must spend its budget against the monotonic source", //$NON-NLS-1$
+            source.contains("System::nanoTime")); //$NON-NLS-1$
+        assertFalse("waitSeconds stops being an upper bound the moment the wall clock is stepped " //$NON-NLS-1$
+            + "back, so this file must not name it - not even in a comment", //$NON-NLS-1$
+            source.contains("System.currentTimeMillis")); //$NON-NLS-1$
+    }
+
+    // ==================== a service gap is not a comparison that is gone ====================
+
+    /**
+     * EDT's comparison service can be unregistered for an instant while the workbench starts or
+     * stops. The read used to go through the facade accessor that answers EMPTY in that gap and
+     * turn the empty into a bare {@code IllegalStateException} - which reached the caller through
+     * the generic branch, telling them to check the id or start a new comparison while the id was
+     * alive, the session registered and its nodeIds still resolving.
+     */
+    @Test
+    public void testAMomentaryServiceGapIsNotReportedAsAComparisonThatIsGone()
+    {
+        ComparisonEngine.install(() -> null);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(
+                new ComparisonProcessHandle(new NamedDataSource("Demo"), //$NON-NLS-1$
+                    new NamedDataSource("Other"), ComparisonScope.EMPTY_SCOPE), //$NON-NLS-1$
+                new CompareMergeProcessBatch(List.of()));
+
+            String message = errorMessage(new GetComparisonNodeTool().execute(
+                args("comparisonId", comparisonId, "nodeId", "42", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
+            assertTrue("the service could not be asked, and that is what it must say: " + message, //$NON-NLS-1$
+                message.contains("could not be asked")); //$NON-NLS-1$
+            assertTrue("the comparison is untouched, and saying so is the whole remedy: " //$NON-NLS-1$
+                + message, message.contains("still registered")); //$NON-NLS-1$
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /** The pin on ABSENCE: the one sentence a retryable gap must never carry. */
+    @Test
+    public void testAMomentaryServiceGapDoesNotSendTheCallerToStartANewComparison()
+    {
+        ComparisonEngine.install(() -> null);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(
+                new ComparisonProcessHandle(new NamedDataSource("Demo"), //$NON-NLS-1$
+                    new NamedDataSource("Other"), ComparisonScope.EMPTY_SCOPE), //$NON-NLS-1$
+                new CompareMergeProcessBatch(List.of()));
+
+            String message = errorMessage(new GetComparisonNodeTool().execute(
+                args("comparisonId", comparisonId, "nodeId", "42", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
+            assertFalse("the session is alive and holds EDT's single slot - starting another one " //$NON-NLS-1$
+                + "would be refused: " + message, message.contains("Start a new comparison")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("nor is it a failure of this tool: " + message, //$NON-NLS-1$
+                message.contains("start a new one")); //$NON-NLS-1$
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * The control, and the distinction the fix must not blur: a comparison this server really does
+     * not hold still gets the answer it always got.
+     */
+    @Test
+    public void testAComparisonNobodyHoldsIsStillReportedAsNotRunning()
+    {
+        ComparisonEngine.install(() -> null);
+        try
+        {
+            String message = errorMessage(new GetComparisonNodeTool().execute(
+                args("comparisonId", "cmp-nobody-has", "nodeId", "42", "waitSeconds", "0"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+            assertTrue("an id that names nothing is not a service gap: " + message, //$NON-NLS-1$
+                message.contains("Unknown comparison")); //$NON-NLS-1$
+            assertFalse("and it must not be dressed up as one: " + message, //$NON-NLS-1$
+                message.contains("could not be asked for comparison")); //$NON-NLS-1$
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
     // ==================== Helpers ====================
 
     private static String call(StubSource source, Map<String, String> params)
     {
         return new GetComparisonNodeTool(source).execute(params);
+    }
+
+    /**
+     * @param source the scripted engine
+     * @param ticker the scripted elapsed-time source
+     * @param params the call
+     * @return the tool's answer
+     */
+    private static String call(StubSource source, SteppingTicker ticker, Map<String, String> params)
+    {
+        return new GetComparisonNodeTool(source, ticker).execute(params);
+    }
+
+    /**
+     * Locates a bundle source file by walking up from the working directory, exactly as the
+     * source-scanning ratchets in this suite do.
+     *
+     * @param relative path under the bundle's {@code src/com/ditrix/edt/mcp/server}
+     * @return the file
+     */
+    private static java.nio.file.Path sourceFile(String relative)
+    {
+        String base = "bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server/"; //$NON-NLS-1$
+        File dir = new File(System.getProperty("user.dir")); //$NON-NLS-1$
+        for (int i = 0; i < 12 && dir != null; i++)
+        {
+            for (String prefix : List.of("", "mcp/")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                File candidate = new File(dir, prefix + base + relative);
+                if (candidate.isFile())
+                {
+                    return candidate.toPath();
+                }
+            }
+            dir = dir.getParentFile();
+        }
+        fail("could not locate " + relative + " by walking up from user.dir=" //$NON-NLS-1$ //$NON-NLS-2$
+            + System.getProperty("user.dir")); //$NON-NLS-1$
+        return null; // unreachable
+    }
+
+    /** The one thing a {@code ComparisonProcessHandle} needs from a side: the project's name. */
+    private static final class NamedDataSource
+        implements com._1c.g5.v8.dt.compare.datasource.IComparisonDataSourceDescriptor
+    {
+        private final String name;
+
+        NamedDataSource(String name)
+        {
+            this.name = name;
+        }
+
+        @Override
+        public String getProjectName()
+        {
+            return name;
+        }
+    }
+
+    /**
+     * A scripted elapsed-time source: the first reading is the origin, and each later one applies
+     * the next step - the LAST step repeating for every reading after it.
+     * <p>
+     * Steps rather than absolute readings, so that a test says what the machine DID (advanced,
+     * jumped back) instead of restating the arithmetic under test.
+     */
+    private static final class SteppingTicker
+        implements GetComparisonNodeTool.Ticker
+    {
+        private final long[] steps;
+
+        private long current;
+
+        private int readings;
+
+        SteppingTicker(long origin, long... steps)
+        {
+            this.current = origin;
+            this.steps = steps;
+        }
+
+        @Override
+        public long nanoTime()
+        {
+            if (readings > 0)
+            {
+                current += steps[Math.min(readings - 1, steps.length - 1)];
+            }
+            readings++;
+            return current;
+        }
     }
 
     private static Map<String, String> args(String... keyValues)
