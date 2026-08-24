@@ -110,6 +110,18 @@ public class MergeRulesCodecTest
             + "<Node Key=\"orphan\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
             + "</MergeSettings></Settings>"; //$NON-NLS-1$
 
+    /**
+     * One rule in a SECOND {@code <MergeSettings>} element - accepted by the codec, carried
+     * through every rewrite, and read by nothing: {@code findContainer} picks the first container
+     * and no lookup, decision or write here ever looks past it.
+     */
+    private static final String RULE_IN_A_SECOND_CONTAINER =
+        "<Settings Format_version=\"2.0\">" //$NON-NLS-1$
+            + "<MergeSettings><Node Key=\"$$Root$$\"/></MergeSettings>" //$NON-NLS-1$
+            + "<MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
+            + "<Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/></Node></MergeSettings>" //$NON-NLS-1$
+            + "</Settings>"; //$NON-NLS-1$
+
     /** The payload block the reader does not interpret and must never drop. */
     private static final String PROPERTIES_BLOCK = "      <Properties>\n" //$NON-NLS-1$
         + "        <SkipUnchanged>true</SkipUnchanged>\n" //$NON-NLS-1$
@@ -791,6 +803,81 @@ public class MergeRulesCodecTest
     }
 
     /**
+     * A rule in a SECOND {@code <MergeSettings>} element. {@code findContainer} picks the first
+     * and no reader here looks past it, so such a rule is addressed by nothing - and it used to be
+     * counted by nothing either: {@code decisions()} never enters that container,
+     * {@code unreachableRuleCount} never left the one it reads, and
+     * {@code preservedSectionCount} descended into it as if it were structure. A file whose only
+     * rule sits there therefore reported no merge rule at all, while every rewrite carried the
+     * rule forward.
+     */
+    @Test
+    public void testARuleInASecondMergeSettingsElementIsCountedAsUnreachable() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(RULE_IN_A_SECOND_CONTAINER);
+
+        assertEquals("only the first container is read, so this rule is addressed by nothing", 1, //$NON-NLS-1$
+            document.unreachableRuleCount());
+    }
+
+    /** Its half of the same claim: the rule is not returned as a decision at a made-up address. */
+    @Test
+    public void testARuleInASecondMergeSettingsElementIsNotADecisionAtAnAddress() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(RULE_IN_A_SECOND_CONTAINER);
+
+        assertTrue("a rule no lookup can reach has no address to be reported under: " //$NON-NLS-1$
+            + describe(document.decisions()), document.decisions().isEmpty());
+    }
+
+    /** And the literal that makes the count worth printing: the rewrite really does keep it. */
+    @Test
+    public void testARuleInASecondMergeSettingsElementSurvivesTheRewrite() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(RULE_IN_A_SECOND_CONTAINER);
+
+        assertTrue("the rewrite carries what it does not interpret, verbatim", //$NON-NLS-1$
+            MergeRulesCodec.serialize(document)
+                .contains("<Node Key=\"commonModules\" MergeRule=\"GetFromOther\"/>")); //$NON-NLS-1$
+    }
+
+    /**
+     * The other half of the partition: the second container is itself a block a rewrite carries
+     * verbatim, exactly like a {@code Correspondences} section, so it is counted as one. Keyed on
+     * the TAG rather than on the container's identity, this count descended into it and reported
+     * the payload sections INSIDE it while never naming the element itself.
+     */
+    @Test
+    public void testASecondMergeSettingsElementIsCountedAsAPreservedSection() throws Exception
+    {
+        MergeRulesDocument document = MergeRulesCodec.parse(RULE_IN_A_SECOND_CONTAINER);
+
+        assertEquals("the element this document does not read is payload it carries through", 1, //$NON-NLS-1$
+            document.preservedSectionCount());
+    }
+
+    /**
+     * Its control, and the one that keeps the pin above from being passed by "every
+     * {@code MergeSettings} is one block": the container the document DOES read is still descended
+     * into, so the two payload sections in it stay two. Three is the only answer that separates
+     * the fix from both the old behaviour (which counted 2) and that mutation (which counts 2 as
+     * well).
+     */
+    @Test
+    public void testTheContainerTheDocumentReadsIsStillDescendedInto() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\">" //$NON-NLS-1$
+                + "<MergeSettings><Properties/><Notes/>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"/></MergeSettings>" //$NON-NLS-1$
+                + "<MergeSettings><Node Key=\"$$Root$$\" MergeRule=\"GetFromOther\"/></MergeSettings>" //$NON-NLS-1$
+                + "</Settings>"); //$NON-NLS-1$
+
+        assertEquals("two payload sections inside the container that is read, plus the container " //$NON-NLS-1$
+            + "that is not", 3, document.preservedSectionCount()); //$NON-NLS-1$
+    }
+
+    /**
      * The control that keeps the two above from being passed by a counter that counts every
      * rule in the file: the fixture's four rules all sit at addresses, so none of them is one.
      */
@@ -1113,6 +1200,76 @@ public class MergeRulesCodecTest
 
         assertTrue("the entry sits past the listing bound and is still found", //$NON-NLS-1$
             MergeRulesCodec.lookUpEntry(zip, "A_B_C").found()); //$NON-NLS-1$
+    }
+
+    /**
+     * The walk stops where the answer is settled. A match makes every entry after it irrelevant -
+     * the answer is a boolean and nothing later can change it - so reading on costs a
+     * {@code ZipEntry} per remaining entry while a launch waits on this call, and buys nothing.
+     *
+     * @throws Exception when the archive cannot be written or read
+     */
+    @Test
+    public void testLookUpEntryStopsWalkingAtTheMatch() throws Exception
+    {
+        List<String> names = new ArrayList<>();
+        names.add("A_B_C.xml"); //$NON-NLS-1$
+        for (int i = 0; i < 40; i++)
+        {
+            names.add("P" + i + "_Q_R.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        Path zip = workDir.resolve("match-first.zip"); //$NON-NLS-1$
+        writeZip(zip, names);
+
+        assertEquals("the match settles the answer, so nothing past it may be read", 1, //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").entriesWalked()); //$NON-NLS-1$
+    }
+
+    /**
+     * Its control, and the one that keeps the pin above from being satisfied by a walk that always
+     * stops after the first entry: with no match there is nothing to settle, the platform walks
+     * every entry, and the refusal's "it holds X instead" is only true of the whole archive.
+     *
+     * @throws Exception when the archive cannot be written or read
+     */
+    @Test
+    public void testLookUpEntryWalksTheWholeArchiveWhenNothingMatches() throws Exception
+    {
+        Path zip = workDir.resolve("no-match.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("X_Y_Z.xml", "Q_W_E.xml", "R_T_Y.xml")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertEquals("an absent entry is only absent once every entry has been looked at", 3, //$NON-NLS-1$
+            MergeRulesCodec.lookUpEntry(zip, "A_B_C").entriesWalked()); //$NON-NLS-1$
+    }
+
+    /**
+     * The absence pin for the same stop: because the walk ends at the match, a found lookup has
+     * seen the archive only as far as that entry, and handing that half out as "what the archive
+     * holds" would be a listing that omits most of the file while reading as the whole of it.
+     * Asking is a programming error, and it is refused rather than answered approximately.
+     *
+     * @throws Exception when the archive cannot be written or read
+     */
+    @Test
+    public void testAFoundLookupRefusesToDescribeWhatTheArchiveHolds() throws Exception
+    {
+        Path zip = workDir.resolve("found-contents.zip"); //$NON-NLS-1$
+        writeZip(zip, List.of("X_Y_Z.xml", "A_B_C.xml", "Q_W_E.xml")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        MergeRulesCodec.ZipEntryLookup lookup = MergeRulesCodec.lookUpEntry(zip, "A_B_C"); //$NON-NLS-1$
+
+        assertTrue("the entry is in there, so this is the found answer", lookup.found()); //$NON-NLS-1$
+        try
+        {
+            String described = lookup.describeContents();
+            fail("a found lookup listed " + described //$NON-NLS-1$
+                + ", which is what it walked past and not what the archive holds"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the refusal must say where the answer belongs: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("found() is false")); //$NON-NLS-1$
+        }
     }
 
     @Test

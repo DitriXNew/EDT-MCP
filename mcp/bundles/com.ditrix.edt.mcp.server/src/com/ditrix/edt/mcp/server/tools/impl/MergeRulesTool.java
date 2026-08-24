@@ -465,14 +465,16 @@ public class MergeRulesTool implements IMcpTool
      */
     private static String unreachableRuleClause(int count)
     {
-        // The two shapes the counter actually sees. A third - a node shadowed by an earlier
+        // The three shapes the counter actually sees. A fourth - a node shadowed by an earlier
         // sibling carrying the same key - is defended against in the counter but cannot occur in
         // a document that got this far: duplicate sibling keys inside the addressable tree are
         // refused while parsing. Naming it here would describe a state this tool never loads.
         boolean one = count == 1;
         return "The file carries " + count + " merge rule" + (one ? "" : "s") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " in a part of the node tree addressing never enters: anything outside the subtree " //$NON-NLS-1$
-            + "of the '" + MergeRulesDocument.ROOT_KEY + "' marker, and anything below a node " //$NON-NLS-1$ //$NON-NLS-2$
+            + "of the '" + MergeRulesDocument.ROOT_KEY + "' marker - a second " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'<" + MergeRulesDocument.TAG_MERGE_SETTINGS + ">' element included, because only " //$NON-NLS-1$ //$NON-NLS-2$
+            + "the first one is read - and anything below a node " //$NON-NLS-1$
             + "that carries no 'Key'. EDT resolves a node by its key chain from that marker, so " //$NON-NLS-1$
             + (one ? "that rule applies" : "those rules apply") //$NON-NLS-1$ //$NON-NLS-2$
             + " to nothing and no request here can address " //$NON-NLS-1$

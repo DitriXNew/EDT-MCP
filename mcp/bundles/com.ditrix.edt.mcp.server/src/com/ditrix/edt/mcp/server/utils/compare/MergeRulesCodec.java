@@ -1315,11 +1315,30 @@ public final class MergeRulesCodec
      * {@code A_B_C.old.xml} reduces to {@code A_B_C.old} and does not match. The comparison is
      * {@code equals}, so it is CASE-SENSITIVE.
      *
-     * <h2>The walk is unbounded here, and the accumulation is not</h2>
-     * {@link #readZip} bounds its walk because it keeps a name per entry. This answer has to agree
-     * with the platform's, and the platform walks every entry, so a bound would turn a large
-     * archive into "cannot say" - which is the silent outcome this exists to remove. What costs
-     * memory is the names kept for the message, and those stop at {@link #MAX_LISTED_ZIP_ENTRIES}.
+     * <h2>The walk stops at the match, and what it accumulates is bounded</h2>
+     * A match SETTLES the question - the answer is a boolean, and no entry after the first match
+     * can turn "there is one" into anything else - so the walk returns there and the rest of the
+     * archive is never materialised. Nothing is dropped by stopping: the only thing the remaining
+     * entries feed is the listing of what the archive holds INSTEAD, which exists for the refusal
+     * and which a found lookup therefore has no use for (see {@link ZipEntryLookup}). A duplicate
+     * of the entry is not a fact this answer carries either - a lookup asks whether the
+     * comparison will find something, and two spellings that both reduce to the id are still
+     * something.
+     * <p>
+     * With no match there is nothing to settle, so the walk runs to the end. It has to: the
+     * platform walks every entry, so stopping early would answer "absent" for an archive EDT
+     * reads fine, and the refusal's "it holds X instead" is only true of the whole archive.
+     * <p>
+     * <b>Why there is no {@link #MAX_ZIP_ENTRIES} bound here.</b> That bound refuses what
+     * {@link #readZip} RETAINS - a name per entry, kept for every one of them - and this walk
+     * retains at most {@link #MAX_LISTED_ZIP_ENTRIES} names however long it runs, so the cost it
+     * exists to refuse is already absent. What is left is the per-entry {@code ZipEntry} the
+     * enumeration hands out, which is garbage on the next iteration, and a bound could only be
+     * charged AFTER {@code ZipFile} has read and validated the whole central directory on open -
+     * so it would bound nothing that has not already been paid for. Refusing past a bound would
+     * cost something real, though: an archive whose matching entry sits past it would be refused
+     * while the platform restores from it, and a false refusal is worse than the silence this
+     * lookup exists to remove.
      *
      * @param file the archive to look in
      * @param entryId the id this comparison will look for, already without an extension
@@ -1330,9 +1349,8 @@ public final class MergeRulesCodec
     {
         try (ZipFile zip = new ZipFile(file.toFile()))
         {
-            boolean found = false;
             List<String> kept = new ArrayList<>();
-            int total = 0;
+            int walked = 0;
             Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements())
             {
@@ -1341,17 +1359,17 @@ public final class MergeRulesCodec
                 // Directory entries are counted and compared like any other, because the
                 // platform's own walk does not skip them: a lookup that did could answer "absent"
                 // where EDT answers "found", and a false refusal is worse than the silence.
-                total++;
+                walked++;
+                if (removeExtension(name).equals(entryId))
+                {
+                    return ZipEntryLookup.found(walked);
+                }
                 if (kept.size() < MAX_LISTED_ZIP_ENTRIES)
                 {
                     kept.add(name);
                 }
-                if (removeExtension(name).equals(entryId))
-                {
-                    found = true;
-                }
             }
-            return new ZipEntryLookup(found, kept, total);
+            return ZipEntryLookup.absent(kept, walked);
         }
     }
 
@@ -1380,6 +1398,13 @@ public final class MergeRulesCodec
      * what the archive holds if it is not. The second is the only thing that lets a refusal say
      * something a caller can act on - "a zip of somebody else's comparison" and "a zip of the
      * wrong kind entirely" look identical without it.
+     * <p>
+     * <b>The second fact belongs to the ABSENT answer only, and this class enforces that rather
+     * than trusting it.</b> The walk stops at a match, so a found lookup has seen the archive only
+     * as far as the entry it was looking for - and a listing of what was walked up to there is not
+     * a listing of what the archive holds. Rather than hand out that half-listing as if it were
+     * the whole, a found lookup holds no listing at all and {@link #describeContents()} refuses to
+     * invent one.
      */
     public static final class ZipEntryLookup
     {
@@ -1387,13 +1412,36 @@ public final class MergeRulesCodec
 
         private final List<String> kept;
 
-        private final int total;
+        private final int walked;
 
-        private ZipEntryLookup(boolean found, List<String> kept, int total)
+        private ZipEntryLookup(boolean found, List<String> kept, int walked)
         {
             this.found = found;
             this.kept = kept;
-            this.total = total;
+            this.walked = walked;
+        }
+
+        /**
+         * The answer for an archive the entry was found in, after {@code walked} entries.
+         *
+         * @param walked how many entries the walk read, the match included
+         * @return the lookup
+         */
+        private static ZipEntryLookup found(int walked)
+        {
+            return new ZipEntryLookup(true, List.of(), walked);
+        }
+
+        /**
+         * The answer for an archive the entry is not in, which is the whole of it.
+         *
+         * @param kept the first {@link MergeRulesCodec#MAX_LISTED_ZIP_ENTRIES} names
+         * @param walked how many entries the archive holds
+         * @return the lookup
+         */
+        private static ZipEntryLookup absent(List<String> kept, int walked)
+        {
+            return new ZipEntryLookup(false, kept, walked);
         }
 
         /**
@@ -1405,6 +1453,21 @@ public final class MergeRulesCodec
         }
 
         /**
+         * How many entries the walk read before it had the answer: the position of the match when
+         * there is one, and the whole archive when there is not.
+         * <p>
+         * Exposed because it is the one observable difference between a walk that stops at the
+         * match and one that runs on past it, and a walk that runs on is what this lookup must
+         * not do while a launch waits on it.
+         *
+         * @return the number of entries read
+         */
+        public int entriesWalked()
+        {
+            return walked;
+        }
+
+        /**
          * Names what the archive holds, for a refusal that has to say what was there instead.
          * <p>
          * Bounded the same way {@link MergeRulesCodec#listEntries} is bounded, and for the same
@@ -1412,18 +1475,27 @@ public final class MergeRulesCodec
          * so a huge archive costs a sentence rather than a page.
          *
          * @return the entry names, or {@code it is empty} when there are none
+         * @throws IllegalStateException when the entry WAS found, because then the walk stopped
+         *             at it and no answer about the rest of the archive was ever read
          */
         public String describeContents()
         {
-            if (total == 0)
+            if (found)
+            {
+                throw new IllegalStateException(
+                    "A found lookup does not describe an archive's contents: the walk stops at " //$NON-NLS-1$
+                        + "the match, so what it saw is the entries up to that point and not what " //$NON-NLS-1$
+                        + "the archive holds. Ask this only where found() is false."); //$NON-NLS-1$
+            }
+            if (walked == 0)
             {
                 return "it is empty"; //$NON-NLS-1$
             }
-            if (total <= kept.size())
+            if (walked <= kept.size())
             {
                 return String.join(", ", kept); //$NON-NLS-1$
             }
-            return String.join(", ", kept) + " and " + (total - kept.size()) + " more"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return String.join(", ", kept) + " and " + (walked - kept.size()) + " more"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
     }
 

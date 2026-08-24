@@ -336,14 +336,25 @@ public final class MergeRulesDocument
      * counted over the WHOLE document. Two kinds reach the count, and both are payload a
      * caller may have put there: a section beside the node tree ({@code Correspondences} is
      * the platform's own) and a section inside it ({@code Properties} maps, nested sections).
-     * Only the {@code Node} tree and its {@code MergeSettings} container are structure this
-     * plugin reads; everything else is counted, one per block, without descending into it.
-     * Reported so a caller can see the payload is still there.
+     * Only the {@code Node} tree and the ONE {@code MergeSettings} container
+     * {@link #findContainer(Element)} picks are structure this plugin reads; everything else is
+     * counted, one per block, without descending into it. Reported so a caller can see the
+     * payload is still there.
+     * <p>
+     * <b>The container is recognised by IDENTITY, not by its tag</b>, and the difference is a
+     * whole element: a document may carry a SECOND {@code <MergeSettings>}, which the codec
+     * accepts because no lookup, decision or write here ever looks past the first. Keyed on the
+     * tag, this count treated that second element as structure it reads - descending into it and
+     * counting only the payload sections INSIDE it - so the element itself, which a rewrite
+     * carries through exactly like a {@code Correspondences} block, was named nowhere. Keyed on
+     * identity, everything this document does not read is a preserved block, and the file's
+     * elements are partitioned by the same question every other reader here asks.
      *
      * @return the count of preserved blocks
      */
     public int preservedSectionCount()
     {
+        Element container = findContainer(settings);
         int count = 0;
         for (Element child : settings.children())
         {
@@ -355,7 +366,7 @@ public final class MergeRulesDocument
                 // file as a block.
                 continue;
             }
-            if (TAG_MERGE_SETTINGS.equals(child.tag()))
+            if (child == container)
             {
                 count += countNonNodeElements(child);
             }
@@ -374,10 +385,11 @@ public final class MergeRulesDocument
      * Reachable means here what it means everywhere else in this class: the container
      * {@link #findContainer(Element)} picks, entered at the one address it exposes
      * ({@link #findRoot(Element)}), then walked down by {@link #findNode(Element, String)} on each
-     * key. Three shapes fall outside it - a {@code Node} sitting BESIDE the root, a node carrying
+     * key. Four shapes fall outside it - a {@code Node} sitting BESIDE the root, a node carrying
      * no {@link #ATTR_KEY} (a lookup matches on tag AND key, so no path comes to rest on it and
-     * nothing below it is reachable either), and a keyed node a lookup does not LAND on because an
-     * earlier sibling carries the same key.
+     * nothing below it is reachable either), a keyed node a lookup does not LAND on because an
+     * earlier sibling carries the same key, and every node of a SECOND {@code <MergeSettings>}
+     * element, which {@link #findContainer(Element)} never picks and no reader here enters.
      * <p>
      * <b>Counted because otherwise nothing mentions such a rule at all.</b> {@link #decisions()}
      * deliberately does not return one - it has no address to return it under - and
@@ -399,7 +411,7 @@ public final class MergeRulesDocument
             return 0;
         }
         Element rootNode = findRoot(container);
-        int count = 0;
+        int count = rulesInUnreadContainers(container);
         for (Element child : nodeChildren(container))
         {
             if (child != rootNode)
@@ -728,6 +740,41 @@ public final class MergeRulesDocument
             here.add(key);
             collect(findNode(node, key), here, collected);
         }
+    }
+
+    /**
+     * Rules held by a {@code <MergeSettings>} element this document does not read.
+     * <p>
+     * {@link #findContainer(Element)} picks the FIRST one and every reader here stops there, so a
+     * second container is a node tree nothing enters: not one of its rules can be addressed,
+     * written to, or applied by a launch. They are counted here rather than left to
+     * {@link #preservedSectionCount()} because that count answers a different question - it
+     * reports the second container as ONE block a rewrite carries verbatim, which is true and says
+     * nothing about the rules inside it. Uncounted in both, a file whose only rules sit in a second
+     * container reported no merge rule at all while carrying them forward on every write.
+     * <p>
+     * Only {@code Node} subtrees are counted, exactly as inside the container that IS read: a
+     * {@code MergeRule} attribute on some other element is content this plugin does not interpret,
+     * and guessing at its meaning here would be reading somebody else's block.
+     *
+     * @param read the container this document reads, never {@code null}
+     * @return the count of rules held by the containers after it
+     */
+    private int rulesInUnreadContainers(Element read)
+    {
+        int count = 0;
+        for (Element child : settings.children())
+        {
+            if (child == read || !TAG_MERGE_SETTINGS.equals(child.tag()))
+            {
+                continue;
+            }
+            for (Element node : nodeChildren(child))
+            {
+                count += rulesInSubtree(node);
+            }
+        }
+        return count;
     }
 
     /**

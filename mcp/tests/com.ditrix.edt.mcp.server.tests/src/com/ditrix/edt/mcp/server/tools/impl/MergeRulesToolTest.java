@@ -128,13 +128,13 @@ public class MergeRulesToolTest
     private static final String CATALOGS_RU =
         "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A\u0438"; //$NON-NLS-1$
 
+    /** The XML attribute delimiter, kept out of the fixtures so they stay readable. */
+    private static final String QUOTE = String.valueOf((char)34);
+
     /**
      * The sentence a report may only say about a file that carries NO merge rule at all.
      * Pinned as a literal because what the tests below assert about it is its ABSENCE.
      */
-    /** The XML attribute delimiter, kept out of the fixtures so they stay readable. */
-    private static final String QUOTE = String.valueOf((char)34);
-
     private static final String CLAIMS_NO_RULE = "The file records no merge rule"; //$NON-NLS-1$
 
     /**
@@ -188,6 +188,18 @@ public class MergeRulesToolTest
         "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + "><MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$
             + "<Node Key=" + QUOTE + "a" + QUOTE + " MergeRule=" + QUOTE + "DoNotMerge" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "/></MergeSettings></Settings>"; //$NON-NLS-1$
+
+    /**
+     * A rule in a SECOND {@code <MergeSettings>} element: the codec accepts the file, a rewrite
+     * carries the rule forward, and the document reads only the first container - so nothing
+     * addresses it and, until the counters were fixed, nothing reported it either.
+     */
+    private static final String RULE_IN_A_SECOND_CONTAINER =
+        "<Settings Format_version=" + QUOTE + "2.0" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<MergeSettings><Node Key=" + QUOTE + "$$Root$$" + QUOTE + "/></MergeSettings>" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "<MergeSettings><Node Key=" + QUOTE + "$$Root$$" + QUOTE + ">" //$NON-NLS-1$ //$NON-NLS-2$
+            + "<Node Key=" + QUOTE + "commonModules" + QUOTE + " MergeRule=" + QUOTE //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "GetFromOther" + QUOTE + "/></Node></MergeSettings></Settings>"; //$NON-NLS-1$ //$NON-NLS-2$
 
     /** Two of them, so the sentence has to agree in number with what it counted. */
     private static final String TWO_UNREACHABLE_RULES =
@@ -643,6 +655,59 @@ public class MergeRulesToolTest
             result.contains("carries it through verbatim")); //$NON-NLS-1$
     }
 
+    /**
+     * The same false claim of absence, from a shape the counters used to divide the document
+     * badly: a file whose only rule sits in a SECOND {@code <MergeSettings>} element read as a
+     * file with nothing in it, while a write started from it copied that rule forward.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadDoesNotClaimNoRuleWhenOneSitsInASecondContainer() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("second-container.xml", RULE_IN_A_SECOND_CONTAINER).toString())); //$NON-NLS-1$
+
+        assertFalse("the file carries a rule, so this sentence is false about it:\n" + result, //$NON-NLS-1$
+            result.contains(CLAIMS_NO_RULE));
+        assertTrue("and the report has to count it: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * And the clause has to name the shape, not only count it: a caller told "outside the
+     * '$$Root$$' subtree" about a rule that sits under a marker of its own would go looking in the
+     * wrong element.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheUnreachableClauseNamesTheSecondContainerShape() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("second-container.xml", RULE_IN_A_SECOND_CONTAINER).toString())); //$NON-NLS-1$
+
+        assertTrue("the clause must say a second container is one of the places: " + result, //$NON-NLS-1$
+            result.contains("a second '<MergeSettings>' element included")); //$NON-NLS-1$
+    }
+
+    /**
+     * The block itself is payload, and the preserved-section count is where a caller sees that a
+     * rewrite keeps it. Counting only the sections INSIDE it reported zero here, for a file that
+     * carries a whole element through.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadCountsTheSecondContainerAmongThePreservedSections() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            seed("second-container.xml", RULE_IN_A_SECOND_CONTAINER).toString())); //$NON-NLS-1$
+
+        assertTrue("the element a rewrite carries verbatim has to be counted as one: " + result, //$NON-NLS-1$
+            result.contains("Preserved sections this tool does not interpret: 1")); //$NON-NLS-1$
+    }
+
     @Test
     public void testAReadDoesNotClaimNoRuleWhenOneSitsUnderAKeylessNode() throws IOException
     {
@@ -726,6 +791,47 @@ public class MergeRulesToolTest
 
         assertTrue("the write report has to count what it carried forward: " + result, //$NON-NLS-1$
             result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * The same disclosure for the shape the counters used to miss entirely. This is the half that
+     * made the divided document dangerous rather than merely untidy: the write really does carry
+     * the second container's rule into the file it writes, and both of the report's numbers left
+     * it out.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAWriteCarryingARuleFromASecondContainerForwardSaysSo() throws IOException
+    {
+        Path file = seed("write-second-container.xml", RULE_IN_A_SECOND_CONTAINER); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the write report has to count what it carried forward: " + result, //$NON-NLS-1$
+            result.contains("1 merge rule" + UNREACHABLE_CLAUSE_MARK)); //$NON-NLS-1$
+    }
+
+    /**
+     * What makes that clause true rather than decorative: the rule from the second container
+     * really is in the file this call wrote.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testTheRuleFromASecondContainerIsReallyInTheWrittenFile() throws IOException
+    {
+        Path file = seed("write-second-container.xml", RULE_IN_A_SECOND_CONTAINER); //$NON-NLS-1$
+
+        call(params("mode", "write", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", file.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"commonModules\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String written = read(file);
+        assertEquals("the rewrite must have carried the second container through:\n" + written, 2, //$NON-NLS-1$
+            written.split("<MergeSettings", -1).length - 1); //$NON-NLS-1$
     }
 
     @Test
