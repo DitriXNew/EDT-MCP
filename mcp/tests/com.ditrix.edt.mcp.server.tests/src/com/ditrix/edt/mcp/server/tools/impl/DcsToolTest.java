@@ -273,6 +273,39 @@ public class DcsToolTest
     }
 
     @Test
+    public void testDynamicListSettingsReplaceScansBareAndRelativePointerScopes()
+    {
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DataCompositionSettings listSettings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
+            .eINSTANCE.createDataCompositionSettings();
+        dynamic.setListSettings(listSettings);
+        listSettings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChart());
+
+        String bare = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
+            address(root));
+        assertNotNull("the established bare-root scan must remain guarded", bare); //$NON-NLS-1$
+        assertTrue(bare, bare.contains("DataCompositionChart")); //$NON-NLS-1$
+
+        String settingsPointer = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
+            address(root + "#/listSettings")); //$NON-NLS-1$
+        assertNotNull("a pointer to the whole non-containment settings root must be guarded", //$NON-NLS-1$
+            settingsPointer);
+        assertTrue(settingsPointer, settingsPointer.contains("DataCompositionChart")); //$NON-NLS-1$
+
+        String itemPointer = DcsTool.replaceRefusal(dynamic, listSettings, "grouping", //$NON-NLS-1$
+            address(root + "#/listSettings/items/0")); //$NON-NLS-1$
+        assertNotNull("the relative pointer must line up with the scanned chart address", //$NON-NLS-1$
+            itemPointer);
+        assertTrue(itemPointer, itemPointer.contains("DataCompositionChart")); //$NON-NLS-1$
+
+        assertNull("a sibling holder replacement does not discard the chart", //$NON-NLS-1$
+            DcsTool.replaceRefusal(dynamic, listSettings, "selection", //$NON-NLS-1$
+                address(root + "#/listSettings/selection"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnnotationsMatchFixedMixedReadWriteContract()
     {
         ToolAnnotations annotations = new DcsTool().getAnnotations();

@@ -972,8 +972,10 @@ public class DcsTool implements IMcpTool
      * resolves to that type's default settings path, but the address itself still carries no
      * pointer - so checking it against the whole document treated every unmodellable node anywhere
      * as a descendant. Scope concrete settings types and userSettings to their settings root, and
-     * variant to the schema's variants collection, even when the target settings root is absent;
-     * an explicitly pointered address already says what it means.</p>
+     * variant to the schema's variants collection, even when the target settings root is absent.
+     * A pointer below a dynamic list's non-containment {@code listSettings} reference must likewise
+     * be scanned against the actual settings object, with that leading segment removed so the
+     * target address and the addresses produced by the subtree scan share the same root.</p>
      *
      * @param whole the whole schema or ext-info used for pointer and collection-scoped checks
      * @param settingsRoot the settings the bare-root form resolves into, possibly {@code null}
@@ -1014,6 +1016,21 @@ public class DcsTool implements IMcpTool
                 {
                     return DcsMutationGuard.replaceError(settingsRoot, parsed.address());
                 }
+            }
+        }
+        else if (whole instanceof DynamicListExtInfo && settingsRoot != null
+            && !address.segments().isEmpty()
+            && "listSettings".equals(address.segments().get(0))) //$NON-NLS-1$
+        {
+            // unmodellableNodes(settingsRoot, rootFqn) renders the settings object's children as
+            // rootFqn#/items/..., not rootFqn#/listSettings/items/.... Scope with the pointer
+            // relative to listSettings or replaceError's prefix comparison will match nothing.
+            List<String> relative = address.segments().subList(1, address.segments().size());
+            DcsAddress.ParseResult parsed = DcsAddress.parse(
+                DcsAddress.render(address.rootFqn(), relative));
+            if (parsed.isSuccess())
+            {
+                return DcsMutationGuard.replaceError(settingsRoot, parsed.address());
             }
         }
         return DcsMutationGuard.replaceError(whole, address);
