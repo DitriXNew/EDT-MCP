@@ -709,20 +709,31 @@ public final class MergeRulesCodec
      * told only that a write failed.
      *
      * <h2>What the identity can and cannot tell apart</h2>
-     * {@code fileKey()} is the whole answer wherever the store gives one: on a POSIX filesystem it
-     * is the {@code (device, inode)} pair, which names the FILE rather than the path, so a
-     * replacement differs even when it carries the same name, size and timestamps. Windows returns
-     * none from this view, and there the fallback is the shape and the two timestamps: an empty
-     * regular file created and last modified at the instants recorded.
+     * The SHAPE carries the answer on every platform: the reservation is an EMPTY REGULAR file
+     * created and last modified at the instants recorded, and whatever is not one of those is a
+     * different file. {@code fileKey()} - the {@code (device, inode)} pair a POSIX store answers,
+     * and {@code null} from this view on Windows - is an ADDITIONAL discriminator laid on top of
+     * that shape, never a replacement for it.
      * <p>
-     * <b>The fallback's limit, stated rather than implied.</b> It cannot tell the reservation from
-     * a replacement that is ALSO an empty regular file carrying the same two timestamps - and NTFS
-     * makes that reachable rather than theoretical: file-system tunnelling restores the creation
-     * time of a file re-created under a name deleted within the last few seconds, which is exactly
-     * this scenario's shape. What the fallback does hold onto is the case that costs something: a
-     * replacement with rules in it is not empty, and a file of a different size is never taken for
-     * the reservation. So the loss it can still permit is an empty file, and the loss it prevents
-     * is a file with decisions in it.
+     * <b>Why the key alone was wrong, named rather than implied: INODE REUSE.</b> The key names
+     * the FILE rather than the path, which reads as proof that a replacement must differ - and
+     * that reading is false for the one sequence a replacement actually performs, DELETE followed
+     * by CREATE. A filesystem is free to hand the just-freed inode straight back to the next
+     * create in the same directory, and Linux ordinarily does, so the foreign file written onto
+     * this path is answered THE SAME KEY the reservation was. Taking the key for the whole answer
+     * therefore recognised somebody else's rules as this call's own litter and deleted them -
+     * precisely the loss the identity exists against, and reachable only on the platforms that
+     * answer a key at all. That is why the key may only ever narrow the shape's answer.
+     * <p>
+     * <b>The limit that remains.</b> The check cannot tell the reservation from a replacement that
+     * is ALSO an empty regular file carrying the same two timestamps, and neither family of stores
+     * makes that merely theoretical: a POSIX store can hand back the inode, and NTFS has
+     * file-system tunnelling, which restores the creation time of a file re-created under a name
+     * deleted within the last few seconds. What the check does hold onto is the case that costs
+     * something: a replacement with rules in it is not empty, and a file of a different size is
+     * never taken for the reservation. So the loss it can still permit is an empty file, and the
+     * loss it prevents is a file with decisions in it - on every platform, rather than on the one
+     * that happens to answer no key.
      *
      * @param path the reserved path
      * @param taken the identity recorded when the reservation was claimed, or {@code null} when
@@ -771,25 +782,37 @@ public final class MergeRulesCodec
 
     /**
      * Whether the file described by {@code present} is the same file as the one described by
-     * {@code taken}. See {@code releaseReservation} for what each half can and cannot tell apart.
+     * {@code taken}. See {@code releaseReservation} for what the answer can and cannot tell apart.
+     * <p>
+     * The shape is required of EVERY platform and the key only narrows it, because a key that
+     * matches proves nothing on its own: a delete-then-create on the same path can be handed back
+     * the very inode the reservation held, so the foreign file wears the reservation's key. Not
+     * package-private by accident - a test feeds this pair of descriptions directly, which is the
+     * only way to model that reuse on a platform whose filesystem will not perform it.
      *
-     * @param taken the identity recorded at the claim
+     * @param taken the identity recorded at the claim, always an empty regular file
      * @param present the identity read now
      * @return whether they describe one file
      */
-    private static boolean isTheSameFile(BasicFileAttributes taken, BasicFileAttributes present)
+    static boolean isTheSameFile(BasicFileAttributes taken, BasicFileAttributes present)
     {
+        if (!present.isRegularFile() || present.size() != 0
+            || !taken.creationTime().equals(present.creationTime())
+            || !taken.lastModifiedTime().equals(present.lastModifiedTime()))
+        {
+            // Not the shape that was claimed, whatever any key says. This is the half that holds
+            // onto the case that costs something: a replacement carrying rules is not empty.
+            return false;
+        }
         Object claimedKey = taken.fileKey();
         Object presentKey = present.fileKey();
-        if (claimedKey != null || presentKey != null)
+        if (claimedKey == null && presentKey == null)
         {
-            // Where the store answers a key at all it is the whole answer, and a side that
-            // answers none where the other did is a different file by that alone.
-            return claimedKey != null && claimedKey.equals(presentKey);
+            return true;
         }
-        return present.isRegularFile() && present.size() == 0
-            && taken.creationTime().equals(present.creationTime())
-            && taken.lastModifiedTime().equals(present.lastModifiedTime());
+        // A store that answers a key adds a discriminator the shape does not have, and a side
+        // that answers none where the other did is a different file by that alone.
+        return claimedKey != null && claimedKey.equals(presentKey);
     }
 
     /**

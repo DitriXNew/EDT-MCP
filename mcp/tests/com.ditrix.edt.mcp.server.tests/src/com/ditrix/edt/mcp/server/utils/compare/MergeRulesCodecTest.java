@@ -24,6 +24,8 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
@@ -2169,6 +2171,207 @@ public class MergeRulesCodecTest
         return () -> {
             throw new UncheckedIOException(new IOException(INTERFERING_FAILURE));
         };
+    }
+
+    // ==== ... and the file key is not on its own proof that nothing replaced it ====
+
+    /**
+     * The instants the reservation carries. Shared by both descriptions on purpose: the timestamps
+     * are held EQUAL so they cannot be what any of these tests actually turns on.
+     */
+    private static final FileTime CLAIMED_AT = FileTime.fromMillis(1_500_000_000_000L);
+
+    /**
+     * The two tests above reproduce the replacement through the real filesystem, and on Windows
+     * that is not the defect's shape at all: this view answers no file key there, so the fallback
+     * runs and the foreign file is rejected by its SIZE. The failure was Linux-only, which means a
+     * green Windows run proves nothing about it - and a test that can only fail on the CI machine
+     * is a test this repository cannot iterate on.
+     * <p>
+     * So the reuse is modelled instead of provoked: two prepared descriptions carrying THE SAME
+     * key, which is what a POSIX store answers after a delete-and-create hands the just-freed inode
+     * straight back to the next create. That pairing is what the defect needed, and no filesystem
+     * can be ordered to produce it on demand.
+     * <p>
+     * Not vacuous: the keys are asserted EQUAL first. A version of this test whose two keys
+     * differed would pass on the very code it exists to fail.
+     */
+    @Test
+    public void testAForeignFileHandedTheReservationsOwnInodeIsNotTakenForIt()
+    {
+        BasicFileAttributes taken = theReservationAsClaimed(aFileKey());
+        BasicFileAttributes present = new DescribedFile(aFileKey(),
+            FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8).length, true, CLAIMED_AT,
+            CLAIMED_AT);
+
+        assertEquals("the keys have to MATCH for this to model inode reuse at all - with " //$NON-NLS-1$
+            + "different keys the case passes on the code that trusts the key", taken.fileKey(), //$NON-NLS-1$
+            present.fileKey());
+        assertFalse("a file carrying rules is not the empty reservation, whatever key the store " //$NON-NLS-1$
+            + "answers for it - treating the key as the whole answer deletes somebody else's " //$NON-NLS-1$
+            + "decisions", MergeRulesCodec.isTheSameFile(taken, present)); //$NON-NLS-1$
+    }
+
+    /**
+     * The same reuse, with the replacement a DIRECTORY rather than a file: an empty one is size
+     * zero on the stores that report a size for it, so the shape check has to ask what the entry
+     * IS and not only how large it is.
+     */
+    @Test
+    public void testADirectoryHandedTheReservationsOwnInodeIsNotTakenForIt()
+    {
+        BasicFileAttributes taken = theReservationAsClaimed(aFileKey());
+        BasicFileAttributes present =
+            new DescribedFile(aFileKey(), 0L, false, CLAIMED_AT, CLAIMED_AT);
+
+        assertEquals("the keys have to MATCH for this to model inode reuse at all", //$NON-NLS-1$
+            taken.fileKey(), present.fileKey());
+        assertFalse("a directory is not the empty regular file this call claimed", //$NON-NLS-1$
+            MergeRulesCodec.isTheSameFile(taken, present));
+    }
+
+    /**
+     * The control that keeps the two above from being satisfied by "never the same file": the
+     * reservation nobody touched is still recognised, so the clean-up still removes its own
+     * litter. Without this, tightening the check into a constant {@code false} would pass.
+     */
+    @Test
+    public void testTheUntouchedReservationIsStillRecognisedAsItself()
+    {
+        assertTrue("an empty regular file with the claimed key and the claimed timestamps IS " //$NON-NLS-1$
+            + "the reservation, and leaving it behind would make the next write refuse a path " //$NON-NLS-1$
+            + "that holds no rules", //$NON-NLS-1$
+            MergeRulesCodec.isTheSameFile(theReservationAsClaimed(aFileKey()),
+                theReservationAsClaimed(aFileKey())));
+    }
+
+    /**
+     * And the key still NARROWS: same shape, same timestamps, a different inode. This is the case
+     * the shape alone cannot see - the one the key was brought in for - so dropping the key
+     * comparison has to be caught here rather than nowhere.
+     */
+    @Test
+    public void testAnEmptyFileWearingADifferentInodeIsNotTheReservation()
+    {
+        BasicFileAttributes present =
+            new DescribedFile(List.of(2049L, 999L), 0L, true, CLAIMED_AT, CLAIMED_AT);
+
+        assertFalse("an empty file the store answers a DIFFERENT key for is a different file, " //$NON-NLS-1$
+            + "even though it wears the reservation's shape and timestamps", //$NON-NLS-1$
+            MergeRulesCodec.isTheSameFile(theReservationAsClaimed(aFileKey()), present));
+    }
+
+    /**
+     * Where no key is answered at all - Windows, from this view - the shape and the timestamps are
+     * the whole of the answer, and they still have to decide.
+     */
+    @Test
+    public void testWithoutAnyKeyTheTimestampsStillDecide()
+    {
+        BasicFileAttributes taken = theReservationAsClaimed(null);
+        BasicFileAttributes touchedSince =
+            new DescribedFile(null, 0L, true, CLAIMED_AT, FileTime.fromMillis(1_500_000_001_000L));
+
+        assertTrue("with no key on either side the unchanged reservation is still itself", //$NON-NLS-1$
+            MergeRulesCodec.isTheSameFile(taken, theReservationAsClaimed(null)));
+        assertFalse("and an empty file last modified at another instant is not", //$NON-NLS-1$
+            MergeRulesCodec.isTheSameFile(taken, touchedSince));
+    }
+
+    /**
+     * @return a file key shaped like the {@code (device, inode)} pair a POSIX store answers - a
+     *         fresh object each call, so the comparison under test has to be an {@code equals} one
+     */
+    private static Object aFileKey()
+    {
+        return List.of(2049L, 8675309L);
+    }
+
+    /**
+     * @param key the key the store answers for it, or {@code null} where it answers none
+     * @return the description {@code createFile} leaves behind: an empty regular file
+     */
+    private static BasicFileAttributes theReservationAsClaimed(Object key)
+    {
+        return new DescribedFile(key, 0L, true, CLAIMED_AT, CLAIMED_AT);
+    }
+
+    /**
+     * A file description built rather than read, so a pairing no local filesystem will produce on
+     * demand - one key, two different files - can be handed to the identity check directly.
+     */
+    private static final class DescribedFile
+        implements BasicFileAttributes
+    {
+        private final Object key;
+        private final long size;
+        private final boolean regularFile;
+        private final FileTime created;
+        private final FileTime modified;
+
+        DescribedFile(Object key, long size, boolean regularFile, FileTime created,
+            FileTime modified)
+        {
+            this.key = key;
+            this.size = size;
+            this.regularFile = regularFile;
+            this.created = created;
+            this.modified = modified;
+        }
+
+        @Override
+        public FileTime lastModifiedTime()
+        {
+            return modified;
+        }
+
+        @Override
+        public FileTime lastAccessTime()
+        {
+            return modified;
+        }
+
+        @Override
+        public FileTime creationTime()
+        {
+            return created;
+        }
+
+        @Override
+        public boolean isRegularFile()
+        {
+            return regularFile;
+        }
+
+        @Override
+        public boolean isDirectory()
+        {
+            return !regularFile;
+        }
+
+        @Override
+        public boolean isSymbolicLink()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isOther()
+        {
+            return false;
+        }
+
+        @Override
+        public long size()
+        {
+            return size;
+        }
+
+        @Override
+        public Object fileKey()
+        {
+            return key;
+        }
     }
 
     // ============ Nor may the NUMBER of nodes a document builds run without a bound ============
