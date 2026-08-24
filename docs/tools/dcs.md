@@ -283,7 +283,7 @@ Shared localized text and value shapes:
 PresentationSpec = "neutral text" | {"<languageCode>": "localized text", ...}
 ValueSpec = {"kind": "field|parameter|expression|string|number|boolean|date|null",
              "value": <matching value>}
-ValueTypeSpec = {"types": [{"kind": "Date|String|Number|Boolean|...", ...}]}
+ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind":"Number","precision"?:int,"scale"?:int,"nonNegative"?:bool} | {"kind":"Date","fractions"?:"DateTime|Date|Time"} | {"kind":"Boolean"} | {"kind":"Ref|...Ref","ref":string} | {"kind":"ValueStorage|UUID|..."}]}
 ```
 
 | `type` | Target / body shape |

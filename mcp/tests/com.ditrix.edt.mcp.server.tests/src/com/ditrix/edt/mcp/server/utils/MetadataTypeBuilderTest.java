@@ -47,7 +47,10 @@ public class MetadataTypeBuilderTest
     {
         assertNull(MetadataTypeBuilder.validateShape(json("{\"types\":[{\"kind\":\"String\"}]}"))); //$NON-NLS-1$
         assertNull(MetadataTypeBuilder.validateShape(
-            json("{\"types\":[{\"kind\":\"Number\",\"precision\":10},{\"kind\":\"Ref\",\"ref\":\"Catalog.X\"}]}"))); //$NON-NLS-1$
+            json("{\"types\":[{\"kind\":\"String\",\"length\":50,\"fixed\":true}," //$NON-NLS-1$
+                + "{\"kind\":\"Number\",\"precision\":10,\"scale\":2,\"nonNegative\":true}," //$NON-NLS-1$
+                + "{\"kind\":\"Date\",\"fractions\":\"DateTime\"},{\"kind\":\"Boolean\"}," //$NON-NLS-1$
+                + "{\"kind\":\"Ref\",\"ref\":\"Catalog.X\"}]}"))); //$NON-NLS-1$
     }
 
     @Test
@@ -72,6 +75,62 @@ public class MetadataTypeBuilderTest
         assertNotNull(MetadataTypeBuilder.validateShape(json("{\"types\":[\"String\"]}"))); //$NON-NLS-1$
         assertNotNull(MetadataTypeBuilder.validateShape(json("{\"types\":[{}]}"))); //$NON-NLS-1$
         assertNotNull(MetadataTypeBuilder.validateShape(json("{\"types\":[{\"kind\":\"\"}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStringItemRejectsNumberMember()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"String\",\"precision\":10}]}", //$NON-NLS-1$
+            "precision", 0, "kind, length, fixed"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNumberItemRejectsStringMember()
+    {
+        // A real member of ANOTHER kind is just as invalid as an invented member.
+        assertUnknownMember("{\"types\":[{\"kind\":\"Number\",\"length\":10}]}", //$NON-NLS-1$
+            "length", 0, "kind, precision, scale, nonNegative"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNumberItemRejectsXmlSpellingsNestedShapeAndBogusMember()
+    {
+        for (String member : new String[] {
+            "Digits", "FractionDigits", "AllowedSign", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "digits", "fractionDigits", "allowedSign", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "numberQualifiers", "zzz_bogus_member"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertUnknownMember("{\"types\":[{\"kind\":\"Number\",\"" + member + "\":{}}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                member, 0, "kind, precision, scale, nonNegative"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testDateItemRejectsNumberMember()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"Date\",\"scale\":2}]}", //$NON-NLS-1$
+            "scale", 0, "kind, fractions"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testBooleanItemRejectsQualifierAtItsCompositeIndex()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"String\"},{\"kind\":\"Boolean\",\"fixed\":true}]}", //$NON-NLS-1$
+            "fixed", 1, "kind"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testReferenceItemRejectsPrimitiveMember()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"CatalogRef\",\"ref\":\"Catalog\",\"length\":10}]}", //$NON-NLS-1$
+            "length", 0, "kind, ref"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void assertUnknownMember(String spec, String member, int index, String accepted)
+    {
+        assertEquals("Unknown member '" + member + "' in type.types[" + index //$NON-NLS-1$ //$NON-NLS-2$
+            + "]. Accepted members: " + accepted + ". Remove '" + member + "' or use one of them.", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            MetadataTypeBuilder.validateShape(json(spec)));
     }
 
     @Test
@@ -198,23 +257,13 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
-    public void testAddTypeValueStorageIgnoresStrayQualifierFields()
+    public void testValueStorageItemRefusesStrayQualifierFields()
     {
-        // ValueStorage/UUID take NO qualifiers - a stray 'length' alongside the kind must not silently
-        // attach a StringQualifiers (applyQualifiers keys on the primitive name and is never called for
-        // these kinds at all).
-        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
-        Mockito.doReturn(McoreFactory.eINSTANCE.createType()).when(provider).createProxy("ValueStorage"); //$NON-NLS-1$
-
-        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
-        JsonObject item = json("{\"kind\":\"ValueStorage\",\"length\":50}").getAsJsonObject(); //$NON-NLS-1$
-        String err = MetadataTypeBuilder.addType(td, item, "ValueStorage", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false,
-            MetadataTypeBuilder.TypeTarget.METADATA);
-
-        assertNull(err);
-        assertNull("a stray 'length' must not attach a StringQualifiers to a no-qualifier kind", //$NON-NLS-1$
-            td.getStringQualifiers());
+        // This test used to require SUCCESS and merely assert that no StringQualifiers attached. That
+        // encoded the silent-accept defect: ValueStorage consumes no qualifier, so the member is now
+        // refused before any platform type is built.
+        assertUnknownMember("{\"types\":[{\"kind\":\"ValueStorage\",\"length\":50}]}", //$NON-NLS-1$
+            "length", 0, "kind"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

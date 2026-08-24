@@ -79,6 +79,13 @@ public final class MetadataTypeBuilder
     /** The canonical ENGLISH platform names of the primitives, parallel to {@link #RU_PRIMITIVE_NAMES}. */
     private static final String[] EN_PRIMITIVE_NAMES = {"String", "Number", "Boolean", "Date"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
+    /** Accepted JSON members for each kind-specific type-item grammar. */
+    private static final String[] STRING_ITEM_MEMBERS = {"kind", "length", "fixed"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    private static final String[] NUMBER_ITEM_MEMBERS = {"kind", "precision", "scale", "nonNegative"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    private static final String[] DATE_ITEM_MEMBERS = {"kind", "fractions"}; //$NON-NLS-1$ //$NON-NLS-2$
+    private static final String[] REF_ITEM_MEMBERS = {"kind", "ref"}; //$NON-NLS-1$ //$NON-NLS-2$
+    private static final String[] MEMBERLESS_ITEM_MEMBERS = {"kind"}; //$NON-NLS-1$
+
     /** The build outcome: exactly one of {@link #typeDescription} / {@link #error} is non-null. */
     public static final class Result
     {
@@ -122,16 +129,71 @@ public final class MetadataTypeBuilder
         {
             return "type.types must be a non-empty array of {kind, ...} items."; //$NON-NLS-1$
         }
-        for (JsonElement itemEl : typesEl.getAsJsonArray())
+        JsonArray types = typesEl.getAsJsonArray();
+        for (int i = 0; i < types.size(); i++)
         {
+            JsonElement itemEl = types.get(i);
             if (!itemEl.isJsonObject())
             {
                 return "each entry of type.types must be an object like {kind:'String'}."; //$NON-NLS-1$
             }
-            String kind = asString(itemEl.getAsJsonObject().get("kind")); //$NON-NLS-1$
+            JsonObject item = itemEl.getAsJsonObject();
+            String kind = asString(item.get("kind")); //$NON-NLS-1$
             if (kind == null || kind.isEmpty())
             {
                 return "each type item needs a non-empty 'kind' (String/Number/Boolean/Date or a Ref)."; //$NON-NLS-1$
+            }
+            String memberError = validateItemMembers(item, kind, i);
+            if (memberError != null)
+            {
+                return memberError;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Refuses a member that the item's OWN kind cannot consume. Keeping the sets kind-specific is
+     * important: advertising the union would make a misplaced {@code length} on Number look valid and
+     * preserve the same silent-drop ambiguity this validation removes. Non-primitive platform kinds
+     * (ValueStorage / UUID / form-only values / an as-yet unknown kind) carry no inline qualifiers, so
+     * their only accepted member is {@code kind}; unknown-kind resolution still reports the kind itself
+     * later when the item has no extra member.
+     */
+    private static String validateItemMembers(JsonObject item, String kind, int index)
+    {
+        String primitive = normalizePrimitive(kind);
+        String[] accepted;
+        if ("String".equals(primitive)) //$NON-NLS-1$
+        {
+            accepted = STRING_ITEM_MEMBERS;
+        }
+        else if ("Number".equals(primitive)) //$NON-NLS-1$
+        {
+            accepted = NUMBER_ITEM_MEMBERS;
+        }
+        else if ("Date".equals(primitive)) //$NON-NLS-1$
+        {
+            accepted = DATE_ITEM_MEMBERS;
+        }
+        else if (isRefKind(kind))
+        {
+            accepted = REF_ITEM_MEMBERS;
+        }
+        else
+        {
+            // Boolean and every qualifier-free platform kind accept only `kind`.
+            accepted = MEMBERLESS_ITEM_MEMBERS;
+        }
+
+        Set<String> allowed = new HashSet<>(Arrays.asList(accepted));
+        for (String member : item.keySet())
+        {
+            if (!allowed.contains(member))
+            {
+                return "Unknown member '" + member + "' in type.types[" + index //$NON-NLS-1$ //$NON-NLS-2$
+                    + "]. Accepted members: " + String.join(", ", accepted) + ". Remove '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + member + "' or use one of them."; //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         return null;

@@ -930,6 +930,46 @@ def test_schema_write_upserts_dataset_without_duplicate_and_persists_to_disk():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_number_value_type_qualifiers_round_trip_through_typed_calls():
+    report_name = "E2EDcsNumberQualifiers"
+    root = "Report." + report_name
+    parameter = "QualifiedAmount"
+    precision = 17
+    scale = 5
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed report for Number value-type qualifiers")
+    wait_for_project_ready()
+
+    authored = _write(root, "upsert", "parameter", {
+        "name": parameter,
+        "valueType": {"types": [{
+            "kind": "Number",
+            "precision": precision,
+            "scale": scale,
+        }]},
+    })
+    assert_ok(authored, "author Number precision/scale through the typed DCS body")
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the qualified Number parameter write")
+    poll_disk_contains(dcs_rel, parameter,
+                       ctx="the qualified parameter must reach Template.dcs")
+    on_disk = read_disk(dcs_rel)
+    assert "Digits>%d</" % precision in on_disk, \
+        "Number precision must persist as the 1C XML Digits qualifier in %s" % dcs_rel
+    assert "FractionDigits>%d</" % scale in on_disk, \
+        "Number scale must persist as the 1C XML FractionDigits qualifier in %s" % dcs_rel
+
+    read_back = _get(root + "#/parameters/" + parameter, "parameter")
+    assert_ok(read_back, "read back the qualified Number parameter through dcs")
+    assert "NumberQualifiers" in read_back.text, \
+        "the typed read must expose the Number qualifier object:\n%s" % read_back.text
+    assert "- precision: %d" % precision in read_back.text, \
+        "the typed read must expose the written precision:\n%s" % read_back.text
+    assert "- scale: %d" % scale in read_back.text, \
+        "the typed read must expose the written scale:\n%s" % read_back.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_calculated_field_upserts_in_place_and_persists_to_disk():
     report_name = "E2EDcsWriteCalculated"
     root = "Report." + report_name
