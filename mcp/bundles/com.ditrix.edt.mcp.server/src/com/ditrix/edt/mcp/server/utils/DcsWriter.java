@@ -696,6 +696,10 @@ public final class DcsWriter
             DataCompositionSortDirection direction = null;
             if (item.has(KEY_ORDER_TYPE))
             {
+                if (!isStringMember(item, KEY_ORDER_TYPE))
+                    return "Order expression member 'orderType' at '" + itemPath //$NON-NLS-1$
+                        + "' must be a string naming one of " //$NON-NLS-1$
+                        + enumTokens(DataCompositionSortDirection.values()) + "."; //$NON-NLS-1$
                 direction = resolveEnum(DataCompositionSortDirection.values(),
                     stringMember(item, KEY_ORDER_TYPE));
                 if (direction == null) return "Order expression member 'orderType' at '" //$NON-NLS-1$
@@ -2072,6 +2076,9 @@ public final class DcsWriter
             {
                 return unknown;
             }
+            String typeError = stringMembersError(entry, "A data source", where, //$NON-NLS-1$
+                KEY_NAME, KEY_TYPE, KEY_CONNECTION_STRING);
+            if (typeError != null) return typeError;
             String name = nonEmptyString(entry, KEY_NAME);
             if (name == null)
             {
@@ -2125,6 +2132,9 @@ public final class DcsWriter
         {
             return DataSetParseResult.failed(unknown);
         }
+        String stringError = stringMembersError(entry, "A data set", where, KEY_NAME, //$NON-NLS-1$
+            KEY_TYPE, KEY_QUERY, KEY_DATA_SOURCE, KEY_OBJECT_NAME);
+        if (stringError != null) return DataSetParseResult.failed(stringError);
         String name = nonEmptyString(entry, KEY_NAME);
         if (name == null)
         {
@@ -2216,11 +2226,15 @@ public final class DcsWriter
         {
             JsonObject entry = entries.get(i);
             String where = KEY_DATA_SET_LINKS + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-        String unknown = unknownMembers(entry, where, KEY_SOURCE_DATA_SET, KEY_DESTINATION_DATA_SET,
-            KEY_SOURCE_EXPRESSION, KEY_DESTINATION_EXPRESSION, KEY_PARAMETER,
+            String unknown = unknownMembers(entry, where, KEY_SOURCE_DATA_SET,
+                KEY_DESTINATION_DATA_SET, KEY_SOURCE_EXPRESSION, KEY_DESTINATION_EXPRESSION, KEY_PARAMETER,
                 KEY_PARAMETER_LIST_ALLOWED, KEY_LINK_CONDITION_EXPRESSION, KEY_LINK_CONDITION,
                 KEY_START_EXPRESSION, KEY_REQUIRED);
             if (unknown != null) return unknown;
+            String stringError = stringMembersError(entry, "A data-set link", where, //$NON-NLS-1$
+                KEY_SOURCE_DATA_SET, KEY_DESTINATION_DATA_SET, KEY_SOURCE_EXPRESSION,
+                KEY_DESTINATION_EXPRESSION);
+            if (stringError != null) return stringError;
             String source = nonEmptyString(entry, KEY_SOURCE_DATA_SET);
             String destination = nonEmptyString(entry, KEY_DESTINATION_DATA_SET);
             String sourceExpression = nonEmptyString(entry, KEY_SOURCE_EXPRESSION);
@@ -2284,6 +2298,9 @@ public final class DcsWriter
         {
             return FieldParseResult.failed(unknown);
         }
+        String stringError = stringMembersError(entry, "A field", where, KEY_DATA_PATH, //$NON-NLS-1$
+            KEY_FIELD, KEY_NAME);
+        if (stringError != null) return FieldParseResult.failed(stringError);
         String dataPath = nonEmptyString(entry, KEY_DATA_PATH);
         if (dataPath == null)
         {
@@ -2349,6 +2366,8 @@ public final class DcsWriter
         {
             return unknown;
         }
+        String stringError = stringMembersError(entry, "A parameter", where, KEY_NAME, KEY_USE); //$NON-NLS-1$
+        if (stringError != null) return stringError;
         String name = nonEmptyString(entry, KEY_NAME);
         if (name == null)
         {
@@ -2421,6 +2440,9 @@ public final class DcsWriter
         {
             return unknown;
         }
+        String stringError = stringMembersError(entry, "A calculated field", where, //$NON-NLS-1$
+            KEY_DATA_PATH, KEY_EXPRESSION);
+        if (stringError != null) return stringError;
         String dataPath = nonEmptyString(entry, KEY_DATA_PATH);
         if (dataPath == null)
         {
@@ -2463,6 +2485,9 @@ public final class DcsWriter
             {
                 return unknown;
             }
+            String stringError = stringMembersError(entry, "A total field", where, //$NON-NLS-1$
+                KEY_DATA_PATH, KEY_EXPRESSION);
+            if (stringError != null) return stringError;
             String dataPath = nonEmptyString(entry, KEY_DATA_PATH);
             if (dataPath == null)
             {
@@ -2550,6 +2575,10 @@ public final class DcsWriter
         }
         if (roleObj.has(ROLE_PERIOD_TYPE) && !roleObj.get(ROLE_PERIOD_TYPE).isJsonNull())
         {
+            if (!isStringMember(roleObj, ROLE_PERIOD_TYPE))
+                return RoleResult.failed(ERR_FIELD_ROLE + where //$NON-NLS-1$
+                    + ") 'periodType' must be a string naming one of " //$NON-NLS-1$
+                    + enumTokens(DataCompositionPeriodType.values()) + "."); //$NON-NLS-1$
             role.periodType = resolveEnum(DataCompositionPeriodType.values(),
                 stringMember(roleObj, ROLE_PERIOD_TYPE));
             if (role.periodType == null)
@@ -2732,7 +2761,22 @@ public final class DcsWriter
             return null;
         }
         JsonElement element = obj.get(name);
-        return (element != null && element.isJsonPrimitive()) ? element.getAsString() : null;
+        return element != null && element.isJsonPrimitive()
+            && element.getAsJsonPrimitive().isString() ? element.getAsString() : null;
+    }
+
+    private static String stringMembersError(JsonObject object, String subject, String where,
+        String... members)
+    {
+        for (String member : members)
+        {
+            if (object.has(member) && !isStringMember(object, member))
+            {
+                return subject + " (" + where + ") member '" + member //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' must be a string."; //$NON-NLS-1$
+            }
+        }
+        return null;
     }
 
     private static boolean isStringMember(JsonObject obj, String name)

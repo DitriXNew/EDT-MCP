@@ -309,6 +309,31 @@ public final class DcsSchemaWriter
             String replacement = string(request.body, member);
             if (replacement == null || identity.equals(replacement)) return null;
         }
+        if (TYPE_FIELD_FOLDER.equals(request.type))
+        {
+            FieldTarget target = resolveFieldTarget(schema, segments);
+            if (target.error != null) return target.error;
+            List<DataSetField> matches = dataSetFields(target.fields(), identity);
+            if (matches.size() != 1
+                || !(matches.get(0) instanceof DataCompositionSchemaDataSetFieldFolder))
+            {
+                return null;
+            }
+            DataCompositionSchemaDataSetFieldFolder folder =
+                (DataCompositionSchemaDataSetFieldFolder)matches.get(0);
+            List<DataSetField> removed = new ArrayList<>();
+            removed.add(folder);
+            removed.addAll(DcsFieldFolders.descendants(target.dataSet, folder));
+            for (DataSetField field : removed)
+            {
+                String kind = field instanceof DataCompositionSchemaDataSetFieldFolder
+                    ? TYPE_FIELD_FOLDER : TYPE_FIELD;
+                String error = DcsMutationGuard.referenceError(schema, request.address, kind,
+                    DcsFieldFolders.key(field));
+                if (error != null) return error;
+            }
+            return null;
+        }
         return DcsMutationGuard.referenceError(schema, request.address, request.type, identity);
     }
 
@@ -674,7 +699,42 @@ public final class DcsSchemaWriter
                 + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
                 + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
         }
+        for (DataSet dataSet : dataSets)
+        {
+            for (DataSetField raw : dataSet.getFields())
+            {
+                if (!(raw instanceof DataCompositionSchemaDataSetField)) continue;
+                DataCompositionSchemaDataSetField field =
+                    (DataCompositionSchemaDataSetField)raw;
+                String error = hierarchyReferenceError(schema, rootFqn,
+                    field.getInHierarchyDataSet(), "inHierarchyDataSet", TYPE_DATA_SET, //$NON-NLS-1$
+                    "data set", dataSetNames); //$NON-NLS-1$
+                if (error != null) return error;
+                error = hierarchyReferenceError(schema, rootFqn,
+                    field.getInHierarchyDataSetParameter(), "inHierarchyDataSetParameter", //$NON-NLS-1$
+                    TYPE_PARAMETER, "parameter", parameterNames); //$NON-NLS-1$
+                if (error != null) return error;
+            }
+        }
         return null;
+    }
+
+    private static String hierarchyReferenceError(DataCompositionSchema schema, String rootFqn,
+        String identity, String member, String targetKind, String targetLabel,
+        Set<String> targets)
+    {
+        if (identity == null || identity.isEmpty()
+            || targets.contains(guardIdentity(identity)))
+        {
+            return null;
+        }
+        List<String> addresses = DcsReadProjection.referenceAddresses(schema, rootFqn,
+            targetKind, identity);
+        String address = addresses.isEmpty() ? rootFqn : String.join(", ", addresses); //$NON-NLS-1$
+        return "Field at '" + address + "' has dangling " + member + " '" + identity //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' after assembling the schema. Add or keep a " + targetLabel + " named '" //$NON-NLS-1$ //$NON-NLS-2$
+            + identity + "' in the assembled schema (include it in the replacement body when " //$NON-NLS-1$
+            + "replacing), or update/remove the referring field first and retry."; //$NON-NLS-1$
     }
 
     private static void collectDataSets(List<DataSet> candidates, Set<String> names,
@@ -2229,7 +2289,7 @@ public final class DcsSchemaWriter
 
     private static void mergeFieldDefaults(JsonObject body, DataCompositionSchemaDataSetField current)
     {
-        if (!body.has(KEY_FIELD))
+        if (!body.has(KEY_FIELD) && current.getField() != null)
         {
             body.addProperty(KEY_FIELD, current.getField());
         }

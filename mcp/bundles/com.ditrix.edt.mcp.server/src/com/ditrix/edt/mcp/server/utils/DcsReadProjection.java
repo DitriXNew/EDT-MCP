@@ -408,7 +408,8 @@ public final class DcsReadProjection
     private static void collectReferences(EObject object, String address, String kind,
         String identity, Set<String> result)
     {
-        if (("field".equals(kind) || "calculatedField".equals(kind) || "totalField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (("field".equals(kind) || "fieldFolder".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
+            || "calculatedField".equals(kind) || "totalField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
             || "userField".equals(kind)) //$NON-NLS-1$
             && object instanceof DataCompositionField
             && sameIdentity(identity, ((DataCompositionField)object).getValue()))
@@ -434,6 +435,18 @@ public final class DcsReadProjection
                 result.add(address);
             }
         }
+        if (object instanceof DataCompositionSchemaDataSetField)
+        {
+            DataCompositionSchemaDataSetField field =
+                (DataCompositionSchemaDataSetField)object;
+            if (("dataSet".equals(kind) //$NON-NLS-1$
+                && sameIdentity(identity, field.getInHierarchyDataSet()))
+                || ("parameter".equals(kind) //$NON-NLS-1$
+                    && sameIdentity(identity, field.getInHierarchyDataSetParameter())))
+            {
+                result.add(address);
+            }
+        }
         if ("dataSource".equals(kind)) //$NON-NLS-1$
         {
             String dataSource = object instanceof DataCompositionSchemaDataSetQuery
@@ -445,13 +458,14 @@ public final class DcsReadProjection
                 result.add(address);
             }
         }
-        // A schema expression names a field by its data path and a parameter as '&Name', and both
-        // tokenize the same way, so one scan covers every identity an expression can strand.
-        if ("field".equals(kind) || "calculatedField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
+        // Expressions name fields by data path and parameters as '&Name'. Query text names only
+        // parameters in this identity surface; query source/alias tokens are not DCS field nodes.
+        if ("field".equals(kind) || "fieldFolder".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
+            || "calculatedField".equals(kind) //$NON-NLS-1$
             || "totalField".equals(kind) || "userField".equals(kind) //$NON-NLS-1$ //$NON-NLS-2$
             || "parameter".equals(kind)) //$NON-NLS-1$
         {
-            collectExpressionReferences(object, address, identity, result);
+            collectTextReferences(object, address, kind, identity, result);
         }
         for (EReference reference : object.eClass().getEAllContainments())
         {
@@ -856,19 +870,25 @@ public final class DcsReadProjection
         }
     }
 
-    private static void collectExpressionReferences(EObject object, String address,
+    private static void collectTextReferences(EObject object, String address, String kind,
         String identity, Set<String> result)
     {
         for (EAttribute attribute : object.eClass().getEAllAttributes())
         {
             String name = attribute.getName();
             String normalized = name == null ? "" : name.toLowerCase(Locale.ROOT); //$NON-NLS-1$
-            if (!normalized.endsWith("expression") && !"linkcondition".equals(normalized)) //$NON-NLS-1$ //$NON-NLS-2$
+            boolean expression = normalized.endsWith("expression") //$NON-NLS-1$
+                || "linkcondition".equals(normalized); //$NON-NLS-1$
+            boolean query = "parameter".equals(kind) //$NON-NLS-1$
+                && ("query".equals(normalized) || "querytext".equals(normalized)); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!expression && !query)
             {
                 continue;
             }
             Object value = object.eGet(attribute);
-            if (value instanceof String && expressionReferences((String)value, identity))
+            boolean parameter = "parameter".equals(kind); //$NON-NLS-1$
+            if (value instanceof String
+                && textReferences((String)value, identity, parameter))
             {
                 result.add(address);
             }
@@ -896,31 +916,34 @@ public final class DcsReadProjection
             && first.toLowerCase(Locale.ROOT).equals(second.toLowerCase(Locale.ROOT));
     }
 
-    private static boolean expressionReferences(String expression, String identity)
+    private static boolean textReferences(String text, String identity,
+        boolean requireParameterPrefix)
     {
         String normalizedIdentity = identity.toLowerCase(Locale.ROOT);
         int current = 0;
-        while (current < expression.length())
+        while (current < text.length())
         {
-            if (expression.charAt(current) == '"')
+            if (text.charAt(current) == '"')
             {
-                current = afterStringLiteral(expression, current);
+                current = afterStringLiteral(text, current);
                 continue;
             }
-            if (!isExpressionTokenCharacter(expression.charAt(current)))
+            if (!isExpressionTokenCharacter(text.charAt(current)))
             {
                 current++;
                 continue;
             }
             int start = current;
-            while (current < expression.length()
-                && isExpressionTokenCharacter(expression.charAt(current)))
+            while (current < text.length()
+                && isExpressionTokenCharacter(text.charAt(current)))
             {
                 current++;
             }
-            if (current >= expression.length() || expression.charAt(current) != '(')
+            boolean parameterToken = start > 0 && text.charAt(start - 1) == '&';
+            if ((!requireParameterPrefix || parameterToken)
+                && (current >= text.length() || text.charAt(current) != '('))
             {
-                String token = expression.substring(start, current).toLowerCase(Locale.ROOT);
+                String token = text.substring(start, current).toLowerCase(Locale.ROOT);
                 int separator = token.indexOf('.');
                 if (token.equals(normalizedIdentity) || separator > 0
                     && token.substring(0, separator).equals(normalizedIdentity))

@@ -740,6 +740,27 @@ public class DcsReadProjectionTest
     }
 
     @Test
+    public void testQueryTextsReportOnlyAmpersandParameterReferences()
+    {
+        DataCompositionSchema schema = schemaWithDataSet("Sales", //$NON-NLS-1$
+            "SELECT Period FROM Sales WHERE Date >= &Period"); //$NON-NLS-1$
+        assertEquals(java.util.Arrays.asList("Report.Sales#/dataSets/Sales"), //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, "Report.Sales", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+                "Period")); //$NON-NLS-1$
+        assertTrue("query source/alias tokens are not DCS field identities", //$NON-NLS-1$
+            DcsReadProjection.referenceAddresses(schema, "Report.Sales", "field", //$NON-NLS-1$ //$NON-NLS-2$
+                "Period").isEmpty()); //$NON-NLS-1$
+
+        DynamicListExtInfo list = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        list.eSet(list.eClass().getEStructuralFeature("queryText"), //$NON-NLS-1$
+            "SELECT Period FROM Sales WHERE Date >= &Period"); //$NON-NLS-1$
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        assertEquals(java.util.Arrays.asList(root),
+            DcsReadProjection.referenceAddresses(list, root, "parameter", "Period")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(DcsReadProjection.referenceAddresses(list, root, "field", "Period").isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testStructuredReferencesMatchIdentitiesCaseInsensitively()
     {
         String root = "Report.Sales"; //$NON-NLS-1$

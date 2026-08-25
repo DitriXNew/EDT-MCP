@@ -549,6 +549,49 @@ public class DcsWriterTest
     }
 
     @Test
+    public void testPresentConnectionStringMustBeAStringAndCannotClearAnExistingValue()
+    {
+        for (String malformed : new String[] { "{}", "[]", "123", "true", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            DataCompositionSchema schema = newSchema();
+            Result seeded = DcsWriter.apply(schema, json("{\"dataSources\":[{\"name\":\"Source\"," //$NON-NLS-1$
+                + "\"connectionString\":\"Connection=Original\"}]}"), null); //$NON-NLS-1$
+            assertFalse(seeded.error, seeded.hasError());
+
+            Result result = DcsWriter.apply(schema, json("{\"dataSources\":[{\"name\":\"Source\"," //$NON-NLS-1$
+                + "\"connectionString\":" + malformed + "}]}"), null); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue(malformed, result.hasError());
+            assertTrue(result.error, result.error.contains("connectionString")); //$NON-NLS-1$
+            assertTrue(result.error, result.error.contains("string")); //$NON-NLS-1$
+            assertEquals("Connection=Original", //$NON-NLS-1$
+                schema.getDataSources().get(0).getConnectionString());
+        }
+    }
+
+    @Test
+    public void testStringMembersNeverCoerceOtherJsonPrimitives()
+    {
+        String[][] cases = {
+            {"{\"dataSources\":[{\"name\":123}]}", "name"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"dataSets\":[{\"name\":\"DS\",\"type\":true}]}", "type"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"dataSets\":[{\"name\":\"DS\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"dataSource\":123}]}", "dataSource"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"dataSets\":[{\"name\":\"DS\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Code\",\"field\":false}]}]}", "field"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"parameters\":[{\"name\":\"P\",\"use\":1}]}", "use"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"totalFields\":[{\"dataPath\":\"T\",\"expression\":true}]}", "expression"} //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (String[] item : cases)
+        {
+            Result result = DcsWriter.apply(newSchema(), json(item[0]), null);
+            assertTrue(item[0], result.hasError());
+            assertTrue(result.error, result.error.contains(item[1]));
+            assertTrue(result.error, result.error.contains("string")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testObjectDataSetIsAuthoredWithItsObjectName()
     {
         DataCompositionSchema schema = newSchema();

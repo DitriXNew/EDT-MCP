@@ -1331,6 +1331,10 @@ def test_localized_title_uses_the_declared_language_code_spelling():
     # forceExportToDisk only SCHEDULES the flush, so poll for it instead of reading the tree
     # immediately - the write itself already reported success.
     dcs_rel = _poll_report_dcs(report_name, ctx="the localized parameter write")
+    # _poll_report_dcs only waits for the FILE, and seeding the report already created it,
+    # so it can release before this write's export lands. Wait for the write's own mark.
+    poll_disk_contains(dcs_rel, ">en<",
+                       ctx="the canonicalized language key must reach Template.dcs")
     on_disk = read_disk(dcs_rel)
     assert ">en<" in on_disk, \
         "the title must use the configuration's declared spelling 'en': %s" % on_disk[:700]
@@ -1890,6 +1894,12 @@ def test_variant_output_parameters_use_declared_xml_types_and_refuse_unknown_nam
     dcs_rel = _poll_report_dcs(report_name, ctx="the typed output-parameter fixture")
     poll_disk_contains(dcs_rel, "English output title",
                        ctx="the typed output parameters must reach Template.dcs")
+    # Both writes are asserted below, so both must be polled for. Polling only the first
+    # variant's marker releases as soon as ITS export lands, and on a loaded machine the
+    # second variant can still be in flight - the parse below then finds one variant and
+    # blames the writer for a race that lives in this test.
+    poll_disk_contains(dcs_rel, "Russian-call output title",
+                       ctx="the Russian-call output parameters must reach Template.dcs")
     on_disk = read_disk(dcs_rel)
 
     namespaces = {

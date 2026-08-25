@@ -37,6 +37,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com.ditrix.edt.mcp.server.utils.DcsTargetResolver.TargetKind;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -77,6 +78,63 @@ public class DcsSchemaWriterTest
 
         assertNull("guards follow 1C identity semantics even when caller casing differs", //$NON-NLS-1$
             DcsSchemaWriter.validateAssembledReferences(schema, "Report.Sales")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHierarchyReferencesValidateOnWriteAndGuardTargetMutations()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsSchemaWriter.Result missingDataSet = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT Code\"," //$NON-NLS-1$ //$NON-NLS-2$
+                + "\"fields\":[{\"dataPath\":\"Code\",\"inHierarchyDataSet\":\"Hierarchy\"}]}" //$NON-NLS-1$
+        );
+        assertFalse(missingDataSet.isSuccess());
+        assertTrue(missingDataSet.error(), missingDataSet.error().contains("inHierarchyDataSet")); //$NON-NLS-1$
+        assertTrue(missingDataSet.error(), missingDataSet.error().contains("Hierarchy")); //$NON-NLS-1$
+        assertTrue(schema.getDataSets().isEmpty());
+
+        DcsSchemaWriter.Result hierarchy = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", //$NON-NLS-1$
+            "{\"name\":\"Hierarchy\",\"type\":\"query\",\"query\":\"SELECT Parent\"}"); //$NON-NLS-1$
+        assertTrue(hierarchy.error(), hierarchy.isSuccess());
+        String beforeMissingParameter = DcsHash.compute(schema);
+        DcsSchemaWriter.Result missingParameter = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT Code\"," //$NON-NLS-1$ //$NON-NLS-2$
+                + "\"fields\":[{\"dataPath\":\"Code\",\"inHierarchyDataSet\":\"Hierarchy\"," //$NON-NLS-1$
+                + "\"inHierarchyDataSetParameter\":\"Parent\"}]}" //$NON-NLS-1$
+        );
+        assertFalse(missingParameter.isSuccess());
+        assertTrue(missingParameter.error(),
+            missingParameter.error().contains("inHierarchyDataSetParameter")); //$NON-NLS-1$
+        assertTrue(missingParameter.error(), missingParameter.error().contains("Parent")); //$NON-NLS-1$
+        assertEquals(beforeMissingParameter, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result valid = apply(schema, "upsert", "schema", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"parameters\":[{\"name\":\"Parent\"}],\"dataSets\":[{\"name\":\"Sales\"," //$NON-NLS-1$
+                + "\"type\":\"query\",\"query\":\"SELECT Code\",\"fields\":[{\"dataPath\":\"Code\"," //$NON-NLS-1$
+                + "\"inHierarchyDataSet\":\"Hierarchy\"," //$NON-NLS-1$
+                + "\"inHierarchyDataSetParameter\":\"Parent\"}]}]}" //$NON-NLS-1$
+        );
+        assertTrue(valid.error(), valid.isSuccess());
+        String validHash = DcsHash.compute(schema);
+        String fieldAddress = "Report.Sales#/dataSets/Sales/fields/Code"; //$NON-NLS-1$
+
+        DcsSchemaWriter.Result removeDataSet = apply(schema, "remove", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Hierarchy", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result renameDataSet = apply(schema, "update", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Hierarchy", "{\"name\":\"Tree\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result removeParameter = apply(schema, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Parent", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result renameParameter = apply(schema, "update", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Parent", "{\"name\":\"Ancestor\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (DcsSchemaWriter.Result result : Arrays.asList(removeDataSet, renameDataSet,
+            removeParameter, renameParameter))
+        {
+            assertFalse(result.isSuccess());
+            assertTrue(result.error(), result.error().contains(fieldAddress));
+        }
+        assertEquals(validHash, DcsHash.compute(schema));
     }
 
     @Test
@@ -753,6 +811,72 @@ public class DcsSchemaWriterTest
         DcsSchemaWriter.Result allowed = apply(schema, "update", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
             "Report.Sales#/parameters/Period", "{\"name\":\"Period\"}"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(allowed.error(), allowed.isSuccess());
+    }
+
+    @Test
+    public void testQueryParameterReferenceBlocksParameterRenameAndRemove()
+    {
+        DataCompositionSchema schema = schemaWithFields("Date"); //$NON-NLS-1$
+        query(schema).setQuery("SELECT Date FROM Sales WHERE Date >= &Period"); //$NON-NLS-1$
+        DataCompositionSchemaParameter period = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        period.setName("Period"); //$NON-NLS-1$
+        schema.getParameters().add(period);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result renamed = apply(schema, "update", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Period", "{\"name\":\"Interval\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result removed = apply(schema, "remove", "parameter", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/parameters/Period", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(renamed.isSuccess());
+        assertTrue(renamed.error(), renamed.error().contains("Report.Sales#/dataSets/Sales")); //$NON-NLS-1$
+        assertFalse(removed.isSuccess());
+        assertTrue(removed.error(), removed.error().contains("Report.Sales#/dataSets/Sales")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DataCompositionSchema fieldSchema = schemaWithFields("Date"); //$NON-NLS-1$
+        query(fieldSchema).setQuery("SELECT Date FROM Sales WHERE Date >= &Period"); //$NON-NLS-1$
+        DcsSchemaWriter.Result fieldRemoved = apply(fieldSchema, "remove", "field", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Date", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a query column/alias token is not ownership of a DCS field node: " //$NON-NLS-1$
+            + fieldRemoved.error(), fieldRemoved.isSuccess());
+        assertTrue(query(fieldSchema).getFields().isEmpty());
+    }
+
+    @Test
+    public void testRemovingFieldFolderRefusesReferencedDescendant()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery dataSet = dataSet("Sales", "SELECT 1"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetFieldFolder folder = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetFieldFolder();
+        folder.setDataPath("Customer"); //$NON-NLS-1$
+        dataSet.getFields().add(folder);
+        dataSet.getFields().add(field("Customer.Name")); //$NON-NLS-1$
+        schema.getDataSets().add(dataSet);
+        SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        variant.setName("Main"); //$NON-NLS-1$
+        variant.setSettings(settingsReferencingFields("Customer.Name")); //$NON-NLS-1$
+        schema.getSettingsVariants().add(variant);
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "remove", "fieldFolder", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Customer", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsSchemaWriter.Result renamed = apply(schema, "update", "fieldFolder", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Sales/fields/Customer", //$NON-NLS-1$
+            "{\"dataPath\":\"Client\"}"); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("field 'Customer.Name'")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains(
+            "Report.Sales#/variants/Main/settings/selection")); //$NON-NLS-1$
+        assertFalse(renamed.isSuccess());
+        assertTrue(renamed.error(), renamed.error().contains("field 'Customer.Name'")); //$NON-NLS-1$
+        assertTrue(renamed.error(), renamed.error().contains(
+            "Report.Sales#/variants/Main/settings/selection")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
     }
 
     @Test
