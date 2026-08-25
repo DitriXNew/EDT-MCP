@@ -19,7 +19,9 @@ import java.util.Arrays;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionAppearance;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionTotalPlacement;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
@@ -42,9 +44,11 @@ import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
+import com._1c.g5.v8.dt.dcs.parameters.output.DcsOutputParameters;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
@@ -244,6 +248,109 @@ public class DcsSettingsWriterTest
             java.util.Collections.emptyList(), "upsert", "userSettings", body, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("an appearance block must never be accepted unvalidated", result.isSuccess()); //$NON-NLS-1$
         assertTrue(result.error(), result.error().contains("appearance")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAppearanceParameterUseLivesOnTheParameterValueAndAcceptsSiblingShape()
+    {
+        String russianTextColor = "ЦветТекста"; //$NON-NLS-1$
+        DcsAvailableParameterCollection available = new DcsAvailableParameterCollection();
+        ColorValue defaultColor = McoreFactory.eINSTANCE.createColorValue();
+        addAvailableParameter(available, "TextColor", russianTextColor, defaultColor); //$NON-NLS-1$
+        DcsPresentationParser.LanguageContext russian =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "ru"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        DcsSettingsWriter.AppearanceResult result = DcsSettingsWriter.buildAppearanceForTest(
+            json("{\"TextColor\":{\"use\":false,\"color\":{" //$NON-NLS-1$
+                + "\"red\":12,\"green\":34,\"blue\":56}}}"), null, russian, available); //$NON-NLS-1$
+
+        assertTrue(result.error, result.value != null);
+        DataCompositionAppearance appearance = result.value;
+        assertEquals(1, appearance.getItems().size());
+        DataCompositionParameterValue item = appearance.getItems().get(0);
+        assertFalse("the appearance parameter's own DataCompositionParameterValue.use must survive", //$NON-NLS-1$
+            item.isUse());
+        assertEquals(russianTextColor, item.getParameter().getValue());
+        assertTrue(item.getValues().get(0) instanceof ColorValue);
+
+        DcsPresentationParser.LanguageContext english =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "en"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject englishPatch = new JsonObject();
+        englishPatch.add(russianTextColor, json("{\"use\":true,\"color\":{" //$NON-NLS-1$
+            + "\"red\":65,\"green\":43,\"blue\":21}}")); //$NON-NLS-1$
+        DcsSettingsWriter.AppearanceResult patched = DcsSettingsWriter.buildAppearanceForTest(
+            englishPatch, appearance, english, available);
+        assertTrue(patched.error, patched.value != null);
+        assertEquals("a bilingual patch must replace the same parameter, not append an alias", //$NON-NLS-1$
+            1, patched.value.getItems().size());
+        assertEquals("TextColor", patched.value.getItems().get(0).getParameter().getValue()); //$NON-NLS-1$
+        assertTrue(patched.value.getItems().get(0).isUse());
+
+        DcsSettingsWriter.AppearanceResult invalid = DcsSettingsWriter.buildAppearanceForTest(
+            json("{\"TextColor\":{\"use\":\"false\",\"color\":\"auto\"}}"), //$NON-NLS-1$
+            null, english, available);
+        assertNull(invalid.value);
+        assertTrue(invalid.error, invalid.error.contains("appearance.TextColor.use")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputParameterLookupIsBilingualButStorageFollowsConfigurationLanguageCode()
+    {
+        String englishName = "VerticalOverallPlacement"; //$NON-NLS-1$
+        String russianName = "ВертикальноеРасположениеОбщихИтогов"; //$NON-NLS-1$
+        DcsAvailableParameterCollection available = new DcsAvailableParameterCollection();
+        EnumValue placement = McoreFactory.eINSTANCE.createEnumValue();
+        placement.setValue(DataCompositionTotalPlacement.AUTO);
+        addAvailableParameter(available, englishName, russianName, placement);
+        DcsPresentationParser.LanguageContext englishConfigurationRussianValue =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "ru", "en"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        DcsPresentationParser.LanguageContext russianConfigurationEnglishValue =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "en", "ru"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertOutputParameterName(available, englishConfigurationRussianValue,
+            englishName, englishName);
+        assertOutputParameterName(available, englishConfigurationRussianValue,
+            russianName, englishName);
+        assertOutputParameterName(available, russianConfigurationEnglishValue,
+            englishName, russianName);
+        assertOutputParameterName(available, russianConfigurationEnglishValue,
+            russianName, russianName);
+    }
+
+    @Test
+    public void testPlatformOutputParameterCataloguePublishesStableEnglishAndRussianAliases()
+        throws DcsPathException
+    {
+        try (DcsCatalogueTestRuntime.Scope ignored =
+            DcsCatalogueTestRuntime.prepareCatalogues(Version.V8_3_27))
+        {
+            DcsOutputParameters russianCatalogue =
+                new DcsOutputParameters(Version.V8_3_27, "ru"); //$NON-NLS-1$
+            DcsOutputParameters englishCatalogue =
+                new DcsOutputParameters(Version.V8_3_27, "en"); //$NON-NLS-1$
+
+            assertPlatformOutputAliases(russianCatalogue, "ru"); //$NON-NLS-1$
+            assertPlatformOutputAliases(englishCatalogue, "en"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testOnlyRussianConfigurationCodeSelectsTheRussianParameterAlias()
+    {
+        DcsAvailableParameterCollection available = new DcsAvailableParameterCollection();
+        addAvailableParameter(available, "Title", "Заголовок", //$NON-NLS-1$ //$NON-NLS-2$
+            McoreFactory.eINSTANCE.createStringValue());
+        DcsAvailableParameter title = available.findItem("Title"); //$NON-NLS-1$
+
+        DcsPresentationParser.LanguageContext ukrainian =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru", "uk"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "ru", "uk"); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsPresentationParser.LanguageContext russian =
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru", "uk"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "uk", "ru"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("Title", DcsSettingsWriter.parameterName(title, ukrainian)); //$NON-NLS-1$
+        assertEquals("Заголовок", DcsSettingsWriter.parameterName(title, russian)); //$NON-NLS-1$
     }
 
     @Test
@@ -1920,17 +2027,55 @@ public class DcsSettingsWriterTest
     private static void addOutputParameter(DcsAvailableParameterCollection parameters,
         String name, Value defaultValue)
     {
+        addAvailableParameter(parameters, name, "", defaultValue); //$NON-NLS-1$
+    }
+
+    private static void addAvailableParameter(DcsAvailableParameterCollection parameters,
+        String englishName, String russianName, Value defaultValue)
+    {
         DcsAvailableParameter parameter = parameters.addItem();
         try
         {
-            parameter.init(new String[] {name, ""}, null, null, name, defaultValue, false, null, //$NON-NLS-1$
+            parameter.init(new String[] {englishName, russianName}, null, null, englishName,
+                defaultValue, false, null,
                 true, false, null, Version.LATEST, null);
         }
         catch (DcsPathException e)
         {
             throw new AssertionError("Could not create the synthetic output parameter '" //$NON-NLS-1$
-                + name + "'", e); //$NON-NLS-1$
+                + englishName + "'", e); //$NON-NLS-1$
         }
+    }
+
+    private static void assertOutputParameterName(DcsAvailableParameterCollection available,
+        DcsPresentationParser.LanguageContext languages, String suppliedName, String storedName)
+    {
+        SettingsParameterValue item = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsParameterValue();
+        JsonObject body = new JsonObject();
+        JsonObject parameter = new JsonObject();
+        parameter.addProperty("kind", "parameter"); //$NON-NLS-1$ //$NON-NLS-2$
+        parameter.addProperty("value", suppliedName); //$NON-NLS-1$
+        body.add("parameter", parameter); //$NON-NLS-1$
+        body.addProperty("value", "None"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String error = DcsSettingsWriter.applyOutputParameterItemForTest(item, body, languages,
+            available);
+
+        assertNull(error, error);
+        assertEquals(storedName, item.getParameter().getValue());
+    }
+
+    private static void assertPlatformOutputAliases(DcsOutputParameters catalogue, String language)
+    {
+        DcsAvailableParameter parameter = catalogue.getAvailableParameters().getParameters()
+            .findItem("VerticalOverallPlacement"); //$NON-NLS-1$
+        assertNotNull("VerticalOverallPlacement must exist for catalogue language " + language, //$NON-NLS-1$
+            parameter);
+        assertEquals("alias 0 for catalogue language " + language, //$NON-NLS-1$
+            "VerticalOverallPlacement", parameter.key(0)); //$NON-NLS-1$
+        assertEquals("alias 1 for catalogue language " + language, //$NON-NLS-1$
+            "ВертикальноеРасположениеОбщихИтогов", parameter.key(1)); //$NON-NLS-1$
     }
 
     private static DcsAddress address(String source)

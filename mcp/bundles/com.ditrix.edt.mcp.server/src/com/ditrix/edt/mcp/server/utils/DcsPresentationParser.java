@@ -192,11 +192,15 @@ public final class DcsPresentationParser
         return presentation;
     }
 
-    /** Configured language-code spellings, the resolved code, and codes used by the parsed body. */
+    /**
+     * Configured language-code spellings, the resolved presentation code, the configuration code
+     * used for serialized catalogue names, and codes used by the parsed body.
+     */
     public static final class LanguageContext
     {
         private final List<String> declaredCodes;
         private final String resolvedCode;
+        private final String configurationCode;
         private final Set<String> usedCodes = new LinkedHashSet<>();
 
         public LanguageContext(List<String> declaredCodes)
@@ -205,6 +209,12 @@ public final class DcsPresentationParser
         }
 
         public LanguageContext(List<String> declaredCodes, String resolvedCode)
+        {
+            this(declaredCodes, resolvedCode, resolvedCode);
+        }
+
+        public LanguageContext(List<String> declaredCodes, String resolvedCode,
+            String configurationCode)
         {
             List<String> copy = new ArrayList<>();
             if (declaredCodes != null)
@@ -226,6 +236,8 @@ public final class DcsPresentationParser
             {
                 this.resolvedCode = resolvedCode;
             }
+            this.configurationCode = configurationCode == null || configurationCode.isEmpty()
+                ? this.resolvedCode : configurationCode;
         }
 
         public List<String> declaredCodes()
@@ -236,6 +248,12 @@ public final class DcsPresentationParser
         public String resolvedCode()
         {
             return resolvedCode;
+        }
+
+        /** The configuration's own language CODE, independent of a per-call presentation code. */
+        public String configurationCode()
+        {
+            return configurationCode;
         }
 
         public Set<String> usedCodes()

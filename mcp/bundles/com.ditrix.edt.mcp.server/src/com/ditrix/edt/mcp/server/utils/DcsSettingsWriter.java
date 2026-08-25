@@ -82,6 +82,7 @@ import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.dcs.parameters.DcsParameterValuesBase;
 import com._1c.g5.v8.dt.dcs.parameters.appearance.DcsAppearanceParameters;
+import com._1c.g5.v8.dt.dcs.parameters.appearance.DynamicListAppearanceParameters;
 import com._1c.g5.v8.dt.dcs.parameters.appearance.FormAppearanceParameters;
 import com._1c.g5.v8.dt.dcs.parameters.output.DcsChartGroupOutputParameters;
 import com._1c.g5.v8.dt.dcs.parameters.output.DcsChartOutputParameters;
@@ -125,7 +126,7 @@ public final class DcsSettingsWriter
      */
     private static final ThreadLocal<StyleValueBuilder.NamedColorResolver> NAMED_COLOR_RESOLVER =
         new ThreadLocal<>();
-    private static final ThreadLocal<Boolean> FORM_APPEARANCE_PARAMETERS = new ThreadLocal<>();
+    private static final ThreadLocal<AppearanceCatalogue> APPEARANCE_CATALOGUE = new ThreadLocal<>();
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
     private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$
@@ -488,7 +489,7 @@ public final class DcsSettingsWriter
         List<String> relative = new ArrayList<>();
         relative.add("conditionalAppearance"); //$NON-NLS-1$
         relative.addAll(address.segments());
-        return withNamedColors(namedColors, () -> withFormAppearanceParameters(() ->
+        return withNamedColors(namedColors, () -> withAppearanceCatalogue(AppearanceCatalogue.FORM, () ->
             planSettings(wrapper, relative, action, type, body, languages, version,
                 address, address.rootFqn())));
     }
@@ -498,6 +499,11 @@ public final class DcsSettingsWriter
         String type, DcsAddress address, JsonObject body,
         DcsPresentationParser.LanguageContext languages, Version version)
     {
+        if (APPEARANCE_CATALOGUE.get() != AppearanceCatalogue.DYNAMIC_LIST)
+        {
+            return withAppearanceCatalogue(AppearanceCatalogue.DYNAMIC_LIST,
+                () -> planDynamicList(current, action, type, address, body, languages, version));
+        }
         String common = validateCommon(action, type, address, body, languages);
         if (common != null)
         {
@@ -3445,44 +3451,10 @@ public final class DcsSettingsWriter
         String language = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
         try
         {
-            DcsAppearanceParameters catalogue = Boolean.TRUE.equals(FORM_APPEARANCE_PARAMETERS.get())
-                ? new FormAppearanceParameters(version == null ? Version.LATEST : version, language)
-                : new DcsAppearanceParameters(version == null ? Version.LATEST : version, language);
-            DcsAvailableParameterCollection available =
-                catalogue.getAvailableParameters().getParameters();
-            // Update and exact-target upsert are PATCH operations. Start from a detached copy so an
-            // omitted appearance key survives and a later conversion error cannot mutate the input.
-            // Replace deliberately passes no current value and therefore retains its clearing contract.
-            DataCompositionAppearance result = copy(current);
-            if (result == null)
-            {
-                result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
-                    .createDataCompositionAppearance();
-            }
-            for (String key : body.keySet())
-            {
-                DcsAvailableParameter parameter = available.findItem(key);
-                if (parameter == null)
-                {
-                    return AppearanceResult.failure("Unknown appearance key '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
-                        + path + "'. Use one of the typed keys for platform " + version + ": " //$NON-NLS-1$ //$NON-NLS-2$
-                        + parameterKeys(available) + ". Remove '" + key + "' or correct its spelling."); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                ValueResult mapped = typedParameterValue(body.get(key), parameter.defValue(),
-                    languages, path + "." + key); //$NON-NLS-1$
-                if (mapped.error != null) return AppearanceResult.failure(mapped.error);
-                DataCompositionParameterValue item =
-                    com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
-                        .createDataCompositionParameterValue();
-                item.setUse(true);
-                DataCompositionParameter name =
-                    com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
-                name.setValue(parameter.key(0));
-                item.setParameter(name);
-                item.getValues().add(mapped.value);
-                putAppearanceParameter(result, item);
-            }
-            return AppearanceResult.success(result);
+            AppearanceCatalogue kind = APPEARANCE_CATALOGUE.get();
+            DcsAvailableParameterCollection available = appearanceParameters(
+                kind == null ? AppearanceCatalogue.SCHEMA : kind, version, language);
+            return appearance(body, current, languages, available, version, path);
         }
         catch (DcsPathException | RuntimeException e)
         {
@@ -3501,24 +3473,106 @@ public final class DcsSettingsWriter
             () -> appearance(body, current, languages, version, path));
     }
 
+    /** Headless unit seam: production supplies the same bilingual collection from EDT's catalogue. */
+    static AppearanceResult buildAppearanceForTest(JsonObject body, DataCompositionAppearance current,
+        DcsPresentationParser.LanguageContext languages, DcsAvailableParameterCollection available)
+    {
+        return appearance(body, current, languages, available, Version.LATEST, "appearance"); //$NON-NLS-1$
+    }
+
+    private static AppearanceResult appearance(JsonObject body, DataCompositionAppearance current,
+        DcsPresentationParser.LanguageContext languages, DcsAvailableParameterCollection available,
+        Version version, String path)
+    {
+        // Update and exact-target upsert are PATCH operations. Start from a detached copy so an
+        // omitted appearance key survives and a later conversion error cannot mutate the input.
+        // Replace deliberately passes no current value and therefore retains its clearing contract.
+        DataCompositionAppearance result = copy(current);
+        if (result == null)
+        {
+            result = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionAppearance();
+        }
+        for (String key : body.keySet())
+        {
+            DcsAvailableParameter parameter = available.findItem(key);
+            if (parameter == null)
+            {
+                return AppearanceResult.failure("Unknown appearance key '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + path + "'. Use one of the typed keys for platform " + version + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                    + parameterKeys(available) + ". Remove '" + key + "' or correct its spelling."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            AppearanceParameterSpec spec = appearanceParameterSpec(body.get(key),
+                path + "." + key); //$NON-NLS-1$
+            if (spec.error != null) return AppearanceResult.failure(spec.error);
+            ValueResult mapped = typedParameterValue(spec.value, parameter.defValue(), languages,
+                path + "." + key); //$NON-NLS-1$
+            if (mapped.error != null) return AppearanceResult.failure(mapped.error);
+            DataCompositionParameterValue item =
+                com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                    .createDataCompositionParameterValue();
+            item.setUse(spec.use);
+            DataCompositionParameter name =
+                com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createDataCompositionParameter();
+            name.setValue(parameterName(parameter, languages));
+            item.setParameter(name);
+            item.getValues().add(mapped.value);
+            putAppearanceParameter(result, item, parameter, available);
+        }
+        return AppearanceResult.success(result);
+    }
+
+    /** Extracts the optional per-parameter use flag without passing it to the typed value builder. */
+    private static AppearanceParameterSpec appearanceParameterSpec(JsonElement raw, String path)
+    {
+        if (raw == null || !raw.isJsonObject() || !raw.getAsJsonObject().has(KEY_USE))
+        {
+            return AppearanceParameterSpec.success(raw, true);
+        }
+        JsonObject supplied = raw.getAsJsonObject();
+        Boolean use = bool(supplied, KEY_USE, path);
+        if (use == null) return AppearanceParameterSpec.failure(booleanError);
+        JsonObject value = supplied.deepCopy();
+        value.remove(KEY_USE);
+        if (value.size() == 0)
+        {
+            return AppearanceParameterSpec.failure("Appearance parameter at '" + path //$NON-NLS-1$
+                + "' needs its typed value beside 'use', or in a 'value' member."); //$NON-NLS-1$
+        }
+        JsonElement typed = value.size() == 1 && value.has("value") //$NON-NLS-1$
+            ? value.get("value") : value; //$NON-NLS-1$
+        return AppearanceParameterSpec.success(typed, use.booleanValue());
+    }
+
     /** Replaces one named appearance parameter in place, or appends it when the patch adds a new key. */
     private static void putAppearanceParameter(DataCompositionAppearance appearance,
-        DataCompositionParameterValue replacement)
+        DataCompositionParameterValue replacement, DcsAvailableParameter declared,
+        DcsAvailableParameterCollection available)
     {
-        String name = replacement.getParameter() == null
-            ? null : replacement.getParameter().getValue();
         for (int i = 0; i < appearance.getItems().size(); i++)
         {
             DataCompositionParameterValue existing = appearance.getItems().get(i);
             String existingName = existing.getParameter() == null
                 ? null : existing.getParameter().getValue();
-            if (name != null && name.equals(existingName))
+            if (existingName != null && available.findItem(existingName) == declared)
             {
                 appearance.getItems().set(i, replacement);
                 return;
             }
         }
         appearance.getItems().add(replacement);
+    }
+
+    /**
+     * EDT's DCS catalogues publish English at alias 0 and specifically Russian at alias 1. The
+     * serialized name follows the configuration language, not a per-call presentation language.
+     */
+    static String parameterName(DcsAvailableParameter parameter,
+        DcsPresentationParser.LanguageContext languages)
+    {
+        String code = languages == null ? "en" : languages.configurationCode(); //$NON-NLS-1$
+        String localized = parameter.key("ru".equalsIgnoreCase(code) ? 1 : 0); //$NON-NLS-1$
+        return localized == null || localized.isEmpty() ? parameter.key(0) : localized;
     }
 
     /** Maps a JSON value to the platform-declared parameter type for every typed parameter path. */
@@ -3668,19 +3722,46 @@ public final class DcsSettingsWriter
         }
     }
 
-    private static <T> T withFormAppearanceParameters(Supplier<T> operation)
+    private static <T> T withAppearanceCatalogue(AppearanceCatalogue catalogue,
+        Supplier<T> operation)
     {
-        Boolean previous = FORM_APPEARANCE_PARAMETERS.get();
-        FORM_APPEARANCE_PARAMETERS.set(Boolean.TRUE);
+        AppearanceCatalogue previous = APPEARANCE_CATALOGUE.get();
+        APPEARANCE_CATALOGUE.set(catalogue);
         try
         {
             return operation.get();
         }
         finally
         {
-            if (previous == null) FORM_APPEARANCE_PARAMETERS.remove();
-            else FORM_APPEARANCE_PARAMETERS.set(previous);
+            if (previous == null) APPEARANCE_CATALOGUE.remove();
+            else APPEARANCE_CATALOGUE.set(previous);
         }
+    }
+
+    enum AppearanceCatalogue
+    {
+        SCHEMA,
+        FORM,
+        DYNAMIC_LIST
+    }
+
+    static DcsAvailableParameterCollection appearanceParameters(AppearanceCatalogue catalogue,
+        Version version, String language) throws DcsPathException
+    {
+        DcsAppearanceParameters parameters;
+        switch (catalogue)
+        {
+            case FORM:
+                parameters = new FormAppearanceParameters(platformVersion(version), language);
+                break;
+            case DYNAMIC_LIST:
+                parameters = new DynamicListAppearanceParameters(platformVersion(version), language);
+                break;
+            default:
+                parameters = new DcsAppearanceParameters(platformVersion(version), language);
+                break;
+        }
+        return parameters.getAvailableParameters().getParameters();
     }
 
     private static boolean hasExpectedType(Value expected, Value supplied)
@@ -3705,8 +3786,7 @@ public final class DcsSettingsWriter
         String language = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
         try
         {
-            return AvailableParametersResult.success(catalogue.create(platform, language)
-                .getAvailableParameters().getParameters());
+            return AvailableParametersResult.success(outputParameters(catalogue, platform, language));
         }
         catch (DcsPathException | RuntimeException e)
         {
@@ -3721,7 +3801,7 @@ public final class DcsSettingsWriter
         return version == null ? Version.LATEST : version;
     }
 
-    private enum OutputParameterCatalogue
+    enum OutputParameterCatalogue
     {
         SETTINGS,
         GROUP,
@@ -3742,6 +3822,13 @@ public final class DcsSettingsWriter
                 default: return new DcsChartGroupOutputParameters(version, language);
             }
         }
+    }
+
+    static DcsAvailableParameterCollection outputParameters(OutputParameterCatalogue catalogue,
+        Version version, String language) throws DcsPathException
+    {
+        return catalogue.create(platformVersion(version), language)
+            .getAvailableParameters().getParameters();
     }
 
     private static String applyParameterPath(DataCompositionSettings settings, List<String> path,
@@ -4255,7 +4342,8 @@ public final class DcsSettingsWriter
                     return unknownOutputParameter(name, available, version,
                         path + ".parameter"); //$NON-NLS-1$
                 }
-                ((DataCompositionParameter)parameter.value).setValue(declared.key(0));
+                ((DataCompositionParameter)parameter.value).setValue(
+                    parameterName(declared, languages));
             }
             item.setParameter((DataCompositionParameter)parameter.value);
         }
@@ -4273,6 +4361,7 @@ public final class DcsSettingsWriter
                 return unknownOutputParameter(name, available, version,
                     path + ".parameter"); //$NON-NLS-1$
             }
+            item.getParameter().setValue(parameterName(declared, languages));
         }
         if (body.has("value")) //$NON-NLS-1$
         {
@@ -4945,15 +5034,21 @@ public final class DcsSettingsWriter
 
     private static String enumeratorValues(Enumerator sample)
     {
-        if (sample == null) return "(none)"; //$NON-NLS-1$
+        List<String> result = enumeratorLiterals(sample);
+        return result.isEmpty() ? "(none)" : String.join(", ", result); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    static List<String> enumeratorLiterals(Enumerator sample)
+    {
+        if (sample == null) return Collections.emptyList();
         Object[] values = sample.getClass().getEnumConstants();
-        if (values == null) return sample.getLiteral();
+        if (values == null) return Collections.singletonList(sample.getLiteral());
         List<String> result = new ArrayList<>();
         for (Object candidate : values)
         {
             result.add(((Enumerator)candidate).getLiteral());
         }
-        return String.join(", ", result); //$NON-NLS-1$
+        return Collections.unmodifiableList(result);
     }
 
     // ---- JSON helpers -----------------------------------------------------------------------
@@ -5938,6 +6033,17 @@ public final class DcsSettingsWriter
         { return new AvailableParametersResult(parameters, null); }
         static AvailableParametersResult failure(String error)
         { return new AvailableParametersResult(null, error); }
+    }
+
+    private static final class AppearanceParameterSpec
+    {
+        final JsonElement value; final boolean use; final String error;
+        private AppearanceParameterSpec(JsonElement value, boolean use, String error)
+        { this.value = value; this.use = use; this.error = error; }
+        static AppearanceParameterSpec success(JsonElement value, boolean use)
+        { return new AppearanceParameterSpec(value, use, null); }
+        static AppearanceParameterSpec failure(String error)
+        { return new AppearanceParameterSpec(null, false, error); }
     }
 
     private static final class FieldResult

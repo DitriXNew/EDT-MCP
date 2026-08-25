@@ -271,6 +271,25 @@ public final class DcsReadProjection
             DcsAddress.render(rootFqn, Collections.<String>emptyList()), kind, identity);
     }
 
+    /** Resolves the same canonical pointer used by reads for the read-only options catalogue. */
+    static OptionsNode resolveOptionsNode(String rootFqn, EObject root, DcsAddress address)
+    {
+        if (address == null || !address.hasPointer())
+        {
+            return OptionsNode.success(root, null, null);
+        }
+        if (root == null)
+        {
+            return OptionsNode.failure("Pointer '" + address //$NON-NLS-1$
+                + "' cannot be resolved because the DCS root has no content."); //$NON-NLS-1$
+        }
+        NodeResolution resolution = resolvePointer(rootFqn, root, address.segments());
+        return resolution.isSuccess()
+            ? OptionsNode.success(resolution.node.value, resolution.node.owner,
+                typeOf(resolution.node))
+            : OptionsNode.failure(resolution.error);
+    }
+
     private static String renderFormConditionalAppearance(String address, EObject appearance,
         String language, int limit, int offset, int maxPageChars)
     {
@@ -2425,6 +2444,37 @@ public final class DcsReadProjection
         static CollectionRef failure(String error)
         {
             return new CollectionRef(null, Collections.<NodeRef> emptyList(), error);
+        }
+    }
+
+    static final class OptionsNode
+    {
+        final Object value;
+        final EObject owner;
+        final String actualType;
+        final String error;
+
+        private OptionsNode(Object value, EObject owner, String actualType, String error)
+        {
+            this.value = value;
+            this.owner = owner;
+            this.actualType = actualType;
+            this.error = error;
+        }
+
+        static OptionsNode success(Object value, EObject owner, String actualType)
+        {
+            return new OptionsNode(value, owner, actualType, null);
+        }
+
+        static OptionsNode failure(String error)
+        {
+            return new OptionsNode(null, null, null, error);
+        }
+
+        boolean isSuccess()
+        {
+            return error == null;
         }
     }
 }

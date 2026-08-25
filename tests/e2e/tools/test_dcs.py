@@ -44,6 +44,13 @@ _OUTPUT_GUARD_NOTICE = "so the response stays under the size cap."
 _DCS_DEFAULT_CHARACTER_LIMIT = 40_000
 _DCS_MAX_CHARACTER_REQUEST = 100_000
 
+_VERTICAL_OVERALL_PLACEMENT_RU = (
+    "\u0412\u0435\u0440\u0442\u0438\u043a\u0430\u043b\u044c\u043d\u043e\u0435"
+    "\u0420\u0430\u0441\u043f\u043e\u043b\u043e\u0436\u0435\u043d\u0438\u0435"
+    "\u041e\u0431\u0449\u0438\u0445\u0418\u0442\u043e\u0433\u043e\u0432"
+)
+_TITLE_RU = "\u0417\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a"
+
 
 def _seed_report(name, data_set_names=("DataSet1",)):
     fqn = "Report." + name
@@ -110,6 +117,20 @@ def _get(fqn, target_type, *, limit=None, **extra):
         # Keep an explicit no-limit intent authoritative even if a blanket key is added above.
         args.pop("limit", None)
     else:
+        args["limit"] = limit
+    return call("dcs", args)
+
+
+def _options(fqn, target_type, *, limit=None, **extra):
+    """Read the platform-version vocabulary through the public contract."""
+    args = {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "action": "options",
+        "type": target_type,
+    }
+    args.update(extra)
+    if limit is not None:
         args["limit"] = limit
     return call("dcs", args)
 
@@ -1722,6 +1743,7 @@ def test_conditional_appearance_parameter_patch_preserves_omitted_keys_on_disk()
                             "color": {"red": 255, "green": 0, "blue": 0},
                         },
                         "TextColor": {
+                            "use": False,
                             "color": {"red": 0, "green": 128, "blue": 0},
                         },
                     },
@@ -1733,6 +1755,13 @@ def test_conditional_appearance_parameter_patch_preserves_omitted_keys_on_disk()
     dcs_rel = _poll_report_dcs(report_name, ctx="the appearance-parameter patch fixture")
     poll_disk_contains(dcs_rel, "TextColor",
                        ctx="both initial appearance parameters must reach Template.dcs")
+    initial_disk = read_disk(dcs_rel)
+    text_color_item = next((item for item in re.findall(
+        r"<dcscor:item>(.*?)</dcscor:item>", initial_disk, re.DOTALL)
+        if "<dcscor:parameter>TextColor</dcscor:parameter>" in item), None)
+    assert text_color_item and "<dcscor:use>false</dcscor:use>" in text_color_item, \
+        "the disabled TextColor parameter must persist use=false on its dcscor:item: %s" \
+        % initial_disk[:2400]
 
     before_update = _get(rule_address, "conditionalAppearance")
     assert_ok(before_update, "read the conditional-appearance rule before update")
@@ -1799,6 +1828,22 @@ def test_variant_output_parameters_use_declared_xml_types_and_refuse_unknown_nam
     wait_for_project_ready()
     root = _seed_report(report_name)
 
+    options = _options(root, "outputParameter", limit=1000, language="en")
+    assert_ok(options, "read the version-aware output-parameter vocabulary")
+    placement_option = re.search(
+        r"\| output parameter \| (VerticalOverallPlacement) "
+        r"\| ([^|]+) \| ([^|]+) \|", options.text)
+    assert placement_option, \
+        "options must report the placement key, declared enum type and literals: %s" \
+        % options.text[:3000]
+    reported_parameter = placement_option.group(1)
+    declared_type = placement_option.group(2).strip()
+    assert declared_type, "options must report a declared type: %s" % options.text[:3000]
+    reported_literals = [value.strip() for value in placement_option.group(3).split(",")]
+    assert "None" in reported_literals, \
+        "options must report the None literal accepted by the writer: %s" % options.text[:3000]
+    reported_literal = "None"
+
     authored = _write(root, "upsert", "variant", {
         "name": "TypedOutput",
         "presentation": "Typed output",
@@ -1807,9 +1852,9 @@ def test_variant_output_parameters_use_declared_xml_types_and_refuse_unknown_nam
                 "items": [{
                     "parameter": {
                         "kind": "parameter",
-                        "value": "VerticalOverallPlacement",
+                        "value": reported_parameter,
                     },
-                    "value": "None",
+                    "value": reported_literal,
                 }, {
                     "parameter": {"kind": "parameter", "value": "Title"},
                     "value": {
@@ -1821,27 +1866,95 @@ def test_variant_output_parameters_use_declared_xml_types_and_refuse_unknown_nam
         },
     }, language="en")
     assert_ok(authored, "author enum and localized output parameters")
+
+    authored_russian = _write(root, "upsert", "variant", {
+        "name": "TypedOutputRussian",
+        "presentation": "Typed output Russian names",
+        "settings": {
+            "outputParameters": {
+                "items": [{
+                    "parameter": {
+                        "kind": "parameter",
+                        "value": reported_parameter,
+                    },
+                    "value": reported_literal,
+                }, {
+                    "parameter": {"kind": "parameter", "value": "Title"},
+                    "value": "Russian-call output title",
+                }],
+            },
+        },
+    }, language="ru")
+    assert_ok(authored_russian,
+              "author localized values in Russian without changing stored parameter names")
     dcs_rel = _poll_report_dcs(report_name, ctx="the typed output-parameter fixture")
     poll_disk_contains(dcs_rel, "English output title",
                        ctx="the typed output parameters must reach Template.dcs")
     on_disk = read_disk(dcs_rel)
 
-    placement = re.compile(
-        r"<dcscor:parameter>VerticalOverallPlacement</dcscor:parameter>\s*"
-        r'<dcscor:value xsi:type="dcscor:DataCompositionTotalPlacement">None</dcscor:value>')
-    assert placement.search(on_disk), \
-        "the placement value must carry DataCompositionTotalPlacement on disk: %s" % on_disk[:1800]
-    title = re.search(
-        r"<dcscor:parameter>Title</dcscor:parameter>\s*"
-        r'<dcscor:value xsi:type="v8:LocalStringType">(.*?)</dcscor:value>',
-        on_disk, re.DOTALL)
-    assert title, "the title value must carry v8:LocalStringType on disk: %s" % on_disk[:1800]
-    for code, text in (("ru", "Russian output title"), ("en", "English output title")):
-        item = re.compile(
-            r"<v8:item>\s*<v8:lang>%s</v8:lang>\s*<v8:content>%s</v8:content>"
-            % (re.escape(code), re.escape(text)))
-        assert item.search(title.group(1)), \
-            "the LocalString title must carry the %s item: %s" % (code, title.group(1))
+    namespaces = {
+        "dcs": "http://v8.1c.ru/8.1/data-composition-system/schema",
+        "dcscor": "http://v8.1c.ru/8.1/data-composition-system/core",
+        "dcsset": "http://v8.1c.ru/8.1/data-composition-system/settings",
+        "v8": "http://v8.1c.ru/8.1/data/core",
+        "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    }
+    xml_root = ET.fromstring(on_disk)
+    variants = {
+        node.findtext("dcsset:name", namespaces=namespaces): node
+        for node in xml_root.findall("dcs:settingsVariant", namespaces)
+    }
+    expected_variants = {"TypedOutput", "TypedOutputRussian"}
+    assert expected_variants <= set(variants), \
+        "the two writes must create their own settings variants: %s" % on_disk[:2400]
+
+    output_values = {}
+    for variant_name in expected_variants:
+        variant = variants[variant_name]
+        output_parameters = variant.find(
+            "dcsset:settings/dcsset:outputParameters", namespaces)
+        assert output_parameters is not None, \
+            "%s must carry output parameters in its own settings: %s" \
+            % (variant_name, on_disk[:2400])
+        item_nodes = output_parameters.findall("dcscor:item", namespaces)
+        parameter_names = [
+            item.findtext("dcscor:parameter", namespaces=namespaces)
+            for item in item_nodes
+        ]
+        assert sorted(parameter_names) == sorted([reported_parameter, "Title"]), \
+            "%s must store both exact English parameter names in its own settings: %s" \
+            % (variant_name, ET.tostring(output_parameters, encoding="unicode"))
+        items = dict(zip(parameter_names, item_nodes))
+        placement_value = items[reported_parameter].find("dcscor:value", namespaces)
+        assert placement_value is not None \
+            and placement_value.get("{%s}type" % namespaces["xsi"]) \
+            == "dcscor:DataCompositionTotalPlacement" \
+            and placement_value.text == reported_literal, \
+            "%s placement must carry DataCompositionTotalPlacement and None: %s" \
+            % (variant_name, ET.tostring(items[reported_parameter], encoding="unicode"))
+        title_value = items["Title"].find("dcscor:value", namespaces)
+        assert title_value is not None \
+            and title_value.get("{%s}type" % namespaces["xsi"]) == "v8:LocalStringType", \
+            "%s title must carry v8:LocalStringType: %s" \
+            % (variant_name, ET.tostring(items["Title"], encoding="unicode"))
+        output_values[variant_name] = {
+            item.findtext("v8:lang", namespaces=namespaces):
+                item.findtext("v8:content", namespaces=namespaces)
+            for item in title_value.findall("v8:item", namespaces)
+        }
+
+    assert _VERTICAL_OVERALL_PLACEMENT_RU not in on_disk and _TITLE_RU not in on_disk, \
+        "language='ru' must not switch parameter names away from the configuration language: %s" \
+        % on_disk[:2400]
+    assert output_values["TypedOutput"] == {
+        "en": "English output title",
+        "ru": "Russian output title",
+    }, "the English-call variant must retain both localized title values: %s" \
+        % output_values["TypedOutput"]
+    assert output_values["TypedOutputRussian"] == {
+        "ru": "Russian-call output title",
+    }, "language='ru' must select ru for the localized value: %s" \
+        % output_values["TypedOutputRussian"]
 
     before_refusal = read_disk(dcs_rel)
     refused = _write(root + "#/variants/TypedOutput/settings/outputParameters",

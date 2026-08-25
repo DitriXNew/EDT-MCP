@@ -649,7 +649,7 @@ public final class DcsStructureReader
      *
      * @return the described type, or {@code ""} when {@code type} is {@code null} or declares no types
      */
-    private static String describeType(TypeDescription type)
+    static String describeType(TypeDescription type)
     {
         if (type == null)
         {

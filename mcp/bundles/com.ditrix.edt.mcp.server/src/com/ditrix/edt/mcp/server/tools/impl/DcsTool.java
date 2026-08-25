@@ -41,6 +41,7 @@ import com.ditrix.edt.mcp.server.utils.DcsFormAppearanceContent;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
 import com.ditrix.edt.mcp.server.utils.DcsModelComparison;
 import com.ditrix.edt.mcp.server.utils.DcsMutationGuard;
+import com.ditrix.edt.mcp.server.utils.DcsOptions;
 import com.ditrix.edt.mcp.server.utils.DcsPresentationParser;
 import com.ditrix.edt.mcp.server.utils.DcsReadProjection;
 import com.ditrix.edt.mcp.server.utils.DcsRootReader;
@@ -80,13 +81,14 @@ public class DcsTool implements IMcpTool
     private static final String FORMAT_XML = "xml"; //$NON-NLS-1$
 
     private static final String ACTION_GET = "get"; //$NON-NLS-1$
+    private static final String ACTION_OPTIONS = "options"; //$NON-NLS-1$
     private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
     private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
     private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$
     private static final String ACTION_REMOVE = "remove"; //$NON-NLS-1$
 
     private static final String[] ACTIONS = {
-        ACTION_GET, ACTION_UPSERT, ACTION_UPDATE, ACTION_REPLACE, ACTION_REMOVE
+        ACTION_GET, ACTION_OPTIONS, ACTION_UPSERT, ACTION_UPDATE, ACTION_REPLACE, ACTION_REMOVE
     };
 
     private static final String[] TYPES = {
@@ -121,19 +123,23 @@ public class DcsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .stringProperty(McpKeys.PROJECT_NAME, "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_FQN, "DCS root FQN, optionally followed by an RFC-6901 '#/...' pointer.", true) //$NON-NLS-1$
-            .enumProperty(KEY_ACTION, "Operation; replace resets omitted members, remove deletes one node.", //$NON-NLS-1$
+            .enumProperty(KEY_ACTION, "Operation; options lists version-aware writable vocabularies, " //$NON-NLS-1$
+                + "replace resets omitted members, and remove deletes one node.", //$NON-NLS-1$
                 true, ACTIONS)
             .enumProperty(KEY_TYPE, "Target kind; body shapes are in get_tool_guide('dcs').", true, TYPES) //$NON-NLS-1$
-            .objectProperty(KEY_BODY, "Mutation body; forbidden for get/remove and required by the other mutations.") //$NON-NLS-1$
+            .objectProperty(KEY_BODY, "Mutation body; forbidden for get/options/remove and " //$NON-NLS-1$
+                + "required by the other mutations.") //$NON-NLS-1$
             .stringProperty(KEY_EXPECTED_HASH, "Hash from get; conditionally required for mutation actions.") //$NON-NLS-1$
-            .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for presentations.") //$NON-NLS-1$
+            .stringProperty(KEY_LANGUAGE, "Optional declared configuration language code for localized " //$NON-NLS-1$
+                + "values and presentations; parameter names always use the configuration's default " //$NON-NLS-1$
+                + "language code.") //$NON-NLS-1$
             .enumProperty(KEY_FORMAT, "Read output; defaults to md. xml is only for a bare schema get.", //$NON-NLS-1$
                 false, FORMAT_MD, FORMAT_XML)
             .integerProperty(McpKeys.LIMIT,
                 "Markdown collection/summary item count (default 100, maximum 1000), or " //$NON-NLS-1$
                     + "exact-value/XML chunk characters (default 40000, bounded by the output envelope).") //$NON-NLS-1$
             .integerProperty(KEY_OFFSET,
-                "Zero-based collection/summary item or exact-value/XML character offset for get.") //$NON-NLS-1$
+                "Zero-based item or character offset for get/options pagination.") //$NON-NLS-1$
             .build();
     }
 
@@ -233,6 +239,11 @@ public class DcsTool implements IMcpTool
         {
             display.syncExec(() -> result.set(executeGet(projectName, parsed.address(), type,
                 language, format, limit, offset)));
+        }
+        else if (ACTION_OPTIONS.equals(action))
+        {
+            display.syncExec(() -> result.set(executeOptions(projectName, parsed.address(), type,
+                language, limit, offset)));
         }
         else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
             || ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action))
@@ -338,21 +349,24 @@ public class DcsTool implements IMcpTool
             return ToolResult.error("expectedHash '" + expectedHash //$NON-NLS-1$
                 + "' is invalid. Re-run dcs action='get' and copy its 20-character lowercase hash.").toJson(); //$NON-NLS-1$
         }
-        if (ACTION_GET.equals(action))
+        if (ACTION_GET.equals(action) || ACTION_OPTIONS.equals(action))
         {
             if (hasBody)
             {
-                return ToolResult.error("body is not allowed for action='get'. Omit body and use fqn/type to select the read target.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("body is not allowed for action='" + action //$NON-NLS-1$
+                    + "'. Omit body and use fqn/type to select the read target.").toJson(); //$NON-NLS-1$
             }
             if (hasHash)
             {
-                return ToolResult.error("expectedHash is not accepted by action='get'. Omit it; get returns the current hash.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("expectedHash is not accepted by action='" + action //$NON-NLS-1$
+                    + "'. Omit it; reads do not mutate the target.").toJson(); //$NON-NLS-1$
             }
             return null;
         }
         if (hasLimit || hasOffset)
         {
-            return ToolResult.error("limit/offset apply only to action='get'. Omit them from action='" //$NON-NLS-1$
+            return ToolResult.error("limit/offset apply only to action='get' or action='options'. " //$NON-NLS-1$
+                + "Omit them from action='" //$NON-NLS-1$
                 + action + "'.").toJson(); //$NON-NLS-1$
         }
         if (ACTION_REMOVE.equals(action))
@@ -577,7 +591,7 @@ public class DcsTool implements IMcpTool
             DcsTargetResolver.Target target = resolution.target();
             DcsPresentationParser.LanguageContext languages =
                 new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
-                    effectiveLanguage);
+                    effectiveLanguage, context.scope().defaultLanguageCode());
             IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
             IV8Project v8Project = v8ProjectManager == null
                 ? null : v8ProjectManager.getProject(context.project());
@@ -975,6 +989,62 @@ public class DcsTool implements IMcpTool
             + (written.settingsFqn != null) + "`\n\n**Applied:** " //$NON-NLS-1$
             + (written.applied.isEmpty() ? "none" : String.join(", ", written.applied)) //$NON-NLS-1$ //$NON-NLS-2$
             + localeUnusedNote(context, languages);
+    }
+
+    private static String executeOptions(String projectName, DcsAddress address, String type,
+        String language, Integer limit, int offset)
+    {
+        try
+        {
+            ProjectContext.ConfigurationResult context = ProjectContext.resolveMetadataRoot(projectName);
+            if (!context.ok()) return context.errorJson();
+            String effectiveLanguage = resolveLanguage(context, language);
+            if (effectiveLanguage != null && effectiveLanguage.startsWith("ERROR:")) //$NON-NLS-1$
+            {
+                return ToolResult.error(effectiveLanguage.substring("ERROR:".length())).toJson(); //$NON-NLS-1$
+            }
+            IBmModelManager manager = Activator.getDefault().getBmModelManager();
+            IBmModel model = manager == null ? null : manager.getModel(context.project());
+            if (model == null)
+            {
+                return ToolResult.error("BM model is not available for project '" + projectName //$NON-NLS-1$
+                    + "'. Wait for EDT to finish opening the project, then retry dcs " //$NON-NLS-1$
+                    + "action='options'.").toJson(); //$NON-NLS-1$
+            }
+            DcsTargetResolver.Resolution resolution = DcsTargetResolver.resolve(context, model, address);
+            if (!resolution.isSuccess())
+            {
+                return ToolResult.error(resolution.failure().message()).toJson();
+            }
+            IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+            IV8Project v8Project = v8ProjectManager == null
+                ? null : v8ProjectManager.getProject(context.project());
+            Version version = v8Project == null ? null : v8Project.getVersion();
+            if (version == null)
+            {
+                return ToolResult.error("The platform version is unavailable for DCS target '" //$NON-NLS-1$
+                    + resolution.target().normalizedRootFqn()
+                    + "'. Wait for EDT to finish loading the project, then retry.").toJson(); //$NON-NLS-1$
+            }
+            DcsTargetResolver.Target target = resolution.target();
+            return BmTransactions.executeAndRollback(model, "DcsOptions", (tx, monitor) -> //$NON-NLS-1$
+            {
+                DcsRootReader.Result read = DcsRootReader.read(tx, target);
+                if (!read.isSuccess()) return ToolResult.error(read.error()).toJson();
+                DcsOptions.Result options = DcsOptions.render(target.normalizedRootFqn(),
+                    target.kind(), read.root(), address, type, context.scope().defaultLanguageCode(),
+                    version, limit, offset);
+                return options.isSuccess() ? options.markdown()
+                    : ToolResult.error(options.error()).toJson();
+            });
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error reading DCS options for " + address, e); //$NON-NLS-1$
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            return ToolResult.error("Could not read DCS options for '" + address + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                + message + ". Re-open or clean the project, then retry action='options'.").toJson(); //$NON-NLS-1$
+        }
     }
 
     private static String executeFormConditionalAppearanceWrite(

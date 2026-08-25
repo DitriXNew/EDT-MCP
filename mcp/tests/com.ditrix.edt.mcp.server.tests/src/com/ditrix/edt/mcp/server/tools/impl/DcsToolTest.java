@@ -48,7 +48,7 @@ public class DcsToolTest
         "format", "limit", "offset")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     private static final Set<String> ACTIONS = new LinkedHashSet<>(Arrays.asList(
-        "get", "upsert", "update", "replace", "remove")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "get", "options", "upsert", "update", "replace", "remove")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
 
     private static final Set<String> TYPES = new LinkedHashSet<>(Arrays.asList(
         "schema", "dynamicList", "dataSource", "dataSet", "field", "fieldFolder", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$

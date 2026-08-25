@@ -11,7 +11,7 @@ Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, a
 | type | yes | string (one of: schema, dynamicList, dataSource, dataSet, field, fieldFolder, parameter, calculatedField, totalField, variant, grouping, selection, filter, dataParameter, order, conditionalAppearance, table, userField, outputParameter, userSettings) | Target kind; body shapes are in get_tool_guide('dcs'). |
 | body | — | object | Mutation body; forbidden for get/remove and required by the other mutations. |
 | expectedHash | — | string | Hash from get; conditionally required for mutation actions. |
-| language | — | string | Optional declared configuration language code for presentations. |
+| language | — | string | Optional declared configuration language code for localized values and presentations; parameter names always use the configuration's default language code. |
 | format | — | string (one of: md, xml) | Read output; defaults to md. xml is only for a bare schema get. |
 | limit | — | integer | Markdown collection/summary item count (default 100, maximum 1000), or exact-value/XML chunk characters (default 40000, bounded by the output envelope). |
 | offset | — | integer | Zero-based collection/summary item or exact-value/XML character offset for get. |
@@ -253,10 +253,24 @@ at `#/items/<index>`. This is distinct from a dynamic-list attribute below that 
 | Action | Meaning | `body` | `expectedHash` | Current support |
 | --- | --- | --- | --- | --- |
 | `get` | Read a root summary, collection page, or full node | Must be absent | Must be absent; the current `hash` is returned | Implemented |
+| `options` | Read version-aware parameter keys, declared types, and enum literals accepted by writes | Must be absent | Must be absent | Conditional appearance, output parameters, and enum-bearing body members; supports `limit`/`offset` |
 | `upsert` | Create by natural key, append to an ordered collection, or partially update an exact target; omitted members stay unchanged | Required | Required for every index-addressed target | Schema, settings, dynamic lists, and form conditional appearance |
 | `update` | Modify an existing node only; never create | Required | Required for every index-addressed target | Schema, settings, dynamic lists, and form conditional appearance |
 | `replace` | Authoritative replacement; omitted values reset and omitted collections clear | Required structured body, or `{xml:"..."}` for a bare schema root | Always required | Schema/settings, form conditional appearance, and a dynamic list below `#/listSettings` |
 | `remove` | Remove exactly one addressed node | Must be absent | Always required | Schema/settings, form conditional appearance, and a dynamic list below `#/listSettings` |
+
+For example, ask the target platform for the output-parameter vocabulary before writing:
+
+```json
+{"projectName":"MyProject","fqn":"Report.Sales","action":"options","type":"outputParameter","limit":100}
+```
+
+The answer uses the project's language spelling and notes that the other English/Russian
+spelling is accepted on input. A schema, managed form, and dynamic list use their own
+conditional-appearance catalogues. The declared value type is the concrete catalogue default
+accepted by the writer. If the platform type description has multiple entries, `options` reports
+that writable type rather than an apparent union; for example, `Text` reports `LocalString`.
+Options are paged rows and never return or require a hash.
 
 `replace` and `remove` act on the settings layer. On a dynamic list that means an address below
 `#/listSettings`; the list's own scalars, fields, calculated fields and parameters take `upsert` or
@@ -313,7 +327,7 @@ ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind
 | `filter` | `{items:[{kind?:"item", left?:ValueSpec, comparisonType?, right?:ValueSpec[], use?, ...ItemScaffold} | {kind:"group", groupType?, use?, items:[...], ...ItemScaffold}], ...HolderScaffold}`. Groups can be nested; items are ordered/indexed. |
 | `dataParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `order` | `{items:[{kind?:"item", field?:ValueSpec, orderType?, use?, viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
-| `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. Schema/settings targets validate `appearance` keys against the schema catalogue; a form root uses EDT's `FormAppearanceParameters` catalogue. Unknown keys are refused and valid keys are listed. A form appearance field reference is accepted but is not validated against the form's data in this release. |
+| `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. `appearance` is `{"ParameterName":AppearanceParameterSpec,...}` as described below. Schema/settings targets validate its keys against the schema catalogue; a form root uses EDT's `FormAppearanceParameters` catalogue. Unknown keys are refused and valid keys are listed. A form appearance field reference is accepted but is not validated against the form's data in this release. |
 | `table` | `{kind?:"table", name?, use?, id?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `id` is the table's real settable platform member. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. |
 | `userField` | Expression field: `{kind:"expression", dataPath, use?, title?:PresentationSpec, detailExpression?, detailExpressionPresentation?, totalExpression?, totalExpressionPresentation?}`. Case field: `{kind:"case", dataPath, use?, title?:PresentationSpec, variants?}`. Items are ordered/indexed. |
 | `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
@@ -335,6 +349,16 @@ body and either the root/collection address (`upsert`) or exact returned node ad
 Enum values are platform literals such as `Equal`, `AndGroup`, `Asc`, `Items`, and
 `Normal`. An invalid comparison, order direction, grouping kind, or similar token is
 rejected; the error names the bad value and lists every allowed platform literal.
+
+`AppearanceParameterSpec` is the parameter's existing typed value plus an optional `use`
+member on the same object. For example, a present-but-disabled color is
+`{"TextColor":{"use":false,"color":{"red":0,"green":128,"blue":0}}}`. For a
+typed value that is normally bare (such as an enum literal or localized string), use
+`{"use":false,"value":<typed-value>}`. Omitting `use` means `true`. The flag belongs to
+the appearance parameter's `DataCompositionParameterValue`, not to the conditional-
+appearance rule. Appearance and output parameter names may be supplied in either English
+or Russian; the stored name follows the configuration's default language code, independently
+of the per-call `language` argument.
 
 ### Settings examples
 
@@ -459,6 +483,8 @@ tree guard, not a cross-EDT-version content identifier.
   project, not language object names. Matching is case-insensitive but output uses the
   configuration's declared spelling. An undeclared code is rejected with the declared
   list. Omit `language` to use the project's default code.
+- `language` selects localized values and presentations only; stored appearance and output
+  parameter names always follow the configuration's default language code.
 - Query text and DCS expressions are preserved exactly. They are not synonym-resolved,
   normalized, or translated; both 1C query-language dialects remain valid data.
 - A write into a language the configuration DECLARES but does not itself use reports
