@@ -811,6 +811,7 @@
         "action": {
           "enum": [
             "get",
+            "options",
             "upsert",
             "update",
             "replace",
@@ -819,7 +820,7 @@
           "type": "string"
         },
         "body": {
-          "description": "Mutation body; forbidden for get/remove and required by the other mutations.",
+          "description": "Mutation body; forbidden for get/options/remove and required by the other mutations.",
           "type": "object"
         },
         "expectedHash": {
