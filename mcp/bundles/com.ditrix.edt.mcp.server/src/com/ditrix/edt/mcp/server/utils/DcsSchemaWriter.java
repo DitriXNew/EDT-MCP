@@ -171,7 +171,9 @@ public final class DcsSchemaWriter
                 return Result.success(null);
             }
         }
-        PayloadResult payload = payload(working, request);
+        DcsWriter.DataSetValidationContext dataSetValidation =
+            new DcsWriter.DataSetValidationContext();
+        PayloadResult payload = payload(working, request, dataSetValidation);
         if (payload.error != null)
         {
             return Result.failure(payload.error);
@@ -179,7 +181,7 @@ public final class DcsSchemaWriter
         FolderPlanResult folders = extractFieldFolders(working, payload.payload, request);
         if (folders.error != null) return Result.failure(folders.error);
         DcsWriter.Result applied = DcsWriter.apply(working, folders.payload, resolver,
-            request.languages, version, namedColors);
+            request.languages, version, namedColors, dataSetValidation);
         if (applied.hasError()) return Result.failureJson(applied.error);
         String folderError = applyFieldFolders(working, folders.folders);
         if (folderError != null) return Result.failure(folderError);
@@ -858,7 +860,9 @@ public final class DcsSchemaWriter
             else if ("object".equals(kind)) //$NON-NLS-1$
             {
                 replacement = DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetObject();
-                if (!request.body.has(KEY_OBJECT_NAME)) request.body.addProperty(KEY_OBJECT_NAME, ""); //$NON-NLS-1$
+                // Exact replace rebuilds the data set from this body. Omitting objectName therefore
+                // resets it to null; the blank replacement is recorded by normalizeDataSet so the
+                // shared shape validator accepts that omission without inventing an empty element.
             }
             else if ("union".equals(kind)) //$NON-NLS-1$
             {
@@ -1072,7 +1076,8 @@ public final class DcsSchemaWriter
         target.getTotalFields().addAll(EcoreUtil.copyAll(source.getTotalFields()));
     }
 
-    private static PayloadResult payload(DataCompositionSchema schema, Request request)
+    private static PayloadResult payload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
     {
         switch (request.type)
         {
@@ -1082,15 +1087,15 @@ public final class DcsSchemaWriter
                     return PayloadResult.failure("type='schema' targets the bare root, not '" //$NON-NLS-1$
                         + request.address + "'. Remove the '#/...' fragment."); //$NON-NLS-1$
                 }
-                return normalizeSchemaBody(schema, request);
+                return normalizeSchemaBody(schema, request, dataSetValidation);
             case TYPE_DATA_SOURCE:
                 return namedPayload(schema, request, "dataSources", KEY_NAME); //$NON-NLS-1$
             case TYPE_DATA_SET:
-                return dataSetPayload(schema, request);
+                return dataSetPayload(schema, request, dataSetValidation);
             case TYPE_FIELD:
-                return fieldPayload(schema, request);
+                return fieldPayload(schema, request, dataSetValidation);
             case TYPE_FIELD_FOLDER:
-                return fieldFolderPayload(schema, request);
+                return fieldFolderPayload(schema, request, dataSetValidation);
             case TYPE_PARAMETER:
                 return namedPayload(schema, request, "parameters", KEY_NAME); //$NON-NLS-1$
             case TYPE_CALCULATED_FIELD:
@@ -1102,7 +1107,8 @@ public final class DcsSchemaWriter
         }
     }
 
-    private static PayloadResult normalizeSchemaBody(DataCompositionSchema schema, Request request)
+    private static PayloadResult normalizeSchemaBody(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
     {
         JsonObject body = request.body.deepCopy();
         if (body.has("dataSources") && body.get("dataSources").isJsonArray()) //$NON-NLS-1$ //$NON-NLS-2$
@@ -1118,7 +1124,7 @@ public final class DcsSchemaWriter
             {
                 String name = string(entry, KEY_NAME);
                 DataSet existing = findDataSet(schema, name);
-                String error = normalizeDataSet(entry, existing, name);
+                String error = normalizeDataSet(entry, existing, name, dataSetValidation);
                 if (error != null)
                 {
                     return PayloadResult.failure(error);
@@ -1156,7 +1162,8 @@ public final class DcsSchemaWriter
         return PayloadResult.success(wrap(collection, entry));
     }
 
-    private static PayloadResult dataSetPayload(DataCompositionSchema schema, Request request)
+    private static PayloadResult dataSetPayload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
     {
         List<String> path = request.address.segments();
         if (isDataSetPath(path))
@@ -1186,15 +1193,16 @@ public final class DcsSchemaWriter
             }
             JsonObject entry = request.body.deepCopy();
             entry.addProperty(KEY_NAME, keyed.key);
-            String error = normalizeDataSet(entry, existing, keyed.key);
-            if (error != null) return PayloadResult.failure(error);
             List<DataSet> parents = existing == null ? target.dataSets
                 : target.dataSets.subList(0, target.dataSets.size() - 1);
+            String error = normalizeDataSet(entry, existing, keyed.key,
+                parents.isEmpty() ? dataSetValidation : null);
+            if (error != null) return PayloadResult.failure(error);
             JsonObject dataSet = nestedDataSetPayload(parents, entry);
             if (!parents.isEmpty())
             {
                 DataSet root = parents.get(0);
-                error = normalizeDataSet(dataSet, root, root.getName());
+                error = normalizeDataSet(dataSet, root, root.getName(), dataSetValidation);
                 if (error != null) return PayloadResult.failure(error);
             }
             return PayloadResult.success(wrap("dataSets", dataSet)); //$NON-NLS-1$
@@ -1217,22 +1225,42 @@ public final class DcsSchemaWriter
         }
         JsonObject entry = request.body.deepCopy();
         entry.addProperty(KEY_NAME, keyed.key);
-        String error = normalizeDataSet(entry, existing, keyed.key);
+        String error = normalizeDataSet(entry, existing, keyed.key, dataSetValidation);
         return error == null ? PayloadResult.success(wrap("dataSets", entry)) //$NON-NLS-1$
             : PayloadResult.failure(error);
     }
 
-    private static String normalizeDataSet(JsonObject entry, DataSet existing, String name)
+    private static String normalizeDataSet(JsonObject entry, DataSet existing, String name,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        return normalizeDataSet(entry, existing, name, dataSetValidation,
+            Collections.<String>emptyList());
+    }
+
+    private static String normalizeDataSet(JsonObject entry, DataSet existing, String name,
+        DcsWriter.DataSetValidationContext dataSetValidation, List<String> parentPath)
     {
         if (name == null)
         {
             return null; // DcsWriter reports the malformed natural key with its exact body location.
         }
+        List<String> dataSetPath = new ArrayList<>(parentPath);
+        dataSetPath.add(name);
         if (existing instanceof DataCompositionSchemaDataSetObject)
         {
             entry.addProperty(KEY_TYPE, "object"); //$NON-NLS-1$
             DataCompositionSchemaDataSetObject object = (DataCompositionSchemaDataSetObject)existing;
-            if (!entry.has(KEY_OBJECT_NAME)) entry.addProperty(KEY_OBJECT_NAME, object.getObjectName());
+            if (!entry.has(KEY_OBJECT_NAME))
+            {
+                if (object.getObjectName() != null)
+                {
+                    entry.addProperty(KEY_OBJECT_NAME, object.getObjectName());
+                }
+                else if (dataSetValidation != null)
+                {
+                    dataSetValidation.allowMissingObjectName(dataSetPath);
+                }
+            }
             if (!entry.has(KEY_DATA_SOURCE) && object.getDataSource() != null)
                 entry.addProperty(KEY_DATA_SOURCE, object.getDataSource());
             mergeDataSetFields(entry, existing);
@@ -1240,7 +1268,8 @@ public final class DcsSchemaWriter
         }
         if (existing instanceof DataCompositionSchemaDataSetUnion)
         {
-            return normalizeUnionDataSet(entry, (DataCompositionSchemaDataSetUnion)existing, name);
+            return normalizeUnionDataSet(entry, (DataCompositionSchemaDataSetUnion)existing, name,
+                dataSetValidation, dataSetPath);
         }
         if (existing != null && !(existing instanceof DataCompositionSchemaDataSetQuery))
         {
@@ -1254,7 +1283,7 @@ public final class DcsSchemaWriter
         }
         if (existing == null && "union".equalsIgnoreCase(declaredType)) //$NON-NLS-1$
         {
-            return normalizeUnionDataSet(entry, null, name);
+            return normalizeUnionDataSet(entry, null, name, dataSetValidation, dataSetPath);
         }
         DataCompositionSchemaDataSetQuery query = (DataCompositionSchemaDataSetQuery)existing;
         entry.addProperty(KEY_TYPE, "query"); //$NON-NLS-1$
@@ -1283,7 +1312,8 @@ public final class DcsSchemaWriter
     }
 
     private static String normalizeUnionDataSet(JsonObject entry,
-        DataCompositionSchemaDataSetUnion existing, String name)
+        DataCompositionSchemaDataSetUnion existing, String name,
+        DcsWriter.DataSetValidationContext dataSetValidation, List<String> dataSetPath)
     {
         if (entry.has(KEY_QUERY))
         {
@@ -1303,7 +1333,7 @@ public final class DcsSchemaWriter
         {
             String childName = string(child, KEY_NAME);
             DataSet current = existing == null ? null : findDataSet(existing.getItems(), childName);
-            String error = normalizeDataSet(child, current, childName);
+            String error = normalizeDataSet(child, current, childName, dataSetValidation, dataSetPath);
             if (error != null) return error;
         }
         return null;
@@ -1422,7 +1452,8 @@ public final class DcsSchemaWriter
         }
     }
 
-    private static PayloadResult fieldPayload(DataCompositionSchema schema, Request request)
+    private static PayloadResult fieldPayload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
     {
         List<String> segments = request.address.segments();
         if (!isFieldPath(segments, false) && !isFieldPath(segments, true))
@@ -1484,12 +1515,13 @@ public final class DcsSchemaWriter
         JsonObject dataSet = nestedDataSetPayload(
             target.dataSets.subList(0, target.dataSets.size() - 1), leaf);
         DataSet root = target.dataSets.get(0);
-        String normalizeError = normalizeDataSet(dataSet, root, root.getName());
+        String normalizeError = normalizeDataSet(dataSet, root, root.getName(), dataSetValidation);
         if (normalizeError != null) return PayloadResult.failure(normalizeError);
         return PayloadResult.success(wrap("dataSets", dataSet)); //$NON-NLS-1$
     }
 
-    private static PayloadResult fieldFolderPayload(DataCompositionSchema schema, Request request)
+    private static PayloadResult fieldFolderPayload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
     {
         List<String> segments = request.address.segments();
         if (!isFieldPath(segments, false) && !isFieldPath(segments, true))
@@ -1539,7 +1571,7 @@ public final class DcsSchemaWriter
         JsonObject dataSet = nestedDataSetPayload(
             target.dataSets.subList(0, target.dataSets.size() - 1), leaf);
         DataSet root = target.dataSets.get(0);
-        String normalizeError = normalizeDataSet(dataSet, root, root.getName());
+        String normalizeError = normalizeDataSet(dataSet, root, root.getName(), dataSetValidation);
         return normalizeError == null ? PayloadResult.success(wrap("dataSets", dataSet)) //$NON-NLS-1$
             : PayloadResult.failure(normalizeError);
     }

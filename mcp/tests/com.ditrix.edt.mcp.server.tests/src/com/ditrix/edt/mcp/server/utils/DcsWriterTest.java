@@ -166,7 +166,7 @@ public class DcsWriterTest
         assertEquals("Goods", goods.getDataPath()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Goods", goods.getField()); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a titled field must carry a Presentation", goods.getTitle()); //$NON-NLS-1$
-        assertEquals("Goods", goods.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Goods", presentationText(goods.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a role must be created", goods.getRole()); //$NON-NLS-1$
         assertTrue("the dimension role flag must be set", goods.getRole().isDimension()); //$NON-NLS-1$
 
@@ -195,7 +195,7 @@ public class DcsWriterTest
             param.getValueType().getStringQualifiers());
         assertEquals(10, param.getValueType().getStringQualifiers().getLength());
         assertNotNull("a titled parameter must carry a Presentation", param.getTitle()); //$NON-NLS-1$
-        assertEquals("Period", param.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Period", presentationText(param.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(DataCompositionParameterUse.AUTO, param.getUse());
     }
 
@@ -244,7 +244,7 @@ public class DcsWriterTest
         assertEquals("Margin", field.getDataPath()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Revenue - Cost", field.getExpression()); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a titled calculated field must carry a Presentation", field.getTitle()); //$NON-NLS-1$
-        assertEquals("Margin", field.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Margin", presentationText(field.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -290,7 +290,7 @@ public class DcsWriterTest
         // data set field's find-or-update discipline: only supplied members are overwritten.
         assertNotNull("a title set by an earlier apply must survive an update that omits it", //$NON-NLS-1$
             field.getTitle());
-        assertEquals("Margin", field.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Margin", presentationText(field.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -384,7 +384,7 @@ public class DcsWriterTest
         assertTrue(field.getOrderExpressions().get(0).isAutoOrder());
         assertEquals("Hierarchy", field.getInHierarchyDataSet()); //$NON-NLS-1$
         assertEquals("Parent", field.getInHierarchyDataSetParameter()); //$NON-NLS-1$
-        assertEquals("Alpha", field.getAvailableValues().get(0).getPresentation().getValue()); //$NON-NLS-1$
+        assertEquals("Alpha", presentationText(field.getAvailableValues().get(0).getPresentation())); //$NON-NLS-1$
         assertTrue(field.getAvailableValues().get(0).getValue() instanceof StringValue);
         assertEquals("P", field.getInputParameters().getItems().get(0).getParameter().getValue()); //$NON-NLS-1$
 
@@ -832,4 +832,18 @@ public class DcsWriterTest
         assertNotNull("a bad use token must fail the pure parse", parsed.error); //$NON-NLS-1$
         assertNull(parsed.plan);
     }
+
+    /**
+     * A presentation's text now always lives in its LocalString, keyed by the project's default
+     * language: EDT never writes the neutral Presentation.value form, and shipped consumers
+     * dereference getLocalValue() without a guard.
+     */
+    private static String presentationText(com._1c.g5.v8.dt.dcs.model.core.Presentation presentation)
+    {
+        if (presentation == null || presentation.getLocalValue() == null) return null;
+        java.util.Iterator<String> values =
+            presentation.getLocalValue().getContent().values().iterator();
+        return values.hasNext() ? values.next() : null;
+    }
+
 }

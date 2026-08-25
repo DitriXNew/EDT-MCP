@@ -864,7 +864,8 @@ public final class DcsSettingsWriter
             return "action='update' could not find variant '" + name + "'. Existing variants: " //$NON-NLS-1$ //$NON-NLS-2$
                 + variantNames(variants) + ". Use action='upsert' to create it."; //$NON-NLS-1$
         }
-        SettingsVariant variant = index < 0 || ACTION_REPLACE.equals(action)
+        boolean buildsFresh = index < 0 || ACTION_REPLACE.equals(action);
+        SettingsVariant variant = buildsFresh
             ? DcsFactory.eINSTANCE.createSettingsVariant()
             : EcoreUtil.copy(variants.get(index));
         variant.setName(name);
@@ -877,6 +878,18 @@ public final class DcsSettingsWriter
                 return presentation.error;
             }
             variant.setPresentation(presentation.value);
+        }
+        // Checking the RESOLVED presentation, not merely that the member was supplied: the parser
+        // reports success with a null plan for JSON null, "" and {} alike, so a presence-only guard
+        // still lets all three through and stores a presentation-less variant - the shape that makes
+        // the platform's DataCompositionNameVariantDefaultCheck throw and stop validating the schema.
+        // A variant that ALREADY had none and whose body does not mention it is left alone, so this
+        // never refuses over a member the caller never touched.
+        if (variant.getPresentation() == null && (buildsFresh || body.has(KEY_PRESENTATION)))
+        {
+            return "Variant '" + name + "' at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                + "' needs a non-empty 'presentation'. Pass a string or a {languageCode: text} map; " //$NON-NLS-1$
+                + "null, an empty string and {} all leave the variant without one."; //$NON-NLS-1$
         }
         if (body.has("settings")) //$NON-NLS-1$
         {
@@ -893,7 +906,7 @@ public final class DcsSettingsWriter
             }
             variant.setSettings(settings.settings());
         }
-        else if (variant.getSettings() == null && (index < 0 || ACTION_REPLACE.equals(action)))
+        else if (variant.getSettings() == null && buildsFresh)
         {
             variant.setSettings(DcsFactory.eINSTANCE.createDataCompositionSettings());
         }

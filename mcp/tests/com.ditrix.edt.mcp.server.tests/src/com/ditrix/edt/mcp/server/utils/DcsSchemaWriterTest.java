@@ -153,6 +153,84 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testPartialUpsertKeepsMissingObjectNameNull()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetObject object = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetObject();
+        object.setName("Products"); //$NON-NLS-1$
+        schema.getDataSets().add(object);
+
+        DcsSchemaWriter.Result result = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Products", //$NON-NLS-1$
+            "{\"fields\":[{\"dataPath\":\"Code\"}]}"); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        DataCompositionSchemaDataSetObject updated =
+            (DataCompositionSchemaDataSetObject)schema.getDataSets().get(0);
+        assertNull(updated.getObjectName());
+        assertEquals("Code", ((DataCompositionSchemaDataSetField)updated.getFields().get(0)) //$NON-NLS-1$
+            .getDataPath());
+    }
+
+    @Test
+    public void testNestedUnionPartialUpsertKeepsMissingObjectNameNull()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetUnion union = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetUnion();
+        union.setName("AllProducts"); //$NON-NLS-1$
+        DataCompositionSchemaDataSetObject object = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetObject();
+        object.setName("Products"); //$NON-NLS-1$
+        union.getItems().add(object);
+        schema.getDataSets().add(union);
+
+        DcsSchemaWriter.Result result = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/AllProducts/items/Products", //$NON-NLS-1$
+            "{\"fields\":[{\"dataPath\":\"Ref\"}]}"); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        DataCompositionSchemaDataSetObject updated = (DataCompositionSchemaDataSetObject)
+            ((DataCompositionSchemaDataSetUnion)schema.getDataSets().get(0)).getItems().get(0);
+        assertNull(updated.getObjectName());
+        assertEquals("Ref", ((DataCompositionSchemaDataSetField)updated.getFields().get(0)) //$NON-NLS-1$
+            .getDataPath());
+    }
+
+    @Test
+    public void testCreateObjectDataSetWithoutObjectNameIsRefused()
+    {
+        DataCompositionSchema schema = newSchema();
+
+        DcsSchemaWriter.Result result = apply(schema, "upsert", "dataSet", "Report.Sales", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "{\"name\":\"Products\",\"type\":\"object\"}"); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains(
+            "needs an 'objectName' member")); //$NON-NLS-1$
+        assertTrue(schema.getDataSets().isEmpty());
+    }
+
+    @Test
+    public void testExactObjectDataSetReplaceOmissionResetsObjectNameToNull()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetObject object = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetObject();
+        object.setName("Products"); //$NON-NLS-1$
+        object.setObjectName("Catalog.Products"); //$NON-NLS-1$
+        schema.getDataSets().add(object);
+
+        DcsSchemaWriter.Result result = apply(schema, "replace", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/dataSets/Products", "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(result.error(), result.isSuccess());
+        assertNull(((DataCompositionSchemaDataSetObject)schema.getDataSets().get(0))
+            .getObjectName());
+    }
+
+    @Test
     public void testSchemaUpsertCreatesAndRecursivelyUpsertsUnionItemsAndFields()
     {
         DataCompositionSchema schema = newSchema();

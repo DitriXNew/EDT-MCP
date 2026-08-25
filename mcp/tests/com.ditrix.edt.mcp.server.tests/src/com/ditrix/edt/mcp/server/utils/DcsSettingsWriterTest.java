@@ -117,6 +117,91 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testCreatingVariantWithoutPresentationIsRefused()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+
+        DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "upsert", //$NON-NLS-1$
+            "variant", address("Report.Sales"), json("{\"name\":\"Operational\"}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("non-empty 'presentation'")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("string")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("{languageCode: text} map")); //$NON-NLS-1$
+        assertTrue(schema.getSettingsVariants().isEmpty());
+    }
+
+    @Test
+    public void testReplacingVariantWithoutPresentationIsRefused()
+    {
+        DataCompositionSchema schema = schemaWithVariant();
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "replace", //$NON-NLS-1$
+            "variant", address("Report.Sales#/variants/Operational"), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"name\":\"Operational\"}"), LANGUAGES); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("non-empty 'presentation'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    /**
+     * A presence-only guard is not enough: DcsPresentationParser reports SUCCESS with a null plan for
+     * JSON null, for "" and for {} alike, so each of these supplies the member and still stores a
+     * variant with no presentation - the shape that makes the platform's variant check throw.
+     */
+    @Test
+    public void testCreatingVariantWithAnEmptyPresentationFormIsRefused()
+    {
+        for (String form : new String[] {"null", "\"\"", "{}"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+
+            DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "upsert", //$NON-NLS-1$
+                "variant", address("Report.Sales"), //$NON-NLS-1$ //$NON-NLS-2$
+                json("{\"name\":\"Operational\",\"presentation\":" + form + "}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertFalse("presentation:" + form + " must not create a variant", result.isSuccess()); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(result.error(), result.error().contains("non-empty 'presentation'")); //$NON-NLS-1$
+            assertTrue(schema.getSettingsVariants().isEmpty());
+        }
+    }
+
+    /** Clearing a presentation an existing variant HAS would create the same broken shape. */
+    @Test
+    public void testClearingAnExistingVariantPresentationIsRefused()
+    {
+        DataCompositionSchema schema = schemaWithVariant();
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "update", //$NON-NLS-1$
+            "variant", address("Report.Sales#/variants/Operational"), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"presentation\":\"\"}"), LANGUAGES); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("non-empty 'presentation'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testUpdatingExistingNullPresentationVariantMayOmitPresentation()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        SettingsVariant legacy = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createSettingsVariant();
+        legacy.setName("Legacy"); //$NON-NLS-1$
+        schema.getSettingsVariants().add(legacy);
+
+        DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "update", //$NON-NLS-1$
+            "variant", address("Report.Sales#/variants/Legacy"), json("{}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue(result.error(), result.isSuccess());
+        result.plan().commit(schema);
+        assertNull(schema.getSettingsVariants().get(0).getPresentation());
+    }
+
+    @Test
     public void testSchemaBodyRefusesDuplicateVariantNaturalKeysBeforeApplyingEntries()
     {
         DataCompositionSchema schema = schemaWithVariant();
@@ -600,7 +685,7 @@ public class DcsSettingsWriterTest
     private static DataCompositionSchema schemaWithVariant()
     {
         DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
-        JsonObject variant = json("{\"name\":\"Operational\"}"); //$NON-NLS-1$
+        JsonObject variant = json("{\"name\":\"Operational\",\"presentation\":\"Operational view\"}"); //$NON-NLS-1$
         variant.add("settings", settingsBody()); //$NON-NLS-1$
         DcsSettingsWriter.SchemaResult result = DcsSettingsWriter.planSchema(schema, "upsert", //$NON-NLS-1$
             "variant", address("Report.Sales"), variant, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
@@ -979,7 +1064,7 @@ public class DcsSettingsWriterTest
         DataCompositionConditionalAppearance holder = ((DataCompositionGroup)patched.settings()
             .getItems().get(0)).getConditionalAppearance();
         assertTrue(holder.getItems().get(0).isUse());
-        assertEquals("Rule", holder.getItems().get(0).getPresentation().getValue()); //$NON-NLS-1$
+        assertEquals("Rule", presentationText(holder.getItems().get(0).getPresentation())); //$NON-NLS-1$
 
         DcsSettingsWriter.SettingsResult nested = DcsSettingsWriter.planSettings(patched.settings(),
             Arrays.asList("items", "0", "items", "0", "conditionalAppearance"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
@@ -1821,6 +1906,7 @@ public class DcsSettingsWriterTest
 
         JsonObject variantBody = new JsonObject();
         variantBody.addProperty("name", "Protected"); //$NON-NLS-1$ //$NON-NLS-2$
+        variantBody.addProperty("presentation", "Protected settings"); //$NON-NLS-1$ //$NON-NLS-2$
         variantBody.add("settings", replacement.deepCopy()); //$NON-NLS-1$
         DcsSettingsWriter.SchemaResult variantReplace = DcsSettingsWriter.planSchema(schema,
             "replace", "variant", address(root + "#/variants/Protected"), variantBody, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2084,4 +2170,18 @@ public class DcsSettingsWriterTest
         assertTrue(parsed.failure() == null ? source : parsed.failure().message(), parsed.isSuccess());
         return parsed.address();
     }
+
+    /**
+     * A presentation's text now always lives in its LocalString, keyed by the project's default
+     * language: EDT never writes the neutral Presentation.value form, and shipped consumers
+     * dereference getLocalValue() without a guard.
+     */
+    private static String presentationText(com._1c.g5.v8.dt.dcs.model.core.Presentation presentation)
+    {
+        if (presentation == null || presentation.getLocalValue() == null) return null;
+        java.util.Iterator<String> values =
+            presentation.getLocalValue().getContent().values().iterator();
+        return values.hasNext() ? values.next() : null;
+    }
+
 }

@@ -104,7 +104,25 @@ public final class DcsPresentationParser
                     + "' must be a string or a {languageCode:text} object."); //$NON-NLS-1$
             }
             String text = primitive.getAsString();
-            return ParseResult.success(text.isEmpty() ? null : Plan.neutral(text));
+            if (text.isEmpty())
+            {
+                return ParseResult.success(null);
+            }
+            // A plain string is stored under the project's OWN default language, not as a neutral
+            // Presentation.value. EDT never writes the neutral form - 41940 of 41940 presentation
+            // and title elements in ERP 2.5.16 are LocalStrings - and shipped consumers rely on
+            // that: the platform's DataCompositionNameVariantDefaultCheck dereferences
+            // getLocalValue().getContent() with no guard, so a neutral value makes the whole check
+            // throw and stop validating the schema. Our own localized parameter value refused it
+            // outright for the same reason.
+            String code = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
+            Map<String, String> single = new LinkedHashMap<>();
+            single.put(code, text);
+            if (languages != null)
+            {
+                languages.record(code);
+            }
+            return ParseResult.success(Plan.localized(single));
         }
         if (!element.isJsonObject())
         {
@@ -178,17 +196,10 @@ public final class DcsPresentationParser
     {
         Presentation presentation =
             com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createPresentation();
-        if (plan.neutral != null)
-        {
-            presentation.setValue(plan.neutral);
-        }
-        else
-        {
-            LocalString local =
-                com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString();
-            plan.localized.forEach(local.getContent()::put);
-            presentation.setLocalValue(local);
-        }
+        LocalString local =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createLocalString();
+        plan.localized.forEach(local.getContent()::put);
+        presentation.setLocalValue(local);
         return presentation;
     }
 
@@ -282,24 +293,17 @@ public final class DcsPresentationParser
     /** Validated presentation data; detached from EMF until {@link #build(Plan)}. */
     public static final class Plan
     {
-        private final String neutral;
         private final Map<String, String> localized;
 
-        private Plan(String neutral, Map<String, String> localized)
+        private Plan(Map<String, String> localized)
         {
-            this.neutral = neutral;
-            this.localized = localized == null ? null
+            this.localized = localized == null ? Collections.<String, String>emptyMap()
                 : Collections.unmodifiableMap(new LinkedHashMap<>(localized));
-        }
-
-        private static Plan neutral(String value)
-        {
-            return new Plan(value, null);
         }
 
         private static Plan localized(Map<String, String> value)
         {
-            return new Plan(null, value);
+            return new Plan(value);
         }
     }
 

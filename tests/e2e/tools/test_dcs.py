@@ -638,7 +638,10 @@ def test_report_summary_collection_pagination_and_pointer_drill_down():
 def test_cut_report_summary_section_names_its_local_continuation_offsets():
     root = _seed_report("E2EDcsSummarySectionMarkers")
     authored = _write(root, "upsert", "schema", {
-        "variants": [{"name": "Variant%d" % index} for index in range(8)],
+        "variants": [{
+            "name": "Variant%d" % index,
+            "presentation": "Paged variant %d" % index,
+        } for index in range(8)],
     })
     assert_ok(authored, "seed eight variants for a section-local paging signal")
 
@@ -705,6 +708,7 @@ def test_large_variant_settings_exact_read_is_complete_and_has_no_duplicate_node
     authored = _write(root, "upsert", "schema", {
         "variants": [{
             "name": variant_name,
+            "presentation": "ERP-shaped settings",
             "settings": {"selection": {"items": items}},
         }],
     })
@@ -1490,6 +1494,27 @@ def test_total_field_and_validation_failure_is_atomic():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_variant_create_without_presentation_is_refused_actionably():
+    root = _seed_report("E2EDcsVariantPresentationRequired")
+    before = _get(root, "schema")
+    assert_ok(before, "capture the schema before rejecting an incomplete variant")
+    before_diff = diff()
+
+    refused = _write(root, "upsert", "variant", {"name": "MissingPresentation"})
+    error = assert_error(refused, "create a variant without presentation")
+    assert_error_quality(
+        error,
+        names=["presentation"],
+        suggests=["string", "languageCode"],
+        ctx="the refusal must name presentation and both accepted shapes")
+
+    after = _get(root, "schema")
+    assert_ok(after, "read the schema after the rejected variant")
+    assert after.text == before.text, "a rejected variant must not reach the EDT model"
+    assert diff() == before_diff, "a rejected variant must not change the exported DCS"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_variant_nested_settings_and_hash_guarded_filter_index_update():
     root = _seed_report("E2EDcsSettings")
     authored = _write(root, "upsert", "variant", {
@@ -2206,6 +2231,7 @@ def test_settings_collection_address_copied_from_outline_renders_a_page():
     root = _seed_report("E2EDcsSettingsCollectionRead")
     authored = _write(root, "upsert", "variant", {
         "name": "Readable",
+        "presentation": "Readable settings",
         "settings": {
             "selection": {
                 "items": [{"field": {"kind": "field", "value": "Amount1"}}],
@@ -2486,6 +2512,7 @@ def test_user_field_reference_guard_covers_report_variant_and_dynamic_list_setti
     variant_name = "Protected"
     authored_report = _write(report_root, "upsert", "variant", {
         "name": variant_name,
+        "presentation": "Protected settings",
         "settings": settings,
     })
     assert_ok(authored_report, "seed referenced and free user fields in a report variant")

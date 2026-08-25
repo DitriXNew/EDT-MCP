@@ -304,7 +304,11 @@ marked with `?`; omitted members have the action semantics from the table above.
 Shared localized text and value shapes:
 
 ```text
-PresentationSpec = "neutral text" | {"<languageCode>": "localized text", ...}
+PresentationSpec = "text" | {"<languageCode>": "localized text", ...}
+  A plain string is stored under the configuration's DEFAULT language, not as a
+  language-neutral value: EDT never writes the neutral form and platform checks assume it
+  is absent. It therefore reads back empty in the other languages - pass the map form to
+  set more than one.
 ValueSpec = {"kind": "field|parameter|expression|string|number|boolean|date|null",
              "value": <matching value>}
 ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind":"Number","precision"?:int,"scale"?:int,"nonNegative"?:bool} | {"kind":"Date","fractions"?:"DateTime|Date|Time"} | {"kind":"Boolean"} | {"kind":"Ref|...Ref","ref":string} | {"kind":"ValueStorage|UUID|..."}]}
@@ -321,7 +325,7 @@ ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind
 | `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?}`; natural key is `name`. |
 | `calculatedField` | `{dataPath, title?:PresentationSpec, expression?}`; natural key is `dataPath`. Creation and an exact `replace` must carry `expression`; pass an empty string only when intentionally resetting it. An existing calculated field may keep an empty expression during a partial update. |
 | `totalField` | `{dataPath, expression?, groups?:string[]}`; natural key is `dataPath`. Creation and an exact `replace` must carry a non-empty `expression`. |
-| `variant` | `{name, presentation?:PresentationSpec, settings?}`; natural key is `name`. |
+| `variant` | `{name, presentation:PresentationSpec, settings?}`; natural key is `name`. `presentation` is required when creating or replacing a variant; an update/upsert that finds an existing variant may omit it. |
 | `grouping` | `{name?, use?, id?, groupState?:"Enabled|Disabled|DeletedByUser", groupFields?:{items:[{field?:ValueSpec, use?, groupType?, periodAdditionType?, periodAdditionBegin?:ValueSpec, periodAdditionEnd?:ValueSpec}]}, selection?, filter?, order?, conditionalAppearance?, outputParameters?, items?, ...GroupScaffold}`. `id` and `groupState` are real settable platform members. Groups recurse through `items`; all group addresses use the returned index and hash. |
 | `selection` | `{items:[{kind?:"field", field?:ValueSpec, title?:PresentationSpec, use?, viewMode?} | {kind:"group", field?:ValueSpec, title?:PresentationSpec, use?, placement?, items:[...], viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
 | `filter` | `{items:[{kind?:"item", left?:ValueSpec, comparisonType?, right?:ValueSpec[], use?, ...ItemScaffold} | {kind:"group", groupType?, use?, items:[...], ...ItemScaffold}], ...HolderScaffold}`. Groups can be nested; items are ordered/indexed. |

@@ -253,6 +253,26 @@ public final class DcsWriter
         TypeResolution resolve(JsonElement valueTypeSpec);
     }
 
+    /**
+     * Model-aware exceptions to lifecycle requirements enforced by the otherwise shape-only parser.
+     * Paths use data-set natural keys, including every containing union, so one legacy object data set
+     * cannot relax validation for an unrelated new entry in the same payload.
+     */
+    static final class DataSetValidationContext
+    {
+        private final Set<List<String>> missingObjectNameAllowed = new HashSet<>();
+
+        void allowMissingObjectName(List<String> dataSetPath)
+        {
+            missingObjectNameAllowed.add(new ArrayList<>(dataSetPath));
+        }
+
+        boolean allowsMissingObjectName(List<String> dataSetPath)
+        {
+            return missingObjectNameAllowed.contains(dataSetPath);
+        }
+    }
+
     /** The outcome of a {@link TypeResolver}: a built type or a ready error message. */
     public static final class TypeResolution
     {
@@ -415,12 +435,19 @@ public final class DcsWriter
         DcsPresentationParser.LanguageContext languages, Version version,
         StyleValueBuilder.NamedColorResolver namedColors)
     {
+        return apply(schema, spec, typeResolver, languages, version, namedColors, null);
+    }
+
+    static Result apply(DataCompositionSchema schema, JsonObject spec, TypeResolver typeResolver,
+        DcsPresentationParser.LanguageContext languages, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors, DataSetValidationContext dataSetValidation)
+    {
         if (schema == null)
         {
             return Result.failed(ToolResult.error(
                 "The report has no Data Composition Schema content to write to.").toJson()); //$NON-NLS-1$
         }
-        ParseResult parsed = parse(spec, languages);
+        ParseResult parsed = parse(spec, languages, dataSetValidation);
         if (parsed.error != null)
         {
             return Result.failed(ToolResult.error(parsed.error).toJson());
@@ -2001,6 +2028,12 @@ public final class DcsWriter
 
     static ParseResult parse(JsonObject spec, DcsPresentationParser.LanguageContext languages)
     {
+        return parse(spec, languages, null);
+    }
+
+    private static ParseResult parse(JsonObject spec,
+        DcsPresentationParser.LanguageContext languages, DataSetValidationContext dataSetValidation)
+    {
         if (spec == null)
         {
             return ParseResult.failed("A 'dcs' payload is required, e.g. {dataSets:[{name:'DataSet1'," //$NON-NLS-1$
@@ -2017,7 +2050,7 @@ public final class DcsWriter
         String error = parseDataSources(spec, plan);
         if (error == null)
         {
-            error = parseDataSets(spec, plan, languages);
+            error = parseDataSets(spec, plan, languages, dataSetValidation);
         }
         if (error == null)
         {
@@ -2093,7 +2126,7 @@ public final class DcsWriter
     }
 
     private static String parseDataSets(JsonObject spec, Plan plan,
-        DcsPresentationParser.LanguageContext languages)
+        DcsPresentationParser.LanguageContext languages, DataSetValidationContext dataSetValidation)
     {
         List<JsonObject> entries = objectArray(spec, KEY_DATA_SETS);
         if (entries == null)
@@ -2102,7 +2135,7 @@ public final class DcsWriter
         }
         for (int i = 0; i < entries.size(); i++)
         {
-            String error = parseDataSet(entries.get(i), i, plan, languages);
+            String error = parseDataSet(entries.get(i), i, plan, languages, dataSetValidation);
             if (error != null)
             {
                 return error;
@@ -2112,10 +2145,11 @@ public final class DcsWriter
     }
 
     private static String parseDataSet(JsonObject entry, int index, Plan plan,
-        DcsPresentationParser.LanguageContext languages)
+        DcsPresentationParser.LanguageContext languages, DataSetValidationContext dataSetValidation)
     {
         String where = KEY_DATA_SETS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-        DataSetParseResult result = parseDataSet(entry, where, languages);
+        DataSetParseResult result = parseDataSet(entry, where, languages, dataSetValidation,
+            Collections.<String>emptyList());
         if (result.error == null)
         {
             plan.dataSets.add(result.plan);
@@ -2124,7 +2158,8 @@ public final class DcsWriter
     }
 
     private static DataSetParseResult parseDataSet(JsonObject entry, String where,
-        DcsPresentationParser.LanguageContext languages)
+        DcsPresentationParser.LanguageContext languages, DataSetValidationContext dataSetValidation,
+        List<String> parentPath)
     {
         String unknown = unknownMembers(entry, where, KEY_NAME, KEY_TYPE, KEY_QUERY,
             KEY_DATA_SOURCE, KEY_AUTO_FILL, KEY_FIELDS, KEY_OBJECT_NAME, KEY_ITEMS);
@@ -2140,6 +2175,8 @@ public final class DcsWriter
         {
             return DataSetParseResult.failed(ERR_DATA_SET + where + ERR_NEEDS_NAME);
         }
+        List<String> dataSetPath = new ArrayList<>(parentPath);
+        dataSetPath.add(name);
         String type = nonEmptyString(entry, KEY_TYPE);
         if (type == null)
         {
@@ -2160,10 +2197,13 @@ public final class DcsWriter
             return DataSetParseResult.failed("A query data set (" + where //$NON-NLS-1$
                 + ") member 'query' must be a string. Pass an empty string only when intentionally " //$NON-NLS-1$
                 + "resetting it."); //$NON-NLS-1$
-        if (TYPE_OBJECT.equalsIgnoreCase(type) && !entry.has(KEY_OBJECT_NAME))
+        if (TYPE_OBJECT.equalsIgnoreCase(type) && !entry.has(KEY_OBJECT_NAME)
+            && (dataSetValidation == null
+                || !dataSetValidation.allowsMissingObjectName(dataSetPath)))
             return DataSetParseResult.failed("An object data set (" + where //$NON-NLS-1$
                 + ") needs an 'objectName' member. Pass an empty string only when intentionally resetting it."); //$NON-NLS-1$
-        if (TYPE_OBJECT.equalsIgnoreCase(type) && !isStringMember(entry, KEY_OBJECT_NAME))
+        if (TYPE_OBJECT.equalsIgnoreCase(type) && entry.has(KEY_OBJECT_NAME)
+            && !isStringMember(entry, KEY_OBJECT_NAME))
             return DataSetParseResult.failed("An object data set (" + where //$NON-NLS-1$
                 + ") member 'objectName' must be a string. Pass an empty string only when intentionally " //$NON-NLS-1$
                 + "resetting it."); //$NON-NLS-1$
@@ -2210,7 +2250,7 @@ public final class DcsWriter
         for (int i = 0; i < itemEntries.size(); i++)
         {
             DataSetParseResult child = parseDataSet(itemEntries.get(i),
-                where + ".items[" + i + "]", languages); //$NON-NLS-1$ //$NON-NLS-2$
+                where + ".items[" + i + "]", languages, dataSetValidation, dataSetPath); //$NON-NLS-1$ //$NON-NLS-2$
             if (child.error != null) return child;
             items.add(child.plan);
         }

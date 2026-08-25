@@ -288,7 +288,11 @@ marked with `?`; omitted members have the action semantics from the table above.
 Shared localized text and value shapes:
 
 ```text
-PresentationSpec = "neutral text" | {"<languageCode>": "localized text", ...}
+PresentationSpec = "text" | {"<languageCode>": "localized text", ...}
+  A plain string is stored under the configuration's DEFAULT language, not as a
+  language-neutral value: EDT never writes the neutral form and platform checks assume it
+  is absent. It therefore reads back empty in the other languages - pass the map form to
+  set more than one.
 ValueSpec = {"kind": "field|parameter|expression|string|number|boolean|date|null",
              "value": <matching value>}
 AvailableValueSpec = {"value":ValueSpec, "presentation"?:PresentationSpec}
@@ -309,7 +313,7 @@ ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind
 | `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?, values?:ValueSpec[], availableValues?:AvailableValueSpec[], expression?:string, useRestriction?:bool, valueListAllowed?:bool, availableAsField?:bool, denyIncompleteValues?:bool, functionalOptionsParameter?:string, inputParameters?:InputParametersSpec}`; natural key is `name`. `values` is the model's plural list containing the default value(s); String/Number/Boolean/Date/Null defaults are checked against and serialized as the declared `valueType`. Unsupported declared ValueSpec pairings are refused. |
 | `calculatedField` | `{dataPath, title?:PresentationSpec, expression?, valueType?:ValueTypeSpec, appearance?:object, useRestriction?, presentationExpression?:string, orderExpression?:OrderExpressionSpec[], availableValues?:AvailableValueSpec[], inputParameters?:InputParametersSpec}`; natural key is `dataPath`. Note the model's singular `orderExpression` list name. Creation and an exact `replace` must carry `expression`; pass an empty string only when intentionally resetting it. An existing calculated field may keep an empty expression during a partial update. |
 | `totalField` | `{dataPath, expression?, groups?:string[]}`; natural key is `dataPath`. Creation and an exact `replace` must carry a non-empty `expression`. |
-| `variant` | `{name, presentation?:PresentationSpec, settings?}`; natural key is `name`. |
+| `variant` | `{name, presentation:PresentationSpec, settings?}`; natural key is `name`. `presentation` is required when creating or replacing a variant; an update/upsert that finds an existing variant may omit it. |
 | `grouping` | `{name?, use?, id?, groupState?:"Enabled|Disabled|DeletedByUser", groupFields?:{items:[{field?:ValueSpec, use?, groupType?, periodAdditionType?, periodAdditionBegin?:ValueSpec, periodAdditionEnd?:ValueSpec}]}, selection?, filter?, order?, conditionalAppearance?, outputParameters?, items?, ...GroupScaffold}`. `id` and `groupState` are real settable platform members, not invented MCP identifiers. Groups recurse through `items`; all group addresses use the returned index and hash. Renaming writes the group's `name` property without changing the indexed addressing rule. |
 | `selection` | `{items:[{kind?:"field", field?:ValueSpec, title?:PresentationSpec, use?, viewMode?} | {kind:"group", field?:ValueSpec, title?:PresentationSpec, use?, placement?, items:[...], viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
 | `filter` | `{items:[{kind?:"item", left?:ValueSpec, comparisonType?, right?:ValueSpec[], use?, ...ItemScaffold} | {kind:"group", groupType?, use?, items:[...], ...ItemScaffold}], ...HolderScaffold}`. Groups can be nested; items are ordered/indexed. |
