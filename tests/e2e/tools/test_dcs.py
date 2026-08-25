@@ -2927,8 +2927,18 @@ def test_chart_schema_survives_xml_copy_and_typed_chart_write_is_articulately_re
          if node.tag.rsplit("}", 1)[-1] == "defaultSettings"), None)
     assert default_settings is not None, \
         "the typed seed must serialize a defaultSettings node"
+    # Seed the chart in the shape EDT itself writes. A bare <item xsi:type="...Chart"/> has no
+    # point axis, EDT builds nothing from it, and the round-trip loss guard then correctly
+    # reports the submitted node as removed. Every real chart carries a point with a selection.
     chart = ET.Element("{%s}item" % settings_ns)
     chart.set("{%s}type" % xsi_ns, "dcsset:StructureItemChart")
+    point = ET.SubElement(chart, "{%s}point" % settings_ns)
+    point_selection = ET.SubElement(point, "{%s}selection" % settings_ns)
+    point_auto = ET.SubElement(point_selection, "{%s}item" % settings_ns)
+    point_auto.set("{%s}type" % xsi_ns, "dcsset:SelectedItemAuto")
+    chart_selection = ET.SubElement(chart, "{%s}selection" % settings_ns)
+    chart_auto = ET.SubElement(chart_selection, "{%s}item" % settings_ns)
+    chart_auto.set("{%s}type" % xsi_ns, "dcsset:SelectedItemAuto")
     default_settings.append(chart)
     chart_xml = ET.tostring(document, encoding="unicode")
 
