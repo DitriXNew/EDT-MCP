@@ -18,6 +18,8 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
+import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
@@ -105,6 +107,34 @@ public class DcsReadProjectionTest
         assertTrue(result.markdown().contains("Sales")); //$NON-NLS-1$
         assertTrue(result.markdown().contains("| Data sets | 1 |")); //$NON-NLS-1$
         assertFalse(result.markdown().contains("SecretQueryText")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFieldTitleFallsBackToFirstLocalizedValue()
+    {
+        String root = "Report.Sales"; //$NON-NLS-1$
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DataCompositionSchemaDataSetQuery dataSet = query("Sales", "SELECT Code"); //$NON-NLS-1$ //$NON-NLS-2$
+        DataCompositionSchemaDataSetField field = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+            .eINSTANCE.createDataCompositionSchemaDataSetField();
+        field.setDataPath("Code"); //$NON-NLS-1$
+        Presentation presentation = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createPresentation();
+        LocalString local = com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createLocalString();
+        local.getContent().put("en", "English fallback"); //$NON-NLS-1$ //$NON-NLS-2$
+        presentation.setLocalValue(local);
+        field.setTitle(presentation);
+        dataSet.getFields().add(field);
+        schema.getDataSets().add(dataSet);
+
+        DcsReadProjection.Result result = DcsReadProjection.render(root,
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(root + "#/dataSets/Sales").address(), //$NON-NLS-1$
+            "dataSet", "ru", 100_000, 0); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(result.error(), result.isSuccess());
+        assertTrue(result.markdown(), result.markdown().contains("English fallback")); //$NON-NLS-1$
     }
 
     @Test

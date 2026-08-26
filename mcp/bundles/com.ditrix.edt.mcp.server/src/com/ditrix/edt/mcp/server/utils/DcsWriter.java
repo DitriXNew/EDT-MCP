@@ -773,7 +773,7 @@ public final class DcsWriter
             AvailableValue value = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
                 .createAvailableValue();
             value.setValue(built.value);
-            if (item.has(KEY_PRESENTATION) && !item.get(KEY_PRESENTATION).isJsonNull())
+            if (item.has(KEY_PRESENTATION))
             {
                 DcsPresentationParser.ParseResult presentation = DcsPresentationParser.parse(
                     item.get(KEY_PRESENTATION), languages, itemPath + "." + KEY_PRESENTATION); //$NON-NLS-1$
@@ -1588,9 +1588,8 @@ public final class DcsWriter
     }
 
     /**
-     * Builds a core {@link Presentation} from a title plan: a plain string sets the language-neutral
-     * {@link Presentation#setValue(String) value}; a localized map populates a {@link LocalString} keyed by
-     * language code.
+     * Builds a core {@link Presentation} from a title plan. Both a plain string and a localized map
+     * populate a {@link LocalString} keyed by language code; a missing plan means no presentation.
      */
     private static com._1c.g5.v8.dt.dcs.model.core.Presentation buildPresentation(
         DcsPresentationParser.Plan plan)

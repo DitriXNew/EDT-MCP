@@ -315,6 +315,25 @@ public class DcsStructureReaderTest
     }
 
     @Test
+    public void testParameterTitleFallsBackToFirstLocalizedValue()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaParameter parameter = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory
+            .eINSTANCE.createDataCompositionSchemaParameter();
+        parameter.setName("P"); //$NON-NLS-1$
+        Presentation presentation = DcsFactory.eINSTANCE.createPresentation();
+        LocalString local = DcsFactory.eINSTANCE.createLocalString();
+        local.getContent().put("en", "English fallback"); //$NON-NLS-1$ //$NON-NLS-2$
+        presentation.setLocalValue(local);
+        parameter.setTitle(presentation);
+        schema.getParameters().add(parameter);
+
+        String rendered = DcsStructureReader.render("Report.X.Template.Main", schema, "ru"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(rendered, rendered.contains("English fallback")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testParameterDefaultValuesCoverEveryDescribeValueKind()
     {
         // One parameter with one default value of every mcore Value kind describeValue/describeSimpleValue/

@@ -396,6 +396,25 @@ public class DcsWriterTest
     }
 
     @Test
+    public void testAvailableValuesAcceptEmptyPresentationsAsAbsent()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT Code\",\"fields\":[{" //$NON-NLS-1$
+            + "\"dataPath\":\"Code\",\"valueType\":{\"types\":[{\"kind\":\"String\"}]}," //$NON-NLS-1$
+            + "\"availableValues\":[{\"value\":{\"kind\":\"string\",\"value\":\"A\"}," //$NON-NLS-1$
+            + "\"presentation\":\"\"},{\"value\":{\"kind\":\"string\",\"value\":\"B\"}," //$NON-NLS-1$
+            + "\"presentation\":{}}]}]}]}"), STRING10_RESOLVER); //$NON-NLS-1$
+
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaDataSetField field =
+            (DataCompositionSchemaDataSetField)firstQuery(schema).getFields().get(0);
+        assertEquals(2, field.getAvailableValues().size());
+        assertNull(field.getAvailableValues().get(0).getPresentation());
+        assertNull(field.getAvailableValues().get(1).getPresentation());
+    }
+
+    @Test
     public void testCalculatedFieldExtendedMembersAndInvalidOrderAreExplicit()
     {
         DataCompositionSchema schema = newSchema();

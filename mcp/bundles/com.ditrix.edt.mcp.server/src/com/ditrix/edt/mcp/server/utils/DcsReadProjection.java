@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -2129,10 +2130,11 @@ public final class DcsReadProjection
         {
             Presentation typed = (Presentation)presentation;
             LocalString localized = typed.getLocalValue();
-            if (localized != null && language != null)
+            if (localized != null)
             {
-                String value = localized.getContent().get(language);
-                if (value != null && !value.isEmpty())
+                String value = MetadataLanguageUtils.getSynonymForLanguage(
+                    localized.getContent().map(), language);
+                if (!value.isEmpty())
                 {
                     return value;
                 }
@@ -2144,15 +2146,28 @@ public final class DcsReadProjection
         Object content = featureValue(local, "content"); //$NON-NLS-1$
         Object map = content instanceof Map<?, ?> ? content
             : content instanceof EObject ? featureValue((EObject)content, "map") : null; //$NON-NLS-1$
-        if (map instanceof Map<?, ?> && language != null)
+        if (map instanceof Map<?, ?>)
         {
-            Object localized = ((Map<?, ?>)map).get(language);
-            if (localized != null && !localized.toString().isEmpty())
+            String localized = localizedText((Map<?, ?>)map, language);
+            if (!localized.isEmpty())
             {
-                return localized.toString();
+                return localized;
             }
         }
         return neutral;
+    }
+
+    private static String localizedText(Map<?, ?> content, String language)
+    {
+        Map<String, String> localized = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : content.entrySet())
+        {
+            if (entry.getKey() != null && entry.getValue() != null)
+            {
+                localized.put(entry.getKey().toString(), entry.getValue().toString());
+            }
+        }
+        return MetadataLanguageUtils.getSynonymForLanguage(localized, language);
     }
 
     private static String displayValue(Object value, String language)

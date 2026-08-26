@@ -1836,7 +1836,7 @@ public final class DcsSchemaWriter
             }
             if (spec.titlePresent)
             {
-                folder.setTitle(spec.title == null ? null : DcsPresentationParser.build(spec.title));
+                folder.setTitle(DcsPresentationParser.build(spec.title));
             }
             if (spec.restrictionPresent)
             {

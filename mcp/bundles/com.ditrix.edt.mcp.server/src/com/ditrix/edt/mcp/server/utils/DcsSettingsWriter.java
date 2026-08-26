@@ -3606,7 +3606,7 @@ public final class DcsSettingsWriter
                 && raw.getAsJsonPrimitive().isString())
             {
                 JsonObject map = new JsonObject();
-                map.addProperty(languages == null ? "en" : languages.resolvedCode(), //$NON-NLS-1$
+                map.addProperty(languages == null ? "en" : languages.writeLanguageCode(), //$NON-NLS-1$
                     raw.getAsString());
                 localized = map;
             }
@@ -5226,8 +5226,8 @@ public final class DcsSettingsWriter
         DcsPresentationParser.LanguageContext languages, String path)
     {
         DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(element, languages, path);
-        return parsed.isSuccess() ? PresentationResult.success(parsed.plan() == null ? null
-            : DcsPresentationParser.build(parsed.plan())) : PresentationResult.failure(parsed.error());
+        return parsed.isSuccess() ? PresentationResult.success(DcsPresentationParser.build(parsed.plan()))
+            : PresentationResult.failure(parsed.error());
     }
 
     /**

@@ -591,7 +591,8 @@ public class DcsTool implements IMcpTool
             DcsTargetResolver.Target target = resolution.target();
             DcsPresentationParser.LanguageContext languages =
                 new DcsPresentationParser.LanguageContext(context.scope().declaredLanguageCodes(),
-                    effectiveLanguage, context.scope().defaultLanguageCode());
+                    effectiveLanguage, context.scope().defaultLanguageCode(),
+                    language != null && !language.isEmpty());
             IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
             IV8Project v8Project = v8ProjectManager == null
                 ? null : v8ProjectManager.getProject(context.project());

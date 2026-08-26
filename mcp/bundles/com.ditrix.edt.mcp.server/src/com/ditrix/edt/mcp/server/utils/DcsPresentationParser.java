@@ -108,14 +108,15 @@ public final class DcsPresentationParser
             {
                 return ParseResult.success(null);
             }
-            // A plain string is stored under the project's OWN default language, not as a neutral
-            // Presentation.value. EDT never writes the neutral form - 41940 of 41940 presentation
-            // and title elements in ERP 2.5.16 are LocalStrings - and shipped consumers rely on
-            // that: the platform's DataCompositionNameVariantDefaultCheck dereferences
-            // getLocalValue().getContent() with no guard, so a neutral value makes the whole check
-            // throw and stop validating the schema. Our own localized parameter value refused it
-            // outright for the same reason.
-            String code = languages == null ? "en" : languages.resolvedCode(); //$NON-NLS-1$
+            // A plain string is stored under the language the call is working in: the language
+            // parameter when one is given, and the CONFIGURATION's default language when it is not.
+            // It is not stored as Presentation.value. EDT never writes the neutral form - 41940 of
+            // 41940 presentation and title elements in ERP 2.5.16 are LocalStrings - and shipped
+            // consumers rely on that: the platform's DataCompositionNameVariantDefaultCheck
+            // dereferences getLocalValue().getContent() with no guard, so a neutral value makes the
+            // whole check throw and stop validating the schema. Our own localized parameter value
+            // refused it outright for the same reason.
+            String code = languages == null ? "en" : languages.writeLanguageCode(); //$NON-NLS-1$
             Map<String, String> single = new LinkedHashMap<>();
             single.put(code, text);
             if (languages != null)
@@ -194,6 +195,10 @@ public final class DcsPresentationParser
     /** Builds the typed DCS presentation after validation has completed. */
     public static Presentation build(Plan plan)
     {
+        if (plan == null)
+        {
+            return null;
+        }
         Presentation presentation =
             com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createPresentation();
         LocalString local =
@@ -204,28 +209,38 @@ public final class DcsPresentationParser
     }
 
     /**
-     * Configured language-code spellings, the resolved presentation code, the configuration code
-     * used for serialized catalogue names, and codes used by the parsed body.
+     * Configured language-code spellings, the resolved presentation code, whether a language was
+     * selected for this call, the configuration code used for serialized catalogue names, and
+     * codes used by the parsed body.
      */
     public static final class LanguageContext
     {
         private final List<String> declaredCodes;
         private final String resolvedCode;
         private final String configurationCode;
+        private final boolean languageSelected;
         private final Set<String> usedCodes = new LinkedHashSet<>();
 
         public LanguageContext(List<String> declaredCodes)
         {
-            this(declaredCodes, null);
+            this(declaredCodes, null, null, false);
         }
 
         public LanguageContext(List<String> declaredCodes, String resolvedCode)
         {
-            this(declaredCodes, resolvedCode, resolvedCode);
+            this(declaredCodes, resolvedCode, resolvedCode,
+                resolvedCode != null && !resolvedCode.isEmpty());
         }
 
         public LanguageContext(List<String> declaredCodes, String resolvedCode,
             String configurationCode)
+        {
+            this(declaredCodes, resolvedCode, configurationCode,
+                resolvedCode != null && !resolvedCode.isEmpty());
+        }
+
+        public LanguageContext(List<String> declaredCodes, String resolvedCode,
+            String configurationCode, boolean languageSelected)
         {
             List<String> copy = new ArrayList<>();
             if (declaredCodes != null)
@@ -249,6 +264,8 @@ public final class DcsPresentationParser
             }
             this.configurationCode = configurationCode == null || configurationCode.isEmpty()
                 ? this.resolvedCode : configurationCode;
+            this.languageSelected = languageSelected
+                && resolvedCode != null && !resolvedCode.isEmpty();
         }
 
         public List<String> declaredCodes()
@@ -265,6 +282,15 @@ public final class DcsPresentationParser
         public String configurationCode()
         {
             return configurationCode;
+        }
+
+        /**
+         * The language code for a plain-string write: the selected call language when present,
+         * otherwise the configuration's default code.
+         */
+        public String writeLanguageCode()
+        {
+            return languageSelected ? resolvedCode : configurationCode;
         }
 
         public Set<String> usedCodes()

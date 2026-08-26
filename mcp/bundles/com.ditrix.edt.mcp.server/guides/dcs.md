@@ -289,10 +289,11 @@ Shared localized text and value shapes:
 
 ```text
 PresentationSpec = "text" | {"<languageCode>": "localized text", ...}
-  A plain string is stored under the configuration's DEFAULT language, not as a
-  language-neutral value: EDT never writes the neutral form and platform checks assume it
-  is absent. It therefore reads back empty in the other languages - pass the map form to
-  set more than one.
+  A plain string is stored under the language the call is working in: the `language`
+  parameter when one is given, and the CONFIGURATION's default language when it is not.
+  It is not stored as a language-neutral value: EDT never writes the neutral form and
+  platform checks assume it is absent. A read falls back to the first non-empty localized
+  value when the requested language is absent; pass the map form to set more than one.
 ValueSpec = {"kind": "field|parameter|expression|string|number|boolean|date|null",
              "value": <matching value>}
 AvailableValueSpec = {"value":ValueSpec, "presentation"?:PresentationSpec}
