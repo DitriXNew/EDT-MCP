@@ -7,7 +7,9 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -54,10 +56,12 @@ public class DcsPresentationParserTest
     public void testPlainStringUsesSelectedLanguageOrConfigurationDefault()
     {
         DcsPresentationParser.LanguageContext defaultUkrainian =
-            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "uk"), "uk", "uk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru", "uk"), "en", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "uk", //$NON-NLS-1$
                 false);
         DcsPresentationParser.LanguageContext selectedEnglish =
-            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "uk"), "en", "uk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru", "uk"), "en", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "uk", //$NON-NLS-1$
                 true);
 
         Presentation defaultPresentation = parsePlainString(defaultUkrainian);
@@ -65,12 +69,37 @@ public class DcsPresentationParserTest
 
         assertEquals("uk", defaultUkrainian.writeLanguageCode()); //$NON-NLS-1$
         assertEquals("uk", new DcsPresentationParser.LanguageContext( //$NON-NLS-1$
-            Arrays.asList("en", "uk"), null, "uk").writeLanguageCode()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            Arrays.asList("en", "uk"), null, "uk", false).writeLanguageCode()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("Title", defaultPresentation.getLocalValue().getContent().get("uk")); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(defaultPresentation.getLocalValue().getContent().get("en")); //$NON-NLS-1$
         assertEquals("en", selectedEnglish.writeLanguageCode()); //$NON-NLS-1$
         assertEquals("Title", selectedPresentation.getLocalValue().getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(selectedPresentation.getLocalValue().getContent().get("uk")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPlainStringRequiresDeclaredLanguageWhenContextExists()
+    {
+        DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(
+            JsonParser.parseString("\"Title\""), //$NON-NLS-1$
+            new DcsPresentationParser.LanguageContext(Collections.emptyList()), "body.title"); //$NON-NLS-1$
+
+        assertFalse(parsed.isSuccess());
+        assertTrue(parsed.error(), parsed.error().contains("declares no language codes")); //$NON-NLS-1$
+        assertTrue(parsed.error(), parsed.error().contains("body.title")); //$NON-NLS-1$
+        assertTrue(parsed.error(),
+            parsed.error().contains("Add a Language object with a 'languageCode'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPlainStringWithoutLanguageContextStillParses()
+    {
+        DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(
+            JsonParser.parseString("\"Title\""), null, "title"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(parsed.error(), parsed.isSuccess());
+        Presentation presentation = DcsPresentationParser.build(parsed.plan());
+        assertEquals("Title", presentation.getLocalValue().getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static Presentation parsePlainString(DcsPresentationParser.LanguageContext languages)

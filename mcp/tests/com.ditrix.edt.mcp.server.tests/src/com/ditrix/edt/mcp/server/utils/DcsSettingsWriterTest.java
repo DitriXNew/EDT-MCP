@@ -388,9 +388,11 @@ public class DcsSettingsWriterTest
         placement.setValue(DataCompositionTotalPlacement.AUTO);
         addAvailableParameter(available, englishName, russianName, placement);
         DcsPresentationParser.LanguageContext englishConfigurationRussianValue =
-            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "ru", "en"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "ru", "en", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                true);
         DcsPresentationParser.LanguageContext russianConfigurationEnglishValue =
-            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "en", "ru"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru"), "en", "ru", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                true);
 
         assertOutputParameterName(available, englishConfigurationRussianValue,
             englishName, englishName);
@@ -429,10 +431,10 @@ public class DcsSettingsWriterTest
 
         DcsPresentationParser.LanguageContext ukrainian =
             new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru", "uk"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "ru", "uk"); //$NON-NLS-1$ //$NON-NLS-2$
+                "ru", "uk", true); //$NON-NLS-1$ //$NON-NLS-2$
         DcsPresentationParser.LanguageContext russian =
             new DcsPresentationParser.LanguageContext(Arrays.asList("en", "ru", "uk"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "uk", "ru"); //$NON-NLS-1$ //$NON-NLS-2$
+                "uk", "ru", true); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertEquals("Title", DcsSettingsWriter.parameterName(title, ukrainian)); //$NON-NLS-1$
         assertEquals("Заголовок", DcsSettingsWriter.parameterName(title, russian)); //$NON-NLS-1$

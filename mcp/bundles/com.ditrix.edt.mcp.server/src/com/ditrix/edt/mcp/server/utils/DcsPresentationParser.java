@@ -108,6 +108,13 @@ public final class DcsPresentationParser
             {
                 return ParseResult.success(null);
             }
+            if (languages != null && languages.declaredCodes().isEmpty())
+            {
+                return ParseResult.failure("This configuration declares no language codes, so " //$NON-NLS-1$
+                    + "the plain string in presentation '" + path //$NON-NLS-1$
+                    + "' cannot be stored where anything would display it. Add a Language " //$NON-NLS-1$
+                    + "object with a 'languageCode', then retry."); //$NON-NLS-1$
+            }
             // A plain string is stored under the language the call is working in: the language
             // parameter when one is given, and the CONFIGURATION's default language when it is not.
             // It is not stored as Presentation.value. EDT never writes the neutral form - 41940 of
@@ -221,22 +228,16 @@ public final class DcsPresentationParser
         private final boolean languageSelected;
         private final Set<String> usedCodes = new LinkedHashSet<>();
 
+        /** Creates a context with no per-call language selection. */
         public LanguageContext(List<String> declaredCodes)
         {
             this(declaredCodes, null, null, false);
         }
 
+        /** Creates a context whose resolved code was explicitly selected for this call. */
         public LanguageContext(List<String> declaredCodes, String resolvedCode)
         {
-            this(declaredCodes, resolvedCode, resolvedCode,
-                resolvedCode != null && !resolvedCode.isEmpty());
-        }
-
-        public LanguageContext(List<String> declaredCodes, String resolvedCode,
-            String configurationCode)
-        {
-            this(declaredCodes, resolvedCode, configurationCode,
-                resolvedCode != null && !resolvedCode.isEmpty());
+            this(declaredCodes, resolvedCode, resolvedCode, true);
         }
 
         public LanguageContext(List<String> declaredCodes, String resolvedCode,
