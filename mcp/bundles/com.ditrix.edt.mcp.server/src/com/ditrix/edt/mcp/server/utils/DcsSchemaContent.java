@@ -24,7 +24,6 @@ import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
-import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.platform.version.Version;
@@ -85,14 +84,16 @@ public final class DcsSchemaContent
         BasicTemplate template;
         if (target.kind() == TargetKind.REPORT_MAIN_DCS)
         {
-            Long reportId = target.bmId(BmRole.ROOT_OWNER);
-            EObject object = reportId == null ? null : transaction.getObjectById(reportId.longValue());
-            if (!(object instanceof Report))
+            Long ownerId = target.bmId(BmRole.ROOT_OWNER);
+            EObject object = ownerId == null ? null : transaction.getObjectById(ownerId.longValue());
+            String ownerType = DcsMainSchemaOwner.expectedType(target.normalizedRootFqn());
+            if (!DcsMainSchemaOwner.supports(object))
             {
-                return ResolveResult.failure("Report DCS target '" + target.normalizedRootFqn() //$NON-NLS-1$
-                    + "' disappeared before the write transaction. Re-run dcs action='get'."); //$NON-NLS-1$
+                return ResolveResult.failure(ownerType + " DCS target '" //$NON-NLS-1$
+                    + target.normalizedRootFqn() + "' disappeared before the write transaction. " //$NON-NLS-1$
+                    + "Re-run dcs action='get'."); //$NON-NLS-1$
             }
-            template = findOrCreateMainTemplate((Report)object, services.factory, services.version);
+            template = findOrCreateMainTemplate(object, services.factory, services.version);
         }
         else
         {
@@ -109,15 +110,16 @@ public final class DcsSchemaContent
             target.normalizedRootFqn());
     }
 
-    private static BasicTemplate findOrCreateMainTemplate(Report report, IModelObjectFactory factory,
+    private static BasicTemplate findOrCreateMainTemplate(EObject owner, IModelObjectFactory factory,
         Version version)
     {
-        BasicTemplate existing = report.getMainDataCompositionSchema();
+        BasicTemplate existing = DcsMainSchemaOwner.get(owner);
         if (existing != null)
         {
             return existing;
         }
-        MdObject child = (MdObject)factory.create(MdClassPackage.Literals.TEMPLATE, report, version);
+        MdObject child = (MdObject)factory.create(MdClassPackage.Literals.TEMPLATE,
+            (MdObject)owner, version);
         if (child == null)
         {
             child = (MdObject)EcoreUtil.create(MdClassPackage.Literals.TEMPLATE);
@@ -129,8 +131,7 @@ public final class DcsSchemaContent
             template.setUuid(UUID.randomUUID());
         }
         template.setTemplateType(TemplateType.DATA_COMPOSITION_SCHEMA);
-        report.getTemplates().add(template);
-        report.setMainDataCompositionSchema(template);
+        DcsMainSchemaOwner.addAndSet(owner, template);
         factory.fillDefaultReferences(template);
         return template;
     }

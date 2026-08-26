@@ -74,8 +74,8 @@ public final class DcsRootReader
         Long id = target.bmId(BmRole.TEMPLATE);
         if (id == null)
         {
-            // A Report may not have materialized its main DCS template yet. This is a valid empty
-            // root whose hash must still be returned, rather than a not-found error.
+            // A Report or ExternalReport may not have materialized its main DCS template yet. This
+            // is a valid empty root whose hash must still be returned, rather than a not-found error.
             return Result.success(null);
         }
         EObject object = transaction.getObjectById(id.longValue());

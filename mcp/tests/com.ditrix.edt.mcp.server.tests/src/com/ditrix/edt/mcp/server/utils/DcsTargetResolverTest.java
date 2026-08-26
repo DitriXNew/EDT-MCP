@@ -25,6 +25,12 @@ public class DcsTargetResolverTest
     }
 
     @Test
+    public void testClassifiesExternalReportMainDcs()
+    {
+        assertKind("ExternalReport.Sales", DcsTargetResolver.TargetKind.REPORT_MAIN_DCS); //$NON-NLS-1$
+    }
+
+    @Test
     public void testClassifiesCommonTemplate()
     {
         assertKind("CommonTemplate.Analytics", DcsTargetResolver.TargetKind.COMMON_TEMPLATE); //$NON-NLS-1$
@@ -62,6 +68,8 @@ public class DcsTargetResolverTest
     {
         assertKind("\u041E\u0442\u0447\u0435\u0442.Sales", //$NON-NLS-1$
             DcsTargetResolver.TargetKind.REPORT_MAIN_DCS);
+        assertKind("\u0412\u043D\u0435\u0448\u043D\u0438\u0439\u041E\u0442\u0447\u0435\u0442.Sales", //$NON-NLS-1$
+            DcsTargetResolver.TargetKind.REPORT_MAIN_DCS);
         assertKind("Report.Sales.\u041C\u0430\u043A\u0435\u0442.CustomDcs", //$NON-NLS-1$
             DcsTargetResolver.TargetKind.OWNED_TEMPLATE);
         assertKind("Catalog.Products.\u0424\u043E\u0440\u043C\u0430.ListForm." //$NON-NLS-1$
@@ -83,9 +91,27 @@ public class DcsTargetResolverTest
             classification.failure.message().contains("Catalog.Products")); //$NON-NLS-1$
         assertTrue(classification.failure.message(), classification.failure.message().contains("Report.<Name>")); //$NON-NLS-1$
         assertTrue(classification.failure.message(),
+            classification.failure.message().contains("ExternalReport.<Name>")); //$NON-NLS-1$
+        assertTrue(classification.failure.message(),
             classification.failure.message().contains("CommonTemplate.<Name>")); //$NON-NLS-1$
         assertTrue(classification.failure.message(),
             classification.failure.message().contains("Attribute.<Name>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExternalDataProcessorMainRootRemainsUnsupportedAndNamesOwnedTemplateAlternative()
+    {
+        DcsTargetResolver.RootClassification classification =
+            classify("ExternalDataProcessor.ExtProc"); //$NON-NLS-1$
+
+        assertFalse(classification.isSuccess());
+        assertEquals(DcsTargetResolver.FailureCode.UNSUPPORTED_ROOT, classification.failure.code());
+        assertTrue(classification.failure.message(),
+            classification.failure.message().contains("ExternalDataProcessor.ExtProc")); //$NON-NLS-1$
+        assertTrue(classification.failure.message(), classification.failure.message()
+            .contains("ExternalDataProcessor.<Name>.Template.<Name>")); //$NON-NLS-1$
+        assertTrue(classification.failure.message(),
+            classification.failure.message().contains("no main DCS")); //$NON-NLS-1$
     }
 
     @Test

@@ -24,7 +24,6 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
-import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 
 /**
@@ -190,7 +189,8 @@ public final class DcsTargetResolver
         String[] parts = normalized.split("\\.", -1); //$NON-NLS-1$
         String englishType = parts.length == 0 ? null : MetadataTypeUtils.toEnglishSingular(parts[0]);
 
-        if (parts.length == 2 && "Report".equals(englishType)) //$NON-NLS-1$
+        if (parts.length == 2 && ("Report".equals(englishType) //$NON-NLS-1$
+            || "ExternalReport".equals(englishType))) //$NON-NLS-1$
         {
             return RootClassification.success(TargetKind.REPORT_MAIN_DCS, normalized, null);
         }
@@ -263,17 +263,19 @@ public final class DcsTargetResolver
     private static Resolution resolveReport(ProjectContext.ConfigurationResult context,
         IBmModel bmModel, DcsAddress address, RootClassification classification)
     {
+        String ownerType = DcsMainSchemaOwner.expectedType(classification.normalizedRoot);
         MetadataNodeResolver.MetadataNode node =
             MetadataNodeResolver.resolveExisting(context.scope(), classification.normalizedRoot);
         if (node == null)
         {
             return notFound(classification.normalizedRoot,
-                "Verify the Report programmatic Name with get_metadata_objects, then retry."); //$NON-NLS-1$
+                "Verify the " + ownerType //$NON-NLS-1$
+                    + " programmatic Name with get_metadata_objects, then retry."); //$NON-NLS-1$
         }
-        if (!(node.object instanceof Report))
+        if (!DcsMainSchemaOwner.supports(node.object))
         {
             return wrongType(classification.normalizedRoot, node.object,
-                "Address an existing Report.<Name> root."); //$NON-NLS-1$
+                "Address an existing " + ownerType + ".<Name> root."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (!(node.object instanceof IBmObject))
         {
@@ -290,14 +292,15 @@ public final class DcsTargetResolver
             "ResolveReportMainDcs", (tx, monitor) -> //$NON-NLS-1$
         {
             EObject txObject = tx.getObjectById(reportBm.bmGetId());
-            if (!(txObject instanceof Report))
+            if (!DcsMainSchemaOwner.supports(txObject))
             {
                 return DcsInspection.failure(new Failure(FailureCode.TRANSACTION_TARGET_MISSING,
                     classification.normalizedRoot, typeName(txObject),
-                    "Report '" + classification.normalizedRoot + "' disappeared before its DCS " //$NON-NLS-1$ //$NON-NLS-2$
+                    ownerType + " '" + classification.normalizedRoot //$NON-NLS-1$
+                        + "' disappeared before its DCS " //$NON-NLS-1$
                         + "could be read. Re-run dcs action=get.")); //$NON-NLS-1$
             }
-            BasicTemplate template = ((Report)txObject).getMainDataCompositionSchema();
+            BasicTemplate template = DcsMainSchemaOwner.get(txObject);
             return template == null ? DcsInspection.empty() : inspectTemplate(template,
                 classification.normalizedRoot);
         });
@@ -708,8 +711,21 @@ public final class DcsTargetResolver
 
     private static String unsupportedRootMessage(String fqn)
     {
+        if (fqn != null)
+        {
+            String[] parts = fqn.split("\\.", -1); //$NON-NLS-1$
+            String englishType = parts.length == 0 ? null
+                : MetadataTypeUtils.toEnglishSingular(parts[0]);
+            if (parts.length == 2 && "ExternalDataProcessor".equals(englishType)) //$NON-NLS-1$
+            {
+                return "FQN '" + fqn + "' is not a supported main-DCS root: an " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "ExternalDataProcessor has owned DCS templates but no main DCS. Use " //$NON-NLS-1$
+                    + "ExternalDataProcessor.<Name>.Template.<Name> instead."; //$NON-NLS-1$
+            }
+        }
         return "FQN '" + fqn + "' is not a supported DCS root. Use Report.<Name>, " //$NON-NLS-1$ //$NON-NLS-2$
-            + "CommonTemplate.<Name>, <Type>.<Owner>.Template.<Name>, or " //$NON-NLS-1$
+            + "ExternalReport.<Name>, CommonTemplate.<Name>, " //$NON-NLS-1$
+            + "<Type>.<Owner>.Template.<Name>, or " //$NON-NLS-1$
             + "<Type>.<Owner>.Form.<Name> (for conditional appearance), or " //$NON-NLS-1$
             + "<Type>.<Owner>.Form.<Name>.Attribute.<Name> (for a dynamic list)."; //$NON-NLS-1$
     }

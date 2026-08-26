@@ -135,6 +135,7 @@ Supported roots are:
 | Root kind | FQN example | Root type |
 | --- | --- | --- |
 | Report main DCS | `Report.Sales` | `schema` |
+| External report main DCS | `ExternalReport.Sales` | `schema` |
 | Common DCS template | `CommonTemplate.Analytics` | `schema` |
 | Object-owned DCS template | `Report.Sales.Template.CustomDcs` | `schema` |
 | Managed form conditional appearance | `Catalog.Products.Form.ListForm` | `conditionalAppearance` |
