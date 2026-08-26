@@ -89,8 +89,10 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
                 "Type filter (case-insensitive), default 'all'. Accepts 'all' or any standard metadata " + //$NON-NLS-1$
-                "type name (the FQN token, English or Russian, singular or plural, e.g. 'ScheduledJob', " + //$NON-NLS-1$
-                "'Role', '\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A'). Single value only - not an array. " + //$NON-NLS-1$
+                "type name (the FQN token). English resolves in singular OR plural ('ScheduledJob', " + //$NON-NLS-1$
+                "'Role', 'httpServices'); Russian resolves in the spelling 1C registers for that type, " + //$NON-NLS-1$
+                "which for most types is the singular alone ('\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A', " + //$NON-NLS-1$
+                "'\u041E\u0431\u0449\u0430\u044F\u0424\u043E\u0440\u043C\u0430'). Single value only - not an array. " + //$NON-NLS-1$
                 "In an EXTERNAL-OBJECTS project the vocabulary is " + //$NON-NLS-1$
                 "all / externalDataProcessors / externalReports instead - that project holds its " + //$NON-NLS-1$
                 "own roots, not a configuration.") //$NON-NLS-1$
@@ -452,8 +454,10 @@ public class GetMetadataObjectsTool implements IMcpTool
         }
 
         return ToolResult.error("Unknown metadata type: " + metadataType + ". Accepted values are " //$NON-NLS-1$ //$NON-NLS-2$
-            + "'all' or any standard configuration metadata type name (case-insensitive; English " //$NON-NLS-1$
-            + "or Russian, singular or plural). Configuration metadata types: " + acceptedTypes //$NON-NLS-1$
+            + "'all' or any standard configuration metadata type name (case-insensitive). Each type " //$NON-NLS-1$
+            + "below is accepted in English singular or plural, and in the Russian spelling 1C " //$NON-NLS-1$
+            + "registers for it - for most types the singular alone. Configuration metadata types: " //$NON-NLS-1$
+            + acceptedTypes
             + ".").toJson(); //$NON-NLS-1$
     }
 

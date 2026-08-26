@@ -36,14 +36,20 @@ Default (`all`) — real output:
 ```
 ## Configuration Metadata: TestConfiguration
 
-**Total:** 4 objects
+**Total:** 15 objects
 
 | Name | Synonym | Comment | Type | ObjectModule | ManagerModule |
 | --- | --- | --- | --- | --- | --- |
 | Catalog | Catalog |  | Catalog | Yes | Yes |
-| Error | Error |  | CommonModule | Yes | - |
-| OK | OK |  | CommonModule | Yes | - |
+| Calc | Calc |  | CommonModule | Yes | - |
+| (5 more common modules) |  |  | CommonModule | Yes | - |
+| Subsystem | Subsystem |  | Subsystem | - | - |
+| Form | Form |  | CommonForm | - | - |
+| ProbeService |  |  | HTTPService | Yes | - |
 | CommonAttribute | Common attribute |  | CommonAttribute | - | - |
+| SessionParameter | Session parameter |  | SessionParameter | - | - |
+| PrintForm | Print Form |  | CommonTemplate | - | - |
+| English | English |  | Language | - | - |
 ```
 
 Filtered (`commonModules` + `nameFilter="err"`) — real output:
@@ -59,10 +65,10 @@ Filtered (`commonModules` + `nameFilter="err"`) — real output:
 ```
 
 **Gotchas.**
-- **`metadataType` is an OPEN, bilingual vocabulary.** It accepts `all` (default) or any standard configuration type name resolved through `MetadataTypeUtils` — English or Russian, singular or plural (`Catalog`, `catalogs`, `Справочник`, `справочники`, `Role`, `HTTPService`). Only a token that resolves to nothing returns a structured error, which then lists every configuration type. The `Type` column shows the fixed English EDT type label (`Catalog`, `CommonModule`, `CommonAttribute`, …) — never translated.
+- **`metadataType` is an OPEN vocabulary, but the two languages accept different forms.** English resolves in singular AND plural (`Catalog`, `catalogs`, `Role`, `HTTPService`). Russian resolves only in the spelling `MetadataTypeUtils` registers for that type, which for most types is the singular alone — `Справочник` and `справочники` both work because Catalog registers both, while `ОбщиеФормы` does NOT, since CommonForm registers only `ОбщаяФорма`. Only a token that resolves to nothing returns a structured error, which then lists every configuration type. The `Type` column shows the fixed English EDT type label (`Catalog`, `CommonModule`, `CommonAttribute`, …) — never translated.
 - **Name vs Synonym (the bilingual trap).** The `Name` column is the programmatic identifier and is the value you pass to other tools; it is never translated. The `Synonym` column is the localized display text resolved for the chosen `language`. The synonym map is keyed by language CODE (`"ru"`/`"en"`), not by the language object's name — `language="en"` requests the `en` entry, with fallback when absent. In `TestConfiguration` Name and Synonym happen to coincide (e.g. `Catalog`/`Catalog`); in a real config they differ, and `CommonAttribute` shows synonym `Common attribute`. Do not match objects by synonym — match by Name.
 - **`nameFilter` is a case-insensitive substring on the programmatic Name only** (not synonym, not comment) — `nameFilter="err"` matched `Error`. There is no exact-match mode here.
-- **`metadataType` scopes which families are collected, not row-level filtering.** `all` walks EVERY configuration collection — there is no whitelist, so a kind the fixture owns can never be silently missing. `TestConfiguration` reports 15 objects across 8 kinds for `all`, but 1 for `catalogs`.
+- **`metadataType` scopes which families are collected, not row-level filtering.** `all` walks EVERY configuration collection — there is no whitelist, so a kind the fixture owns can never be silently missing. `TestConfiguration` reports 15 objects across 9 kinds for `all` — the ninth is `Language`, which lives inside `Configuration.mdo` rather than in its own `src/` folder — but 1 for `catalogs`.
 - **`limit` is clamped to 1..1000 (default 100), no offset/pagination.** When truncated, the header reads `**Total:** N objects (showing M)` and the table holds the first `M` rows. Narrow with `metadataType`/`nameFilter` rather than paging.
 - **Module columns are per-family, not universal.** ObjectModule/ManagerModule reflect which modules a family actually owns: CommonModule has an object module (its `Module`) but `-` for manager; Enum has only a manager module; CommonAttribute / EventSubscription / ScheduledJob always show `-`/`-`. A `-` is "this family has no such module", not an error.
 - **Empty result is success, not error.** A valid project/family with no matches returns the heading, `**Total:** 0 objects`, and `No metadata objects found.` as Markdown — not a JSON error.
