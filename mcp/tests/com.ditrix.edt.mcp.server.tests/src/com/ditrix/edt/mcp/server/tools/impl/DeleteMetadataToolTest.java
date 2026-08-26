@@ -1816,6 +1816,33 @@ public class DeleteMetadataToolTest
             DeleteMetadataTool.containsRegistration(stale, "Catalog.X", "Catalog.X.Fielld.A")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testRegistrationCheckIgnoresForeignNamespaceElements() throws Exception
+    {
+        // Measured across the whole ERP tree: EDT qualifies only the ROOT element and writes every
+        // child unqualified. The check states that instead of assuming it, because a foreign
+        // element sharing a local name would otherwise read as a surviving registration and report
+        // a COMPLETED delete as partial - a false alarm is as wrong here as a missed one.
+        Element foreignConfig = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'" //$NON-NLS-1$
+            + " xmlns:ext='urn:foreign'><ext:reports>Report.X</ext:reports></mdclass:Configuration>"); //$NON-NLS-1$
+        assertFalse("a foreign-namespace element is not a registration", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(foreignConfig, "Configuration", "Report.X")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Element foreignMember = xmlRoot("<mdclass:Catalog xmlns:mdclass='urn:test'" //$NON-NLS-1$
+            + " xmlns:ext='urn:foreign'><name>X</name>" //$NON-NLS-1$
+            + "<ext:attributes><ext:name>A</ext:name></ext:attributes></mdclass:Catalog>"); //$NON-NLS-1$
+        assertFalse("a foreign-namespace member is not a registration", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(foreignMember, "Catalog.X", //$NON-NLS-1$
+                "Catalog.X.Attribute.A")); //$NON-NLS-1$
+
+        // The document's OWN namespace still counts: rejecting it would silently stop detecting a
+        // stale registration if the serializer ever qualified its children.
+        Element qualified = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'>" //$NON-NLS-1$
+            + "<mdclass:reports>Report.X</mdclass:reports></mdclass:Configuration>"); //$NON-NLS-1$
+        assertTrue("an element in the document's own namespace is a registration", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(qualified, "Configuration", "Report.X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private static Element xmlRoot(String xml) throws Exception
     {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();

@@ -28,6 +28,7 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
+import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -1067,6 +1068,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return true;
     }
 
+    /**
+     * The direct children that belong to THIS document's registration vocabulary: the local name
+     * matches AND the element is either unqualified (how EDT writes every child of an {@code .mdo})
+     * or in the document element's own namespace. A same-named element from a FOREIGN namespace is
+     * not a registration, and counting one would report a completed delete as partial.
+     */
     private static List<Element> directChildren(Element parent, String name)
     {
         List<Element> result = new ArrayList<>();
@@ -1074,16 +1081,27 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return result;
         }
+        Document owner = parent.getOwnerDocument();
+        Element root = owner == null ? null : owner.getDocumentElement();
+        String documentNamespace = root == null ? null : root.getNamespaceURI();
         NodeList children = parent.getChildNodes();
         for (int i = 0; i < children.getLength(); i++)
         {
             Node child = children.item(i);
-            if (child instanceof Element element && name.equals(elementName(element)))
+            if (child instanceof Element element && name.equals(elementName(element))
+                && belongsToDocument(element, documentNamespace))
             {
                 result.add(element);
             }
         }
         return result;
+    }
+
+    /** Whether an element is part of the document's own vocabulary rather than a foreign one. */
+    private static boolean belongsToDocument(Element element, String documentNamespace)
+    {
+        String namespace = element.getNamespaceURI();
+        return namespace == null || namespace.equals(documentNamespace);
     }
 
     private static String directChildText(Element parent, String name)
