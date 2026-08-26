@@ -2793,7 +2793,7 @@ public final class DcsWriter
         return "'" + key + "' must be an array of objects."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private static String stringMember(JsonObject obj, String name)
+    static String stringMember(JsonObject obj, String name)
     {
         if (obj == null || !obj.has(name))
         {
@@ -2804,7 +2804,7 @@ public final class DcsWriter
             && element.getAsJsonPrimitive().isString() ? element.getAsString() : null;
     }
 
-    private static String stringMembersError(JsonObject object, String subject, String where,
+    static String stringMembersError(JsonObject object, String subject, String where,
         String... members)
     {
         for (String member : members)

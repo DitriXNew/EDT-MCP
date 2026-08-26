@@ -235,37 +235,28 @@ public class DcsTool implements IMcpTool
                 + "'. Open the project in EDT and retry action='" + action + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         AtomicReference<String> result = new AtomicReference<>();
+        WriteScope scope = null;
+        Runnable handoff;
         if (ACTION_GET.equals(action))
         {
-            display.syncExec(() -> result.set(executeGet(projectName, parsed.address(), type,
-                language, format, limit, offset)));
+            handoff = () -> display.syncExec(() -> result.set(executeGet(projectName,
+                parsed.address(), type, language, format, limit, offset)));
         }
         else if (ACTION_OPTIONS.equals(action))
         {
-            display.syncExec(() -> result.set(executeOptions(projectName, parsed.address(), type,
-                language, limit, offset)));
+            handoff = () -> display.syncExec(() -> result.set(executeOptions(projectName,
+                parsed.address(), type, language, limit, offset)));
         }
         else if (ACTION_UPSERT.equals(action) || ACTION_UPDATE.equals(action)
             || ACTION_REPLACE.equals(action) || ACTION_REMOVE.equals(action))
         {
             JsonObject parsedBody = ACTION_REMOVE.equals(action) ? null
                 : JsonParser.parseString(body).getAsJsonObject();
-            WriteScope scope = new WriteScope();
-            try
-            {
-                display.syncExec(() -> WriteScope.runWithScope(scope,
-                    () -> result.set(executeWrite(projectName, parsed.address(), action, type,
-                        parsedBody, expectedHash, language))));
-            }
-            catch (RuntimeException e)
-            {
-                Activator.logError("Error dispatching DCS write " + parsed.address(), e); //$NON-NLS-1$
-                String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                result.set(ToolResult.error("Could not dispatch DCS write for '" + parsed.address() //$NON-NLS-1$
-                    + "': " + message + ". Re-open or clean the project, run dcs action='get', " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "then retry.").toJson()); //$NON-NLS-1$
-            }
-            return finalizeWriteResult(scope, result.get());
+            WriteScope writeScope = new WriteScope();
+            scope = writeScope;
+            handoff = () -> display.syncExec(() -> WriteScope.runWithScope(writeScope,
+                () -> result.set(executeWrite(projectName, parsed.address(), action, type,
+                    parsedBody, expectedHash, language))));
         }
         else
         {
@@ -276,7 +267,26 @@ public class DcsTool implements IMcpTool
                 + "' has no handler. Use one of: " + String.join(", ", ACTION_SET) //$NON-NLS-1$ //$NON-NLS-2$
                 + "; no model changes were made.").toJson(); //$NON-NLS-1$
         }
-        return result.get();
+        return dispatchResult(action, parsed.address(), scope, result, handoff);
+    }
+
+    /** Converts a failed SWT handoff into the tool's structured error contract for every action. */
+    static String dispatchResult(String action, DcsAddress address, WriteScope scope,
+        AtomicReference<String> result, Runnable handoff)
+    {
+        try
+        {
+            handoff.run();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error dispatching DCS action='" + action + "' " + address, e); //$NON-NLS-1$ //$NON-NLS-2$
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            result.set(ToolResult.error("Could not dispatch DCS action='" + action + "' for '" //$NON-NLS-1$ //$NON-NLS-2$
+                + address + "': " + message + ". Ensure EDT is open, re-open or clean the project, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "then retry action='" + action + "'.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return scope == null ? result.get() : finalizeWriteResult(scope, result.get());
     }
 
     /** The one exit for a DCS mutation, deriving its marker from the request's recorded writes. */

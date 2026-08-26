@@ -132,6 +132,8 @@ public final class DcsSchemaWriter
         {
             return Result.failure("The DCS schema content is unavailable. Re-open the template and retry."); //$NON-NLS-1$
         }
+        String stringError = requestStringMembersError(request);
+        if (stringError != null) return Result.failure(stringError);
         if (ACTION_REPLACE.equals(request.action))
         {
             String refusal = DcsMutationGuard.replaceError(schema, request.address);
@@ -308,7 +310,7 @@ public final class DcsSchemaWriter
         if (ACTION_UPDATE.equals(request.action))
         {
             String member = keyMember(request.type);
-            String replacement = string(request.body, member);
+            String replacement = DcsWriter.stringMember(request.body, member);
             if (replacement == null || identity.equals(replacement)) return null;
         }
         if (TYPE_FIELD_FOLDER.equals(request.type))
@@ -367,7 +369,7 @@ public final class DcsSchemaWriter
             if (own == null || path.size() != 2 || !own.equals(path.get(0))) return null;
         }
         String oldKey = field || dataSet ? path.get(path.size() - 1) : path.get(1);
-        String newKey = string(request.body, member);
+        String newKey = DcsWriter.stringMember(request.body, member);
         if (newKey == null || oldKey.equals(newKey)) return null;
         if (newKey.isEmpty())
         {
@@ -553,7 +555,7 @@ public final class DcsSchemaWriter
         String operation = request.action;
         if (ACTION_UPDATE.equals(request.action))
         {
-            String replacement = string(request.body, keyMember(request.type));
+            String replacement = DcsWriter.stringMember(request.body, keyMember(request.type));
             if (replacement != null && !selector.equals(replacement)) operation = "rename"; //$NON-NLS-1$
         }
         return selected.naturalCount > 1
@@ -845,7 +847,7 @@ public final class DcsSchemaWriter
             DataSetTarget target = resolveDataSetTarget(schema, path, false);
             if (target.error != null) return target.error;
             DataSet existing = target.dataSet;
-            String kind = string(request.body, KEY_TYPE);
+            String kind = DcsWriter.stringMember(request.body, KEY_TYPE);
             if (kind == null)
             {
                 kind = dataSetKind(existing);
@@ -901,7 +903,7 @@ public final class DcsSchemaWriter
         Request request, List<? extends EObject> existing)
     {
         String member = keyMember(request.type);
-        String retained = string(request.body, member);
+        String retained = DcsWriter.stringMember(request.body, member);
         if (retained == null || retained.isEmpty()) return null;
         Set<String> identities = new LinkedHashSet<>();
         for (EObject item : existing)
@@ -1076,6 +1078,121 @@ public final class DcsSchemaWriter
         target.getTotalFields().addAll(EcoreUtil.copyAll(source.getTotalFields()));
     }
 
+    private static String requestStringMembersError(Request request)
+    {
+        JsonObject body = request.body;
+        if (body == null) return null;
+        switch (request.type)
+        {
+            case TYPE_SCHEMA:
+                return schemaStringMembersError(body);
+            case TYPE_DATA_SOURCE:
+                return DcsWriter.stringMembersError(body, "A data source", "body", KEY_NAME); //$NON-NLS-1$ //$NON-NLS-2$
+            case TYPE_DATA_SET:
+                return dataSetStringMembersError(body, "body"); //$NON-NLS-1$
+            case TYPE_FIELD:
+                return DcsWriter.stringMembersError(body, "A field", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH, KEY_KIND);
+            case TYPE_FIELD_FOLDER:
+                return DcsWriter.stringMembersError(body, "A field folder", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH, KEY_KIND);
+            case TYPE_PARAMETER:
+                return DcsWriter.stringMembersError(body, "A parameter", "body", KEY_NAME); //$NON-NLS-1$ //$NON-NLS-2$
+            case TYPE_CALCULATED_FIELD:
+                return DcsWriter.stringMembersError(body, "A calculated field", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH);
+            case TYPE_TOTAL_FIELD:
+                return DcsWriter.stringMembersError(body, "A total field", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH);
+            default:
+                return null;
+        }
+    }
+
+    private static String schemaStringMembersError(JsonObject body)
+    {
+        String error = collectionStringMembersError(body, "dataSources", "A data source", //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_NAME);
+        if (error != null) return error;
+        error = dataSetCollectionStringMembersError(body, "dataSets"); //$NON-NLS-1$
+        if (error != null) return error;
+        error = collectionStringMembersError(body, "calculatedFields", "A calculated field", //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_DATA_PATH);
+        if (error != null) return error;
+        return collectionStringMembersError(body, "totalFields", "A total field", //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_DATA_PATH);
+    }
+
+    private static String collectionStringMembersError(JsonObject body, String collection,
+        String subject, String... members)
+    {
+        if (!body.has(collection) || !body.get(collection).isJsonArray()) return null;
+        JsonArray entries = body.getAsJsonArray(collection);
+        for (int i = 0; i < entries.size(); i++)
+        {
+            JsonElement element = entries.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            String error = DcsWriter.stringMembersError(element.getAsJsonObject(), subject,
+                collection + "[" + i + "]", members); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String dataSetCollectionStringMembersError(JsonObject body, String collection)
+    {
+        if (!body.has(collection) || !body.get(collection).isJsonArray()) return null;
+        JsonArray entries = body.getAsJsonArray(collection);
+        for (int i = 0; i < entries.size(); i++)
+        {
+            JsonElement element = entries.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            String error = dataSetStringMembersError(element.getAsJsonObject(),
+                collection + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String dataSetStringMembersError(JsonObject dataSet, String where)
+    {
+        String error = DcsWriter.stringMembersError(dataSet, "A data set", where, //$NON-NLS-1$
+            KEY_NAME, KEY_TYPE);
+        if (error != null) return error;
+        error = fieldStringMembersError(dataSet, where);
+        if (error != null) return error;
+        if (!dataSet.has(KEY_ITEMS) || !dataSet.get(KEY_ITEMS).isJsonArray()) return null;
+        JsonArray items = dataSet.getAsJsonArray(KEY_ITEMS);
+        for (int i = 0; i < items.size(); i++)
+        {
+            JsonElement element = items.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            error = dataSetStringMembersError(element.getAsJsonObject(),
+                where + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String fieldStringMembersError(JsonObject owner, String where)
+    {
+        if (!owner.has(KEY_FIELDS) || !owner.get(KEY_FIELDS).isJsonArray()) return null;
+        JsonArray fields = owner.getAsJsonArray(KEY_FIELDS);
+        for (int i = 0; i < fields.size(); i++)
+        {
+            JsonElement element = fields.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            JsonObject field = element.getAsJsonObject();
+            String fieldWhere = where + ".fields[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            String error = DcsWriter.stringMembersError(field, "A field", fieldWhere, //$NON-NLS-1$
+                KEY_DATA_PATH, KEY_KIND);
+            if (error != null) return error;
+            error = fieldStringMembersError(field, fieldWhere);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
     private static PayloadResult payload(DataCompositionSchema schema, Request request,
         DcsWriter.DataSetValidationContext dataSetValidation)
     {
@@ -1115,14 +1232,14 @@ public final class DcsSchemaWriter
         {
             for (JsonObject entry : objects(body.getAsJsonArray("dataSources"))) //$NON-NLS-1$
             {
-                mergeDataSourceType(schema, entry, string(entry, KEY_NAME));
+                mergeDataSourceType(schema, entry, DcsWriter.stringMember(entry, KEY_NAME));
             }
         }
         if (body.has("dataSets") && body.get("dataSets").isJsonArray()) //$NON-NLS-1$ //$NON-NLS-2$
         {
             for (JsonObject entry : objects(body.getAsJsonArray("dataSets"))) //$NON-NLS-1$
             {
-                String name = string(entry, KEY_NAME);
+                String name = DcsWriter.stringMember(entry, KEY_NAME);
                 DataSet existing = findDataSet(schema, name);
                 String error = normalizeDataSet(entry, existing, name, dataSetValidation);
                 if (error != null)
@@ -1275,7 +1392,7 @@ public final class DcsSchemaWriter
         {
             return null;
         }
-        String declaredType = string(entry, KEY_TYPE);
+        String declaredType = DcsWriter.stringMember(entry, KEY_TYPE);
         if (existing == null && "object".equalsIgnoreCase(declaredType)) //$NON-NLS-1$
         {
             entry.addProperty(KEY_TYPE, "object"); //$NON-NLS-1$
@@ -1331,7 +1448,7 @@ public final class DcsSchemaWriter
         }
         for (JsonObject child : objects(entry.getAsJsonArray(KEY_ITEMS)))
         {
-            String childName = string(child, KEY_NAME);
+            String childName = DcsWriter.stringMember(child, KEY_NAME);
             DataSet current = existing == null ? null : findDataSet(existing.getItems(), childName);
             String error = normalizeDataSet(child, current, childName, dataSetValidation, dataSetPath);
             if (error != null) return error;
@@ -1342,7 +1459,7 @@ public final class DcsSchemaWriter
     private static String nestedDataSetUpdateError(Request request, DataSet existing,
         JsonObject body, String address)
     {
-        String declaredType = string(body, KEY_TYPE);
+        String declaredType = DcsWriter.stringMember(body, KEY_TYPE);
         if (declaredType != null)
         {
             String existingType = dataSetKind(existing);
@@ -1358,9 +1475,9 @@ public final class DcsSchemaWriter
         {
             for (JsonObject field : objects(body.getAsJsonArray(KEY_FIELDS)))
             {
-                String key = string(field, KEY_DATA_PATH);
+                String key = DcsWriter.stringMember(field, KEY_DATA_PATH);
                 if (key == null) continue;
-                String requestedKind = string(field, KEY_KIND);
+                String requestedKind = DcsWriter.stringMember(field, KEY_KIND);
                 if (DcsUnsupportedAuthoring.isNestedDataSetKind(requestedKind))
                 {
                     return DcsUnsupportedAuthoring.refusal(
@@ -1405,7 +1522,7 @@ public final class DcsSchemaWriter
         List<DataSet> existingItems = ((DataCompositionSchemaDataSetUnion)existing).getItems();
         for (JsonObject child : objects(body.getAsJsonArray(KEY_ITEMS)))
         {
-            String key = string(child, KEY_NAME);
+            String key = DcsWriter.stringMember(child, KEY_NAME);
             if (key == null) continue;
             List<DataSet> matches = matchingDataSets(existingItems, key);
             String childAddress = address + "/items/" + key; //$NON-NLS-1$
@@ -1446,7 +1563,7 @@ public final class DcsSchemaWriter
         if (!entry.has(KEY_FIELDS) || !entry.get(KEY_FIELDS).isJsonArray()) return;
         for (JsonObject field : objects(entry.getAsJsonArray(KEY_FIELDS)))
         {
-            String path = string(field, KEY_DATA_PATH);
+            String path = DcsWriter.stringMember(field, KEY_DATA_PATH);
             DataCompositionSchemaDataSetField current = findField(dataSet, path);
             if (current != null) mergeFieldDefaults(field, current);
         }
@@ -1495,12 +1612,9 @@ public final class DcsSchemaWriter
             return PayloadResult.failure(missing(request, keyed.key,
                 fieldKeys(target.fields())));
         }
-        if (target.parent != null && !keyed.key.startsWith(target.parent.getDataPath() + ".")) //$NON-NLS-1$
-        {
-            return PayloadResult.failure("Field dataPath '" + keyed.key //$NON-NLS-1$
-                + "' is not below parent folder '" + target.parent.getDataPath() + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
-                + request.address + "'. Prefix it with the parent dataPath and a dot."); //$NON-NLS-1$
-        }
+        String parentError = fieldParentError(false, keyed.key,
+            target.parent == null ? null : target.parent.getDataPath(), request.address.toString());
+        if (parentError != null) return PayloadResult.failure(parentError);
         JsonObject field = request.body.deepCopy();
         field.addProperty(KEY_DATA_PATH, keyed.key);
         if (existing != null)
@@ -1550,16 +1664,9 @@ public final class DcsSchemaWriter
         {
             return PayloadResult.failure(missing(request, keyed.key, fieldKeys(target.fields())));
         }
-        if (target.parent != null)
-        {
-            String parentPath = target.parent.getDataPath();
-            if (parentPath != null && !keyed.key.startsWith(parentPath + ".")) //$NON-NLS-1$
-            {
-                return PayloadResult.failure("Field-folder dataPath '" + keyed.key //$NON-NLS-1$
-                    + "' is not below parent folder '" + parentPath + "' at '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + request.address + "'. Use a dataPath beginning '" + parentPath + ".'."); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
+        String parentError = fieldParentError(true, keyed.key,
+            target.parent == null ? null : target.parent.getDataPath(), request.address.toString());
+        if (parentError != null) return PayloadResult.failure(parentError);
         JsonObject folder = request.body.deepCopy();
         folder.addProperty(KEY_KIND, KIND_FOLDER);
         folder.addProperty(KEY_DATA_PATH, keyed.key);
@@ -1600,7 +1707,7 @@ public final class DcsSchemaWriter
             JsonElement element = dataSets.get(i);
             if (element == null || !element.isJsonObject()) continue;
             JsonObject entry = element.getAsJsonObject();
-            String name = string(entry, KEY_NAME);
+            String name = DcsWriter.stringMember(entry, KEY_NAME);
             DataSet existing = findDataSet(existingSets, name);
             List<String> dataSetPath = new ArrayList<>(parentPath);
             dataSetPath.add(name);
@@ -1633,19 +1740,23 @@ public final class DcsSchemaWriter
         return null;
     }
 
-    private static String extractFolderEntries(DataSet dataSet,
-        DataCompositionSchemaDataSetFieldFolder parent, JsonArray input, JsonArray flattened,
+    private static String extractFolderEntries(DataSet dataSet, String parentPath, JsonArray input,
+        JsonArray flattened,
         List<String> dataSetPath, List<FolderSpec> folders, Request request, String where,
         Set<String> bodyKeys)
     {
         for (int i = 0; i < input.size(); i++)
         {
             JsonElement element = input.get(i);
-            if (element == null || !element.isJsonObject()) continue;
-            JsonObject field = element.getAsJsonObject();
             String itemWhere = where + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-            String key = string(field, KEY_DATA_PATH);
-            String kind = string(field, KEY_KIND);
+            if (element == null || !element.isJsonObject())
+            {
+                return "Field entry at '" + itemWhere //$NON-NLS-1$
+                    + "' must be an object. Replace it with a field or folder object."; //$NON-NLS-1$
+            }
+            JsonObject field = element.getAsJsonObject();
+            String key = DcsWriter.stringMember(field, KEY_DATA_PATH);
+            String kind = DcsWriter.stringMember(field, KEY_KIND);
             if (DcsUnsupportedAuthoring.isNestedDataSetKind(kind))
             {
                 return DcsUnsupportedAuthoring.refusal(
@@ -1669,6 +1780,8 @@ public final class DcsSchemaWriter
                 return "Field kind '" + kind + "' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
                     + "' is invalid. Use kind='field' or kind='folder'."; //$NON-NLS-1$
             }
+            String parentError = fieldParentError(folder, key, parentPath, itemWhere);
+            if (parentError != null) return parentError;
             if (ACTION_UPDATE.equals(request.action) && existing == null)
             {
                 return "action='update' cannot create field '" + key + "' below '" + where //$NON-NLS-1$ //$NON-NLS-2$
@@ -1699,12 +1812,6 @@ public final class DcsSchemaWriter
                 return "A field folder (" + itemWhere //$NON-NLS-1$
                     + ") needs a non-empty 'dataPath'."; //$NON-NLS-1$
             }
-            if (parent != null && !key.startsWith(parent.getDataPath() + ".")) //$NON-NLS-1$
-            {
-                return "Field-folder dataPath '" + key + "' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
-                    + "' is not below parent folder '" + parent.getDataPath() //$NON-NLS-1$
-                    + "'. Prefix it with the parent dataPath and a dot."; //$NON-NLS-1$
-            }
             DcsPresentationParser.Plan title = null;
             if (field.has("title")) //$NON-NLS-1$
             {
@@ -1729,16 +1836,25 @@ public final class DcsSchemaWriter
                     return "Field folder member 'fields' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
                         + "' must be an array of field or folder objects."; //$NON-NLS-1$
                 }
-                DataCompositionSchemaDataSetFieldFolder existingFolder =
-                    existing instanceof DataCompositionSchemaDataSetFieldFolder
-                        ? (DataCompositionSchemaDataSetFieldFolder)existing : null;
-                String error = extractFolderEntries(dataSet, existingFolder,
+                String error = extractFolderEntries(dataSet, key,
                     field.getAsJsonArray(KEY_FIELDS), flattened, dataSetPath, folders, request,
                     itemWhere + ".fields", bodyKeys); //$NON-NLS-1$
                 if (error != null) return error;
             }
         }
         return null;
+    }
+
+    private static String fieldParentError(boolean folder, String dataPath, String parentPath,
+        String address)
+    {
+        if (dataPath == null || parentPath == null || dataPath.startsWith(parentPath + ".")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        return (folder ? "Field-folder" : "Field") + " dataPath '" + dataPath //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' is not below parent folder '" + parentPath + "' at '" + address //$NON-NLS-1$ //$NON-NLS-2$
+            + "'. Prefix it with the parent dataPath and a dot."; //$NON-NLS-1$
     }
 
     private static void mergeFolderRestrictionDefaults(JsonObject body,
@@ -1905,7 +2021,7 @@ public final class DcsSchemaWriter
             {
                 continue;
             }
-            String key = string(entry, KEY_DATA_PATH);
+            String key = DcsWriter.stringMember(entry, KEY_DATA_PATH);
             String current = expression(schema, collection, key);
             if (!keys(schema, collection, null).contains(key))
             {
@@ -1940,7 +2056,7 @@ public final class DcsSchemaWriter
 
     private static KeyResult key(Request request, String member, String pointerKey)
     {
-        String bodyKey = string(request.body, member);
+        String bodyKey = DcsWriter.stringMember(request.body, member);
         if (pointerKey != null && bodyKey != null && !pointerKey.equals(bodyKey))
         {
             if (ACTION_UPDATE.equals(request.action) && bodyKey.equals(request.renamedTo))
@@ -2037,15 +2153,6 @@ public final class DcsSchemaWriter
             }
         });
         return result;
-    }
-
-    private static String string(JsonObject object, String member)
-    {
-        if (object == null || !object.has(member) || !object.get(member).isJsonPrimitive())
-        {
-            return null;
-        }
-        return object.get(member).getAsString();
     }
 
     private static DataSet findDataSet(DataCompositionSchema schema, String name)

@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Test;
 
@@ -134,6 +135,28 @@ public class DcsToolTest
         assertFalse(marked.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue(marked.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
         assertEquals("post-commit scheduling threw", marked.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testReadDispatchRaceReturnsStructuredActionableError()
+    {
+        DcsAddress target = address("Report.Sales"); //$NON-NLS-1$
+        for (String action : Arrays.asList("get", "options")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            AtomicReference<String> result = new AtomicReference<>();
+            String response = DcsTool.dispatchResult(action, target, null, result, () -> {
+                throw new IllegalStateException("Display disposed between check and syncExec"); //$NON-NLS-1$
+            });
+
+            JsonObject error = JsonParser.parseString(response).getAsJsonObject();
+            assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+            String message = error.get("error").getAsString(); //$NON-NLS-1$
+            assertTrue(message, message.contains("action='" + action + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(message, message.contains("Report.Sales")); //$NON-NLS-1$
+            assertTrue(message, message.contains("Display disposed")); //$NON-NLS-1$
+            assertTrue(message, message.contains("re-open or clean the project")); //$NON-NLS-1$
+            assertTrue(message, message.contains("retry")); //$NON-NLS-1$
+        }
     }
 
     @Test

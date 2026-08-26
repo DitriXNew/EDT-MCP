@@ -648,6 +648,83 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testNonStringNaturalKeyIsRefusedWithoutChangingHash()
+    {
+        DataCompositionSchema schema = newSchema();
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "upsert", "dataSource", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", "{\"name\":5}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(result.isSuccess());
+        assertEquals("A data source (body) member 'name' must be a string.", result.error()); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testNonObjectFieldEntryIsRefusedWithoutChangingHash()
+    {
+        DataCompositionSchema schema = newSchema();
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result result = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", //$NON-NLS-1$
+            "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT 1\",\"fields\":[5]}"); //$NON-NLS-1$
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.error(), result.error().contains("dataSets[0].fields[0]")); //$NON-NLS-1$
+        assertTrue(result.error(), result.error().contains("must be an object")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+    }
+
+    @Test
+    public void testNestedFieldAndFolderMustStayBelowParentWhileValidChildFlattens()
+    {
+        DataCompositionSchema schema = newSchema();
+        String beforeHash = DcsHash.compute(schema);
+
+        DcsSchemaWriter.Result fieldOutsideParent = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", //$NON-NLS-1$
+            "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"fields\":[{\"kind\":\"folder\",\"dataPath\":\"Customer\"," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Amount\"}]}]}"); //$NON-NLS-1$
+        assertFalse(fieldOutsideParent.isSuccess());
+        assertTrue(fieldOutsideParent.error(), fieldOutsideParent.error().contains(
+            "Field dataPath 'Amount' is not below parent folder 'Customer'")); //$NON-NLS-1$
+        assertTrue(fieldOutsideParent.error(), fieldOutsideParent.error().contains(
+            "dataSets[0].fields[0].fields[0]")); //$NON-NLS-1$
+        assertTrue(fieldOutsideParent.error(), fieldOutsideParent.error().contains(
+            "Prefix it with the parent dataPath and a dot")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result folderOutsideParent = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", //$NON-NLS-1$
+            "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"fields\":[{\"kind\":\"folder\",\"dataPath\":\"Customer\"," //$NON-NLS-1$
+                + "\"fields\":[{\"kind\":\"folder\",\"dataPath\":\"Orders\"}]}]}"); //$NON-NLS-1$
+        assertFalse(folderOutsideParent.isSuccess());
+        assertTrue(folderOutsideParent.error(), folderOutsideParent.error().contains(
+            "Field-folder dataPath 'Orders' is not below parent folder 'Customer'")); //$NON-NLS-1$
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result accepted = apply(schema, "upsert", "dataSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales", //$NON-NLS-1$
+            "{\"name\":\"Sales\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"fields\":[{\"kind\":\"folder\",\"dataPath\":\"Customer\"," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Customer.Amount\"}]}]}"); //$NON-NLS-1$
+
+        assertTrue(accepted.error(), accepted.isSuccess());
+        assertFalse(beforeHash.equals(DcsHash.compute(schema)));
+        assertEquals(2, query(schema).getFields().size());
+        assertTrue(query(schema).getFields().stream().anyMatch(field ->
+            field instanceof DataCompositionSchemaDataSetField
+                && "Customer.Amount".equals(DcsFieldFolders.key(field)))); //$NON-NLS-1$
+        assertTrue(query(schema).getFields().stream().anyMatch(field ->
+            field instanceof DataCompositionSchemaDataSetFieldFolder
+                && "Customer".equals(DcsFieldFolders.key(field)))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testNestedDataSetRefusalIsArticulateAtNodeParentBodyAndCollectionReplace()
     {
         DataCompositionSchema schema = newSchema();
