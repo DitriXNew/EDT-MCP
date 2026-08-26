@@ -1238,7 +1238,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; force=true overrides that block and leaves those references dangling. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: NOTHING blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a field's dataPath, a command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Parameters and examples: get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; an EDT platform prohibition is listed separately and also blocks. force=true overrides either block and leaves only genuine incoming references dangling. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: NOTHING blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a field's dataPath, a command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Parameters and examples: get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -1302,7 +1302,25 @@
         "message": {
           "type": "string"
         },
+        "persisted": {
+          "type": "boolean"
+        },
+        "platformProhibitions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "platformProhibitionsCount": {
+          "type": "integer"
+        },
         "refactoringTitle": {
+          "type": "string"
+        },
+        "registeringContainer": {
+          "type": "string"
+        },
+        "registeringFile": {
           "type": "string"
         },
         "success": {

@@ -732,7 +732,10 @@ def test_confirm_without_force_is_blocked_by_incoming_reference():
 
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": "Catalog." + cat, "confirm": True})
     e = assert_error(r, "delete a still-referenced catalog without force must be blocked")
-    assert_error_quality(e, names=[cat], suggests=["referenced", "force"],
+    # "reference", not "referenced": the message distinguishes incoming REFERENCES from platform
+    # prohibitions now, so it says "incoming reference(s)" - pinning one inflection would fail the
+    # test for a wording that is more precise, not less.
+    assert_error_quality(e, names=[cat], suggests=["reference", "force"],
                          ctx="a blocked delete names the target and points at force=true")
     # Structured envelope marks the block and lists the referencer.
     assert r.structured is not None, "a JSON tool must return structuredContent on a blocked delete"
