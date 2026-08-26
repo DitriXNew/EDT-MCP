@@ -88,7 +88,11 @@ public class DcsPresentationParserTest
         assertTrue(parsed.error(), parsed.error().contains("declares no language codes")); //$NON-NLS-1$
         assertTrue(parsed.error(), parsed.error().contains("body.title")); //$NON-NLS-1$
         assertTrue(parsed.error(),
-            parsed.error().contains("Add a Language object with a 'languageCode'")); //$NON-NLS-1$
+            parsed.error().contains("add a Language object with a 'languageCode'")); //$NON-NLS-1$
+        // Both halves of the advice are pinned: an external-objects project has no Language object
+        // to add, so naming only that would hand half the callers an unusable instruction.
+        assertTrue(parsed.error(),
+            parsed.error().contains("external-objects project")); //$NON-NLS-1$
     }
 
     @Test

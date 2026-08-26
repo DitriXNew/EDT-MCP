@@ -23,6 +23,16 @@ import com.google.gson.JsonPrimitive;
 /** Shared pure parser for every localized DCS title or presentation. */
 public final class DcsPresentationParser
 {
+    /**
+     * Where a language actually comes from depends on the project shape, so the advice names both.
+     * A configuration declares Language objects; an external-objects project takes its languages
+     * from the base project its manifest names, or from the manifest itself when it stands alone.
+     * Naming only the Language object would send half the callers to a place they do not have.
+     */
+    private static final String NO_LANGUAGE_FIX =
+        "Declare one: add a Language object with a 'languageCode' to the configuration, or - for " //$NON-NLS-1$
+            + "an external-objects project - give it a base project or a manifest language. Then retry."; //$NON-NLS-1$
+
     private static final Set<String> PRESENTATION_MEMBERS = presentationMembers();
 
     private DcsPresentationParser()
@@ -110,10 +120,9 @@ public final class DcsPresentationParser
             }
             if (languages != null && languages.declaredCodes().isEmpty())
             {
-                return ParseResult.failure("This configuration declares no language codes, so " //$NON-NLS-1$
+                return ParseResult.failure("This project declares no language codes, so " //$NON-NLS-1$
                     + "the plain string in presentation '" + path //$NON-NLS-1$
-                    + "' cannot be stored where anything would display it. Add a Language " //$NON-NLS-1$
-                    + "object with a 'languageCode', then retry."); //$NON-NLS-1$
+                    + "' cannot be stored where anything would display it. " + NO_LANGUAGE_FIX); //$NON-NLS-1$
             }
             // A plain string is stored under the language the call is working in: the language
             // parameter when one is given, and the CONFIGURATION's default language when it is not.
@@ -162,9 +171,9 @@ public final class DcsPresentationParser
         if (languages.declaredCodes().isEmpty())
         {
             String first = object.keySet().iterator().next();
-            return ParseResult.failure("This configuration declares no language codes, so '" //$NON-NLS-1$
+            return ParseResult.failure("This project declares no language codes, so '" //$NON-NLS-1$
                 + first + "' in presentation '" + path + "' cannot be stored where anything " //$NON-NLS-1$ //$NON-NLS-2$
-                + "would display it. Add a Language object with a 'languageCode', then retry."); //$NON-NLS-1$
+                + "would display it. " + NO_LANGUAGE_FIX); //$NON-NLS-1$
         }
 
         Map<String, String> localized = new LinkedHashMap<>();
