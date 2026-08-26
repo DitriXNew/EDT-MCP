@@ -794,9 +794,15 @@ def wait_for_server(timeout=60):
 def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
     """True when every EDT project in the list_projects table reads 'ready'.
 
-    Only rows KNOWN to be non-EDT (`EDT Project` = No) are skipped; "-" (a closed project, or one
-    whose natures could not be read) keeps blocking, because a real project that is genuinely
-    building must never be mistaken for one that cannot become ready.
+    Two kinds of row are skipped, because neither can ever become ready and neither can serve a
+    tool: one KNOWN to be non-EDT (`EDT Project` = No), and one that is CLOSED (`Open` = No).
+    A closed project reads 'not_available' forever - EDT is deliberately not building it, which
+    is the entire point of closing a heavy configuration - so blocking on it aborts every local
+    run on such a workspace before the first test starts. A test that actually targets a closed
+    project still fails on its own, through the per-tool ProjectStateChecker guard, with a message
+    naming that project instead of a mute suite-level timeout. Everything else, "-" included,
+    keeps blocking: a real project that is genuinely building must never be mistaken for one that
+    cannot become ready.
 
     A workspace that hosts a 1C STANDALONE SERVER
     contains the WST container project ("Servers", `EDT Project` = No, no natures), which is
@@ -827,11 +833,12 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
         return not blocking_states
     blocking_projects = []
     for cells in rows:
-        state, edt_project = cells[1].strip().lower(), cells[4].strip().lower()
+        state, is_open = cells[1].strip().lower(), cells[3].strip().lower()
+        edt_project = cells[4].strip().lower()
         if edt_project == "no":
             continue  # a KNOWN non-EDT project (the standalone server's "Servers" container)
-        # Preserve the legacy predicate: despite the docstring's "-" claim, only these two states
-        # block. Reconciling that mismatch is deliberately out of scope for this diagnostic fix.
+        if is_open == "no":
+            continue  # closed on purpose: it will never leave 'not_available' by itself
         if state in ("building", "not_available"):
             blocking_projects.append((cells[0], state))
     if not_ready is not None:

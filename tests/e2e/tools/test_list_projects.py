@@ -76,6 +76,28 @@ def test_readiness_gate_examines_every_row_not_just_the_last():
         "every EDT project ready must read as ready (the non-EDT container is ignored)"
     assert blockers == [], "nothing may be reported as blocking on a ready workspace: %r" % (blockers,)
 
+    # A CLOSED project is not a blocker: EDT is deliberately not building it, so it reads
+    # 'not_available' for as long as it stays closed. Blocking on it aborted every local run on a
+    # workspace that keeps one heavy configuration closed on purpose.
+    closed_heavy = header + (
+        "| ERP_XML | not_available | /w/ERP | No | - | - |\n"
+        "| TestConfiguration | ready | /w/TestConfiguration | Yes | Yes | 1c |\n")
+    blockers = []
+    assert harness._all_edt_projects_ready(closed_heavy, not_ready=blockers), \
+        "a project closed on purpose must not block the suite"
+    assert blockers == [], "a closed project must not be reported as blocking: %r" % (blockers,)
+
+    # ...and skipping it must not smuggle a real blocker through: an OPEN project mid-build still
+    # blocks while a closed one sits in the same table.
+    closed_and_building = header + (
+        "| ERP_XML | not_available | /w/ERP | No | - | - |\n"
+        "| TestConfiguration | building | /w/TestConfiguration | Yes | Yes | 1c |\n")
+    blockers = []
+    assert not harness._all_edt_projects_ready(closed_and_building, not_ready=blockers), \
+        "a closed project must not make a genuinely building project read as ready"
+    assert blockers == [("TestConfiguration", "building")], \
+        "the building project must still be named: %r" % (blockers,)
+
     # No parseable row at all: the substring fallback must stay conservative rather than decay to
     # a permanent "ready", and must still say what it saw.
     blockers = []
