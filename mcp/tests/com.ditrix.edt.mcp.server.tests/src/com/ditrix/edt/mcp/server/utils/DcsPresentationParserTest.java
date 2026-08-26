@@ -22,6 +22,28 @@ import com.google.gson.JsonParser;
 /** Tests for DCS presentation language handling. */
 public class DcsPresentationParserTest
 {
+    /**
+     * An empty declared list is ambiguous - "declares none" and "the Language objects have not
+     * resolved yet" look identical. When the caller NAMED a language, resolveLanguage passes it
+     * through unvalidated because there is no list to validate against, so a code the caller asked
+     * for exists and the write must not be refused over a list we could not read.
+     */
+    @Test
+    public void testPlainStringSurvivesAnEmptyDeclaredListWhenTheCallerNamedALanguage()
+    {
+        DcsPresentationParser.LanguageContext selected =
+            new DcsPresentationParser.LanguageContext(java.util.Collections.<String> emptyList(),
+                "ru", null, true); //$NON-NLS-1$
+        DcsPresentationParser.ParseResult parsed =
+            DcsPresentationParser.parse(new com.google.gson.JsonPrimitive("Margin"), selected, //$NON-NLS-1$
+                "title"); //$NON-NLS-1$
+
+        assertTrue(parsed.error(), parsed.isSuccess());
+        com._1c.g5.v8.dt.dcs.model.core.Presentation built =
+            DcsPresentationParser.build(parsed.plan());
+        assertEquals("Margin", built.getLocalValue().getContent().get("ru")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     @Test
     public void testResolvedLanguageOverridesDeclarationOrder()
     {
@@ -85,7 +107,8 @@ public class DcsPresentationParserTest
             new DcsPresentationParser.LanguageContext(Collections.emptyList()), "body.title"); //$NON-NLS-1$
 
         assertFalse(parsed.isSuccess());
-        assertTrue(parsed.error(), parsed.error().contains("declares no language codes")); //$NON-NLS-1$
+        assertTrue(parsed.error(), parsed.error().contains("No language code is available")); //$NON-NLS-1$
+        assertTrue(parsed.error(), parsed.error().contains("still opening")); //$NON-NLS-1$
         assertTrue(parsed.error(), parsed.error().contains("body.title")); //$NON-NLS-1$
         assertTrue(parsed.error(),
             parsed.error().contains("add a Language object with a 'languageCode'")); //$NON-NLS-1$

@@ -118,11 +118,18 @@ public final class DcsPresentationParser
             {
                 return ParseResult.success(null);
             }
-            if (languages != null && languages.declaredCodes().isEmpty())
+            // Only when NOTHING was selected. An empty declared list is ambiguous: it means "declares
+            // none", but it also means "the Language objects have not resolved yet". When the caller
+            // named a language, resolveLanguage passes it through unvalidated precisely because there
+            // is no list to validate against - so we have a code the caller asked for, and refusing
+            // it would turn a working write into a failure over a list we could not read.
+            if (languages != null && languages.declaredCodes().isEmpty()
+                && !languages.languageSelected())
             {
-                return ParseResult.failure("This project declares no language codes, so " //$NON-NLS-1$
-                    + "the plain string in presentation '" + path //$NON-NLS-1$
-                    + "' cannot be stored where anything would display it. " + NO_LANGUAGE_FIX); //$NON-NLS-1$
+                return ParseResult.failure("No language code is available for the plain string in " //$NON-NLS-1$
+                    + "presentation '" + path + "', so it cannot be stored where anything would " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "display it. Pass 'language' explicitly, or wait for the project to finish " //$NON-NLS-1$
+                    + "loading if it is still opening. " + NO_LANGUAGE_FIX); //$NON-NLS-1$
             }
             // A plain string is stored under the language the call is working in: the language
             // parameter when one is given, and the CONFIGURATION's default language when it is not.
@@ -298,6 +305,12 @@ public final class DcsPresentationParser
          * The language code for a plain-string write: the selected call language when present,
          * otherwise the configuration's default code.
          */
+        /** Whether a language was named for THIS call, as opposed to resolved or defaulted. */
+        public boolean languageSelected()
+        {
+            return languageSelected;
+        }
+
         public String writeLanguageCode()
         {
             return languageSelected ? resolvedCode : configurationCode;
