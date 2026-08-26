@@ -12,20 +12,23 @@ with assert_no_diff() because a read tool must never mutate the project on disk.
 Negative matrix targets the tool's REAL execute() error paths:
   - missing required projectName  -> "projectName is required"  (JsonUtils.requireArgument)
   - non-existent project          -> "Project not found: <name>"
-  - invalid metadataType enum     -> "Unknown metadata type: <type>. Supported categories ..."
+  - invalid metadataType value    -> names the value and lists every accepted configuration type
 
 issue #289: metadataType now ALSO accepts a standard type-name token (the FQN form, as
 used elsewhere in the API - English or Russian, singular or plural, e.g. "CommonModule",
 "Справочник"), resolved via the shared MetadataTypeUtils resolver, IN ADDITION TO the
-legacy lowercase-plural category tokens (documents/catalogs/.../scheduledJobs) which stay
+legacy plural category tokens (documents/catalogs/.../scheduledJobs) which stay
 supported for back-compat. Separately, an AI naturally sending an undeclared
 types=["ScheduledJob"] array (instead of the declared metadataType) is now caught and
 rejected with an actionable error instead of being silently ignored.
 
+The configuration listing is driven by MetadataTypeUtils rather than a local collector
+whitelist, so both `all` and a named filter cover every standard configuration type.
+
 Fixture inventory used (TestConfiguration, English Names):
   Catalog.Catalog, CommonModule.Error, CommonModule.OK,
-  CommonForm.Form (CommonForm has no listed metadataType filter), Subsystem.Subsystem,
-  CommonAttribute.CommonAttribute, SessionParameter.SessionParameter.
+  CommonForm.Form, CommonTemplate.PrintForm, HTTPService.ProbeService,
+  Subsystem.Subsystem, CommonAttribute.CommonAttribute, SessionParameter.SessionParameter.
 """
 
 from harness import (
@@ -50,6 +53,10 @@ def test_lists_catalog_and_does_not_mutate():
     # Type token proves the row was built (not just an echo of our project name).
     assert_contains(r.text, "CommonModule",
                     "the 'all' listing must include common modules with their Type")
+    for metadata_type in (
+            "CommonForm", "CommonTemplate", "HTTPService", "SessionParameter", "Subsystem"):
+        assert_contains(r.text, metadata_type,
+                        f"the 'all' listing must include the fixture {metadata_type} kind")
     # A BASE configuration keeps the original columns: the Origin column (and its
     # extension-only labels) is appended ONLY for an extension project, so a base
     # listing must NOT carry it (extension-origin coverage: test_extension_coverage).
@@ -184,29 +191,27 @@ def test_nonexistent_project_errors_and_names_value():
 
 
 @e2e_test(tool="get_metadata_objects", kind="read")
-def test_invalid_metadatatype_enum_errors_actionably():
-    # metadataType accepts EITHER a category token OR a standard type-name token; a
-    # value recognized as NEITHER -> "Unknown metadata type: <type>. Supported
-    # categories (case-insensitive): all, documents, catalogs, ...". This error IS
-    # actionable: it enumerates the valid category values.
-    bad = "bogusType_e2e"
+def test_invalid_metadatatype_errors_actionably():
+    # An unknown token is distinct from a known type whose collection happens to be empty.
+    # The error names the bad value, enumerates the generated configuration vocabulary,
+    # includes `all`, and points to the guide that explains accepted spellings.
+    bad = "NotAType"
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": bad})
-    err = assert_error(r, "invalid metadataType enum")
-    # Names the bad value AND points at a valid alternative ('catalogs' is one of the
-    # listed supported values) -> the message is genuinely actionable.
-    assert_error_quality(err, names=[bad], suggests=["catalogs"],
-                         ctx="invalid metadataType names value and lists valid ones")
+    err = assert_error(r, "invalid metadataType value")
+    assert_error_quality(err, names=[bad], suggests=["all", "Catalog", "Role",
+                                                     "get_tool_guide"],
+                         ctx="invalid metadataType names the value and lists valid types")
     assert_no_diff("an invalid call must not touch the project on disk")
 
 
 @e2e_test(tool="get_metadata_objects", kind="read")
-def test_unrecognized_type_name_token_still_errors():
-    # A value that IS a metadata type name MetadataTypeUtils recognizes, but that this
-    # tool has NO collector for (e.g. Subsystem - see SUPPORTED_CATEGORIES), must still
-    # fall through to the actionable "Unknown metadata type" error, same as a totally
-    # bogus value - not silently succeed with an empty/wrong result.
+def test_subsystem_type_name_lists_fixture_root():
+    # Configuration.getSubsystems() exposes addressable top-level roots. Nested subsystems
+    # intentionally belong to list_subsystems, which can represent their tree path.
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "Subsystem"})
-    err = assert_error(r, "recognized-but-uncollected type name")
-    assert_error_quality(err, names=["Subsystem"], suggests=["catalogs"],
-                         ctx="uncollected type name still names the value and lists valid ones")
-    assert_no_diff("an invalid call must not touch the project on disk")
+    assert_ok(r, "get_metadata_objects metadataType=Subsystem")
+    assert_contains(r.text, "| Subsystem |",
+                    "Subsystem filter must list the fixture's addressable root subsystem")
+    assert_not_contains(r.text, "CommonModule",
+                        "Subsystem filter must not leak objects of other types")
+    assert_no_diff("a read tool must not touch the project on disk")

@@ -7,11 +7,7 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
-- `metadataType` - which kind to list; default `all`. Matching is case-insensitive, and it's a single string, not an array. Accepts EITHER form:
-  - a category token: `all`, `documents`, `catalogs`, `informationRegisters`, `accumulationRegisters`, `commonModules`, `enums`, `constants`, `reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `commonAttributes`, `eventSubscriptions`, `scheduledJobs`, `xdtoPackages`;
-  - OR a standard metadata type name - the same FQN token used elsewhere in the API, English or its Russian equivalent (e.g. `ScheduledJob`, `Document`, `Справочник`). This is the natural form to reach for; it maps onto the category above internally.
-
-  An unrecognized value (including a type name this tool has no collector for, e.g. `Subsystem`) returns an error naming the bad value and listing the supported categories. Note the parameter is `metadataType` (a single value) - there is no `types` array parameter.
+- `metadataType` - which kind to list; default `all`. Matching is case-insensitive, and it is a single string, not an array. Accepts `all` or any standard metadata type name - the FQN token in English or Russian, singular or plural (e.g. `ScheduledJob`, `Role`, `HTTPServices`, `Справочник`). Legacy English plural tokens such as `documents`, `commonModules`, and `xdtoPackages` remain accepted. An unrecognized value returns an error naming the bad value and listing every available configuration type. There is no `types` array parameter.
 - `nameFilter` - case-insensitive substring matched against the object **Name only**, never the Synonym. Omit to list everything of the chosen type.
 - `limit` - max rows returned; default from preferences (100), clamped to 1000. A truncation notice is appended when results are capped, while **Total** still reports the full count.
 - `language` - language code for the Synonym column (e.g. `en`, `ru`). Defaults to the configuration's default language.
@@ -21,7 +17,7 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 - `Synonym` - localized caption for the chosen `language`.
 - `Comment` - the object's comment, if any.
 - `Type` - e.g. `Document`, `Catalog`, `InformationRegister`, `CommonModule`, `Enum`.
-- `ObjectModule` - `Yes` if the object has an object/record-set/value-manager module, else `-`.
+- `ObjectModule` - `Yes` if the object owns a body module - an object, record-set, value-manager or command module, or the plain module of a common module / HTTP / web service - else `-`.
 - `ManagerModule` - `Yes` if the object has a manager module, else `-`.
 
 ## External-objects projects
@@ -42,5 +38,6 @@ answered from the base configuration it is linked to.
 
 ## Notes & gotchas
 - `nameFilter` matches the programmatic Name, never the localized synonym; searching by a translated caption will not match.
+- `Subsystem` lists top-level roots only. Nested subsystems are not directly addressable as `Subsystem.<Name>`; use `list_subsystems` for the complete tree and its paths.
 - The Synonym is keyed by language **code** (`en`/`ru`), not the language's display name; an unconfigured language yields an empty synonym, not an error.
 - Output is Markdown; table cells are escaped so a `|` in a comment or synonym does not break the table.

@@ -26,7 +26,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * output schema, result file name, guide) and the {@code projectName}
  * required-argument validation in {@code execute(Map)} that returns BEFORE the
  * first {@code PlatformUI.getWorkbench().getDisplay()} call. Everything past that
- * call (project/configuration resolution, the metadataType switch including the
+ * call (project/configuration resolution, metadata collection including the
  * "Unknown metadata type" branch, collection and formatting) needs a live EDT
  * workspace and is covered by the E2E suite.
  */
@@ -164,14 +164,15 @@ public class GetMetadataObjectsToolTest
     {
         // The exhaustive per-tool detail moved out of the always-loaded
         // description/schema and into the on-demand guide channel. The guide
-        // must be non-empty and still carry the migrated specifics (the full
-        // metadataType enum, the Name-only filter rule, the synonym-by-code note).
+        // must be non-empty and still carry the type vocabulary, the Name-only
+        // filter rule, and the module/subsystem boundaries.
         String guide = new GetMetadataObjectsTool().getGuide();
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
-        assertTrue(guide.contains("eventSubscriptions")); //$NON-NLS-1$
+        assertTrue(guide.contains("HTTPService")); //$NON-NLS-1$
         assertTrue(guide.contains("nameFilter")); //$NON-NLS-1$
         assertTrue(guide.contains("ManagerModule")); //$NON-NLS-1$
+        assertTrue(guide.contains("list_subsystems")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (returns before any workbench access) ====================
@@ -229,29 +230,27 @@ public class GetMetadataObjectsToolTest
             !result.contains("Unknown metadata type")); //$NON-NLS-1$
     }
 
-    // ==================== issue #289: metadataType normalization (pure logic, no ======
-    // ==================== EDT/workbench dependency - see normalizeMetadataType javadoc)
+    // ==================== metadataType normalization (pure logic, no workbench) ====================
 
     @Test
     public void testNormalizeMetadataTypeAcceptsLegacyCategoryTokens()
     {
         GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
         assertEquals("all", tool.normalizeMetadataType("all")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("scheduledjobs", tool.normalizeMetadataType("scheduledJobs")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("catalogs", tool.normalizeMetadataType("Catalogs")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("commonmodules", tool.normalizeMetadataType("COMMONMODULES")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ScheduledJob", tool.normalizeMetadataType("scheduledjobs")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog", tool.normalizeMetadataType("catalogs")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonModule", tool.normalizeMetadataType("commonmodules")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testNormalizeMetadataTypeAcceptsEnglishTypeNameToken()
     {
-        // The core #289 fix: a standard FQN type-name token (singular, as an AI would
-        // naturally send it) now resolves to the same category as the legacy plural.
+        // Standard FQN type-name tokens and legacy plurals normalize to one canonical token.
         GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
-        assertEquals("scheduledjobs", tool.normalizeMetadataType("ScheduledJob")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("scheduledjobs", tool.normalizeMetadataType("scheduledjob")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("documents", tool.normalizeMetadataType("Document")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("commonmodules", tool.normalizeMetadataType("CommonModule")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ScheduledJob", tool.normalizeMetadataType("ScheduledJob")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ScheduledJob", tool.normalizeMetadataType("scheduledjob")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Document", tool.normalizeMetadataType("Document")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonModule", tool.normalizeMetadataType("CommonModule")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -265,19 +264,31 @@ public class GetMetadataObjectsToolTest
         String ruCatalog = // Справочник (Catalog)
             "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A"; //$NON-NLS-1$
         GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
-        assertEquals("scheduledjobs", tool.normalizeMetadataType(ruScheduledJob)); //$NON-NLS-1$
-        assertEquals("catalogs", tool.normalizeMetadataType(ruCatalog)); //$NON-NLS-1$
+        assertEquals("ScheduledJob", tool.normalizeMetadataType(ruScheduledJob)); //$NON-NLS-1$
+        assertEquals("Catalog", tool.normalizeMetadataType(ruCatalog)); //$NON-NLS-1$
     }
 
     @Test
-    public void testNormalizeMetadataTypeRejectsRecognizedButUncollectedTypeName()
+    public void testNormalizeMetadataTypeAcceptsEveryPreviouslyUncollectedProbe()
     {
-        // MetadataTypeUtils recognizes far more type names than this tool has
-        // collectors for; a type it does NOT collect (Subsystem, Role) must fall
-        // through to "not recognized" here rather than silently mis-mapping.
         GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
-        assertNull(tool.normalizeMetadataType("Subsystem")); //$NON-NLS-1$
-        assertNull(tool.normalizeMetadataType("Role")); //$NON-NLS-1$
+        assertEquals("Role", tool.normalizeMetadataType("Role")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Subsystem", tool.normalizeMetadataType("Subsystem")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("HTTPService", tool.normalizeMetadataType("HTTPService")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ExternalDataSource", //$NON-NLS-1$
+            tool.normalizeMetadataType("ExternalDataSource")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeAcceptsRussianPreviouslyUncollectedProbes()
+    {
+        String ruRole = // Роль (Role)
+            "\u0420\u043E\u043B\u044C"; //$NON-NLS-1$
+        String ruSubsystem = // Подсистема (Subsystem)
+            "\u041F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u0430"; //$NON-NLS-1$
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertEquals("Role", tool.normalizeMetadataType(ruRole)); //$NON-NLS-1$
+        assertEquals("Subsystem", tool.normalizeMetadataType(ruSubsystem)); //$NON-NLS-1$
     }
 
     @Test
@@ -285,15 +296,22 @@ public class GetMetadataObjectsToolTest
     {
         // XDTO packages had NO listing route at all, which left the XDTO tools' own advice
         // ("check the name with get_metadata_objects") pointing nowhere (issue #321).
-        // The configuration collection is "xDTOPackages", so the category token is its
-        // lowercase form - the type name resolves to the same category.
+        // The configuration collection is "xDTOPackages"; the shared resolver preserves
+        // its unusual DTO capitalization while returning the canonical singular type.
         String ruXdtoPackage = // ПакетXDTO (XDTOPackage)
             "\u041F\u0430\u043A\u0435\u0442XDTO"; //$NON-NLS-1$
         GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
-        assertEquals("xdtopackages", tool.normalizeMetadataType("xdtoPackages")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("xdtopackages", tool.normalizeMetadataType("XDTOPACKAGES")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("xdtopackages", tool.normalizeMetadataType("XDTOPackage")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("xdtopackages", tool.normalizeMetadataType(ruXdtoPackage)); //$NON-NLS-1$
+        assertEquals("XDTOPackage", tool.normalizeMetadataType("xdtopackages")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("XDTOPackage", tool.normalizeMetadataType("XDTOPACKAGES")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("XDTOPackage", tool.normalizeMetadataType("XDTOPackage")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("XDTOPackage", tool.normalizeMetadataType(ruXdtoPackage)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeRejectsStandaloneTypeOnConfigurationPath()
+    {
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertNull(tool.normalizeMetadataType("ExternalDataProcessor")); //$NON-NLS-1$
     }
 
     @Test
