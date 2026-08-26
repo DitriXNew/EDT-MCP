@@ -1094,8 +1094,9 @@ public final class DcsSchemaWriter
                 return DcsWriter.stringMembersError(body, "A field", "body", //$NON-NLS-1$ //$NON-NLS-2$
                     KEY_DATA_PATH, KEY_KIND);
             case TYPE_FIELD_FOLDER:
-                return DcsWriter.stringMembersError(body, "A field folder", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                String folderError = DcsWriter.stringMembersError(body, "A field folder", "body", //$NON-NLS-1$ //$NON-NLS-2$
                     KEY_DATA_PATH, KEY_KIND);
+                return folderError != null ? folderError : fieldStringMembersError(body, "body"); //$NON-NLS-1$
             case TYPE_PARAMETER:
                 return DcsWriter.stringMembersError(body, "A parameter", "body", KEY_NAME); //$NON-NLS-1$ //$NON-NLS-2$
             case TYPE_CALCULATED_FIELD:
@@ -1216,9 +1217,9 @@ public final class DcsSchemaWriter
             case TYPE_PARAMETER:
                 return namedPayload(schema, request, "parameters", KEY_NAME); //$NON-NLS-1$
             case TYPE_CALCULATED_FIELD:
-                return expressionPayload(schema, request, "calculatedFields"); //$NON-NLS-1$
+                return expressionPayload(schema, request, "calculatedFields", dataSetValidation); //$NON-NLS-1$
             case TYPE_TOTAL_FIELD:
-                return expressionPayload(schema, request, "totalFields"); //$NON-NLS-1$
+                return expressionPayload(schema, request, "totalFields", dataSetValidation); //$NON-NLS-1$
             default:
                 return PayloadResult.failure("Type '" + request.type + "' is not authorable here."); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -1248,12 +1249,13 @@ public final class DcsSchemaWriter
                 }
             }
         }
-        PayloadResult calculated = normalizeExpressions(schema, body, "calculatedFields"); //$NON-NLS-1$
+        PayloadResult calculated = normalizeExpressions(schema, body, "calculatedFields", //$NON-NLS-1$
+            dataSetValidation);
         if (calculated.error != null)
         {
             return calculated;
         }
-        PayloadResult totals = normalizeExpressions(schema, body, "totalFields"); //$NON-NLS-1$
+        PayloadResult totals = normalizeExpressions(schema, body, "totalFields", dataSetValidation); //$NON-NLS-1$
         return totals.error == null ? PayloadResult.success(body) : totals;
     }
 
@@ -1980,7 +1982,7 @@ public final class DcsSchemaWriter
     }
 
     private static PayloadResult expressionPayload(DataCompositionSchema schema, Request request,
-        String collection)
+        String collection, DcsWriter.DataSetValidationContext dataSetValidation)
     {
         KeyResult keyed = naturalKey(request, collection, KEY_DATA_PATH);
         if (keyed.error != null)
@@ -2003,13 +2005,20 @@ public final class DcsSchemaWriter
                     + "' requires an 'expression' member. Pass an empty string only when " //$NON-NLS-1$
                     + "intentionally resetting it."); //$NON-NLS-1$
             }
-            entry.addProperty(KEY_EXPRESSION, current);
+            if (current != null)
+            {
+                entry.addProperty(KEY_EXPRESSION, current);
+            }
+            else
+            {
+                dataSetValidation.allowMissingExpression(collection, keyed.key);
+            }
         }
         return PayloadResult.success(wrap(collection, entry));
     }
 
     private static PayloadResult normalizeExpressions(DataCompositionSchema schema, JsonObject body,
-        String collection)
+        String collection, DcsWriter.DataSetValidationContext dataSetValidation)
     {
         if (!body.has(collection) || !body.get(collection).isJsonArray())
         {
@@ -2029,7 +2038,14 @@ public final class DcsSchemaWriter
                     + "' requires an 'expression' member. Pass an empty string only when " //$NON-NLS-1$
                     + "intentionally resetting it."); //$NON-NLS-1$
             }
-            entry.addProperty(KEY_EXPRESSION, current);
+            if (current != null)
+            {
+                entry.addProperty(KEY_EXPRESSION, current);
+            }
+            else
+            {
+                dataSetValidation.allowMissingExpression(collection, key);
+            }
         }
         return PayloadResult.success(body);
     }

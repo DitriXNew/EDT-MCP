@@ -255,12 +255,13 @@ public final class DcsWriter
 
     /**
      * Model-aware exceptions to lifecycle requirements enforced by the otherwise shape-only parser.
-     * Paths use data-set natural keys, including every containing union, so one legacy object data set
-     * cannot relax validation for an unrelated new entry in the same payload.
+     * Data-set paths include every containing union; expression keys include their collection, so one
+     * legacy node cannot relax validation for an unrelated new entry in the same payload.
      */
     static final class DataSetValidationContext
     {
         private final Set<List<String>> missingObjectNameAllowed = new HashSet<>();
+        private final Set<List<String>> missingExpressionAllowed = new HashSet<>();
 
         void allowMissingObjectName(List<String> dataSetPath)
         {
@@ -270,6 +271,16 @@ public final class DcsWriter
         boolean allowsMissingObjectName(List<String> dataSetPath)
         {
             return missingObjectNameAllowed.contains(dataSetPath);
+        }
+
+        void allowMissingExpression(String collection, String dataPath)
+        {
+            missingExpressionAllowed.add(Arrays.asList(collection, dataPath));
+        }
+
+        boolean allowsMissingExpression(String collection, String dataPath)
+        {
+            return missingExpressionAllowed.contains(Arrays.asList(collection, dataPath));
         }
     }
 
@@ -1402,7 +1413,7 @@ public final class DcsWriter
         {
             DataCompositionSchemaTotalField field = getOrCreateTotalField(schema, totalPlan.dataPath);
             field.setDataPath(totalPlan.dataPath);
-            if (totalPlan.expression != null)
+            if (totalPlan.members.has(KEY_EXPRESSION))
             {
                 field.setExpression(totalPlan.expression);
             }
@@ -1425,7 +1436,10 @@ public final class DcsWriter
     {
         DataCompositionSchemaCalculatedField field = getOrCreateCalculatedField(schema, plan.dataPath);
         field.setDataPath(plan.dataPath);
-        field.setExpression(plan.expression);
+        if (plan.members.has(KEY_EXPRESSION))
+        {
+            field.setExpression(plan.expression);
+        }
         if (plan.title != null)
         {
             field.setTitle(buildPresentation(plan.title));
@@ -2061,11 +2075,11 @@ public final class DcsWriter
         }
         if (error == null)
         {
-            error = parseCalculatedFields(spec, plan, languages);
+            error = parseCalculatedFields(spec, plan, languages, dataSetValidation);
         }
         if (error == null)
         {
-            error = parseTotalFields(spec, plan);
+            error = parseTotalFields(spec, plan, dataSetValidation);
         }
         if (error != null)
         {
@@ -2443,7 +2457,7 @@ public final class DcsWriter
     }
 
     private static String parseCalculatedFields(JsonObject spec, Plan plan,
-        DcsPresentationParser.LanguageContext languages)
+        DcsPresentationParser.LanguageContext languages, DataSetValidationContext dataSetValidation)
     {
         List<JsonObject> entries = objectArray(spec, KEY_CALCULATED_FIELDS);
         if (entries == null)
@@ -2452,7 +2466,8 @@ public final class DcsWriter
         }
         for (int i = 0; i < entries.size(); i++)
         {
-            String error = parseCalculatedField(entries.get(i), i, plan, languages);
+            String error = parseCalculatedField(entries.get(i), i, plan, languages,
+                dataSetValidation);
             if (error != null)
             {
                 return error;
@@ -2468,7 +2483,7 @@ public final class DcsWriter
      * expression is meaningful for a run-time-filled calculated field and must be preserved.
      */
     private static String parseCalculatedField(JsonObject entry, int index, Plan plan,
-        DcsPresentationParser.LanguageContext languages)
+        DcsPresentationParser.LanguageContext languages, DataSetValidationContext dataSetValidation)
     {
         String where = KEY_CALCULATED_FIELDS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
         String unknown = unknownMembers(entry, where, KEY_DATA_PATH, KEY_EXPRESSION, KEY_TITLE,
@@ -2487,12 +2502,13 @@ public final class DcsWriter
         {
             return ERR_CALCULATED_FIELD + where + ") needs a non-empty '" + KEY_DATA_PATH + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        if (!entry.has(KEY_EXPRESSION))
+        if (!entry.has(KEY_EXPRESSION) && (dataSetValidation == null
+            || !dataSetValidation.allowsMissingExpression(KEY_CALCULATED_FIELDS, dataPath)))
         {
             return ERR_CALCULATED_FIELD + where + ") needs an '" + KEY_EXPRESSION //$NON-NLS-1$
                 + "' member. Pass an empty string only when intentionally resetting it."; //$NON-NLS-1$
         }
-        if (!isStringMember(entry, KEY_EXPRESSION))
+        if (entry.has(KEY_EXPRESSION) && !isStringMember(entry, KEY_EXPRESSION))
         {
             return ERR_CALCULATED_FIELD + where + ") member '" + KEY_EXPRESSION //$NON-NLS-1$
                 + "' must be a string. Pass an empty string only when intentionally resetting it."; //$NON-NLS-1$
@@ -2508,7 +2524,8 @@ public final class DcsWriter
         return null;
     }
 
-    private static String parseTotalFields(JsonObject spec, Plan plan)
+    private static String parseTotalFields(JsonObject spec, Plan plan,
+        DataSetValidationContext dataSetValidation)
     {
         List<JsonObject> entries = objectArray(spec, KEY_TOTAL_FIELDS);
         if (entries == null)
@@ -2533,7 +2550,8 @@ public final class DcsWriter
                 return ERR_TOTAL_FIELD + where + ") needs a non-empty '" + KEY_DATA_PATH + "'."; //$NON-NLS-1$ //$NON-NLS-2$
             }
             String expression = nonEmptyString(entry, KEY_EXPRESSION);
-            if (expression == null)
+            if (expression == null && (entry.has(KEY_EXPRESSION) || dataSetValidation == null
+                || !dataSetValidation.allowsMissingExpression(KEY_TOTAL_FIELDS, dataPath)))
             {
                 return ERR_TOTAL_FIELD + where + ") needs a non-empty '" + KEY_EXPRESSION + "'."; //$NON-NLS-1$ //$NON-NLS-2$
             }
@@ -2542,7 +2560,7 @@ public final class DcsWriter
             {
                 return ERR_TOTAL_FIELD + where + ") 'groups' must be an array of strings."; //$NON-NLS-1$
             }
-            plan.totalFields.add(new TotalFieldPlan(dataPath, expression, groups));
+            plan.totalFields.add(new TotalFieldPlan(dataPath, expression, groups, entry.deepCopy()));
         }
         return null;
     }
@@ -3152,12 +3170,14 @@ public final class DcsWriter
         final String dataPath;
         final String expression;
         final List<String> groups;
+        final JsonObject members;
 
-        TotalFieldPlan(String dataPath, String expression, List<String> groups)
+        TotalFieldPlan(String dataPath, String expression, List<String> groups, JsonObject members)
         {
             this.dataPath = dataPath;
             this.expression = expression;
             this.groups = groups;
+            this.members = members;
         }
     }
 

@@ -662,6 +662,55 @@ public class DcsSchemaWriterTest
     }
 
     @Test
+    public void testPartialCalculatedFieldUpdateAllowsAbsentExistingExpression()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaCalculatedField field = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaCalculatedField();
+        field.setDataPath("RuntimeValue"); //$NON-NLS-1$
+        assertNull(field.getExpression());
+        schema.getCalculatedFields().add(field);
+
+        DcsSchemaWriter.Result result = apply(schema, "update", "calculatedField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Report.Sales#/calculatedFields/RuntimeValue", //$NON-NLS-1$
+            "{\"title\":{\"en\":\"Updated runtime value\"}}"); //$NON-NLS-1$
+
+        assertTrue(result.error(), result.isSuccess());
+        assertNull(schema.getCalculatedFields().get(0).getExpression());
+        assertEquals("Updated runtime value", //$NON-NLS-1$
+            schema.getCalculatedFields().get(0).getTitle().getLocalValue().getContent().get("en")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFieldFolderRecursivelyRefusesNonStringNestedKindWithoutChangingHash()
+    {
+        DataCompositionSchema schema = newSchema();
+        schema.getDataSets().add(dataSet("Sales", "SELECT 1")); //$NON-NLS-1$ //$NON-NLS-2$
+        String beforeHash = DcsHash.compute(schema);
+        String address = "Report.Sales#/dataSets/Sales/fields"; //$NON-NLS-1$
+
+        DcsSchemaWriter.Result malformed = apply(schema, "upsert", "fieldFolder", address, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"dataPath\":\"Customer\",\"fields\":[" //$NON-NLS-1$
+                + "{\"kind\":\"folder\",\"dataPath\":\"Customer.Orders\",\"fields\":[" //$NON-NLS-1$
+                + "{\"kind\":5,\"dataPath\":\"Customer.Orders.Amount\"}]}]}"); //$NON-NLS-1$
+
+        assertFalse(malformed.isSuccess());
+        assertEquals("A field (body.fields[0].fields[0]) member 'kind' must be a string.", //$NON-NLS-1$
+            malformed.error());
+        assertEquals(beforeHash, DcsHash.compute(schema));
+
+        DcsSchemaWriter.Result valid = apply(schema, "upsert", "fieldFolder", address, //$NON-NLS-1$ //$NON-NLS-2$
+            "{\"dataPath\":\"Customer\",\"fields\":[" //$NON-NLS-1$
+                + "{\"kind\":\"folder\",\"dataPath\":\"Customer.Orders\",\"fields\":[" //$NON-NLS-1$
+                + "{\"kind\":\"field\",\"dataPath\":\"Customer.Orders.Amount\"}]}]}"); //$NON-NLS-1$
+
+        assertTrue(valid.error(), valid.isSuccess());
+        assertTrue(query(schema).getFields().stream().anyMatch(item ->
+            item instanceof DataCompositionSchemaDataSetField
+                && "Customer.Orders.Amount".equals(DcsFieldFolders.key(item)))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testNonObjectFieldEntryIsRefusedWithoutChangingHash()
     {
         DataCompositionSchema schema = newSchema();
