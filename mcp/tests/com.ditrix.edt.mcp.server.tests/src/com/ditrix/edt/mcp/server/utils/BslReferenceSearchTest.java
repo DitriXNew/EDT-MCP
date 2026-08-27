@@ -220,6 +220,36 @@ public class BslReferenceSearchTest
     }
 
     @Test
+    public void scopedResourceSetChangeBetweenPassesForcesCompleteWorkspaceFallback()
+    {
+        IProject base = project("Base"); //$NON-NLS-1$
+        IProject dependency = project("ExternalObjects"); //$NON-NLS-1$
+        URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        URI dependencyURI =
+            platformURI("ExternalObjects", "src/CommonModules/External/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        IResourceDescription baseDescription = description(baseURI);
+        IResourceDescription dependencyDescription = description(dependencyURI);
+        List<IResourceDescription> firstPass =
+            Arrays.asList(baseDescription, dependencyDescription);
+        List<IResourceDescription> secondPass = Collections.singletonList(baseDescription);
+        IResourceDescriptions index = mock(IResourceDescriptions.class);
+        when(index.getAllResourceDescriptions()).thenReturn(firstPass).thenReturn(secondPass);
+        IResourceServiceProvider resourceServiceProvider = provider(index);
+        IReferenceFinder finder = mock(IReferenceFinder.class);
+        Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
+        IAcceptor<IReferenceDescription> acceptor = ignored -> { };
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        CascadeEnvironment environment = stableEnvironment(base, dependency);
+
+        BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
+            monitor, environment);
+
+        verify(index, times(2)).getAllResourceDescriptions();
+        verify(finder, never()).findReferences(any(), any(), any(), any(), any());
+        verify(finder).findAllReferences(eq(targets), isNull(), eq(acceptor), eq(monitor));
+    }
+
+    @Test
     public void unregisteredOpenExternalObjectsProjectForcesCompleteWorkspaceFallback()
     {
         IProject base = project("Base"); //$NON-NLS-1$

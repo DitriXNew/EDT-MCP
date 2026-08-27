@@ -51,7 +51,16 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesRes
  * non-workspace resource, this helper calls {@link IReferenceFinder#findAllReferences} exactly as the
  * previous implementation did. Membership and readiness are captured before index enumeration and
  * re-captured afterward; an observable change discards the scoped result. This is change DETECTION,
- * not an atomic snapshot or a guarantee that no change can occur after the second capture.
+ * not an atomic snapshot.
+ * <p>
+ * The scoped URI set itself is enumerated twice in immediate succession through the same index path.
+ * A difference detects resource movement between the passes, including an open-close-open project
+ * transition that removed or restored indexed resources while the endpoint project snapshots agree.
+ * This still does NOT make enumeration and the subsequent search atomic: a change entirely after the
+ * second pass, or one that reverses within either single pass (or otherwise leaves both collected sets
+ * identical), remains undetected. The Xtext index API available here exposes no generation/version
+ * signal with which to establish anything stronger.
+ * <p>
  * A successful fallback is therefore complete on the SOURCE side. A changed shared snapshot can still
  * make caller-supplied adopted TARGETS incomplete, which the returned stability signal preserves for
  * strict callers. This is load-bearing for {@code delete_metadata}: silently searching a partial source
@@ -188,41 +197,64 @@ public final class BslReferenceSearch
                 return ScopeResolution.failure("Xtext index is unavailable"); //$NON-NLS-1$
             }
 
-            Iterable<IResourceDescription> descriptions = indexData.getAllResourceDescriptions();
-            if (descriptions == null)
+            Set<URI> firstPassSourceResourceURIs = new LinkedHashSet<>();
+            Set<URI> secondPassSourceResourceURIs = new LinkedHashSet<>();
+            for (int pass = 0; pass < 2; pass++)
             {
-                return ScopeResolution.failure("Xtext index enumeration is unavailable"); //$NON-NLS-1$
+                Iterable<IResourceDescription> descriptions =
+                    indexData.getAllResourceDescriptions();
+                if (descriptions == null)
+                {
+                    return ScopeResolution.failure("Xtext index enumeration is unavailable"); //$NON-NLS-1$
+                }
+
+                Set<URI> currentPassSourceResourceURIs = new LinkedHashSet<>();
+                for (IResourceDescription description : descriptions)
+                {
+                    if (description == null || description.getURI() == null)
+                    {
+                        return ScopeResolution.failure(
+                            "Xtext index returned an invalid resource description"); //$NON-NLS-1$
+                    }
+                    URI resourceURI = description.getURI();
+                    if (isKnownNonWorkspaceResource(resourceURI))
+                    {
+                        continue;
+                    }
+                    if (!resourceURI.isPlatformResource())
+                    {
+                        return ScopeResolution.failure(
+                            "Xtext index contains an unclassifiable URI scheme: " //$NON-NLS-1$
+                                + schemeForLog(resourceURI));
+                    }
+                    String resourceProjectName = platformResourceProjectName(resourceURI);
+                    if (projectNames.contains(resourceProjectName))
+                    {
+                        currentPassSourceResourceURIs.add(resourceURI);
+                    }
+                }
+
+                if (pass == 0)
+                {
+                    firstPassSourceResourceURIs = currentPassSourceResourceURIs;
+                }
+                else
+                {
+                    secondPassSourceResourceURIs = currentPassSourceResourceURIs;
+                }
             }
 
-            Set<URI> sourceResourceURIs = new LinkedHashSet<>();
-            for (IResourceDescription description : descriptions)
+            if (!firstPassSourceResourceURIs.equals(secondPassSourceResourceURIs))
             {
-                if (description == null || description.getURI() == null)
-                {
-                    return ScopeResolution.failure(
-                        "Xtext index returned an invalid resource description"); //$NON-NLS-1$
-                }
-                URI resourceURI = description.getURI();
-                if (isKnownNonWorkspaceResource(resourceURI))
-                {
-                    continue;
-                }
-                if (!resourceURI.isPlatformResource())
-                {
-                    return ScopeResolution.failure("Xtext index contains an unclassifiable URI scheme: " //$NON-NLS-1$
-                        + schemeForLog(resourceURI));
-                }
-                String resourceProjectName = platformResourceProjectName(resourceURI);
-                if (projectNames.contains(resourceProjectName))
-                {
-                    sourceResourceURIs.add(resourceURI);
-                }
+                return ScopeResolution.failure(
+                    "Xtext index scoped resource set changed between consecutive enumerations"); //$NON-NLS-1$
             }
 
             // A READY BSL project can legitimately have no modules. Dependency snapshots have
             // already proved that every scoped project is settled, so an empty source set is complete;
             // project readiness, not an invented per-project resource-count rule, guards this case.
-            return ScopeResolution.scoped(new ArrayList<>(sourceResourceURIs), projectNames.size());
+            return ScopeResolution.scoped(new ArrayList<>(secondPassSourceResourceURIs),
+                projectNames.size());
         }
         catch (RuntimeException e)
         {
