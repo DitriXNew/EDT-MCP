@@ -49,7 +49,7 @@ import com.ditrix.edt.mcp.server.utils.BslReferenceSearch;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
-import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Domain service that finds all references to a metadata object.
@@ -790,8 +790,8 @@ public class MetadataReferenceService
                     return;
                 }
 
-                CascadeParticipantsResult extensionParticipants =
-                    ProjectStateChecker.determineCascadeParticipants(sourceProject);
+                SearchDependenciesResult searchDependencies =
+                    ProjectStateChecker.determineSearchDependencies(sourceProject);
 
                 // Collect target URIs (including produced types)
                 List<URI> targetURIs = new ArrayList<>();
@@ -816,7 +816,7 @@ public class MetadataReferenceService
                 }
 
                 AdoptedReferenceTargets.Resolution adoptedTargets =
-                    AdoptedReferenceTargets.resolve(target, extensionParticipants);
+                    AdoptedReferenceTargets.resolve(target, searchDependencies);
                 targetURIs.addAll(adoptedTargets.getTargetURIs());
                 if (!adoptedTargets.isComplete())
                 {
@@ -829,23 +829,22 @@ public class MetadataReferenceService
                         + adoptedTargets.getFailureReason() + "); continuing with resolved targets."); //$NON-NLS-1$
                 }
 
-                BslReferenceSearch.findReferences(resourceServiceProvider, finder, sourceProject,
-                    targetURIs, this::collectBslReferenceDescription, new NullProgressMonitor());
+                boolean dependencySnapshotStable = BslReferenceSearch.findReferences(
+                    resourceServiceProvider, finder, sourceProject, targetURIs,
+                    this::collectBslReferenceDescription, new NullProgressMonitor(),
+                    searchDependencies);
 
-                if (extensionParticipants.isDetermined()
+                if (!dependencySnapshotStable
+                    && adoptedTargets.isComplete()
                     && (target instanceof MdObject || target instanceof PredefinedItem))
                 {
-                    CascadeParticipantsResult extensionsAfter =
-                        ProjectStateChecker.determineCascadeParticipants(sourceProject);
-                    if (!extensionParticipants.hasSameSnapshot(extensionsAfter))
-                    {
-                        // Source-scope stability cannot repair a target set resolved from an older
-                        // extension snapshot. Strict callers must not accept that as proven complete.
-                        bslScanComplete = false;
-                        Activator.logInfo("BSL adopted-target extension membership/readiness changed " //$NON-NLS-1$
-                            + "during the scan for project '" + safeProjectName(sourceProject) //$NON-NLS-1$
-                            + "'; the reference result is best-effort only."); //$NON-NLS-1$
-                    }
+                    // The source search fell back and is complete, but its complete source set cannot
+                    // repair adopted target URIs derived from a dependency snapshot that changed.
+                    bslScanComplete = false;
+                    Activator.logInfo("BSL dependency membership, extension kind, or readiness changed " //$NON-NLS-1$
+                        + "during adopted-target " //$NON-NLS-1$
+                        + "and source resolution for project '" + safeProjectName(sourceProject) //$NON-NLS-1$
+                        + "'; the reference result is best-effort only."); //$NON-NLS-1$
                 }
             }
             catch (Exception e)

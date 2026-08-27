@@ -13,8 +13,14 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
@@ -32,21 +38,34 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
 import com.ditrix.edt.mcp.server.utils.AdoptedReferenceTargets.Resolution;
-import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /** Headless tests for adopted-target completeness and predefined-item correspondence. */
 public class AdoptedReferenceTargetsTest
 {
     @Test
-    public void noExtensionParticipantsNeedNoTargetOrModelAugmentation()
+    public void noExtensionDependenciesNeedNoTargetOrModelAugmentation()
     {
         Catalog baseTargetWithoutIdentity = MdClassFactory.eINSTANCE.createCatalog();
 
         Resolution result = AdoptedReferenceTargets.resolve((IBmObject)baseTargetWithoutIdentity,
-            CascadeParticipantsResult.determined(Collections.emptyList()));
+            readySnapshot());
 
         assertTrue(result.isComplete());
         assertTrue(result.getTargetURIs().isEmpty());
+    }
+
+    @Test
+    public void undeterminedDependencySnapshotMarksAdoptedAugmentationIncomplete()
+    {
+        Catalog baseTarget = MdClassFactory.eINSTANCE.createCatalog();
+
+        Resolution result = AdoptedReferenceTargets.resolve((IBmObject)baseTarget,
+            SearchDependenciesResult.undetermined());
+
+        assertFalse(result.isComplete());
+        assertTrue(result.getFailureReason().contains("dependencies")); //$NON-NLS-1$
     }
 
     @Test
@@ -89,10 +108,11 @@ public class AdoptedReferenceTargetsTest
     {
         PredefinedItem detachedItem = MdClassFactory.eINSTANCE.createCatalogPredefinedItem();
         detachedItem.setName("Detached"); //$NON-NLS-1$
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Base.tests"); //$NON-NLS-1$
 
         Resolution result = AdoptedReferenceTargets.resolve((IBmObject)detachedItem,
-            CascadeParticipantsResult.determined(
-                Collections.singletonList(mock(IProject.class))));
+            readySnapshot(extension));
 
         assertFalse(result.isComplete());
         assertTrue(result.getFailureReason().contains("owner")); //$NON-NLS-1$
@@ -139,6 +159,18 @@ public class AdoptedReferenceTargetsTest
         Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
         attach(catalog, uri);
         return catalog;
+    }
+
+    private static SearchDependenciesResult readySnapshot(IProject... extensions)
+    {
+        List<IProject> extensionProjects = Arrays.asList(extensions);
+        List<IProject> searchProjects = new ArrayList<>(extensionProjects);
+        Map<String, ProjectState> readiness = new LinkedHashMap<>();
+        for (IProject extension : extensionProjects)
+        {
+            readiness.put(extension.getName(), ProjectState.READY);
+        }
+        return SearchDependenciesResult.determined(searchProjects, extensionProjects, readiness);
     }
 
     private static PredefinedItem predefined(Catalog owner, String name)

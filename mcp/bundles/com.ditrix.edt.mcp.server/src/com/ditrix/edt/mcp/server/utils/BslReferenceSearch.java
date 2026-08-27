@@ -42,18 +42,22 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesRes
  * URI was observed in the fixture. The caller also adds adopted-copy URIs as targets, however, and the
  * fixture deliberately proves that an extension BSL usage of such a copy is found in this source scope.
  * <p>
+ * The adopted-target extension set is derived from the SAME dependency snapshot as the source scope.
+ * It is therefore a subset of the projects whose indexed resources are searched by construction: an
+ * adopted target URI can never be paired with a scope that excludes its owning extension.
+ * <p>
  * The scope optimization fails CLOSED: unless dependency discovery completes, every scoped project is
  * ready, and every indexed URI can be classified as either a workspace resource or a known
  * non-workspace resource, this helper calls {@link IReferenceFinder#findAllReferences} exactly as the
  * previous implementation did. Membership and readiness are captured before index enumeration and
  * re-captured afterward; an observable change discards the scoped result. This is change DETECTION,
  * not an atomic snapshot or a guarantee that no change can occur after the second capture.
- * A successful fallback is therefore complete and must remain a successful BSL scan. This is
- * load-bearing for {@code delete_metadata}: its predefined-item safety check uses the same reference
- * scan, and silently searching a partial project set could turn a reference outside that partial set
- * into "no references" and leave it dangling. A slow complete result is strictly preferable to a fast
- * partial result, so the workspace-wide fallback must not be removed or replaced with a partial scoped
- * call.
+ * A successful fallback is therefore complete on the SOURCE side. A changed shared snapshot can still
+ * make caller-supplied adopted TARGETS incomplete, which the returned stability signal preserves for
+ * strict callers. This is load-bearing for {@code delete_metadata}: silently searching a partial source
+ * or target set could turn a real reference into "no references" and leave it dangling. A slow complete
+ * result is strictly preferable to a fast partial result, so the fallback must not be removed or
+ * replaced with a partial scoped call.
  */
 @SuppressWarnings("restriction")
 public final class BslReferenceSearch
@@ -78,8 +82,27 @@ public final class BslReferenceSearch
         IReferenceFinder finder, IProject baseProject, Iterable<URI> targetURIs,
         IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor)
     {
+        SearchDependenciesResult before =
+            ProjectStateChecker.determineSearchDependencies(baseProject);
         findReferences(resourceServiceProvider, finder, baseProject, targetURIs, acceptor, monitor,
-            CascadeEnvironment.DEFAULT);
+            before, CascadeEnvironment.DEFAULT);
+    }
+
+    /**
+     * Uses the caller's dependency snapshot so adopted TARGET extensions are a subset of the SOURCE
+     * projects enumerated here by construction. The returned stability flag lets a caller reject
+     * target augmentation derived from a snapshot that changed during enumeration; either source path
+     * itself remains complete because instability forces the workspace-wide fallback.
+     *
+     * @return whether the supplied dependency snapshot still matched after source enumeration
+     */
+    public static boolean findReferences(IResourceServiceProvider resourceServiceProvider,
+        IReferenceFinder finder, IProject baseProject, Iterable<URI> targetURIs,
+        IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor,
+        SearchDependenciesResult before)
+    {
+        return findReferences(resourceServiceProvider, finder, baseProject, targetURIs, acceptor,
+            monitor, before, CascadeEnvironment.DEFAULT);
     }
 
     /**
@@ -90,7 +113,30 @@ public final class BslReferenceSearch
         IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor,
         CascadeEnvironment environment)
     {
-        ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, environment);
+        SearchDependenciesResult before =
+            ProjectStateChecker.determineSearchDependencies(baseProject, environment);
+        findReferences(resourceServiceProvider, finder, baseProject, targetURIs, acceptor, monitor,
+            before, environment);
+    }
+
+    /** Package-visible seam proving that a caller-supplied target snapshot is not sampled again. */
+    static boolean findReferences(IResourceServiceProvider resourceServiceProvider,
+        IReferenceFinder finder, IProject baseProject, Iterable<URI> targetURIs,
+        IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor,
+        SearchDependenciesResult before, CascadeEnvironment environment)
+    {
+        ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, before);
+        SearchDependenciesResult after =
+            ProjectStateChecker.determineSearchDependencies(baseProject, environment);
+        boolean stable = before != null && before.hasSameSnapshot(after);
+        if (before != null && before.isDetermined() && !stable)
+        {
+            // Even if source enumeration already selected a fallback, the caller's adopted targets
+            // came from the older snapshot and must not be reported as proven complete.
+            scope = ScopeResolution.failure(
+                "search dependency membership, extension kind, or readiness changed during enumeration"); //$NON-NLS-1$
+        }
+
         String projectName = safeProjectName(baseProject);
         if (scope.isScoped())
         {
@@ -98,17 +144,18 @@ public final class BslReferenceSearch
                 + projectName + "' (" + scope.projectCount + " project(s), " //$NON-NLS-1$ //$NON-NLS-2$
                 + scope.sourceResourceURIs.size() + " indexed resource(s))."); //$NON-NLS-1$
             finder.findReferences(targetURIs, scope.sourceResourceURIs, null, acceptor, monitor);
-            return;
+            return stable;
         }
 
         Activator.logInfo("BSL reference scan: scoped source enumeration unavailable for project '" //$NON-NLS-1$
             + projectName + "' (" + scope.failureReason //$NON-NLS-1$
             + "); using complete workspace Xtext index fallback."); //$NON-NLS-1$
         finder.findAllReferences(targetURIs, null, acceptor, monitor);
+        return stable;
     }
 
     private static ScopeResolution resolveScope(IResourceServiceProvider resourceServiceProvider,
-        IProject baseProject, CascadeEnvironment environment)
+        IProject baseProject, SearchDependenciesResult before)
     {
         if (resourceServiceProvider == null)
         {
@@ -121,9 +168,7 @@ public final class BslReferenceSearch
 
         try
         {
-            SearchDependenciesResult before =
-                ProjectStateChecker.determineSearchDependencies(baseProject, environment);
-            if (!before.isDetermined())
+            if (before == null || !before.isDetermined())
             {
                 return ScopeResolution.failure("search dependencies could not be determined"); //$NON-NLS-1$
             }
@@ -172,16 +217,6 @@ public final class BslReferenceSearch
                 {
                     sourceResourceURIs.add(resourceURI);
                 }
-            }
-
-            SearchDependenciesResult after =
-                ProjectStateChecker.determineSearchDependencies(baseProject, environment);
-            if (!before.hasSameSnapshot(after))
-            {
-                // Discard every URI accumulated from the earlier snapshot. A newly opened dependent
-                // or a readiness transition can make that otherwise-normal enumeration incomplete.
-                return ScopeResolution.failure(
-                    "search dependency membership or readiness changed during index enumeration"); //$NON-NLS-1$
             }
 
             // A READY BSL project can legitimately have no modules. Dependency snapshots have

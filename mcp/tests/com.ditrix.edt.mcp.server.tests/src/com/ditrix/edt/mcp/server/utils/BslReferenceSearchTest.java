@@ -7,11 +7,13 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,8 +21,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
@@ -38,6 +42,7 @@ import org.mockito.ArgumentCaptor;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Headless tests for the Xtext-index source scope. The live BSL injector and real dependent-project
@@ -87,10 +92,15 @@ public class BslReferenceSearchTest
             Arrays.asList(base, extension1, extension2, externalObjects, unrelatedExtension));
         when(environment.getOpenDependentNatureProjects()).thenReturn(
             Arrays.asList(extension1, extension2, externalObjects, unrelatedExtension));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(
+            Arrays.asList(extension1, extension2, unrelatedExtension));
         when(environment.resolveBaseProject(extension1)).thenReturn(base);
         when(environment.resolveBaseProject(extension2)).thenReturn(base);
         when(environment.resolveBaseProject(externalObjects)).thenReturn(base);
         when(environment.resolveBaseProject(unrelatedExtension)).thenReturn(otherBase);
+        when(environment.isExtensionProject(extension1)).thenReturn(true);
+        when(environment.isExtensionProject(extension2)).thenReturn(true);
+        when(environment.isExtensionProject(unrelatedExtension)).thenReturn(true);
         ProjectStateResult ready = state(ProjectState.READY);
         when(environment.getProjectState(any(IProject.class))).thenReturn(ready);
 
@@ -103,6 +113,57 @@ public class BslReferenceSearchTest
         verify(finder, never()).findAllReferences(any(), any(), any(), any());
         assertEquals(new LinkedHashSet<>(Arrays.asList(baseURI, extension1URI, extension2URI,
             externalObjectsURI)), asSet(sources.getValue()));
+    }
+
+    @Test
+    public void callerSnapshotSuppliesBothAdoptedExtensionsAndSourceScope()
+    {
+        IProject base = project("Base"); //$NON-NLS-1$
+        IProject extension = project("Base.tests"); //$NON-NLS-1$
+        URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        URI extensionURI =
+            platformURI("Base.tests", "src/CommonModules/Extension/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        IResourceDescription baseDescription = description(baseURI);
+        IResourceDescription extensionDescription = description(extensionURI);
+        List<IResourceDescription> indexedDescriptions =
+            Arrays.asList(baseDescription, extensionDescription);
+        IResourceDescriptions index = mock(IResourceDescriptions.class);
+        when(index.getAllResourceDescriptions()).thenReturn(indexedDescriptions);
+        IResourceServiceProvider resourceServiceProvider = provider(index);
+        IReferenceFinder finder = mock(IReferenceFinder.class);
+        Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/adopted-target")); //$NON-NLS-1$
+        IAcceptor<IReferenceDescription> acceptor = ignored -> { };
+        NullProgressMonitor monitor = new NullProgressMonitor();
+
+        List<IProject> searchProjects = Arrays.asList(base, extension);
+        List<IProject> extensionProjects = Collections.singletonList(extension);
+        Map<String, ProjectState> readiness = new LinkedHashMap<>();
+        readiness.put("Base", ProjectState.READY); //$NON-NLS-1$
+        readiness.put("Base.tests", ProjectState.READY); //$NON-NLS-1$
+        SearchDependenciesResult before = SearchDependenciesResult.determined(
+            searchProjects, extensionProjects, readiness);
+
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        ProjectStateResult ready = state(ProjectState.READY);
+        when(environment.getOpenDtProjects()).thenReturn(searchProjects);
+        when(environment.getOpenDependentNatureProjects()).thenReturn(extensionProjects);
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(extensionProjects);
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.isExtensionProject(extension)).thenReturn(true);
+        when(environment.getProjectState(any(IProject.class))).thenReturn(ready);
+
+        boolean stable = BslReferenceSearch.findReferences(resourceServiceProvider, finder, base,
+            targets, acceptor, monitor, before, environment);
+
+        @SuppressWarnings({ "rawtypes", "unchecked" })
+        ArgumentCaptor<Iterable<URI>> sources = ArgumentCaptor.forClass((Class)Iterable.class);
+        assertTrue(stable);
+        assertTrue(before.getProjects().containsAll(before.getExtensionProjects()));
+        verify(environment, times(1)).getOpenDtProjects();
+        verify(finder).findReferences(eq(targets), sources.capture(), isNull(), eq(acceptor), eq(monitor));
+        verify(finder, never()).findAllReferences(any(), any(), any(), any());
+        assertEquals(new LinkedHashSet<>(Arrays.asList(baseURI, extensionURI)),
+            asSet(sources.getValue()));
     }
 
     @Test
@@ -176,6 +237,7 @@ public class BslReferenceSearchTest
         when(environment.getOpenDtProjects()).thenReturn(Collections.singletonList(base));
         when(environment.getOpenDependentNatureProjects())
             .thenReturn(Collections.singletonList(unregisteredExternalObjects));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
             monitor, environment);
@@ -185,10 +247,10 @@ public class BslReferenceSearchTest
     }
 
     @Test
-    public void readyExtensionWithNoIndexedModulesStillUsesScopedSearch()
+    public void readyDependentWithNoIndexedModulesStillUsesScopedSearch()
     {
         IProject base = project("Base"); //$NON-NLS-1$
-        IProject extension = project("Base.tests"); //$NON-NLS-1$
+        IProject dependency = project("ExternalObjects"); //$NON-NLS-1$
         URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
         IResourceDescription baseDescription = description(baseURI);
         IResourceDescriptions index = mock(IResourceDescriptions.class);
@@ -198,7 +260,7 @@ public class BslReferenceSearchTest
         Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
         IAcceptor<IReferenceDescription> acceptor = ignored -> { };
         NullProgressMonitor monitor = new NullProgressMonitor();
-        CascadeEnvironment environment = stableEnvironment(base, extension);
+        CascadeEnvironment environment = stableEnvironment(base, dependency);
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
             monitor, environment);
@@ -228,6 +290,7 @@ public class BslReferenceSearchTest
         when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, externalObjects));
         when(environment.getOpenDependentNatureProjects())
             .thenReturn(Collections.singletonList(externalObjects));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
         when(environment.resolveBaseProject(externalObjects)).thenReturn(base);
         ProjectStateResult ready = state(ProjectState.READY);
         ProjectStateResult building = state(ProjectState.BUILDING);
@@ -320,6 +383,7 @@ public class BslReferenceSearchTest
         when(environment.getOpenDtProjects()).thenReturn(projectsBefore).thenReturn(projectsAfter);
         when(environment.getOpenDependentNatureProjects()).thenReturn(dependenciesBefore)
             .thenReturn(dependenciesAfter);
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
         when(environment.resolveBaseProject(externalObjects)).thenReturn(base);
         when(environment.getProjectState(any(IProject.class))).thenReturn(ready);
 
@@ -352,6 +416,7 @@ public class BslReferenceSearchTest
         ProjectStateResult building = state(ProjectState.BUILDING);
         when(environment.getOpenDtProjects()).thenReturn(openProjects);
         when(environment.getOpenDependentNatureProjects()).thenReturn(noDependencies);
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
         when(environment.getProjectState(base)).thenReturn(ready).thenReturn(building);
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
@@ -370,11 +435,13 @@ public class BslReferenceSearchTest
         when(environment.getOpenDtProjects()).thenReturn(openProjects);
         when(environment.getOpenDependentNatureProjects())
             .thenReturn(Arrays.asList(dependencies));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
         for (IProject dependency : dependencies)
         {
             when(environment.resolveBaseProject(dependency)).thenReturn(base);
         }
-        when(environment.getProjectState(any(IProject.class))).thenReturn(state(ProjectState.READY));
+        ProjectStateResult ready = state(ProjectState.READY);
+        when(environment.getProjectState(any(IProject.class))).thenReturn(ready);
         return environment;
     }
 

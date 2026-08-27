@@ -23,6 +23,9 @@ import static org.mockito.Mockito.when;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -33,7 +36,6 @@ import org.junit.Test;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
-import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
@@ -107,29 +109,32 @@ public class ProjectStateCheckerTest
     }
 
     @Test
-    public void failureAwareParticipantLookupDistinguishesNoExtensionsFromDiscoveryFailure()
+    public void failureAwareDependencyLookupDistinguishesNoDependenciesFromDiscoveryFailure()
     {
         IProject base = mockOpenProject("Base"); //$NON-NLS-1$
-        CascadeEnvironment noExtensions = mock(CascadeEnvironment.class);
-        when(noExtensions.getOpenDtProjects()).thenReturn(Collections.singletonList(base));
-        when(noExtensions.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        CascadeEnvironment noDependencies = mock(CascadeEnvironment.class);
+        when(noDependencies.getOpenDtProjects()).thenReturn(Collections.singletonList(base));
+        when(noDependencies.getOpenDependentNatureProjects()).thenReturn(Collections.emptyList());
+        when(noDependencies.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
         ProjectStateResult ready = new ProjectStateResult(ProjectState.READY, "ready"); //$NON-NLS-1$
-        when(noExtensions.getProjectState(base)).thenReturn(ready);
+        when(noDependencies.getProjectState(base)).thenReturn(ready);
 
-        CascadeParticipantsResult empty =
-            ProjectStateChecker.determineCascadeParticipants(base, noExtensions);
+        SearchDependenciesResult empty =
+            ProjectStateChecker.determineSearchDependencies(base, noDependencies);
 
         assertTrue(empty.isDetermined());
-        assertTrue(empty.getParticipants().isEmpty());
+        assertEquals(Collections.singletonList(base), empty.getProjects());
+        assertTrue(empty.getExtensionProjects().isEmpty());
 
         CascadeEnvironment failed = mock(CascadeEnvironment.class);
         when(failed.getOpenDtProjects()).thenThrow(new IllegalStateException("workspace changed")); //$NON-NLS-1$
 
-        CascadeParticipantsResult undetermined =
-            ProjectStateChecker.determineCascadeParticipants(base, failed);
+        SearchDependenciesResult undetermined =
+            ProjectStateChecker.determineSearchDependencies(base, failed);
 
         assertFalse(undetermined.isDetermined());
-        assertTrue(undetermined.getParticipants().isEmpty());
+        assertTrue(undetermined.getProjects().isEmpty());
+        assertTrue(undetermined.getExtensionProjects().isEmpty());
     }
 
     @Test
@@ -139,18 +144,40 @@ public class ProjectStateCheckerTest
         IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
         CascadeEnvironment environment = mock(CascadeEnvironment.class);
         when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, extension));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
         when(environment.getOpenExtensionNatureProjects())
             .thenReturn(Collections.singletonList(extension));
         when(environment.resolveBaseProject(extension)).thenReturn(null);
 
-        CascadeParticipantsResult result =
-            ProjectStateChecker.determineCascadeParticipants(base, environment);
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
 
         assertFalse(result.isDetermined());
     }
 
     @Test
-    public void searchDependenciesIncludeExternalObjectsWhileCascadeRemainsExtensionOnly()
+    public void extensionNatureWithoutRuntimeExtensionClassificationIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        List<IProject> openProjects = Arrays.asList(base, extension);
+        List<IProject> extensionProjects = Collections.singletonList(extension);
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(openProjects);
+        when(environment.getOpenDependentNatureProjects()).thenReturn(extensionProjects);
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(extensionProjects);
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.isExtensionProject(extension)).thenReturn(false);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    @Test
+    public void searchDependenciesDeriveExtensionTargetsAsSubsetOfSourceProjects()
     {
         IProject base = mockOpenProject("Base"); //$NON-NLS-1$
         IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
@@ -163,17 +190,17 @@ public class ProjectStateCheckerTest
         when(environment.getOpenDependentNatureProjects()).thenReturn(
             Arrays.asList(extension, externalObjects, unrelatedDependent));
         when(environment.getOpenExtensionNatureProjects())
-            .thenReturn(Collections.singletonList(extension));
+            .thenReturn(Arrays.asList(extension, unrelatedDependent));
         when(environment.resolveBaseProject(extension)).thenReturn(base);
         when(environment.resolveBaseProject(externalObjects)).thenReturn(base);
         when(environment.resolveBaseProject(unrelatedDependent)).thenReturn(otherBase);
+        when(environment.isExtensionProject(extension)).thenReturn(true);
+        when(environment.isExtensionProject(unrelatedDependent)).thenReturn(true);
         when(environment.getProjectState(any(IProject.class)))
             .thenReturn(new ProjectStateResult(ProjectState.READY, "ready")); //$NON-NLS-1$
 
         SearchDependenciesResult search =
             ProjectStateChecker.determineSearchDependencies(base, environment);
-        CascadeParticipantsResult cascade =
-            ProjectStateChecker.determineCascadeParticipants(base, environment);
 
         assertTrue(search.isDetermined());
         assertTrue(search.isAllReady());
@@ -182,24 +209,21 @@ public class ProjectStateCheckerTest
         assertTrue(search.getProjectNames().contains("Base.tests")); //$NON-NLS-1$
         assertTrue(search.getProjectNames().contains("ExternalObjects")); //$NON-NLS-1$
         assertFalse(search.getProjectNames().contains("Other.tests")); //$NON-NLS-1$
-        assertEquals(Collections.singletonList(extension), cascade.getParticipants());
+        assertEquals(Collections.singletonList(extension), search.getExtensionProjects());
+        assertTrue(search.getProjects().containsAll(search.getExtensionProjects()));
     }
 
-    @Test
-    public void cascadeSnapshotsDetectExtensionMembershipChange()
+    @Test(expected = IllegalArgumentException.class)
+    public void dependencySnapshotRejectsTargetExtensionOutsideSourceScope()
     {
-        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
-        IProject newlyOpenedExtension = mockOpenProject("Base.extra"); //$NON-NLS-1$
-        CascadeParticipantsResult before =
-            CascadeParticipantsResult.determined(Collections.singletonList(extension));
-        CascadeParticipantsResult unchanged =
-            CascadeParticipantsResult.determined(Collections.singletonList(extension));
-        CascadeParticipantsResult changed = CascadeParticipantsResult.determined(
-            Arrays.asList(extension, newlyOpenedExtension));
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject omittedExtension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        List<IProject> searchProjects = Collections.singletonList(base);
+        List<IProject> extensionProjects = Collections.singletonList(omittedExtension);
+        Map<String, ProjectState> readiness = new LinkedHashMap<>();
+        readiness.put("Base", ProjectState.READY); //$NON-NLS-1$
 
-        assertTrue(before.hasSameSnapshot(unchanged));
-        assertFalse(before.hasSameSnapshot(changed));
-        assertFalse(before.hasSameSnapshot(CascadeParticipantsResult.undetermined()));
+        SearchDependenciesResult.determined(searchProjects, extensionProjects, readiness);
     }
 
     @Test

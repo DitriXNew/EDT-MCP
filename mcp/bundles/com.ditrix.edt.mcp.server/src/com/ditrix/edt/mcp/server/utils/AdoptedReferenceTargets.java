@@ -29,7 +29,7 @@ import com._1c.g5.v8.dt.metadata.mdtype.MdType;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Resolves the BSL target URIs of adopted copies of a base metadata object or predefined item.
@@ -42,7 +42,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsRe
  * projects belong in the BSL SOURCE scope because they can reference base objects, but they do not
  * adopt configuration objects and therefore cannot contribute adopted TARGET URIs. Not having an
  * adopted owner or predefined child is a successful empty result. An unavailable model,
- * configuration, produced-types value, or participant set is different:
+ * configuration, produced-types value, or dependency snapshot is different:
  * the caller may still run a best-effort search with the targets found so far, but a destructive caller
  * must not treat that partial augmentation as proof that no reference exists.
  */
@@ -54,19 +54,20 @@ public final class AdoptedReferenceTargets
     }
 
     /**
-     * Finds adopted counterparts in the already-resolved extension participant set and returns their
-     * own EObject and produced-type URIs. For a predefined item, returns the URI of the exact-name child
-     * in each adopted owner.
+     * Finds adopted counterparts in the extension subset already derived from the source-scope
+     * dependency snapshot and returns their own EObject and produced-type URIs. For a predefined item,
+     * returns the URI of the exact-name child in each adopted owner.
      *
      * @param baseTarget base-configuration object or predefined item whose adopted copies are targets too
-     * @param participants the extension-only cascade participants used for adopted targets
+     * @param dependencies the same dependency snapshot used for the BSL source scope; its derived
+     *     extension subset supplies adopted targets
      * @return accumulated target URIs and whether every extension lookup completed
      */
-    public static Resolution resolve(IBmObject baseTarget, CascadeParticipantsResult participants)
+    public static Resolution resolve(IBmObject baseTarget, SearchDependenciesResult dependencies)
     {
         try
         {
-            return resolveInternal(baseTarget, participants);
+            return resolveInternal(baseTarget, dependencies);
         }
         catch (RuntimeException e)
         {
@@ -78,7 +79,7 @@ public final class AdoptedReferenceTargets
     }
 
     private static Resolution resolveInternal(IBmObject baseTarget,
-        CascadeParticipantsResult participants)
+        SearchDependenciesResult dependencies)
     {
         if (baseTarget == null)
         {
@@ -89,12 +90,13 @@ public final class AdoptedReferenceTargets
         {
             return Resolution.complete(Collections.emptyList());
         }
-        if (participants == null || !participants.isDetermined())
+        if (dependencies == null || !dependencies.isDetermined()
+            || !dependencies.isAllReady())
         {
             return Resolution.incomplete(Collections.emptyList(),
-                "extension participants could not be determined"); //$NON-NLS-1$
+                "search dependencies or readiness could not be determined"); //$NON-NLS-1$
         }
-        List<IProject> extensionProjects = participants.getParticipants();
+        List<IProject> extensionProjects = dependencies.getExtensionProjects();
         if (extensionProjects.isEmpty())
         {
             // No extension target can exist, so identity/model services are irrelevant here. Requiring
