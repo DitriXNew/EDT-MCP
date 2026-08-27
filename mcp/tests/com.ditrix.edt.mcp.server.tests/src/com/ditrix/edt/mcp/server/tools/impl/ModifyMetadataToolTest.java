@@ -34,11 +34,15 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
+import org.mockito.Mockito;
 
+import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorForm;
@@ -48,6 +52,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
@@ -56,12 +61,14 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 
 /**
@@ -209,6 +216,165 @@ public class ModifyMetadataToolTest
         // The CommonAttribute content payload must be declared (execute() reads it; schema parity).
         assertTrue("schema must declare the content payload", //$NON-NLS-1$
             schema.contains("\"content\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInputSchemaKeepsContainedValueGrammarsOutOfSharedPropertiesProse()
+    {
+        String schema = new ModifyMetadataTool().getInputSchema();
+        assertFalse(schema.contains("StdPicture.<Name>")); //$NON-NLS-1$
+        assertFalse(schema.contains("StdExtPicture.<Name>")); //$NON-NLS-1$
+        assertFalse(schema.contains("CommonPicture.<Name>")); //$NON-NLS-1$
+        assertFalse(schema.contains("{http://www.w3.org/2001/XMLSchema}string")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMalformedPictureRefusalHasExactActionableWording()
+    {
+        ModifyMetadataTool.PicturePreparation prepared = ModifyMetadataTool.buildPictureValue(
+            "headerPicture", new JsonPrimitive("Change"), //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataScope.ofConfiguration(null), null);
+
+        assertEquals("Invalid picture for property 'headerPicture': Picture value \"Change\" is invalid. " //$NON-NLS-1$
+            + "Use 'StdPicture.<Name>' or 'StdExtPicture.<Name>' for a platform picture, or " //$NON-NLS-1$
+            + "'CommonPicture.<Name>' (the type token may also be Russian) for a configuration " //$NON-NLS-1$
+            + "picture; use list_common_pictures to " //$NON-NLS-1$
+            + "discover configuration pictures.", errorText(prepared.error)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnresolvableStandardPictureRefusalHasExactActionableWording()
+    {
+        ModifyMetadataTool.PicturePreparation prepared = ModifyMetadataTool.buildPictureValue(
+            "headerPicture", new JsonPrimitive("StdPicture.Nope"), //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataScope.ofConfiguration(null), null);
+
+        assertEquals("Invalid picture for property 'headerPicture': Picture value 'StdPicture.Nope' " //$NON-NLS-1$
+            + "could not be resolved for this platform version. Use list_common_pictures for " //$NON-NLS-1$
+            + "configuration pictures, or use the exact 'StdPicture.<Name>' or " //$NON-NLS-1$
+            + "'StdExtPicture.<Name>' spelling for a platform picture.", //$NON-NLS-1$
+            errorText(prepared.error));
+    }
+
+    @Test
+    public void testResolvedCommonPictureIsReducedToBmIdWithoutRetainingLiveObject()
+    {
+        IBmObject liveCommonPicture = Mockito.mock(IBmObject.class,
+            Mockito.withSettings().extraInterfaces(CommonPicture.class));
+        Mockito.when(liveCommonPicture.bmGetId()).thenReturn(497L);
+
+        ModifyMetadataTool.PicturePreparation prepared =
+            ModifyMetadataTool.prepareResolvedPicture((EObject)liveCommonPicture);
+
+        assertNull(prepared.error);
+        assertNull("a live CommonPicture must not cross the prepare/write boundary", //$NON-NLS-1$
+            prepared.platformPictureProxy);
+        assertEquals(Long.valueOf(497L), prepared.commonPictureBmId);
+        Mockito.verify(liveCommonPicture).bmGetId();
+    }
+
+    @Test
+    public void testQNameMissingNsUriRefusalHasExactActionableWording()
+    {
+        JsonObject raw = new JsonObject();
+        raw.addProperty("name", "string"); //$NON-NLS-1$ //$NON-NLS-2$
+        ModifyMetadataTool.ContainedValuePreparation prepared =
+            ModifyMetadataTool.buildQNameValue("xdtoValueType", raw); //$NON-NLS-1$
+
+        assertEquals("Invalid QName value for property 'xdtoValueType': {\"name\":\"string\"}; the " //$NON-NLS-1$
+            + "object form requires exactly the 'name' and 'nsUri' members. Use either " //$NON-NLS-1$
+            + "{\"name\":\"string\",\"nsUri\":\"http://www.w3.org/2001/XMLSchema\"} or " //$NON-NLS-1$
+            + "\"{http://www.w3.org/2001/XMLSchema}string\".", errorText(prepared.error)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBadCompactQNameRefusalHasExactActionableWording()
+    {
+        ModifyMetadataTool.ContainedValuePreparation prepared = ModifyMetadataTool.buildQNameValue(
+            "xdtoReturningValueType", //$NON-NLS-1$
+            new JsonPrimitive("{http://www.w3.org/2001/XMLSchema}")); //$NON-NLS-1$
+
+        assertEquals("Invalid QName value for property 'xdtoReturningValueType': " //$NON-NLS-1$
+            + "\"{http://www.w3.org/2001/XMLSchema}\"; the compact form must be '{nsUri}name' with " //$NON-NLS-1$
+            + "a non-empty namespace URI and name. Use either " //$NON-NLS-1$
+            + "{\"name\":\"string\",\"nsUri\":\"http://www.w3.org/2001/XMLSchema\"} or " //$NON-NLS-1$
+            + "\"{http://www.w3.org/2001/XMLSchema}string\".", errorText(prepared.error)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStructuredQNameBuildsBothRequiredMembers()
+    {
+        JsonObject raw = new JsonObject();
+        raw.addProperty("name", "string"); //$NON-NLS-1$ //$NON-NLS-2$
+        raw.addProperty("nsUri", "http://www.w3.org/2001/XMLSchema"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ModifyMetadataTool.ContainedValuePreparation prepared =
+            ModifyMetadataTool.buildQNameValue("xdtoValueType", raw); //$NON-NLS-1$
+
+        assertNull(prepared.error);
+        QName qname = (QName)prepared.value;
+        assertEquals("string", qname.getName()); //$NON-NLS-1$
+        assertEquals("http://www.w3.org/2001/XMLSchema", qname.getNsUri()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCompactQNameBuildsBothRequiredMembers()
+    {
+        ModifyMetadataTool.ContainedValuePreparation prepared = ModifyMetadataTool.buildQNameValue(
+            "xdtoReturningValueType", //$NON-NLS-1$
+            new JsonPrimitive("{http://www.w3.org/2001/XMLSchema}string")); //$NON-NLS-1$
+
+        assertNull(prepared.error);
+        QName qname = (QName)prepared.value;
+        assertEquals("string", qname.getName()); //$NON-NLS-1$
+        assertEquals("http://www.w3.org/2001/XMLSchema", qname.getNsUri()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInvalidMcoreValueListRefusalHasExactActionableWording()
+    {
+        ModifyMetadataTool.McoreValueListPreparation prepared =
+            ModifyMetadataTool.buildMcoreValueListValue("xdtoPackages", //$NON-NLS-1$
+                JsonParser.parseString("[\"XDTOPackege.Nope\"]"), //$NON-NLS-1$
+                MetadataScope.ofConfiguration(null));
+
+        assertEquals("Invalid mcore Value list for property 'xdtoPackages': Mcore Value-list entry " //$NON-NLS-1$
+            + "'XDTOPackege.Nope' could not be resolved as a configuration XDTO package and is not " //$NON-NLS-1$
+            + "a supported namespace URI. Use an existing 'XDTOPackage.<Name>' FQN (the type token " //$NON-NLS-1$
+            + "may also be Russian), or a platform namespace URI beginning with 'http://', " //$NON-NLS-1$
+            + "'https://', or 'urn:'.", errorText(prepared.error)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMcoreValueListReferenceIsReducedToBmIdAndOrderIsPreserved()
+    {
+        IBmObject livePackage = Mockito.mock(IBmObject.class,
+            Mockito.withSettings().extraInterfaces(XDTOPackage.class));
+        Mockito.when(livePackage.bmGetId()).thenReturn(450L);
+        List<McoreValueListBuilder.Item> items = Arrays.asList(
+            McoreValueListBuilder.Item.reference((XDTOPackage)livePackage),
+            McoreValueListBuilder.Item.namespace("urn:e2e:platform")); //$NON-NLS-1$
+
+        ModifyMetadataTool.McoreValueListPreparation prepared =
+            ModifyMetadataTool.prepareResolvedMcoreValueList(items);
+
+        assertNull(prepared.error);
+        assertEquals(2, prepared.values.size());
+        assertEquals(Long.valueOf(450L), prepared.values.get(0).referenceBmId);
+        assertNull("the live XDTO package must not cross the prepare/write boundary", //$NON-NLS-1$
+            prepared.values.get(0).namespaceUri);
+        assertEquals("urn:e2e:platform", prepared.values.get(1).namespaceUri); //$NON-NLS-1$
+        assertNull(prepared.values.get(1).referenceBmId);
+        Mockito.verify(livePackage).bmGetId();
+    }
+
+    private static String errorText(String errorJson)
+    {
+        assertNotNull(errorJson);
+        JsonObject parsed = JsonParser.parseString(errorJson).getAsJsonObject();
+        assertFalse("the refusal must use ToolResult.error", //$NON-NLS-1$
+            parsed.get("success").getAsBoolean()); //$NON-NLS-1$
+        return parsed.get("error").getAsString(); //$NON-NLS-1$
     }
 
     @Test

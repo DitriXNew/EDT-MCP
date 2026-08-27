@@ -25,6 +25,7 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.md.resource.MdTypeUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
 import com._1c.g5.v8.dt.metadata.mdtype.BasicDbObjectTypes;
@@ -52,8 +53,11 @@ import com.google.gson.JsonObject;
  * ValueTable / ValueTree are platform types that carry no qualifiers - the last two are in-memory
  * collections the platform accepts on a FORM attribute only (issue #295). A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
- * {@code {"kind":"CatalogRef", "ref":"Name"}}. The {@code types} list may mix several (a composite
- * type). The shape is validated before any platform call, so a malformed spec fails fast.
+ * {@code {"kind":"CatalogRef", "ref":"Name"}}. A DefinedType is accepted as
+ * {@code {"kind":"DefinedType", "ref":"Name"}}, as a Ref to {@code DefinedType.Name}, or as the
+ * inline kind {@code {"kind":"DefinedType.Name"}}; its type set is shared from the metadata model.
+ * The {@code types} list may mix several (a composite type). The shape is validated before any
+ * platform call, so a malformed spec fails fast.
  * <p>
  * On a {@link TypeTarget#FORM_ATTRIBUTE} the vocabulary is not a fixed list: ANY type name the
  * platform version knows is accepted (ValueList, SpreadsheetDocument, Chart, GanttChart, Dendrogram,
@@ -86,6 +90,12 @@ public final class MetadataTypeBuilder
     private static final String[] DATE_ITEM_MEMBERS = {"kind", "fractions"}; //$NON-NLS-1$ //$NON-NLS-2$
     private static final String[] REF_ITEM_MEMBERS = {"kind", "ref"}; //$NON-NLS-1$ //$NON-NLS-2$
     private static final String[] MEMBERLESS_ITEM_MEMBERS = {"kind"}; //$NON-NLS-1$
+
+    /** The reusable metadata type-set kind in both supported type-token languages. */
+    private static final String DEFINED_TYPE_KIND = "DefinedType"; //$NON-NLS-1$
+    private static final String RU_DEFINED_TYPE_KIND = MetadataLanguageUtils.cp(0x041E, 0x043F, 0x0440,
+        0x0435, 0x0434, 0x0435, 0x043B, 0x044F, 0x0435, 0x043C, 0x044B, 0x0439, 0x0422, 0x0438,
+        0x043F);
 
     /**
      * The WIDEST qualifier the platform accepts anywhere: a variable String of 1024, a Number of 38
@@ -153,7 +163,7 @@ public final class MetadataTypeBuilder
             if (kind == null || kind.trim().isEmpty())
             {
                 return "Invalid member 'kind' in type.types[" + i + "]. Expected a non-empty " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "string naming String/Number/Boolean/Date, a Ref, or a platform type."; //$NON-NLS-1$
+                    + "string naming String/Number/Boolean/Date, a DefinedType/Ref, or a platform type."; //$NON-NLS-1$
             }
             String memberError = validateItemMembers(item, kind, i);
             if (memberError != null)
@@ -330,7 +340,8 @@ public final class MetadataTypeBuilder
         if (ref == null || ref.trim().isEmpty())
         {
             return invalidMember("ref", index, //$NON-NLS-1$
-                "a non-empty reference target string such as 'Catalog.Products'"); //$NON-NLS-1$
+                "a non-empty reference target string such as 'Catalog.Products' or 'MoneyAmount' " //$NON-NLS-1$
+                    + "for kind 'DefinedType'"); //$NON-NLS-1$
         }
         return null;
     }
@@ -618,15 +629,35 @@ public final class MetadataTypeBuilder
     static String addType(TypeDescription td, JsonObject item, String kind,
         IEObjectProvider provider, Configuration config, boolean isExtensionProject, TypeTarget typeTarget)
     {
+        if (isInlineDefinedTypeKind(kind))
+        {
+            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, kind);
+            if (node == null || !isDefinedType(node.object))
+            {
+                return unresolvedDefinedType(kind, kind, isExtensionProject);
+            }
+            return addDefinedTypeSet(td, node.object, kind);
+        }
+
         if (isRefKind(kind))
         {
-            MdObject target = resolveRefTarget(config, kind, asString(item.get("ref"))); //$NON-NLS-1$
+            String ref = asString(item.get("ref")); //$NON-NLS-1$
+            MdObject target = resolveRefTarget(config, kind, ref);
             if (target == null)
             {
+                if (isDefinedTypeKind(kind))
+                {
+                    return unresolvedDefinedType(kind, ref, isExtensionProject);
+                }
                 return "Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + asString(item.get("ref")) + "'. Use {kind:'Ref', ref:'Type.Name'} or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref + "'. Use {kind:'Ref', ref:'Type.Name'} or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "{kind:'CatalogRef', ref:'Name'} and check the object exists." //$NON-NLS-1$
                     + extensionAdoptHint(isExtensionProject);
+            }
+            if (isDefinedType(target))
+            {
+                String requested = isDefinedTypeKind(kind) ? kind + "." + ref : ref; //$NON-NLS-1$
+                return addDefinedTypeSet(td, target, requested);
             }
             Type refType;
             try
@@ -694,11 +725,69 @@ public final class MetadataTypeBuilder
             return null;
         }
 
-        return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$ //$NON-NLS-2$
-            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), or a " //$NON-NLS-1$
+        return "Unknown type kind '" + kind //$NON-NLS-1$
+            + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$
+            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), a " //$NON-NLS-1$
+            + "DefinedType ({kind:'DefinedType', ref:'Name'} or {kind:'DefinedType.Name'}), or a " //$NON-NLS-1$
             + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type name " //$NON-NLS-1$
             + "also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., English or " //$NON-NLS-1$
             + "Russian) - this one names no type this platform version knows."; //$NON-NLS-1$
+    }
+
+    /** Adds the model-owned TypeSet produced by a DefinedType to the non-containment type list. */
+    private static String addDefinedTypeSet(TypeDescription td, MdObject definedType, String requested)
+    {
+        TypeItem typeSet = null;
+        try
+        {
+            MdTypes producedTypes = MdClassUtil.getProducedTypes(definedType);
+            EObject containerType = featureValue(producedTypes, "containerType", EObject.class); //$NON-NLS-1$
+            typeSet = featureValue(containerType, "typeSet", TypeItem.class); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            return unavailableDefinedTypeChain(requested);
+        }
+        if (typeSet == null)
+        {
+            return unavailableDefinedTypeChain(requested);
+        }
+        // TypeDescription.types is NON-containment: share the model-owned TypeSet, do not copy it.
+        td.getTypes().add(typeSet);
+        return null;
+    }
+
+    private static String unavailableDefinedTypeChain(String requested)
+    {
+        return "DefinedType '" + requested //$NON-NLS-1$
+            + "' resolved, but its producedTypes/containerType/typeSet chain is not available yet. " //$NON-NLS-1$
+            + "Wait for project indexing to finish, run revalidate_objects for the DefinedType if " //$NON-NLS-1$
+            + "needed, and retry."; //$NON-NLS-1$
+    }
+
+    /** Reads one named EMF feature without depending on a per-kind generated holder interface. */
+    private static <T> T featureValue(EObject owner, String featureName, Class<T> valueClass)
+    {
+        if (owner == null || owner.eClass() == null)
+        {
+            return null;
+        }
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (feature == null)
+        {
+            return null;
+        }
+        Object value = owner.eGet(feature);
+        return valueClass.isInstance(value) ? valueClass.cast(value) : null;
+    }
+
+    private static String unresolvedDefinedType(String kind, String ref, boolean isExtensionProject)
+    {
+        String requested = isInlineDefinedTypeKind(kind) ? kind : kind + "." + ref; //$NON-NLS-1$
+        return "Cannot resolve the reference target for DefinedType '" + requested + "'. Use " //$NON-NLS-1$ //$NON-NLS-2$
+            + "{kind:'DefinedType', ref:'Name'}, {kind:'Ref', ref:'DefinedType.Name'}, or " //$NON-NLS-1$
+            + "{kind:'DefinedType.Name'}, and check the object exists." //$NON-NLS-1$
+            + extensionAdoptHint(isExtensionProject);
     }
 
     /** The platform pseudo-type name a form list attribute carries, in both languages. */
@@ -874,7 +963,7 @@ public final class MetadataTypeBuilder
         }
     }
 
-    /** A reference kind is the literal {@code "Ref"} or any {@code "...Ref"} token (CatalogRef, ...). */
+    /** A reference-shaped kind is DefinedType, literal Ref, or an {@code "...Ref"} token. */
     static boolean isRefKind(String kind)
     {
         if (kind == null)
@@ -882,8 +971,38 @@ public final class MetadataTypeBuilder
             return false;
         }
         String k = kind.trim();
-        return k.equalsIgnoreCase("Ref") //$NON-NLS-1$
+        return isDefinedTypeKind(k) || k.equalsIgnoreCase("Ref") //$NON-NLS-1$
             || (k.length() > 3 && k.regionMatches(true, k.length() - 3, "Ref", 0, 3)); //$NON-NLS-1$
+    }
+
+    /** Whether the kind is the explicit bilingual DefinedType token (without an inline object name). */
+    static boolean isDefinedTypeKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String k = kind.trim();
+        return DEFINED_TYPE_KIND.equalsIgnoreCase(k) || RU_DEFINED_TYPE_KIND.equalsIgnoreCase(k);
+    }
+
+    /** Whether the whole kind is a bilingual DefinedType FQN such as DefinedType.MoneyAmount. */
+    static boolean isInlineDefinedTypeKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String normalized = MetadataTypeUtils.normalizeFqn(kind.trim());
+        String prefix = DEFINED_TYPE_KIND + "."; //$NON-NLS-1$
+        return normalized != null && normalized.length() > prefix.length()
+            && normalized.regionMatches(true, 0, prefix, 0, prefix.length());
+    }
+
+    private static boolean isDefinedType(MdObject object)
+    {
+        return object != null && object.eClass() != null
+            && MdClassPackage.Literals.DEFINED_TYPE.isSuperTypeOf(object.eClass());
     }
 
     /**
@@ -908,6 +1027,10 @@ public final class MetadataTypeBuilder
         if (ref == null || ref.isEmpty())
         {
             return null;
+        }
+        if (isDefinedTypeKind(kind))
+        {
+            return MetadataTypeUtils.findObject(config, kind, ref);
         }
         if (kind.equalsIgnoreCase("Ref")) //$NON-NLS-1$
         {

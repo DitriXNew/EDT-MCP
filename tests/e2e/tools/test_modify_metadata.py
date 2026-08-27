@@ -103,6 +103,76 @@ def _first_enum_with_value(fqn):
     return None, None
 
 
+def _assignable_row(fqn, property_name):
+    """The assignable-table row for one property, or None when the property is absent."""
+    prefix = "| " + property_name + " |"
+    return next((line for line in _assignable_text(fqn).splitlines()
+                 if line.strip().startswith(prefix)), None)
+
+
+def _assert_header_picture_reached_disk(picture_name):
+    """Require one Form.form headerPicture element to name the expected picture target."""
+    form_root = ET.fromstring(read_disk(_ITEM_FORM))
+    header_pictures = [element for element in form_root.iter()
+                       if element.tag.rsplit("}", 1)[-1] == "headerPicture"]
+    assert header_pictures, "Form.form must contain a headerPicture element after the write"
+    serialized_headers = [ET.tostring(element, encoding="unicode")
+                          for element in header_pictures]
+    assert any(picture_name in element for element in serialized_headers), \
+        "a headerPicture element must name %s: %r" % (picture_name, serialized_headers)
+
+
+def _assert_picture_current_value(fqn, expected):
+    """Require the assignable row to expose exactly one feedable canonical picture value."""
+    row = _assignable_row(fqn, "headerPicture")
+    assert row is not None, "headerPicture must be listed by assignable:true after the write"
+    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+    assert len(cells) >= 3, "headerPicture assignable row is malformed: %r" % row
+    assert cells[1] == "PICTURE", "headerPicture must expose the PICTURE value kind: %r" % row
+    assert cells[2] == expected, \
+        "headerPicture current value must be exactly %s, got: %r" % (expected, row)
+
+
+def _seed_web_service_parameter(stem):
+    """Create a WebService -> Operation -> Parameter chain and return the parameter FQN."""
+    service = stem + "Service"
+    operation = stem + "Operation"
+    parameter = stem + "Parameter"
+    service_fqn = "WebService." + service
+    operation_fqn = service_fqn + ".Operation." + operation
+    parameter_fqn = operation_fqn + ".Parameter." + parameter
+    for fqn, label in ((service_fqn, "WebService"),
+                       (operation_fqn, "Operation"),
+                       (parameter_fqn, "Parameter")):
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed %s for QName modify: %s" % (label, fqn))
+        wait_for_project_ready()
+    return parameter_fqn
+
+
+def _seed_web_service(stem):
+    """Create one isolated WebService and return (FQN, on-disk .mdo path)."""
+    name = stem + "Service"
+    fqn = "WebService." + name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+              "seed WebService for xdtoPackages: %s" % fqn)
+    wait_for_project_ready()
+    return fqn, "src/WebServices/%s/%s.mdo" % (name, name)
+
+
+def _seed_xdto_package(stem):
+    """Create one valid isolated configuration XDTOPackage and return its FQN."""
+    name = stem + "Package"
+    fqn = "XDTOPackage." + name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "targetNamespace": "urn:e2e:%s" % stem,
+    }), "seed configuration XDTO package for xdtoPackages: %s" % fqn)
+    wait_for_project_ready()
+    return fqn
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Happy — set scalar/synonym (verified by structured echo + disk)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -203,6 +273,257 @@ def test_get_metadata_details_assignable_lists_enum_allowed_values():
     assert_contains(text, "Assignable properties", "assignable mode must render the schema heading")
     assert_contains(text, "Allowed values", "assignable table must have an Allowed values column")
     assert "| ENUM |" in text, "an attribute must list at least one ENUM property: %r" % (text[:400],)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Contained mcore values — Picture (#497), QName and Value list (#450)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_field_header_picture_round_trips_symbolic_name():
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.Description"
+    value = "StdPicture.Change"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "headerPicture", "value": value}],
+    })
+    assert_ok(r, "set a standard header picture on a form field")
+    assert "headerPicture" in (r.structured.get("applied") or []), \
+        "headerPicture must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: modify_metadata submits/drains this form export. The containment element and
+    # symbolic target must both be present before another MCP call gets time to mask an early export.
+    assert_diff_contains("<headerPicture", ctx="the PictureRef containment must reach Form.form")
+    assert_diff_contains("Change", ctx="the standard picture target must reach Form.form")
+
+    row = _assignable_row(fqn, "headerPicture")
+    assert row is not None, "headerPicture must be listed by assignable:true after the write"
+    assert_contains(row, "PICTURE", "headerPicture must expose the PICTURE value kind")
+    assert_contains(row, value, "the current picture must round-trip as StdPicture.Change")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_field_extended_header_picture_reaches_disk_and_round_trips_prefix():
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.Description"
+    value = "StdExtPicture.CopyToClipboard"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "headerPicture", "value": value}],
+    })
+    assert_ok(r, "set an extended-standard header picture on a form field")
+    assert "headerPicture" in (r.structured.get("applied") or []), \
+        "headerPicture must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: CopyToClipboard exists only in the extended set, so finding it inside the
+    # headerPicture element proves that the full StdExtPicture provider key reached Form.form.
+    _assert_header_picture_reached_disk("CopyToClipboard")
+
+    # Exact equality pins the /Pictures/StdExt/ discriminator; StdPicture.CopyToClipboard is wrong.
+    _assert_picture_current_value(fqn, value)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_standard_prefix_cannot_resolve_extended_only_picture_and_changes_nothing():
+    bad = "StdPicture.CopyToClipboard"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.Description",
+        "properties": [{"name": "headerPicture", "value": bad}],
+    })
+    e = assert_error(r, "extended-only picture requested through the standard prefix")
+    assert_error_quality(e, names=[bad],
+                         suggests=["platform version", "StdPicture.<Name>",
+                                   "StdExtPicture.<Name>"],
+                         ctx="the two platform-picture prefixes are not interchangeable")
+    assert_no_diff("a rejected extended picture with the wrong prefix must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_russian_extended_picture_name_round_trips_canonical_english_name():
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.Description"
+    russian_value = "StdExtPicture.Копировать"
+    canonical_value = "StdExtPicture.CopyToClipboard"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "headerPicture", "value": russian_value}],
+    })
+    assert_ok(r, "set an extended-standard picture through its Russian provider key")
+    assert "headerPicture" in (r.structured.get("applied") or []), \
+        "headerPicture must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: the bilingual provider key must serialize the same canonical platform target.
+    _assert_header_picture_reached_disk("CopyToClipboard")
+
+    _assert_picture_current_value(fqn, canonical_value)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_field_common_picture_persists_reference_and_round_trips():
+    picture_name = "E2EHeaderCommonPicture"
+    picture_fqn = "CommonPicture." + picture_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": picture_fqn,
+    }), "seed a common picture for the form-field reference")
+    wait_for_project_ready()
+
+    field_fqn = "Catalog.Catalog.Form.ItemForm.Field.Description"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": field_fqn,
+        "properties": [{"name": "headerPicture", "value": picture_fqn}],
+    })
+    assert_ok(r, "set a common-picture header on a form field")
+    assert "headerPicture" in (r.structured.get("applied") or []), \
+        "headerPicture must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: require the exact CommonPicture reference inside headerPicture in Form.form.
+    # The same FQN also occurs in Configuration.mdo after create_metadata, so a global diff
+    # assertion would not prove that the PictureRef reached the form field.
+    poll_disk_contains(_ITEM_FORM, picture_fqn,
+                       ctx="the CommonPicture target must reach Form.form")
+    form_root = ET.fromstring(read_disk(_ITEM_FORM))
+    header_pictures = [element for element in form_root.iter()
+                       if element.tag.rsplit("}", 1)[-1] == "headerPicture"]
+    assert header_pictures, "Form.form must contain a headerPicture element after the write"
+    serialized_headers = [ET.tostring(element, encoding="unicode")
+                          for element in header_pictures]
+    assert any(picture_fqn in element for element in serialized_headers), \
+        "a headerPicture element must name %s: %r" % (picture_fqn, serialized_headers)
+
+    row = _assignable_row(field_fqn, "headerPicture")
+    assert row is not None, "headerPicture must be listed by assignable:true after the write"
+    assert_contains(row, "PICTURE", "headerPicture must expose the PICTURE value kind")
+    assert_contains(row, picture_fqn,
+                    "the current picture must round-trip as CommonPicture.<Name>")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_malformed_form_field_picture_is_actionable_and_changes_nothing():
+    bad = "Change"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.Description",
+        "properties": [{"name": "headerPicture", "value": bad}],
+    })
+    e = assert_error(r, "picture value without a symbolic type prefix")
+    assert_error_quality(e, names=[bad],
+                         suggests=["StdPicture.<Name>", "StdExtPicture.<Name>",
+                                   "CommonPicture.<Name>",
+                                   "list_common_pictures"],
+                         ctx="a malformed picture names all accepted forms and discovery tool")
+    assert_no_diff("a rejected picture value must not change the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_web_service_parameter_qname_round_trips_compact_form():
+    fqn = _seed_web_service_parameter("E2EQNameHappy")
+    value = "{http://www.w3.org/2001/XMLSchema}string"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "xdtoValueType", "value": value}],
+    })
+    assert_ok(r, "set xdtoValueType on a web-service operation parameter")
+    assert "xdtoValueType" in (r.structured.get("applied") or []), \
+        "xdtoValueType must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: prove the nested QName, not merely the already-created Parameter name.
+    assert_diff_contains("<xdtoValueType", ctx="the QName containment must reach the WebService .mdo")
+    assert_diff_contains("http://www.w3.org/2001/XMLSchema",
+                         ctx="the QName namespace must reach the WebService .mdo")
+    assert_diff_contains("<name>string</name>",
+                         ctx="the QName local name must reach the WebService .mdo")
+
+    row = _assignable_row(fqn, "xdtoValueType")
+    assert row is not None, "xdtoValueType must be listed by assignable:true after the write"
+    assert_contains(row, "QNAME", "xdtoValueType must expose the QNAME value kind")
+    assert_contains(row, value, "the current QName must round-trip in compact form")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_bad_compact_web_service_parameter_qname_is_actionable_and_atomic():
+    fqn = _seed_web_service_parameter("E2EQNameBad")
+    before = tree_snapshot()
+    bad = "{http://www.w3.org/2001/XMLSchema}"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "xdtoValueType", "value": bad}],
+    })
+    e = assert_error(r, "compact QName with no local name")
+    assert_error_quality(e, names=[bad],
+                         suggests=["{nsUri}name", "nsUri", "name"],
+                         ctx="a bad compact QName shows both required sides and accepted grammar")
+    assert_tree_unchanged(before, "a rejected QName must not change the seeded WebService tree")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_web_service_xdto_packages_mixes_reference_and_namespace_on_disk():
+    package_fqn = _seed_xdto_package("E2EXdtoPackagesHappy")
+    service_fqn, service_path = _seed_web_service("E2EXdtoPackagesHappy")
+    namespace = "http://v8.1c.ru/8.1/data/core"
+    expected = [package_fqn, namespace]
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": service_fqn,
+        "properties": [{"name": "xdtoPackages", "value": expected}],
+    })
+    assert_ok(r, "replace WebService.xdtoPackages with a mixed two-entry list")
+    assert "xdtoPackages" in (r.structured.get("applied") or []), \
+        "xdtoPackages must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: inspect only the service's own list, preserving order and checking each concrete
+    # mcore Value subtype. The package FQN also exists in Configuration.mdo, so a global diff match
+    # would not prove that the ReferenceValue reached WebService.xdtoPackages.
+    root = ET.fromstring(read_disk(service_path))
+    entries = [element for element in root.iter()
+               if element.tag.rsplit("}", 1)[-1] == "xdtoPackages"]
+    stored = []
+    for entry in entries:
+        value_type = next((value for key, value in entry.attrib.items()
+                           if key.rsplit("}", 1)[-1] == "type"), None)
+        value_node = next((child for child in entry
+                           if child.tag.rsplit("}", 1)[-1] == "value"), None)
+        stored.append((value_type, value_node.text if value_node is not None else None))
+    assert stored == [
+        ("core:ReferenceValue", package_fqn),
+        ("core:StringValue", namespace),
+    ], "WebService .mdo must preserve both concrete Value kinds and order: %r" % (stored,)
+
+    row = _assignable_row(service_fqn, "xdtoPackages")
+    assert row is not None, "xdtoPackages must be listed by assignable:true after the write"
+    assert_contains(row, "MCORE_VALUE_LIST",
+                    "xdtoPackages must expose the mcore Value-list kind")
+    assert_contains(row, package_fqn,
+                    "the configuration package must round-trip in the current array")
+    assert_contains(row, namespace,
+                    "the platform namespace must round-trip in the current array")
+    assert row.index(package_fqn) < row.index(namespace), \
+        "the current array must preserve caller order: %s" % row
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_bad_web_service_xdto_package_entry_is_actionable_and_atomic():
+    service_fqn, _ = _seed_web_service("E2EXdtoPackagesBad")
+    before = tree_snapshot()
+    bad = "XDTOPackege.Nope"
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": service_fqn,
+        "properties": [{"name": "xdtoPackages", "value": [bad]}],
+    })
+    e = assert_error(r, "misspelled XDTO-package type token")
+    assert_error_quality(e, names=[bad],
+                         suggests=["XDTOPackage.<Name>", "http://", "urn:"],
+                         ctx="a bad entry names both configuration and platform package forms")
+    assert_tree_unchanged(before,
+                          "a rejected xdtoPackages replacement must leave the seeded tree unchanged")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -340,9 +661,90 @@ def test_set_uuid_type():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_set_type_unknown_kind_lists_valuestorage_and_uuid():
-    # An unrecognized kind is a clean error that now also names ValueStorage/UUID among the
-    # supported primitive kinds (issue #279).
+def test_set_stored_attribute_type_to_defined_type_reaches_disk_and_model():
+    defined_name = "E2EMoneyAmount"
+    defined_fqn = "DefinedType." + defined_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": defined_fqn,
+    }), "seed the reusable DefinedType")
+    wait_for_project_ready()
+
+    attr_name = "E2EDefinedTypeAttr"
+    attr_fqn = "Catalog.Catalog.Attribute." + attr_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": attr_fqn,
+    }), "seed the stored attribute that will use the DefinedType")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attr_fqn,
+        "properties": [{
+            "name": "type",
+            "value": {"types": [{"kind": "DefinedType", "ref": defined_name}]},
+        }],
+    })
+    assert_ok(r, "set a stored attribute type to a DefinedType")
+    assert "type" in (r.structured.get("applied") or []), \
+        "the DefinedType must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: inspect the new attribute's own type block, not the DefinedType collection entry
+    # that create_metadata already wrote to Configuration.mdo.
+    catalog_root = ET.fromstring(read_disk("src/Catalogs/Catalog/Catalog.mdo"))
+    attribute_blocks = []
+    for element in catalog_root:
+        if element.tag.rsplit("}", 1)[-1] != "attributes":
+            continue
+        names = [child.text for child in element
+                 if child.tag.rsplit("}", 1)[-1] == "name"]
+        if names == [attr_name]:
+            attribute_blocks.append(element)
+    assert len(attribute_blocks) == 1, \
+        "Catalog.mdo must contain exactly one attribute named %s" % attr_name
+    stored_types = [element.text for element in attribute_blocks[0].iter()
+                    if element.tag.rsplit("}", 1)[-1] == "types"]
+    assert stored_types == [defined_fqn], \
+        "the attribute type must store the DefinedType TypeSet: %r" % stored_types
+
+    row = _assignable_row(attr_fqn, "type")
+    assert row is not None, "the attribute type must remain readable through assignable:true"
+    assert_contains(row, defined_fqn,
+                    "the current type must round-trip as the feedable DefinedType FQN")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_unknown_defined_type_name_is_actionable_and_changes_nothing():
+    attr_name = "E2EUnknownDefinedTypeAttr"
+    attr_fqn = "Catalog.Catalog.Attribute." + attr_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": attr_fqn,
+    }), "seed the attribute for an unknown DefinedType refusal")
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    bad_name = "NoSuchDefinedTypeE2E"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attr_fqn,
+        "properties": [{
+            "name": "type",
+            "value": {"types": [{"kind": "DefinedType", "ref": bad_name}]},
+        }],
+    })
+    e = assert_error(r, "unknown DefinedType name")
+    assert_error_quality(e, names=[bad_name], suggests=["DefinedType", "check", "exists"],
+                         ctx="an unknown DefinedType must name the target and explain the fix")
+    assert_tree_unchanged(before,
+                          "a rejected DefinedType assignment must not change the seeded tree")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_type_unknown_kind_lists_valuestorage_uuid_and_defined_type():
+    # An unrecognized kind is a clean error that names ValueStorage/UUID and the reusable
+    # DefinedType grammar among the accepted forms.
     attr = "E2ETypeUnknownKindAttr"
     cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
     assert_ok(cr, "seed attribute")
@@ -352,8 +754,9 @@ def test_set_type_unknown_kind_lists_valuestorage_and_uuid():
         "properties": [{"name": "type", "value": {"types": [{"kind": "NotAKind_zzz"}]}}],
     })
     e = assert_error(r, "unknown type kind")
-    assert_error_quality(e, names=["NotAKind_zzz"], suggests=["ValueStorage", "UUID"],
-                         ctx="the unknown-kind error must list ValueStorage/UUID among the supported kinds")
+    assert_error_quality(e, names=["NotAKind_zzz"],
+                         suggests=["ValueStorage", "UUID", "DefinedType"],
+                         ctx="the unknown-kind error must list the supported reusable type forms")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
