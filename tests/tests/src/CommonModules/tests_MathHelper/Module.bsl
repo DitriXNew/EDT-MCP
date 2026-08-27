@@ -10,11 +10,4 @@
 	Возврат Minuend - Subtrahend;
 КонецФункции
 
-// Fixture for find_references: an extension BSL usage of the ADOPTED Catalog.
-// find_references on the BASE Catalog.Catalog must surface this module, because an
-// adopted object is its own EObject and extension code resolves to that copy.
-Функция AdoptedCatalogManagerForReferenceSearch() Экспорт
-	Возврат Catalogs.Catalog;
-КонецФункции
-
 #EndRegion
