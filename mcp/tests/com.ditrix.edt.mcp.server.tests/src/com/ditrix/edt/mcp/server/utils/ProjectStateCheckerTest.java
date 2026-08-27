@@ -34,6 +34,8 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
 
 /**
  * Tests for {@link ProjectStateChecker#buildingErrorOrNull(String)} and the cascade pre-flight
@@ -108,8 +110,10 @@ public class ProjectStateCheckerTest
     {
         IProject base = mockOpenProject("Base"); //$NON-NLS-1$
         CascadeEnvironment noExtensions = mock(CascadeEnvironment.class);
-        when(noExtensions.getOpenDtProjects()).thenReturn(Collections.emptyList());
+        when(noExtensions.getOpenDtProjects()).thenReturn(Collections.singletonList(base));
         when(noExtensions.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        ProjectStateResult ready = new ProjectStateResult(ProjectState.READY, "ready"); //$NON-NLS-1$
+        when(noExtensions.getProjectState(base)).thenReturn(ready);
 
         CascadeParticipantsResult empty =
             ProjectStateChecker.determineCascadeParticipants(base, noExtensions);

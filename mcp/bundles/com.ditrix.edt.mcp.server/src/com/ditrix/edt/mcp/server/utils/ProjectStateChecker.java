@@ -650,6 +650,8 @@ public final class ProjectStateChecker
      * from the registry. The nature does not say which base the extension belongs to, so any open
      * nature-bearing extension missing from the registry makes the whole result undeterminable, even
      * when it is unrelated to {@code base}. This deliberately widens only during that transient window.
+     * The base and every selected participant must also be {@link ProjectState#READY}; a project whose
+     * derived data is still computing has no proven-complete Xtext index contribution.
      *
      * @param base the base project; {@code null} is undeterminable
      * @return the participant lookup result, never {@code null}
@@ -700,6 +702,17 @@ public final class ProjectStateChecker
                     participants.add(extension);
                 }
             }
+            if (!isReady(base, env))
+            {
+                return CascadeParticipantsResult.undetermined();
+            }
+            for (IProject participant : participants)
+            {
+                if (!isReady(participant, env))
+                {
+                    return CascadeParticipantsResult.undetermined();
+                }
+            }
             return CascadeParticipantsResult.determined(participants);
         }
         catch (RuntimeException e)
@@ -708,7 +721,7 @@ public final class ProjectStateChecker
         }
     }
 
-    /** Outcome of the failure-aware extension-participant lookup. */
+    /** Outcome of failure-aware extension discovery and scoped-project readiness checks. */
     public static final class CascadeParticipantsResult
     {
         private final List<IProject> participants;
@@ -729,7 +742,7 @@ public final class ProjectStateChecker
             return new CascadeParticipantsResult(null);
         }
 
-        /** @return whether discovery completed, including the legitimate zero-extension result */
+        /** @return whether discovery completed and every scoped project was ready */
         public boolean isDetermined()
         {
             return participants != null;
@@ -776,6 +789,12 @@ public final class ProjectStateChecker
         return name;
     }
 
+    private static boolean isReady(IProject project, CascadeEnvironment env)
+    {
+        ProjectStateResult state = env.getProjectState(project);
+        return state != null && state.isReady();
+    }
+
     private static String participantBuildingError(IProject base, IProject participant)
     {
         return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
@@ -815,6 +834,9 @@ public final class ProjectStateChecker
          * An unreadable project description must fail the lookup rather than look like "not an extension".
          */
         List<IProject> getOpenExtensionNatureProjects();
+
+        /** Current EDT/derived-data state used to prove a scoped project's index contribution settled. */
+        ProjectStateResult getProjectState(IProject project);
 
         /**
          * Resolves the BASE (parent) project a dependent project derives from, or {@code null} when
@@ -904,6 +926,12 @@ public final class ProjectStateChecker
                     }
                 }
                 return result;
+            }
+
+            @Override
+            public ProjectStateResult getProjectState(IProject project)
+            {
+                return ProjectStateChecker.checkProjectState(project);
             }
 
             @Override

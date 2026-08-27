@@ -36,9 +36,10 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsRe
  * URI was observed in the fixture. The caller also adds adopted-copy URIs as targets, however, and the
  * fixture deliberately proves that an extension BSL usage of such a copy is found in this source scope.
  * <p>
- * The scope optimization fails CLOSED: unless extension discovery completes and every indexed URI can
- * be classified as either a workspace resource or a known non-workspace resource, this helper calls
- * {@link IReferenceFinder#findAllReferences} exactly as the previous implementation did.
+ * The scope optimization fails CLOSED: unless extension discovery completes, every scoped project is
+ * ready, and every indexed URI can be classified as either a workspace resource or a known
+ * non-workspace resource, this helper calls {@link IReferenceFinder#findAllReferences} exactly as the
+ * previous implementation did.
  * A successful fallback is therefore complete and must remain a successful BSL scan. This is
  * load-bearing for {@code delete_metadata}: its predefined-item safety check uses the same reference
  * scan, and silently searching a partial project set could turn a reference outside that partial set
@@ -160,10 +161,9 @@ public final class BslReferenceSearch
                 }
             }
 
-            if (sourceResourceURIs.isEmpty())
-            {
-                return ScopeResolution.failure("Xtext index contained no resources in the project scope"); //$NON-NLS-1$
-            }
+            // A READY BSL project can legitimately have no modules. Participant determination has
+            // already proved that every scoped project is settled, so an empty source set is complete;
+            // project readiness, not an invented per-project resource-count rule, guards this case.
             return ScopeResolution.scoped(new ArrayList<>(sourceResourceURIs), projectNames.size());
         }
         catch (RuntimeException e)

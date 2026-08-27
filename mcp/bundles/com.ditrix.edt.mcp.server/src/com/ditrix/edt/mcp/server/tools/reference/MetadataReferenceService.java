@@ -172,9 +172,9 @@ public class MetadataReferenceService
      * the BSL scan could not be consulted, since a missed BSL-only reference would otherwise be treated
      * as "genuinely zero references" and the delete would proceed unverified. This compatibility
      * overload has no owning project, so its source scan uses the complete workspace fallback. For an
-     * {@link MdObject}, however, it cannot discover adopted-extension counterparts without that project
-     * and therefore reports the strict scan incomplete; the project-aware overload below is required
-     * when that completeness signal protects a mutation.
+     * {@link MdObject} or {@link PredefinedItem}, however, it cannot discover adopted-extension
+     * counterparts without that project and therefore reports the strict scan incomplete; the
+     * project-aware overload below is required when that completeness signal protects a mutation.
      *
      * @param bmModel the BM model (already open in the caller's own transaction)
      * @param target the object to find references TO
@@ -184,8 +184,8 @@ public class MetadataReferenceService
     public ReferenceScanResult collectReferencesForObjectStrict(IBmModel bmModel, IBmObject target, int limit)
     {
         // No target project means the source-scope optimization cannot be proven safe. The collector
-        // runs the complete workspace fallback; MdObject adopted-target augmentation remains
-        // undeterminable and is reflected in ReferenceScanResult.complete.
+        // runs the complete workspace fallback; MdObject/PredefinedItem adopted-target augmentation
+        // remains undeterminable and is reflected in ReferenceScanResult.complete.
         return collectReferencesForObjectStrict(null, bmModel, target, limit);
     }
 
@@ -424,11 +424,11 @@ public class MetadataReferenceService
     /**
      * Result of {@link #collectReferencesForObjectStrict}: the collected references AND whether the
      * BSL code-reference scan ran to completion. {@code complete=false} means the Xtext reference index
-     * was unavailable (no resource-service-provider / {@link IReferenceFinder}) or the scoped/fallback
-     * finder call threw - a BSL-only incoming reference could have been MISSED, so a caller that
-     * must fail CLOSED (delete_metadata's predefined-item check) should treat the reference state as
-     * UNVERIFIED, never as "genuinely zero references". Public, simple-data-holder style, matching
-     * {@link ReferenceInfo}.
+     * was unavailable (no resource-service-provider / {@link IReferenceFinder}), adopted-extension
+     * target augmentation was incomplete, or the scoped/fallback finder call threw - a BSL-only
+     * incoming reference could have been MISSED, so a caller that must fail CLOSED
+     * (delete_metadata's predefined-item check) should treat the reference state as UNVERIFIED, never
+     * as "genuinely zero references". Public, simple-data-holder style, matching {@link ReferenceInfo}.
      */
     public static final class ReferenceScanResult
     {
@@ -467,10 +467,11 @@ public class MetadataReferenceService
         private org.eclipse.emf.ecore.resource.ResourceSet lineResolveResourceSet;
         /**
          * Whether {@link #collectBslReferences} ran to completion - {@code false} when the Xtext
-         * resource-service-provider / {@link IReferenceFinder} was unavailable, or the scoped/fallback
-         * finder call threw. {@code find_references} itself never reads this (best-effort by
-         * design); {@link MetadataReferenceService#collectReferencesForObjectStrict} surfaces it to a
-         * caller that must fail CLOSED on an incomplete scan. Default {@code true}: most scans complete.
+         * resource-service-provider / {@link IReferenceFinder} was unavailable, adopted-target
+         * augmentation was incomplete, or the scoped/fallback finder call threw. {@code find_references}
+         * itself never reads this (best-effort by design); {@link
+         * MetadataReferenceService#collectReferencesForObjectStrict} surfaces it to a caller that must
+         * fail CLOSED on an incomplete scan. Default {@code true}: most scans complete.
          */
         private boolean bslScanComplete = true;
 
@@ -545,8 +546,8 @@ public class MetadataReferenceService
                 collectFieldReferences(engine, targetAsMdObject);
             }
 
-            // 5. Collect BSL code references - applies to ANY IBmObject (collectBslReferences already
-            // branches internally on `target instanceof MdObject` for the produced-types URI set).
+            // 5. Collect BSL code references - applies to ANY IBmObject. MdObject targets add their
+            // produced types; MdObject and PredefinedItem targets can add adopted-extension copies.
             collectBslReferences(target);
         }
 
@@ -796,7 +797,8 @@ public class MetadataReferenceService
                 List<URI> targetURIs = new ArrayList<>();
                 targetURIs.add(EcoreUtil.getURI((EObject) target));
 
-                // Add produced types URIs
+                // Add produced types URIs for the base MdObject. Predefined items do not own produced
+                // types, but their adopted counterparts are resolved below through the adopted owner.
                 if (target instanceof MdObject)
                 {
                     MdTypes producedTypes = MdClassUtil.getProducedTypes((MdObject) target);
@@ -811,20 +813,20 @@ public class MetadataReferenceService
                             }
                         }
                     }
+                }
 
-                    AdoptedReferenceTargets.Resolution adoptedTargets =
-                        AdoptedReferenceTargets.resolve((MdObject)target, participants);
-                    targetURIs.addAll(adoptedTargets.getTargetURIs());
-                    if (!adoptedTargets.isComplete())
-                    {
-                        // find_references remains best-effort and still searches every target found.
-                        // Strict destructive callers must not interpret a failed augmentation as proof
-                        // that the missing extension contains no adopted counterpart or BSL reference.
-                        bslScanComplete = false;
-                        Activator.logInfo("BSL adopted-target augmentation incomplete for project '" //$NON-NLS-1$
-                            + safeProjectName(sourceProject) + "' (" //$NON-NLS-1$
-                            + adoptedTargets.getFailureReason() + "); continuing with resolved targets."); //$NON-NLS-1$
-                    }
+                AdoptedReferenceTargets.Resolution adoptedTargets =
+                    AdoptedReferenceTargets.resolve(target, participants);
+                targetURIs.addAll(adoptedTargets.getTargetURIs());
+                if (!adoptedTargets.isComplete())
+                {
+                    // find_references remains best-effort and still searches every target found.
+                    // Strict destructive callers must not interpret a failed augmentation as proof
+                    // that the missing extension contains no adopted counterpart or BSL reference.
+                    bslScanComplete = false;
+                    Activator.logInfo("BSL adopted-target augmentation incomplete for project '" //$NON-NLS-1$
+                        + safeProjectName(sourceProject) + "' (" //$NON-NLS-1$
+                        + adoptedTargets.getFailureReason() + "); continuing with resolved targets."); //$NON-NLS-1$
                 }
 
                 BslReferenceSearch.findReferences(resourceServiceProvider, finder, sourceProject,

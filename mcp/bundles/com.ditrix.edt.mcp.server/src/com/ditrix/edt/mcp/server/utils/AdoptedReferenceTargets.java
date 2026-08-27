@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -18,9 +19,11 @@ import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
 import com._1c.g5.v8.dt.metadata.mdtype.MdType;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
@@ -29,14 +32,16 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 
 /**
- * Resolves the BSL target URIs of adopted copies of a base metadata object.
+ * Resolves the BSL target URIs of adopted copies of a base metadata object or predefined item.
  * <p>
  * {@code MdObject.extendedConfigurationObject} is the generated mdclass UUID link from an adopted
- * object to its base object. Each extension is read through its own BM model and only URIs escape the
- * transaction. Not having an adopted counterpart is a successful empty result. An unavailable model,
- * configuration, or participant set is different: the caller may still run a best-effort search with
- * the targets found so far, but a destructive caller must not treat that partial augmentation as proof
- * that no reference exists.
+ * object to its base object. A predefined item has no such owner link of its own, so its adopted
+ * counterpart is found by exact Name within the already-matched adopted owner, matching EDT's own
+ * {@code PredefinedItemAdopterParticipant}. Each extension is read through its own BM model and only
+ * URIs escape the transaction. Not having an adopted owner or predefined child is a successful empty
+ * result. An unavailable model, configuration, produced-types value, or participant set is different:
+ * the caller may still run a best-effort search with the targets found so far, but a destructive caller
+ * must not treat that partial augmentation as proof that no reference exists.
  */
 public final class AdoptedReferenceTargets
 {
@@ -47,13 +52,14 @@ public final class AdoptedReferenceTargets
 
     /**
      * Finds adopted counterparts in the already-resolved extension participant set and returns their
-     * own EObject and produced-type URIs.
+     * own EObject and produced-type URIs. For a predefined item, returns the URI of the exact-name child
+     * in each adopted owner.
      *
-     * @param baseTarget base-configuration object whose adopted copies are targets too
+     * @param baseTarget base-configuration object or predefined item whose adopted copies are targets too
      * @param participants the same participant snapshot used to scope the source scan
      * @return accumulated target URIs and whether every extension lookup completed
      */
-    public static Resolution resolve(MdObject baseTarget, CascadeParticipantsResult participants)
+    public static Resolution resolve(IBmObject baseTarget, CascadeParticipantsResult participants)
     {
         try
         {
@@ -68,10 +74,15 @@ public final class AdoptedReferenceTargets
         }
     }
 
-    private static Resolution resolveInternal(MdObject baseTarget,
+    private static Resolution resolveInternal(IBmObject baseTarget,
         CascadeParticipantsResult participants)
     {
         if (baseTarget == null)
+        {
+            return Resolution.incomplete(Collections.emptyList(),
+                "base target is unavailable"); //$NON-NLS-1$
+        }
+        if (!(baseTarget instanceof MdObject) && !(baseTarget instanceof PredefinedItem))
         {
             return Resolution.complete(Collections.emptyList());
         }
@@ -80,9 +91,37 @@ public final class AdoptedReferenceTargets
             return Resolution.incomplete(Collections.emptyList(),
                 "extension participants could not be determined"); //$NON-NLS-1$
         }
+        List<IProject> extensionProjects = participants.getParticipants();
+        if (extensionProjects.isEmpty())
+        {
+            // No extension target can exist, so identity/model services are irrelevant here. Requiring
+            // them would turn a proven empty addition into a false incomplete strict scan.
+            return Resolution.complete(Collections.emptyList());
+        }
 
-        UUID baseUuid = baseTarget.getUuid();
-        String targetEClassName = baseTarget.eClass().getName();
+        MdObject baseOwner;
+        if (baseTarget instanceof MdObject)
+        {
+            baseOwner = (MdObject)baseTarget;
+        }
+        else
+        {
+            PredefinedItem baseItem = (PredefinedItem)baseTarget;
+            if (baseItem.getName() == null || baseItem.getName().isEmpty())
+            {
+                return Resolution.incomplete(Collections.emptyList(),
+                    "base predefined-item name could not be determined"); //$NON-NLS-1$
+            }
+            baseOwner = findOwningMdObject(baseItem);
+            if (baseOwner == null)
+            {
+                return Resolution.incomplete(Collections.emptyList(),
+                    "base predefined-item owner could not be determined"); //$NON-NLS-1$
+            }
+        }
+
+        UUID baseUuid = baseOwner.getUuid();
+        String targetEClassName = baseOwner.eClass().getName();
         if (baseUuid == null || targetEClassName == null || targetEClassName.isEmpty())
         {
             return Resolution.incomplete(Collections.emptyList(),
@@ -100,7 +139,7 @@ public final class AdoptedReferenceTargets
 
         Set<URI> targetURIs = new LinkedHashSet<>();
         String firstFailure = null;
-        for (IProject extension : participants.getParticipants())
+        for (IProject extension : extensionProjects)
         {
             String extensionName = projectName(extension);
             BmModelResolver.Resolution model;
@@ -123,28 +162,29 @@ public final class AdoptedReferenceTargets
 
             try
             {
-                ExtensionResolution extensionResult = BmTransactions.read(model.getModel(),
+                Resolution extensionResult = BmTransactions.read(model.getModel(),
                     "Resolve adopted reference target", (transaction, monitor) -> { //$NON-NLS-1$
                         Configuration configuration = configurationProvider.getConfiguration(extension);
                         if (configuration == null)
                         {
-                            return ExtensionResolution.failure("configuration is unavailable"); //$NON-NLS-1$
+                            return Resolution.incomplete(Collections.emptyList(),
+                                "configuration is unavailable"); //$NON-NLS-1$
                         }
                         List<? extends MdObject> candidates =
                             MetadataTypeUtils.getObjects(configuration, targetEClassName);
                         if (candidates == null)
                         {
-                            return ExtensionResolution.failure(
+                            return Resolution.incomplete(Collections.emptyList(),
                                 "target metadata collection is unavailable"); //$NON-NLS-1$
                         }
                         for (MdObject candidate : candidates)
                         {
                             if (baseUuid.equals(candidate.getExtendedConfigurationObject()))
                             {
-                                return ExtensionResolution.complete(targetURIs(candidate));
+                                return resolveTargetForAdoptedOwner(baseTarget, candidate);
                             }
                         }
-                        return ExtensionResolution.complete(Collections.emptyList());
+                        return Resolution.complete(Collections.emptyList());
                     });
                 targetURIs.addAll(extensionResult.targetURIs);
                 if (!extensionResult.complete)
@@ -166,23 +206,96 @@ public final class AdoptedReferenceTargets
             : Resolution.incomplete(resolved, firstFailure);
     }
 
-    private static List<URI> targetURIs(MdObject target)
+    /**
+     * Resolves the target nested inside an adopted owner. Package-visible for headless model tests.
+     * The caller has already proven that {@code adoptedOwner} corresponds to the base owner.
+     */
+    static Resolution resolveTargetForAdoptedOwner(IBmObject baseTarget, MdObject adoptedOwner)
     {
         List<URI> targetURIs = new ArrayList<>();
-        targetURIs.add(EcoreUtil.getURI((EObject)target));
-        MdTypes producedTypes = MdClassUtil.getProducedTypes(target);
-        if (producedTypes != null)
+        if (adoptedOwner == null)
         {
-            for (EObject type : producedTypes.eContents())
+            return Resolution.incomplete(targetURIs,
+                "adopted owner is unavailable"); //$NON-NLS-1$
+        }
+        if (baseTarget instanceof PredefinedItem)
+        {
+            String itemName = ((PredefinedItem)baseTarget).getName();
+            if (itemName == null || itemName.isEmpty())
             {
-                if ((type instanceof MdType && ((MdType)type).getType() != null)
-                    || (type instanceof MdTypeSet && ((MdTypeSet)type).getTypeSet() != null))
+                return Resolution.incomplete(targetURIs,
+                    "base predefined-item name could not be determined"); //$NON-NLS-1$
+            }
+            PredefinedItem adoptedItem = PredefinedWriter.findByNameExact(adoptedOwner, itemName);
+            if (adoptedItem == null)
+            {
+                return Resolution.complete(targetURIs);
+            }
+            targetURIs.add(EcoreUtil.getURI((EObject)adoptedItem));
+            return Resolution.complete(targetURIs);
+        }
+        if (!(baseTarget instanceof MdObject))
+        {
+            return Resolution.complete(targetURIs);
+        }
+
+        targetURIs.add(EcoreUtil.getURI((EObject)adoptedOwner));
+        boolean hasProducedTypes =
+            adoptedOwner.eClass().getEStructuralFeature("producedTypes") != null; //$NON-NLS-1$
+        MdTypes producedTypes = MdClassUtil.getProducedTypes(adoptedOwner);
+        if (producedTypes == null)
+        {
+            return hasProducedTypes
+                ? Resolution.incomplete(targetURIs, "produced types are unavailable") //$NON-NLS-1$
+                : Resolution.complete(targetURIs);
+        }
+
+        String firstFailure = null;
+        for (EObject type : producedTypes.eContents())
+        {
+            if (type instanceof MdType)
+            {
+                if (((MdType)type).getType() == null)
                 {
-                    targetURIs.add(EcoreUtil.getURI(type));
+                    firstFailure = firstFailure(firstFailure,
+                        "a produced type is unavailable"); //$NON-NLS-1$
+                    continue;
                 }
             }
+            else if (type instanceof MdTypeSet)
+            {
+                if (((MdTypeSet)type).getTypeSet() == null)
+                {
+                    firstFailure = firstFailure(firstFailure,
+                        "a produced type set is unavailable"); //$NON-NLS-1$
+                    continue;
+                }
+            }
+            else
+            {
+                firstFailure = firstFailure(firstFailure,
+                    "an indexed produced type could not be classified"); //$NON-NLS-1$
+                continue;
+            }
+            targetURIs.add(EcoreUtil.getURI(type));
         }
-        return targetURIs;
+        return firstFailure == null ? Resolution.complete(targetURIs)
+            : Resolution.incomplete(targetURIs, firstFailure);
+    }
+
+    static MdObject findOwningMdObject(PredefinedItem item)
+    {
+        Set<EObject> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        EObject current = (EObject)item;
+        while (current != null && visited.add(current))
+        {
+            if (current instanceof MdObject)
+            {
+                return (MdObject)current;
+            }
+            current = current.eContainer();
+        }
+        return null;
     }
 
     private static String projectName(IProject project)
@@ -250,27 +363,4 @@ public final class AdoptedReferenceTargets
         }
     }
 
-    private static final class ExtensionResolution
-    {
-        private final List<URI> targetURIs;
-        private final boolean complete;
-        private final String failureReason;
-
-        private ExtensionResolution(List<URI> targetURIs, boolean complete, String failureReason)
-        {
-            this.targetURIs = targetURIs;
-            this.complete = complete;
-            this.failureReason = failureReason;
-        }
-
-        private static ExtensionResolution complete(List<URI> targetURIs)
-        {
-            return new ExtensionResolution(targetURIs, true, null);
-        }
-
-        private static ExtensionResolution failure(String failureReason)
-        {
-            return new ExtensionResolution(Collections.emptyList(), false, failureReason);
-        }
-    }
 }
