@@ -22,6 +22,7 @@ import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -32,11 +33,16 @@ import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.QName;
+import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
@@ -75,6 +81,7 @@ import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
@@ -82,6 +89,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
+import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
@@ -4658,8 +4666,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareReference(ctx.scope, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
+            case MCORE_VALUE_LIST:
+                return prepareMcoreValueList(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
                 return prepareStyleValue(ctx.config, name, prop, target, info, out);
+            case PICTURE:
+                return preparePicture(ctx, name, prop, info, out);
+            case QNAME:
+                return prepareQName(name, prop, info, out);
             case ADJUSTABLE_BOOLEAN:
                 return prepareAdjustableBoolean(name, value, info, out);
             case STRING:
@@ -4957,6 +4971,59 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Validates a {@code MCORE_VALUE_LIST} property and queues an ordered replacement. Configuration
+     * XDTO-package targets are reduced to BM ids here; only ids and namespace strings cross into the
+     * write phase, where the actual ReferenceValue/StringValue objects are created.
+     */
+    private static String prepareMcoreValueList(MetadataScope scope, String name, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        McoreValueListPreparation prepared = buildMcoreValueListValue(name, prop.get(KEY_VALUE), scope);
+        if (prepared.error != null)
+        {
+            return prepared.error;
+        }
+        out.add(PreparedChange.mcoreValueList(info.feature, prepared.values));
+        return null;
+    }
+
+    /**
+     * Parses and reduces an mcore Value list to its transaction-safe shape. Package-visible so
+     * headless tests can pin refusal wording and the no-live-reference boundary.
+     */
+    static McoreValueListPreparation buildMcoreValueListValue(String propertyName, JsonElement raw,
+        MetadataScope scope)
+    {
+        McoreValueListBuilder.Result built = McoreValueListBuilder.build(raw, scope);
+        if (built.error != null)
+        {
+            return McoreValueListPreparation.error(ToolResult.error("Invalid mcore Value list for " //$NON-NLS-1$
+                + "property '" + propertyName + "': " + built.error).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return prepareResolvedMcoreValueList(built.items);
+    }
+
+    /** Converts resolved entries to strings/BM ids without retaining any live XDTO-package object. */
+    static McoreValueListPreparation prepareResolvedMcoreValueList(
+        List<McoreValueListBuilder.Item> items)
+    {
+        List<McoreValuePreparation> reduced = new ArrayList<>();
+        for (McoreValueListBuilder.Item item : items)
+        {
+            if (item.referenceTarget != null)
+            {
+                reduced.add(McoreValuePreparation.reference(
+                    ((IBmObject)item.referenceTarget).bmGetId()));
+            }
+            else
+            {
+                reduced.add(McoreValuePreparation.namespace(item.namespaceUri));
+            }
+        }
+        return McoreValueListPreparation.ok(reduced);
+    }
+
+    /**
      * Validates a {@code STYLE_VALUE} property (building the StyleItem Color / Font value) and, on
      * success, appends the prepared style-value change to {@code out} (which also keeps the sibling
      * {@code type} feature consistent with the value). Returns a JSON error on failure, or {@code null}
@@ -4976,6 +5043,159 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         EStructuralFeature typeFeature = target.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
         out.add(PreparedChange.styleValue(info.feature, typeFeature, sv.value, sv.type));
         return null;
+    }
+
+    /**
+     * Validates and resolves a contained mcore Picture value. A standard-picture proxy is safe to
+     * queue directly; a live CommonPicture crosses the prepare/write boundary only by BM id. The
+     * PictureRef itself is created and attached inside the caller's existing write transaction.
+     */
+    private static String preparePicture(PrepareContext ctx, String name, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        JsonElement raw = prop.get(KEY_VALUE);
+        if (isMissingOrEmptyString(raw))
+        {
+            return requireValueError(name);
+        }
+        PicturePreparation prepared = buildPictureValue(name, raw, ctx.scope, ctx.version);
+        if (prepared.error != null)
+        {
+            return prepared.error;
+        }
+        out.add(PreparedChange.picture(info.feature, prepared.platformPictureProxy,
+            prepared.commonPictureBmId));
+        return null;
+    }
+
+    /**
+     * Builds and wraps a PictureValueBuilder result in the tool's ToolResult error contract. Kept
+     * package-visible so the headless unit test can pin the exact refusal wording without a BM model.
+     */
+    static PicturePreparation buildPictureValue(String name, JsonElement raw,
+        MetadataScope scope, Version version)
+    {
+        PictureValueBuilder.Result built = PictureValueBuilder.build(raw, scope, version);
+        if (built.error != null)
+        {
+            return PicturePreparation.error(ToolResult.error(
+                "Invalid picture for property '" + name + "': " + built.error).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return prepareResolvedPicture(built.picture);
+    }
+
+    /**
+     * Converts a resolved picture target to the transaction-safe prepared shape. Package-visible so
+     * a headless test can prove that a CommonPicture is reduced to its BM id, never retained live.
+     */
+    static PicturePreparation prepareResolvedPicture(EObject picture)
+    {
+        if (picture instanceof CommonPicture)
+        {
+            return PicturePreparation.common(((IBmObject)picture).bmGetId());
+        }
+        return PicturePreparation.standard(picture);
+    }
+
+    /**
+     * Validates either supported QName wire form and queues a detached mcore QName for attachment in
+     * the existing write transaction. Both members/sides are required and must be non-empty.
+     */
+    private static String prepareQName(String name, JsonObject prop, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        JsonElement raw = prop.get(KEY_VALUE);
+        if (isMissingOrEmptyString(raw))
+        {
+            return requireValueError(name);
+        }
+        ContainedValuePreparation prepared = buildQNameValue(name, raw);
+        if (prepared.error != null)
+        {
+            return prepared.error;
+        }
+        out.add(PreparedChange.scalar(info.feature, prepared.value));
+        return null;
+    }
+
+    /**
+     * Parses a QName without touching the model. Package-visible for exact refusal-path unit tests.
+     */
+    static ContainedValuePreparation buildQNameValue(String propertyName, JsonElement raw)
+    {
+        String name;
+        String nsUri;
+        if (raw != null && !raw.isJsonNull() && raw.isJsonObject())
+        {
+            JsonObject object = raw.getAsJsonObject();
+            if (object.size() != 2 || !object.has("name") || !object.has("nsUri")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return invalidQName(propertyName, raw,
+                    "the object form requires exactly the 'name' and 'nsUri' members"); //$NON-NLS-1$
+            }
+            name = strictString(object.get("name")); //$NON-NLS-1$
+            nsUri = strictString(object.get("nsUri")); //$NON-NLS-1$
+            if (isBlank(name) || isBlank(nsUri))
+            {
+                return invalidQName(propertyName, raw,
+                    "the object form requires non-empty string members 'name' and 'nsUri'"); //$NON-NLS-1$
+            }
+        }
+        else if (raw != null && !raw.isJsonNull() && raw.isJsonPrimitive()
+            && raw.getAsJsonPrimitive().isString())
+        {
+            String compact = raw.getAsString();
+            int close = compact.indexOf('}');
+            if (!compact.startsWith("{") || close <= 1 || close == compact.length() - 1) //$NON-NLS-1$
+            {
+                return invalidQName(propertyName, raw,
+                    "the compact form must be '{nsUri}name' with a non-empty namespace URI and name"); //$NON-NLS-1$
+            }
+            nsUri = compact.substring(1, close);
+            name = compact.substring(close + 1);
+            if (isBlank(name) || isBlank(nsUri))
+            {
+                return invalidQName(propertyName, raw,
+                    "the compact form must be '{nsUri}name' with a non-empty namespace URI and name"); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            return invalidQName(propertyName, raw,
+                "the value is neither a QName object nor a compact string"); //$NON-NLS-1$
+        }
+
+        QName qname = McoreFactory.eINSTANCE.createQName();
+        qname.setName(name);
+        qname.setNsUri(nsUri);
+        return ContainedValuePreparation.ok(qname);
+    }
+
+    private static ContainedValuePreparation invalidQName(String propertyName, JsonElement raw,
+        String reason)
+    {
+        String value = raw == null || raw.isJsonNull() ? "null" : raw.toString(); //$NON-NLS-1$
+        return ContainedValuePreparation.error(ToolResult.error("Invalid QName value for property '" //$NON-NLS-1$
+            + propertyName + "': " + value + "; " + reason + ". Use either " //$NON-NLS-1$ //$NON-NLS-2$
+            + "{\"name\":\"string\",\"nsUri\":\"http://www.w3.org/2001/XMLSchema\"} or " //$NON-NLS-1$
+            + "\"{http://www.w3.org/2001/XMLSchema}string\".").toJson()); //$NON-NLS-1$
+    }
+
+    private static boolean isMissingOrEmptyString(JsonElement raw)
+    {
+        return raw == null || raw.isJsonNull() || raw.isJsonPrimitive()
+            && raw.getAsJsonPrimitive().isString() && raw.getAsString().isEmpty();
+    }
+
+    private static String strictString(JsonElement raw)
+    {
+        return raw != null && !raw.isJsonNull() && raw.isJsonPrimitive()
+            && raw.getAsJsonPrimitive().isString() ? raw.getAsString() : null;
+    }
+
+    private static boolean isBlank(String value)
+    {
+        return value == null || value.trim().isEmpty();
     }
 
     /**
@@ -5192,17 +5412,137 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
     }
 
+    /**
+     * Transaction-safe prepared Picture target. A successful result carries EITHER a platform proxy
+     * or a CommonPicture BM id; it never retains a live CommonPicture across the write boundary.
+     * Package-visible so the headless tests can pin that invariant and the exact refusal wording.
+     */
+    static final class PicturePreparation
+    {
+        final EObject platformPictureProxy;
+
+        final Long commonPictureBmId;
+
+        final String error;
+
+        private PicturePreparation(EObject platformPictureProxy, Long commonPictureBmId,
+            String error)
+        {
+            this.platformPictureProxy = platformPictureProxy;
+            this.commonPictureBmId = commonPictureBmId;
+            this.error = error;
+        }
+
+        static PicturePreparation standard(EObject platformPictureProxy)
+        {
+            return new PicturePreparation(platformPictureProxy, null, null);
+        }
+
+        static PicturePreparation common(long commonPictureBmId)
+        {
+            return new PicturePreparation(null, Long.valueOf(commonPictureBmId), null);
+        }
+
+        static PicturePreparation error(String error)
+        {
+            return new PicturePreparation(null, null, error);
+        }
+    }
+
+    /**
+     * A detached QName produced during validation, or a ready ToolResult error JSON. Exactly one field
+     * is non-null. Package-visible so headless tests can pin QName refusal wording without constructing
+     * the private PreparedChange or entering a BM transaction.
+     */
+    static final class ContainedValuePreparation
+    {
+        final EObject value;
+
+        final String error;
+
+        private ContainedValuePreparation(EObject value, String error)
+        {
+            this.value = value;
+            this.error = error;
+        }
+
+        static ContainedValuePreparation ok(EObject value)
+        {
+            return new ContainedValuePreparation(value, null);
+        }
+
+        static ContainedValuePreparation error(String error)
+        {
+            return new ContainedValuePreparation(null, error);
+        }
+    }
+
+    /** One transaction-safe mcore Value-list entry: either a namespace string or a reference BM id. */
+    static final class McoreValuePreparation
+    {
+        final String namespaceUri;
+
+        final Long referenceBmId;
+
+        private McoreValuePreparation(String namespaceUri, Long referenceBmId)
+        {
+            this.namespaceUri = namespaceUri;
+            this.referenceBmId = referenceBmId;
+        }
+
+        static McoreValuePreparation namespace(String namespaceUri)
+        {
+            return new McoreValuePreparation(namespaceUri, null);
+        }
+
+        static McoreValuePreparation reference(long bmId)
+        {
+            return new McoreValuePreparation(null, Long.valueOf(bmId));
+        }
+    }
+
+    /** An ordered, transaction-safe mcore Value list, or a ready ToolResult error JSON. */
+    static final class McoreValueListPreparation
+    {
+        final List<McoreValuePreparation> values;
+
+        final String error;
+
+        private McoreValueListPreparation(List<McoreValuePreparation> values, String error)
+        {
+            this.values = values;
+            this.error = error;
+        }
+
+        static McoreValueListPreparation ok(List<McoreValuePreparation> values)
+        {
+            return new McoreValueListPreparation(
+                java.util.Collections.unmodifiableList(new ArrayList<>(values)), null);
+        }
+
+        static McoreValueListPreparation error(String error)
+        {
+            return new McoreValueListPreparation(null, error);
+        }
+    }
+
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
-        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE, ADJUSTABLE_BOOLEAN }
+        private enum Kind
+        {
+            SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MCORE_VALUE_LIST, STYLE_VALUE, PICTURE,
+            ADJUSTABLE_BOOLEAN
+        }
 
         private final EStructuralFeature feature;
         private final Kind kind;
         private final Object scalarValue;
         private final String localizedLanguage;
         private final String localizedValue;
-        /** For a REFERENCE: the target's bmId. For a MANY_REFERENCE: the targets' bmIds in order. */
+        /**
+         * For REFERENCE/MANY_REFERENCE: target bmIds. For a CommonPicture: its one target bmId.
+         */
         private final List<Long> referenceBmIds;
         /** For a STYLE_VALUE: the sibling `type` feature + StyleElementType; {@code null} otherwise. */
         private final StyleBinding styleBinding;
@@ -5283,6 +5623,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 new StyleBinding(typeFeature, type), false);
         }
 
+        /**
+         * A picture change carries either a safe platform proxy in {@code scalarValue}, or one
+         * CommonPicture BM id in {@code referenceBmIds}. The PictureRef is built only in applyTo.
+         */
+        static PreparedChange picture(EStructuralFeature feature, EObject platformPictureProxy,
+            Long commonPictureBmId)
+        {
+            List<Long> ids = commonPictureBmId == null ? null
+                : java.util.Collections.singletonList(commonPictureBmId);
+            return new PreparedChange(feature, Kind.PICTURE, platformPictureProxy, null, null, ids,
+                null, false);
+        }
+
+        /** An ordered replacement list carrying only namespace strings and reference BM ids. */
+        static PreparedChange mcoreValueList(EStructuralFeature feature,
+            List<McoreValuePreparation> values)
+        {
+            return new PreparedChange(feature, Kind.MCORE_VALUE_LIST, values, null, null, null,
+                null, false);
+        }
+
         String featureName()
         {
             return feature.getName();
@@ -5344,6 +5705,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                     return;
                 }
+                case MCORE_VALUE_LIST:
+                {
+                    // Replace the whole containment list. ReferenceValue wrappers are created only
+                    // here, after re-fetching their XDTO-package target in this transaction.
+                    EList<Value> list = (EList<Value>)target.eGet(feature);
+                    list.clear();
+                    for (McoreValuePreparation prepared :
+                        (List<McoreValuePreparation>)scalarValue)
+                    {
+                        if (prepared.referenceBmId != null)
+                        {
+                            ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+                            reference.setValue(requireInTx(tx, prepared.referenceBmId.longValue()));
+                            list.add(reference);
+                        }
+                        else
+                        {
+                            StringValue string = McoreFactory.eINSTANCE.createStringValue();
+                            string.setValue(prepared.namespaceUri);
+                            list.add(string);
+                        }
+                    }
+                    return;
+                }
                 case STYLE_VALUE:
                 {
                     // Keep the style item's `type` consistent with the value it now holds (Color / Font),
@@ -5354,6 +5739,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         target.eSet(styleBinding.typeFeature, styleBinding.type);
                     }
                     target.eSet(feature, scalarValue);
+                    return;
+                }
+                case PICTURE:
+                {
+                    // A platform picture stays a provider proxy. A CommonPicture is re-fetched by
+                    // bmId so no live object from the prepare transaction crosses this boundary.
+                    EObject picture = referenceBmIds == null ? (EObject)scalarValue
+                        : requireInTx(tx, referenceBmIds.get(0));
+                    EObject pictureRef = EcoreUtil.create(McorePackage.Literals.PICTURE_REF);
+                    pictureRef.eSet(McorePackage.Literals.PICTURE_REF__PICTURE, picture);
+                    target.eSet(feature, pictureRef);
                     return;
                 }
                 case ADJUSTABLE_BOOLEAN:

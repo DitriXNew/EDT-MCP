@@ -12,6 +12,7 @@ import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EClassifier;
@@ -20,16 +21,24 @@ import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.eclipse.emf.ecore.InternalEObject;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.QName;
+import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com.google.gson.JsonArray;
 
 /**
  * Introspects the ASSIGNABLE properties of a metadata {@link EObject}: which structural features a
@@ -38,8 +47,9 @@ import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
  * view (human-readable) and {@code modify_metadata}'s validation (availability + value-validity).
  *
  * <p>A feature is considered assignable when it is changeable and not derived / transient / volatile,
- * and is not a containment reference (those are child collections - attributes / tabular sections /
- * forms / commands - created via {@code create_metadata}, not set as a scalar value).</p>
+ * and is not a containment reference (those are normally child collections - attributes / tabular
+ * sections / forms / commands - created via {@code create_metadata}, not set as a scalar value).
+ * Small containment value shapes with an explicit wire grammar are admitted separately.</p>
  */
 public final class MetadataPropertyIntrospector
 {
@@ -70,6 +80,27 @@ public final class MetadataPropertyIntrospector
         REFERENCE,
         /** A list of references to other metadata objects, set (replaced) by an array of FQNs. */
         MANY_REFERENCE,
+        /**
+         * A many-valued containment of mcore {@code Value} objects, set by replacing the whole list
+         * from a JSON array of strings. The EDT metamodel census found this shape exactly once in
+         * {@code MdClass.xcore} ({@code WebService.xdtoPackages}) and zero times in
+         * {@code Form.xcore}; the measured generic rule is therefore narrower than a feature-name
+         * special case while still leaving every other many containment excluded as a child list.
+         */
+        MCORE_VALUE_LIST,
+        /**
+         * A contained mcore {@code Picture}: set by {@code StdPicture.<Name>} or
+         * {@code StdExtPicture.<Name>} for a platform picture, or {@code CommonPicture.<Name>} for a
+         * configuration picture. Like
+         * {@link #STYLE_VALUE}, this is a single-valued containment reference classified explicitly.
+         */
+        PICTURE,
+        /**
+         * A contained mcore {@link QName}: set by {@code {name, nsUri}} or the compact
+         * {@code {nsUri}name} spelling. Like {@link #STYLE_VALUE}, this is a single-valued containment
+         * reference classified explicitly.
+         */
+        QNAME,
         /**
          * A {@link com._1c.g5.v8.dt.metadata.mdclass.StyleItem StyleItem}'s {@code value}: an mcore
          * {@code Value} (a Color or a Font) set via the structured {@code {color:...}} / {@code {font:...}}
@@ -480,9 +511,10 @@ public final class MetadataPropertyIntrospector
     }
 
     /**
-     * Classifies a reference feature: the localized synonym map and the contained TypeDescription are
-     * assignable values; a non-containment reference to an {@code MdObject} is a plain object reference
-     * (single or many); every other reference is excluded ({@code null}).
+     * Classifies a reference feature: the localized synonym map and the explicitly-supported contained
+     * values (TypeDescription, Picture and QName), plus the measured many-containment mcore Value-list
+     * shape, are assignable; a non-containment reference to an {@code MdObject} is a plain object
+     * reference (single or many); every other reference is excluded ({@code null}).
      *
      * <p>A {@link com._1c.g5.v8.dt.metadata.mdclass.BasicCommand#getGroup() BasicCommand.group} feature
      * is declared against {@code com._1c.g5.v8.dt.mcore.CommandGroup} - the base interface both the
@@ -497,9 +529,8 @@ public final class MetadataPropertyIntrospector
     private static ValueKind classifyReference(EReference ref)
     {
         // The synonym (and other localized strings) is a containment map-entry reference reached
-        // via getSynonym(); the data type is a contained TypeDescription. Both ARE assignable
-        // values. Every other reference - child collections (attributes/forms/...) and plain
-        // object references - is NOT a simple assignable value, so it is excluded (null).
+        // via getSynonym(); the remaining containment exceptions are explicit small value types.
+        // Every other containment reference is a child/owned-object relation, not an assignable value.
         if ("synonym".equals(ref.getName()) || isMapEntry(ref)) //$NON-NLS-1$
         {
             return ValueKind.LOCALIZED_STRING;
@@ -507,6 +538,21 @@ public final class MetadataPropertyIntrospector
         if (isTypeDescription(ref))
         {
             return ValueKind.TYPE_DESCRIPTION;
+        }
+        if (isContainedValue(ref, McorePackage.Literals.PICTURE, true))
+        {
+            return ValueKind.PICTURE;
+        }
+        if (isContainedValue(ref, McorePackage.Literals.QNAME, false))
+        {
+            return ValueKind.QNAME;
+        }
+        // Census of the EDT sources: `contains Value[]` occurs exactly once in MdClass.xcore
+        // (WebService.xdtoPackages) and zero times in Form.xcore. Admit that measured shape while
+        // keeping every other many containment classified as a child collection and excluded.
+        if (isContainedValueList(ref))
+        {
+            return ValueKind.MCORE_VALUE_LIST;
         }
         // A non-containment reference whose target is a metadata object (MdObject subtype), OR the
         // mcore CommandGroup interface (BasicCommand.group - see the class doc above), is a plain
@@ -554,6 +600,26 @@ public final class MetadataPropertyIntrospector
     {
         EClassifier type = reference.getEType();
         return type != null && "TypeDescription".equals(type.getName()); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether {@code reference} is a single-valued contained value of {@code expectedType}. Picture
+     * subtypes are accepted; QName is intentionally exact because the model defines one trivial value
+     * class and no polymorphic value family for it.
+     */
+    private static boolean isContainedValue(EReference reference, EClass expectedType,
+        boolean acceptSubtypes)
+    {
+        EClass target = reference.getEReferenceType();
+        return reference.isContainment() && !reference.isMany() && target != null
+            && (target == expectedType || acceptSubtypes && expectedType.isSuperTypeOf(target));
+    }
+
+    /** A many-valued containment declared exactly against the abstract mcore Value base class. */
+    private static boolean isContainedValueList(EReference reference)
+    {
+        return reference.isContainment() && reference.isMany()
+            && reference.getEReferenceType() == McorePackage.Literals.VALUE;
     }
 
     /**
@@ -680,8 +746,14 @@ public final class MetadataPropertyIntrospector
                     return value instanceof MdObject ? ((MdObject)value).getName() : null;
                 case MANY_REFERENCE:
                     return renderReferenceList(value);
+                case MCORE_VALUE_LIST:
+                    return renderMcoreValueList(value);
                 case STYLE_VALUE:
                     return renderStyleValue(value);
+                case PICTURE:
+                    return renderPicture(value);
+                case QNAME:
+                    return value instanceof QName ? renderQName((QName)value) : null;
                 case ADJUSTABLE_BOOLEAN:
                     return renderAdjustableBoolean(value);
                 default:
@@ -744,6 +816,71 @@ public final class MetadataPropertyIntrospector
         return sb.length() > 0 ? sb.toString() : null;
     }
 
+    /** Renders a contained mcore Value list to the same JSON array of strings accepted on the wire. */
+    private static String renderMcoreValueList(Object value)
+    {
+        if (!(value instanceof EList<?>))
+        {
+            return null;
+        }
+        JsonArray rendered = new JsonArray();
+        for (Object element : (EList<?>)value)
+        {
+            if (element instanceof ReferenceValue)
+            {
+                EObject referenceValue = (EObject)element;
+                EStructuralFeature valueFeature =
+                    referenceValue.eClass().getEStructuralFeature("value"); //$NON-NLS-1$
+                Object target = valueFeature == null ? null
+                    : resolvingGet(referenceValue, valueFeature);
+                if (!(target instanceof XDTOPackage))
+                {
+                    return null;
+                }
+                EObject targetObject = (EObject)target;
+                EStructuralFeature nameFeature =
+                    targetObject.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+                Object name = nameFeature == null ? null : resolvingGet(targetObject, nameFeature);
+                if (name == null || name.toString().isEmpty())
+                {
+                    return null;
+                }
+                rendered.add(McoreValueListBuilder.XDTO_PREFIX + name);
+            }
+            else if (element instanceof StringValue)
+            {
+                EObject stringValue = (EObject)element;
+                EStructuralFeature valueFeature =
+                    stringValue.eClass().getEStructuralFeature("value"); //$NON-NLS-1$
+                Object namespace = valueFeature == null ? null
+                    : resolvingGet(stringValue, valueFeature);
+                if (namespace == null || namespace.toString().isEmpty())
+                {
+                    return null;
+                }
+                rendered.add(namespace.toString());
+            }
+            else
+            {
+                return null;
+            }
+        }
+        return rendered.toString();
+    }
+
+    /** Reads a feature normally while keeping a failed proxy resolution local to its rendered value. */
+    private static Object resolvingGet(EObject object, EStructuralFeature feature)
+    {
+        try
+        {
+            return object.eGet(feature, true);
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
     /**
      * Renders a StyleItem {@code value} (an mcore {@code Value}): a Color as {@code Color: RGB(r, g, b)} /
      * {@code Color: Auto}, a Font as {@code Font: ...}. Delegates to {@link StyleValueBuilder} so the
@@ -762,6 +899,135 @@ public final class MetadataPropertyIntrospector
             return font != null ? "Font: " + font : null; //$NON-NLS-1$
         }
         return null;
+    }
+
+    /** Renders a stored PictureRef back to the same symbolic form accepted on the wire. */
+    private static String renderPicture(Object value)
+    {
+        if (!(value instanceof EObject))
+        {
+            return null;
+        }
+        EObject pictureRef = (EObject)value;
+        EStructuralFeature pictureFeature = pictureRef.eClass().getEStructuralFeature("picture"); //$NON-NLS-1$
+        if (pictureFeature == null)
+        {
+            return null;
+        }
+        // Prefix and name require different views of the same reference. Preserve the raw proxy URI
+        // before resolving it; only the resolved object may be asked for its actual name below.
+        Object raw = pictureRef.eGet(pictureFeature, false);
+        if (!(raw instanceof EObject))
+        {
+            return null;
+        }
+        EObject rawPicture = (EObject)raw;
+        URI proxyUri = null;
+        URI definingUri = null;
+        if (rawPicture.eIsProxy() && rawPicture instanceof InternalEObject)
+        {
+            proxyUri = ((InternalEObject)rawPicture).eProxyURI();
+            definingUri = proxyUri;
+        }
+        else if (rawPicture.eResource() != null)
+        {
+            definingUri = rawPicture.eResource().getURI();
+        }
+
+        // A reloaded form may expose an unresolved CommonPicture proxy whose attributes are unset,
+        // so resolve before reading either picture name. The scoped reload e2e covers this path;
+        // synthetic ResourceSet unit fixtures did not reproduce its proxy resolution faithfully.
+        Object resolvedValue = resolvingGet(pictureRef, pictureFeature);
+        EObject resolvedPicture = resolvedValue instanceof EObject
+            ? (EObject)resolvedValue : rawPicture;
+        if (resolvedPicture.eClass() == null
+            || !McorePackage.Literals.PICTURE.isSuperTypeOf(resolvedPicture.eClass()))
+        {
+            return null;
+        }
+        if (resolvedPicture instanceof CommonPicture)
+        {
+            String name = resolvedPicture.eIsProxy() ? null : pictureName(resolvedPicture);
+            if (name != null)
+            {
+                return PictureValueBuilder.COMMON_PREFIX + name;
+            }
+            return unresolvedCommonPictureValue(proxyUri);
+        }
+
+        // StdPicturesLoader registers extended pictures under StdExtPicture.*, while EDT's own
+        // SymbolicNameService and FormQualifiedNameProvider currently return StdPicture.* for every
+        // platform picture. Use the defining resource URI so the emitted value remains resolvable.
+        // Do not use EcoreUtil.getURI here: it throws for a detached, non-proxy EObject and the
+        // caller's broad render guard would silently turn that into an empty Current value.
+        String prefix = definingUri != null
+            && definingUri.toString().contains("/Pictures/StdExt/") //$NON-NLS-1$
+            ? PictureValueBuilder.EXTENDED_PREFIX : PictureValueBuilder.STANDARD_PREFIX;
+
+        String name = resolvedPicture.eIsProxy() ? null : pictureName(resolvedPicture);
+        if (name == null)
+        {
+            // StdPicturesLoader creates proxy URIs with uri.appendFragment("/" + name), so this
+            // fragment is the authoritative name when resolution is unavailable.
+            name = platformPictureNameFromProxyUri(proxyUri);
+        }
+        if (name == null)
+        {
+            return null;
+        }
+        return prefix + name;
+    }
+
+    private static String pictureName(EObject picture)
+    {
+        EStructuralFeature nameFeature = picture.eClass() == null ? null
+            : picture.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+        Object name = nameFeature == null ? null : resolvingGet(picture, nameFeature);
+        return name == null || name.toString().isEmpty() ? null : name.toString();
+    }
+
+    /**
+     * Renders a CommonPicture proxy that could not be resolved without silently blanking Current.
+     * A BM proxy carries the target top-object FQN, so prefer that feedable value; otherwise expose
+     * the unresolved URI explicitly instead of pretending the property is unset.
+     */
+    private static String unresolvedCommonPictureValue(URI proxyUri)
+    {
+        if (proxyUri != null && BmUriUtil.isBmUri(proxyUri))
+        {
+            String fqn = BmUriUtil.extractTopObjectFqn(proxyUri);
+            if (fqn != null && fqn.startsWith(PictureValueBuilder.COMMON_PREFIX)
+                && fqn.length() > PictureValueBuilder.COMMON_PREFIX.length())
+            {
+                return fqn;
+            }
+        }
+        return proxyUri == null ? "Unresolved CommonPicture reference" //$NON-NLS-1$
+            : "Unresolved CommonPicture reference: " + proxyUri; //$NON-NLS-1$
+    }
+
+    private static String platformPictureNameFromProxyUri(URI proxyUri)
+    {
+        if (proxyUri == null)
+        {
+            return null;
+        }
+        String fragment = proxyUri.fragment();
+        if (fragment == null)
+        {
+            return null;
+        }
+        String name = fragment.startsWith("/") ? fragment.substring(1) : fragment; //$NON-NLS-1$
+        return name.isEmpty() ? null : name;
+    }
+
+    /** Renders a QName in the standard compact {@code {nsUri}name} form. */
+    private static String renderQName(QName qname)
+    {
+        String name = qname.getName();
+        String nsUri = qname.getNsUri();
+        return name == null || name.isEmpty() || nsUri == null || nsUri.isEmpty() ? null
+            : "{" + nsUri + "}" + name; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String renderType(TypeDescription typeDesc)
