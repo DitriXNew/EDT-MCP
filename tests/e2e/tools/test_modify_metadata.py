@@ -394,6 +394,15 @@ def test_set_form_field_common_picture_persists_reference_and_round_trips():
     assert any(picture_fqn in element for element in serialized_headers), \
         "a headerPicture element must name %s: %r" % (picture_fqn, serialized_headers)
 
+    # A same-session read sees the resolved object installed by modify_metadata and misses the
+    # persisted-reference proxy shape. The scoped clean is the suite's measured disk re-import
+    # mechanism (also used for planted form data below): it restarts only TestConfiguration's
+    # project context and rebuilds this form from the Form.form asserted above.
+    wait_for_project_ready()
+    reloaded = call("clean_project", {"projectName": PROJECT})
+    assert_ok(reloaded, "reload the persisted CommonPicture reference from disk")
+    wait_for_project_ready()
+
     row = _assignable_row(field_fqn, "headerPicture")
     assert row is not None, "headerPicture must be listed by assignable:true after the write"
     assert_contains(row, "PICTURE", "headerPicture must expose the PICTURE value kind")

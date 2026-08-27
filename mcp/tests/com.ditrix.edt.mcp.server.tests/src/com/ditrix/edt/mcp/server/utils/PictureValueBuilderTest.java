@@ -213,10 +213,19 @@ public class PictureValueBuilderTest
     private static Configuration configurationWithPicture(String name)
     {
         Configuration configuration = MdClassFactory.eINSTANCE.createConfiguration();
-        CommonPicture picture = (CommonPicture)EcoreUtil.create(MdClassPackage.Literals.COMMON_PICTURE);
-        picture.setName(name);
+        CommonPicture picture = newCommonPicture(name);
         configuration.getCommonPictures().add(picture);
         return configuration;
+    }
+
+    private static CommonPicture newCommonPicture(String name)
+    {
+        CommonPicture picture = (CommonPicture)EcoreUtil.create(MdClassPackage.Literals.COMMON_PICTURE);
+        if (name != null)
+        {
+            picture.setName(name);
+        }
+        return picture;
     }
 
     /** A mocked generated Picture described by a synthetic platform-picture EClass. */

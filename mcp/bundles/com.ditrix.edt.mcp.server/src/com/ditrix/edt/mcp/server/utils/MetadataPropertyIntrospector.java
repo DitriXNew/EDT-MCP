@@ -12,6 +12,7 @@ import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EClassifier;
@@ -22,6 +23,7 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McorePackage;
@@ -912,29 +914,16 @@ public final class MetadataPropertyIntrospector
         {
             return null;
         }
-        // Prefix and name require different views of a provider reference. Preserve the raw proxy
-        // URI before resolving it; the resolved object is used for its actual English name below.
+        // Prefix and name require different views of the same reference. Preserve the raw proxy URI
+        // before resolving it; only the resolved object may be asked for its actual name below.
         Object raw = pictureRef.eGet(pictureFeature, false);
-        if (raw instanceof CommonPicture)
-        {
-            String name = ((CommonPicture)raw).getName();
-            return name == null || name.isEmpty() ? null : PictureValueBuilder.COMMON_PREFIX + name;
-        }
         if (!(raw instanceof EObject))
         {
             return null;
         }
         EObject rawPicture = (EObject)raw;
-        if (rawPicture.eClass() == null
-            || !McorePackage.Literals.PICTURE.isSuperTypeOf(rawPicture.eClass()))
-        {
-            return null;
-        }
-        // StdPicturesLoader registers extended pictures under StdExtPicture.*, while EDT's own
-        // SymbolicNameService and FormQualifiedNameProvider currently return StdPicture.* for every
-        // platform picture. Use the defining resource URI so the emitted value remains resolvable.
-        org.eclipse.emf.common.util.URI proxyUri = null;
-        org.eclipse.emf.common.util.URI definingUri = null;
+        URI proxyUri = null;
+        URI definingUri = null;
         if (rawPicture.eIsProxy() && rawPicture instanceof InternalEObject)
         {
             proxyUri = ((InternalEObject)rawPicture).eProxyURI();
@@ -944,13 +933,38 @@ public final class MetadataPropertyIntrospector
         {
             definingUri = rawPicture.eResource().getURI();
         }
+
+        // A reloaded form may expose an unresolved CommonPicture proxy whose attributes are unset,
+        // so resolve before reading either picture name. The scoped reload e2e covers this path;
+        // synthetic ResourceSet unit fixtures did not reproduce its proxy resolution faithfully.
+        Object resolvedValue = resolvingGet(pictureRef, pictureFeature);
+        EObject resolvedPicture = resolvedValue instanceof EObject
+            ? (EObject)resolvedValue : rawPicture;
+        if (resolvedPicture.eClass() == null
+            || !McorePackage.Literals.PICTURE.isSuperTypeOf(resolvedPicture.eClass()))
+        {
+            return null;
+        }
+        if (resolvedPicture instanceof CommonPicture)
+        {
+            String name = resolvedPicture.eIsProxy() ? null : pictureName(resolvedPicture);
+            if (name != null)
+            {
+                return PictureValueBuilder.COMMON_PREFIX + name;
+            }
+            return unresolvedCommonPictureValue(proxyUri);
+        }
+
+        // StdPicturesLoader registers extended pictures under StdExtPicture.*, while EDT's own
+        // SymbolicNameService and FormQualifiedNameProvider currently return StdPicture.* for every
+        // platform picture. Use the defining resource URI so the emitted value remains resolvable.
+        // Do not use EcoreUtil.getURI here: it throws for a detached, non-proxy EObject and the
+        // caller's broad render guard would silently turn that into an empty Current value.
         String prefix = definingUri != null
             && definingUri.toString().contains("/Pictures/StdExt/") //$NON-NLS-1$
             ? PictureValueBuilder.EXTENDED_PREFIX : PictureValueBuilder.STANDARD_PREFIX;
 
-        Object resolved = resolvingGet(pictureRef, pictureFeature);
-        String name = resolved instanceof EObject && !((EObject)resolved).eIsProxy()
-            ? platformPictureName((EObject)resolved) : null;
+        String name = resolvedPicture.eIsProxy() ? null : pictureName(resolvedPicture);
         if (name == null)
         {
             // StdPicturesLoader creates proxy URIs with uri.appendFragment("/" + name), so this
@@ -964,7 +978,7 @@ public final class MetadataPropertyIntrospector
         return prefix + name;
     }
 
-    private static String platformPictureName(EObject picture)
+    private static String pictureName(EObject picture)
     {
         EStructuralFeature nameFeature = picture.eClass() == null ? null
             : picture.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
@@ -972,7 +986,27 @@ public final class MetadataPropertyIntrospector
         return name == null || name.toString().isEmpty() ? null : name.toString();
     }
 
-    private static String platformPictureNameFromProxyUri(org.eclipse.emf.common.util.URI proxyUri)
+    /**
+     * Renders a CommonPicture proxy that could not be resolved without silently blanking Current.
+     * A BM proxy carries the target top-object FQN, so prefer that feedable value; otherwise expose
+     * the unresolved URI explicitly instead of pretending the property is unset.
+     */
+    private static String unresolvedCommonPictureValue(URI proxyUri)
+    {
+        if (proxyUri != null && BmUriUtil.isBmUri(proxyUri))
+        {
+            String fqn = BmUriUtil.extractTopObjectFqn(proxyUri);
+            if (fqn != null && fqn.startsWith(PictureValueBuilder.COMMON_PREFIX)
+                && fqn.length() > PictureValueBuilder.COMMON_PREFIX.length())
+            {
+                return fqn;
+            }
+        }
+        return proxyUri == null ? "Unresolved CommonPicture reference" //$NON-NLS-1$
+            : "Unresolved CommonPicture reference: " + proxyUri; //$NON-NLS-1$
+    }
+
+    private static String platformPictureNameFromProxyUri(URI proxyUri)
     {
         if (proxyUri == null)
         {
