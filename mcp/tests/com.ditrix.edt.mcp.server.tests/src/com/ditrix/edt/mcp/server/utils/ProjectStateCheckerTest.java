@@ -36,6 +36,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Tests for {@link ProjectStateChecker#buildingErrorOrNull(String)} and the cascade pre-flight
@@ -146,6 +147,59 @@ public class ProjectStateCheckerTest
             ProjectStateChecker.determineCascadeParticipants(base, environment);
 
         assertFalse(result.isDetermined());
+    }
+
+    @Test
+    public void searchDependenciesIncludeExternalObjectsWhileCascadeRemainsExtensionOnly()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        IProject externalObjects = mockOpenProject("ExternalObjects"); //$NON-NLS-1$
+        IProject unrelatedDependent = mockOpenProject("Other.tests"); //$NON-NLS-1$
+        IProject otherBase = mockOpenProject("Other"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(
+            Arrays.asList(base, extension, externalObjects, unrelatedDependent));
+        when(environment.getOpenDependentNatureProjects()).thenReturn(
+            Arrays.asList(extension, externalObjects, unrelatedDependent));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.resolveBaseProject(externalObjects)).thenReturn(base);
+        when(environment.resolveBaseProject(unrelatedDependent)).thenReturn(otherBase);
+        when(environment.getProjectState(any(IProject.class)))
+            .thenReturn(new ProjectStateResult(ProjectState.READY, "ready")); //$NON-NLS-1$
+
+        SearchDependenciesResult search =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+        CascadeParticipantsResult cascade =
+            ProjectStateChecker.determineCascadeParticipants(base, environment);
+
+        assertTrue(search.isDetermined());
+        assertTrue(search.isAllReady());
+        assertEquals(3, search.getProjectNames().size());
+        assertTrue(search.getProjectNames().contains("Base")); //$NON-NLS-1$
+        assertTrue(search.getProjectNames().contains("Base.tests")); //$NON-NLS-1$
+        assertTrue(search.getProjectNames().contains("ExternalObjects")); //$NON-NLS-1$
+        assertFalse(search.getProjectNames().contains("Other.tests")); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(extension), cascade.getParticipants());
+    }
+
+    @Test
+    public void cascadeSnapshotsDetectExtensionMembershipChange()
+    {
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        IProject newlyOpenedExtension = mockOpenProject("Base.extra"); //$NON-NLS-1$
+        CascadeParticipantsResult before =
+            CascadeParticipantsResult.determined(Collections.singletonList(extension));
+        CascadeParticipantsResult unchanged =
+            CascadeParticipantsResult.determined(Collections.singletonList(extension));
+        CascadeParticipantsResult changed = CascadeParticipantsResult.determined(
+            Arrays.asList(extension, newlyOpenedExtension));
+
+        assertTrue(before.hasSameSnapshot(unchanged));
+        assertFalse(before.hasSameSnapshot(changed));
+        assertFalse(before.hasSameSnapshot(CascadeParticipantsResult.undetermined()));
     }
 
     @Test

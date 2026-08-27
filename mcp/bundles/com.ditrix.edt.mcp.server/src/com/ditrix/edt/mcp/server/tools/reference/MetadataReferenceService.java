@@ -790,7 +790,7 @@ public class MetadataReferenceService
                     return;
                 }
 
-                CascadeParticipantsResult participants =
+                CascadeParticipantsResult extensionParticipants =
                     ProjectStateChecker.determineCascadeParticipants(sourceProject);
 
                 // Collect target URIs (including produced types)
@@ -816,7 +816,7 @@ public class MetadataReferenceService
                 }
 
                 AdoptedReferenceTargets.Resolution adoptedTargets =
-                    AdoptedReferenceTargets.resolve(target, participants);
+                    AdoptedReferenceTargets.resolve(target, extensionParticipants);
                 targetURIs.addAll(adoptedTargets.getTargetURIs());
                 if (!adoptedTargets.isComplete())
                 {
@@ -830,8 +830,23 @@ public class MetadataReferenceService
                 }
 
                 BslReferenceSearch.findReferences(resourceServiceProvider, finder, sourceProject,
-                    targetURIs, this::collectBslReferenceDescription, new NullProgressMonitor(),
-                    participants);
+                    targetURIs, this::collectBslReferenceDescription, new NullProgressMonitor());
+
+                if (extensionParticipants.isDetermined()
+                    && (target instanceof MdObject || target instanceof PredefinedItem))
+                {
+                    CascadeParticipantsResult extensionsAfter =
+                        ProjectStateChecker.determineCascadeParticipants(sourceProject);
+                    if (!extensionParticipants.hasSameSnapshot(extensionsAfter))
+                    {
+                        // Source-scope stability cannot repair a target set resolved from an older
+                        // extension snapshot. Strict callers must not accept that as proven complete.
+                        bslScanComplete = false;
+                        Activator.logInfo("BSL adopted-target extension membership/readiness changed " //$NON-NLS-1$
+                            + "during the scan for project '" + safeProjectName(sourceProject) //$NON-NLS-1$
+                            + "'; the reference result is best-effort only."); //$NON-NLS-1$
+                    }
+                }
             }
             catch (Exception e)
             {

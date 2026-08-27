@@ -38,8 +38,11 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsRe
  * object to its base object. A predefined item has no such owner link of its own, so its adopted
  * counterpart is found by exact Name within the already-matched adopted owner, matching EDT's own
  * {@code PredefinedItemAdopterParticipant}. Each extension is read through its own BM model and only
- * URIs escape the transaction. Not having an adopted owner or predefined child is a successful empty
- * result. An unavailable model, configuration, produced-types value, or participant set is different:
+ * URIs escape the transaction. This target set is intentionally extension-only: external-object
+ * projects belong in the BSL SOURCE scope because they can reference base objects, but they do not
+ * adopt configuration objects and therefore cannot contribute adopted TARGET URIs. Not having an
+ * adopted owner or predefined child is a successful empty result. An unavailable model,
+ * configuration, produced-types value, or participant set is different:
  * the caller may still run a best-effort search with the targets found so far, but a destructive caller
  * must not treat that partial augmentation as proof that no reference exists.
  */
@@ -56,7 +59,7 @@ public final class AdoptedReferenceTargets
      * in each adopted owner.
      *
      * @param baseTarget base-configuration object or predefined item whose adopted copies are targets too
-     * @param participants the same participant snapshot used to scope the source scan
+     * @param participants the extension-only cascade participants used for adopted targets
      * @return accumulated target URIs and whether every extension lookup completed
      */
     public static Resolution resolve(IBmObject baseTarget, CascadeParticipantsResult participants)

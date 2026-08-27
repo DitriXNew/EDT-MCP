@@ -10,7 +10,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
@@ -37,6 +39,9 @@ public final class ProjectStateChecker
     private static final String V8_EXTENSION_PROJECT_NATURE =
         "com._1c.g5.v8.dt.core.V8ExtensionNature"; //$NON-NLS-1$
 
+    private static final String V8_EXTERNAL_OBJECTS_PROJECT_NATURE =
+        "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"; //$NON-NLS-1$
+
     /**
      * Persistent project-description natures declared by EDT 2026.1 for projects that can own a BM
      * model. Unlike {@link IDtProjectManager#getDtProject(IProject)} and
@@ -44,15 +49,19 @@ public final class ProjectStateChecker
      * project context: EDT's source removes both runtime registrations during disposal, while the
      * nature IDs remain in the Eclipse {@code .project} description until the project is converted or
      * deleted. That makes the nature the safe permanent/non-EDT discriminator for the bounded wait and
-     * the failure-aware participant lookup.
+     * the failure-aware participant/search-dependency lookups.
      */
     private static final List<String> BM_MODEL_PROJECT_NATURES = Arrays.asList(
         "com._1c.g5.v8.dt.core.V8ConfigurationNature", //$NON-NLS-1$
         V8_EXTENSION_PROJECT_NATURE,
-        "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"); //$NON-NLS-1$
+        V8_EXTERNAL_OBJECTS_PROJECT_NATURE);
 
     private static final List<String> V8_EXTENSION_PROJECT_NATURES =
         Collections.singletonList(V8_EXTENSION_PROJECT_NATURE);
+
+    private static final List<String> V8_DEPENDENT_PROJECT_NATURES = Arrays.asList(
+        V8_EXTENSION_PROJECT_NATURE,
+        V8_EXTERNAL_OBJECTS_PROJECT_NATURE);
 
     /**
      * Project state enumeration.
@@ -651,7 +660,9 @@ public final class ProjectStateChecker
      * nature-bearing extension missing from the registry makes the whole result undeterminable, even
      * when it is unrelated to {@code base}. This deliberately widens only during that transient window.
      * The base and every selected participant must also be {@link ProjectState#READY}; a project whose
-     * derived data is still computing has no proven-complete Xtext index contribution.
+     * derived data is still computing has no proven-complete adopted-target model. This set remains
+     * EXTENSION-only for refactoring/adopted targets and must not be reused as the BSL source scope;
+     * {@link #determineSearchDependencies(IProject)} additionally includes external-object projects.
      *
      * @param base the base project; {@code null} is undeterminable
      * @return the participant lookup result, never {@code null}
@@ -725,10 +736,13 @@ public final class ProjectStateChecker
     public static final class CascadeParticipantsResult
     {
         private final List<IProject> participants;
+        private final Set<IProject> participantSet;
 
         private CascadeParticipantsResult(List<IProject> participants)
         {
             this.participants = participants;
+            this.participantSet = participants != null
+                ? Collections.unmodifiableSet(new HashSet<>(participants)) : null;
         }
 
         static CascadeParticipantsResult determined(List<IProject> participants)
@@ -742,7 +756,7 @@ public final class ProjectStateChecker
             return new CascadeParticipantsResult(null);
         }
 
-        /** @return whether discovery completed and every scoped project was ready */
+        /** @return whether extension discovery completed and the base/extensions were ready */
         public boolean isDetermined()
         {
             return participants != null;
@@ -755,6 +769,201 @@ public final class ProjectStateChecker
         public List<IProject> getParticipants()
         {
             return participants != null ? participants : Collections.emptyList();
+        }
+
+        /**
+         * Compares extension membership; both determined results imply READY base/extensions.
+         *
+         * @param other later participant snapshot
+         * @return whether both snapshots are determined and contain the same extensions
+         */
+        public boolean hasSameSnapshot(CascadeParticipantsResult other)
+        {
+            return isDetermined() && other != null && other.isDetermined()
+                && participantSet.equals(other.participantSet);
+        }
+    }
+
+    /**
+     * Captures the base project and every open EDT project that depends on it for reference-search
+     * scoping. Unlike the refactoring cascade, this includes BOTH configuration extensions and linked
+     * external-object projects: both can contain BSL references to base-configuration objects, while
+     * only extensions adopt configuration objects and participate in adopted-target augmentation.
+     * <p>
+     * Runtime registrations are cross-checked against the permanent dependent-project natures
+     * ({@code V8ExtensionNature} and {@code V8ExternalObjectsNature}). If any such open project is
+     * missing from the registry or its parent cannot be resolved, the snapshot is undetermined. This
+     * is deliberately workspace-wide: without that registration, the nature cannot tell us which base
+     * the project depends on. The result records each member's current {@link ProjectState}; callers
+     * decide whether that snapshot is ready and whether a later snapshot still matches it.
+     *
+     * @param base the base configuration project; {@code null} is undeterminable
+     * @return the dependency/readiness snapshot, never {@code null}
+     */
+    public static SearchDependenciesResult determineSearchDependencies(IProject base)
+    {
+        return determineSearchDependencies(base, CascadeEnvironment.DEFAULT);
+    }
+
+    /** Package-visible seam for headless search-snapshot tests. */
+    static SearchDependenciesResult determineSearchDependencies(IProject base, CascadeEnvironment env)
+    {
+        if (base == null || env == null)
+        {
+            return SearchDependenciesResult.undetermined();
+        }
+        try
+        {
+            List<IProject> openDtProjects = env.getOpenDtProjects();
+            List<IProject> openDependentNatureProjects = env.getOpenDependentNatureProjects();
+            if (openDtProjects == null || openDependentNatureProjects == null)
+            {
+                return SearchDependenciesResult.undetermined();
+            }
+
+            Map<String, IProject> registeredProjects = new LinkedHashMap<>();
+            for (IProject project : openDtProjects)
+            {
+                String name = requiredProjectName(project);
+                if (registeredProjects.put(name, project) != null)
+                {
+                    return SearchDependenciesResult.undetermined();
+                }
+            }
+
+            Map<String, IProject> resolvedDependentBases = new LinkedHashMap<>();
+            for (IProject natureProject : openDependentNatureProjects)
+            {
+                String name = requiredProjectName(natureProject);
+                IProject registeredProject = registeredProjects.get(name);
+                if (registeredProject == null || resolvedDependentBases.containsKey(name))
+                {
+                    return SearchDependenciesResult.undetermined();
+                }
+                IProject resolvedBase = env.resolveBaseProject(registeredProject);
+                if (resolvedBase == null)
+                {
+                    // Both permanent dependent natures require a parent. Null can mean the runtime
+                    // registration is currently unusable, not that this is an unrelated project.
+                    return SearchDependenciesResult.undetermined();
+                }
+                resolvedDependentBases.put(name, resolvedBase);
+            }
+
+            List<IProject> searchProjects = new ArrayList<>();
+            Set<String> searchProjectNames = new HashSet<>();
+            String baseName = requiredProjectName(base);
+            searchProjects.add(base);
+            searchProjectNames.add(baseName);
+            for (Map.Entry<String, IProject> entry : registeredProjects.entrySet())
+            {
+                if (baseName.equals(entry.getKey()))
+                {
+                    continue;
+                }
+                IProject resolvedBase = resolvedDependentBases.get(entry.getKey());
+                if (resolvedBase == null)
+                {
+                    // Null is legitimate for a registered base configuration or other non-dependent
+                    // EDT project. Permanent dependent natures were checked separately above.
+                    resolvedBase = env.resolveBaseProject(entry.getValue());
+                }
+                if (base.equals(resolvedBase))
+                {
+                    if (!searchProjectNames.add(entry.getKey()))
+                    {
+                        return SearchDependenciesResult.undetermined();
+                    }
+                    searchProjects.add(entry.getValue());
+                }
+            }
+
+            Map<String, ProjectState> readiness = new LinkedHashMap<>();
+            for (IProject searchProject : searchProjects)
+            {
+                String name = requiredProjectName(searchProject);
+                ProjectStateResult state = env.getProjectState(searchProject);
+                if (state == null || state.getState() == null
+                    || readiness.put(name, state.getState()) != null)
+                {
+                    return SearchDependenciesResult.undetermined();
+                }
+            }
+            return SearchDependenciesResult.determined(searchProjects, readiness);
+        }
+        catch (RuntimeException e)
+        {
+            return SearchDependenciesResult.undetermined();
+        }
+    }
+
+    /** Immutable search membership/readiness snapshot. */
+    public static final class SearchDependenciesResult
+    {
+        private final List<IProject> projects;
+        private final Map<String, ProjectState> readiness;
+
+        private SearchDependenciesResult(List<IProject> projects, Map<String, ProjectState> readiness)
+        {
+            this.projects = projects;
+            this.readiness = readiness;
+        }
+
+        private static SearchDependenciesResult determined(List<IProject> projects,
+            Map<String, ProjectState> readiness)
+        {
+            return new SearchDependenciesResult(Collections.unmodifiableList(
+                new ArrayList<>(projects)), Collections.unmodifiableMap(
+                    new LinkedHashMap<>(readiness)));
+        }
+
+        private static SearchDependenciesResult undetermined()
+        {
+            return new SearchDependenciesResult(null, null);
+        }
+
+        /** @return whether membership and every readiness value were captured successfully */
+        public boolean isDetermined()
+        {
+            return projects != null && readiness != null;
+        }
+
+        /** @return whether every captured project was READY; false when undetermined */
+        public boolean isAllReady()
+        {
+            if (!isDetermined())
+            {
+                return false;
+            }
+            for (ProjectState state : readiness.values())
+            {
+                if (state != ProjectState.READY)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** @return the base followed by its dependent search projects, or an empty list */
+        public List<IProject> getProjects()
+        {
+            return projects != null ? projects : Collections.emptyList();
+        }
+
+        /** @return captured project names, or an empty set when undetermined */
+        public Set<String> getProjectNames()
+        {
+            return readiness != null ? readiness.keySet() : Collections.emptySet();
+        }
+
+        /**
+         * @return whether both captures contain identical membership and readiness values
+         */
+        public boolean hasSameSnapshot(SearchDependenciesResult other)
+        {
+            return isDetermined() && other != null && other.isDetermined()
+                && readiness.equals(other.readiness);
         }
     }
 
@@ -795,6 +1004,30 @@ public final class ProjectStateChecker
         return state != null && state.isReady();
     }
 
+    private static List<IProject> getOpenNatureProjects(List<String> natureIds)
+    {
+        List<IProject> result = new ArrayList<>();
+        for (IProject candidate : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+            .getRoot().getProjects())
+        {
+            if (!candidate.exists() || !candidate.isOpen())
+            {
+                continue;
+            }
+            Boolean matchingNature = ProjectContext.hasAnyNature(candidate, natureIds);
+            if (matchingNature == null)
+            {
+                throw new IllegalStateException(
+                    "Could not read project nature for: " + candidate.getName()); //$NON-NLS-1$
+            }
+            if (matchingNature.booleanValue())
+            {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
+
     private static String participantBuildingError(IProject base, IProject participant)
     {
         return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
@@ -810,8 +1043,8 @@ public final class ProjectStateChecker
     }
 
     /**
-     * Seam over the workspace / derived-data services the cascade pre-flight needs, so a unit
-     * test can substitute a fake and exercise {@code drainParticipants} (and
+     * Seam over the workspace / derived-data services used by cascade and reference-scope checks, so
+     * a unit test can substitute a fake and exercise {@code drainParticipants} (and
      * {@link #settleBeforeCascadeOrError(IProject, long,
      * CascadeEnvironment)}) with no live workspace. {@link #DEFAULT} delegates to the same EDT
      * services ({@link IDtProjectManager}, {@link ExtensionOriginUtils#resolveBaseProject(IProject)},
@@ -834,6 +1067,12 @@ public final class ProjectStateChecker
          * An unreadable project description must fail the lookup rather than look like "not an extension".
          */
         List<IProject> getOpenExtensionNatureProjects();
+
+        /**
+         * The open workspace projects permanently marked as a configuration extension OR an
+         * external-objects project. This independently checks search-dependency registry completeness.
+         */
+        List<IProject> getOpenDependentNatureProjects();
 
         /** Current EDT/derived-data state used to prove a scoped project's index contribution settled. */
         ProjectStateResult getProjectState(IProject project);
@@ -905,27 +1144,13 @@ public final class ProjectStateChecker
             @Override
             public List<IProject> getOpenExtensionNatureProjects()
             {
-                List<IProject> result = new ArrayList<>();
-                for (IProject candidate : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-                    .getRoot().getProjects())
-                {
-                    if (!candidate.exists() || !candidate.isOpen())
-                    {
-                        continue;
-                    }
-                    Boolean extensionNature =
-                        ProjectContext.hasAnyNature(candidate, V8_EXTENSION_PROJECT_NATURES);
-                    if (extensionNature == null)
-                    {
-                        throw new IllegalStateException(
-                            "Could not read project nature for: " + candidate.getName()); //$NON-NLS-1$
-                    }
-                    if (extensionNature.booleanValue())
-                    {
-                        result.add(candidate);
-                    }
-                }
-                return result;
+                return getOpenNatureProjects(V8_EXTENSION_PROJECT_NATURES);
+            }
+
+            @Override
+            public List<IProject> getOpenDependentNatureProjects()
+            {
+                return getOpenNatureProjects(V8_DEPENDENT_PROJECT_NATURES);
             }
 
             @Override

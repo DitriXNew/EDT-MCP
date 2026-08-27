@@ -24,10 +24,16 @@ import org.eclipse.xtext.ui.editor.findrefs.IReferenceFinder;
 import org.eclipse.xtext.util.IAcceptor;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
- * Runs the Xtext BSL reference finder over the target project and all of its open extension projects.
+ * Runs the Xtext BSL reference finder over the target project and every open EDT project that depends
+ * on it. The SEARCH dependency set includes both configuration extensions and linked external-object
+ * projects because either can contain BSL references to the base configuration. This is deliberately
+ * broader than the extension-only REFACTORING cascade/adopted-target set: external-object projects
+ * reference base objects but do not adopt configuration objects.
+ * <p>
  * Source URIs come from the Xtext index itself, so the scope stays aligned with every resource kind the
  * finder knows instead of guessing from a workspace file walk.
  * <p>
@@ -36,10 +42,12 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsRe
  * URI was observed in the fixture. The caller also adds adopted-copy URIs as targets, however, and the
  * fixture deliberately proves that an extension BSL usage of such a copy is found in this source scope.
  * <p>
- * The scope optimization fails CLOSED: unless extension discovery completes, every scoped project is
+ * The scope optimization fails CLOSED: unless dependency discovery completes, every scoped project is
  * ready, and every indexed URI can be classified as either a workspace resource or a known
  * non-workspace resource, this helper calls {@link IReferenceFinder#findAllReferences} exactly as the
- * previous implementation did.
+ * previous implementation did. Membership and readiness are captured before index enumeration and
+ * re-captured afterward; an observable change discards the scoped result. This is change DETECTION,
+ * not an atomic snapshot or a guarantee that no change can occur after the second capture.
  * A successful fallback is therefore complete and must remain a successful BSL scan. This is
  * load-bearing for {@code delete_metadata}: its predefined-item safety check uses the same reference
  * scan, and silently searching a partial project set could turn a reference outside that partial set
@@ -71,19 +79,18 @@ public final class BslReferenceSearch
         IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor)
     {
         findReferences(resourceServiceProvider, finder, baseProject, targetURIs, acceptor, monitor,
-            ProjectStateChecker.determineCascadeParticipants(baseProject));
+            CascadeEnvironment.DEFAULT);
     }
 
     /**
-     * Variant for a caller that already resolved participants and needs that same snapshot for related
-     * work, such as adding adopted-extension target URIs. An undetermined result forces the complete
-     * workspace fallback.
+     * Package-visible environment seam for headless membership/readiness change tests.
      */
-    public static void findReferences(IResourceServiceProvider resourceServiceProvider, IReferenceFinder finder,
-        IProject baseProject, Iterable<URI> targetURIs, IAcceptor<IReferenceDescription> acceptor,
-        IProgressMonitor monitor, CascadeParticipantsResult cascadeParticipants)
+    static void findReferences(IResourceServiceProvider resourceServiceProvider,
+        IReferenceFinder finder, IProject baseProject, Iterable<URI> targetURIs,
+        IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor,
+        CascadeEnvironment environment)
     {
-        ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, cascadeParticipants);
+        ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, environment);
         String projectName = safeProjectName(baseProject);
         if (scope.isScoped())
         {
@@ -101,7 +108,7 @@ public final class BslReferenceSearch
     }
 
     private static ScopeResolution resolveScope(IResourceServiceProvider resourceServiceProvider,
-        IProject baseProject, CascadeParticipantsResult cascadeParticipants)
+        IProject baseProject, CascadeEnvironment environment)
     {
         if (resourceServiceProvider == null)
         {
@@ -114,11 +121,17 @@ public final class BslReferenceSearch
 
         try
         {
-            Set<String> projectNames = scopeProjectNames(baseProject, cascadeParticipants);
-            if (projectNames == null || projectNames.isEmpty())
+            SearchDependenciesResult before =
+                ProjectStateChecker.determineSearchDependencies(baseProject, environment);
+            if (!before.isDetermined())
             {
-                return ScopeResolution.failure("project scope could not be determined"); //$NON-NLS-1$
+                return ScopeResolution.failure("search dependencies could not be determined"); //$NON-NLS-1$
             }
+            if (!before.isAllReady())
+            {
+                return ScopeResolution.failure("a search-scope project is not ready"); //$NON-NLS-1$
+            }
+            Set<String> projectNames = new LinkedHashSet<>(before.getProjectNames());
 
             // IReferenceFinder is implemented by Xtext's DelegatingReferenceFinder, whose indexData
             // field is injected as an unqualified IResourceDescriptions from this same provider's
@@ -161,7 +174,17 @@ public final class BslReferenceSearch
                 }
             }
 
-            // A READY BSL project can legitimately have no modules. Participant determination has
+            SearchDependenciesResult after =
+                ProjectStateChecker.determineSearchDependencies(baseProject, environment);
+            if (!before.hasSameSnapshot(after))
+            {
+                // Discard every URI accumulated from the earlier snapshot. A newly opened dependent
+                // or a readiness transition can make that otherwise-normal enumeration incomplete.
+                return ScopeResolution.failure(
+                    "search dependency membership or readiness changed during index enumeration"); //$NON-NLS-1$
+            }
+
+            // A READY BSL project can legitimately have no modules. Dependency snapshots have
             // already proved that every scoped project is settled, so an empty source set is complete;
             // project readiness, not an invented per-project resource-count rule, guards this case.
             return ScopeResolution.scoped(new ArrayList<>(sourceResourceURIs), projectNames.size());
@@ -172,48 +195,6 @@ public final class BslReferenceSearch
             // an undeterminable scope into a partial search. The caller deliberately widens to all.
             return ScopeResolution.failure("scope enumeration failed: " + e.getClass().getSimpleName()); //$NON-NLS-1$
         }
-    }
-
-    private static Set<String> scopeProjectNames(IProject baseProject,
-        CascadeParticipantsResult cascadeParticipants)
-    {
-        if (cascadeParticipants == null || !cascadeParticipants.isDetermined())
-        {
-            return null;
-        }
-        Set<String> projectNames = new LinkedHashSet<>();
-        if (!addProjectName(projectNames, baseProject))
-        {
-            return null;
-        }
-        List<IProject> participants = cascadeParticipants.getParticipants();
-        if (participants == null)
-        {
-            return null;
-        }
-        for (IProject participant : participants)
-        {
-            if (!addProjectName(projectNames, participant))
-            {
-                return null;
-            }
-        }
-        return projectNames;
-    }
-
-    private static boolean addProjectName(Set<String> projectNames, IProject project)
-    {
-        if (project == null)
-        {
-            return false;
-        }
-        String projectName = project.getName();
-        if (projectName == null || projectName.isEmpty())
-        {
-            return false;
-        }
-        projectNames.add(projectName);
-        return true;
     }
 
     private static String platformResourceProjectName(URI uri)
