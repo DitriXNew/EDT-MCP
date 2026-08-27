@@ -33,10 +33,12 @@ import org.eclipse.xtext.util.IAcceptor;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
+
 /**
  * Headless tests for the Xtext-index source scope. The live BSL injector and real extension-project
- * discovery need an EDT workspace. The existing test_find_references.py fixture pins result equivalence
- * for the scoped build; it does not contain a cross-project BSL reference to a base EObject.
+ * discovery need an EDT workspace. The existing test_find_references.py fixture exercises the adopted
+ * extension-target mapping and pins the live results for the scoped build.
  */
 @SuppressWarnings("restriction")
 public class BslReferenceSearchTest
@@ -75,7 +77,7 @@ public class BslReferenceSearchTest
         NullProgressMonitor monitor = new NullProgressMonitor();
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
-            monitor, ignored -> Arrays.asList(extension1, extension2));
+            monitor, CascadeParticipantsResult.determined(Arrays.asList(extension1, extension2)));
 
         @SuppressWarnings({ "rawtypes", "unchecked" })
         ArgumentCaptor<Iterable<URI>> sources = ArgumentCaptor.forClass((Class)Iterable.class);
@@ -98,7 +100,7 @@ public class BslReferenceSearchTest
         NullProgressMonitor monitor = new NullProgressMonitor();
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
-            monitor, ignored -> Collections.emptyList());
+            monitor, CascadeParticipantsResult.determined(Collections.emptyList()));
 
         verify(finder, never()).findReferences(any(), any(), any(), any(), any());
         verify(finder).findAllReferences(eq(targets), isNull(), eq(acceptor), eq(monitor));
@@ -125,7 +127,81 @@ public class BslReferenceSearchTest
         NullProgressMonitor monitor = new NullProgressMonitor();
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
-            monitor, ignored -> Collections.emptyList());
+            monitor, CascadeParticipantsResult.determined(Collections.emptyList()));
+
+        verify(finder, never()).findReferences(any(), any(), any(), any(), any());
+        verify(finder).findAllReferences(eq(targets), isNull(), eq(acceptor), eq(monitor));
+    }
+
+    @Test
+    public void undeterminableParticipantLookupFallsBackToCompleteWorkspaceSearch()
+    {
+        IProject base = project("Base"); //$NON-NLS-1$
+        URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        IResourceDescription baseDescription = description(baseURI);
+        IResourceDescriptions index = mock(IResourceDescriptions.class);
+        when(index.getAllResourceDescriptions()).thenReturn(Collections.singletonList(baseDescription));
+        IResourceServiceProvider resourceServiceProvider = provider(index);
+        IReferenceFinder finder = mock(IReferenceFinder.class);
+        Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
+        IAcceptor<IReferenceDescription> acceptor = ignored -> { };
+        NullProgressMonitor monitor = new NullProgressMonitor();
+
+        BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
+            monitor, CascadeParticipantsResult.undetermined());
+
+        verify(finder, never()).findReferences(any(), any(), any(), any(), any());
+        verify(finder).findAllReferences(eq(targets), isNull(), eq(acceptor), eq(monitor));
+    }
+
+    @Test
+    public void knownNonWorkspaceResourcesAreSkippedWithoutDisablingScopedSearch()
+    {
+        IProject base = project("Base"); //$NON-NLS-1$
+        URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        URI platformTypeURI = URI.createURI("v8:/PlatformTypes/8.3.27"); //$NON-NLS-1$
+        URI pluginURI = URI.createPlatformPluginURI("com.example.bundle/types.bsl", true); //$NON-NLS-1$
+        IResourceDescription platformTypeDescription = description(platformTypeURI);
+        IResourceDescription pluginDescription = description(pluginURI);
+        IResourceDescription baseDescription = description(baseURI);
+        IResourceDescriptions index = mock(IResourceDescriptions.class);
+        when(index.getAllResourceDescriptions()).thenReturn(Arrays.asList(platformTypeDescription,
+            pluginDescription, baseDescription));
+        IResourceServiceProvider resourceServiceProvider = provider(index);
+        IReferenceFinder finder = mock(IReferenceFinder.class);
+        Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
+        IAcceptor<IReferenceDescription> acceptor = ignored -> { };
+        NullProgressMonitor monitor = new NullProgressMonitor();
+
+        BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
+            monitor, CascadeParticipantsResult.determined(Collections.emptyList()));
+
+        @SuppressWarnings({ "rawtypes", "unchecked" })
+        ArgumentCaptor<Iterable<URI>> sources = ArgumentCaptor.forClass((Class)Iterable.class);
+        verify(finder).findReferences(eq(targets), sources.capture(), isNull(), eq(acceptor), eq(monitor));
+        verify(finder, never()).findAllReferences(any(), any(), any(), any());
+        assertEquals(Collections.singleton(baseURI), asSet(sources.getValue()));
+    }
+
+    @Test
+    public void unclassifiableUriSchemeFallsBackInsteadOfUsingAccumulatedPartialScope()
+    {
+        IProject base = project("Base"); //$NON-NLS-1$
+        URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        URI unknownURI = URI.createURI("workspace:/Base/src/CommonModules/Unknown/Module.bsl"); //$NON-NLS-1$
+        IResourceDescription baseDescription = description(baseURI);
+        IResourceDescription unknownDescription = description(unknownURI);
+        IResourceDescriptions index = mock(IResourceDescriptions.class);
+        when(index.getAllResourceDescriptions()).thenReturn(Arrays.asList(baseDescription,
+            unknownDescription));
+        IResourceServiceProvider resourceServiceProvider = provider(index);
+        IReferenceFinder finder = mock(IReferenceFinder.class);
+        Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
+        IAcceptor<IReferenceDescription> acceptor = ignored -> { };
+        NullProgressMonitor monitor = new NullProgressMonitor();
+
+        BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
+            monitor, CascadeParticipantsResult.determined(Collections.emptyList()));
 
         verify(finder, never()).findReferences(any(), any(), any(), any(), any());
         verify(finder).findAllReferences(eq(targets), isNull(), eq(acceptor), eq(monitor));

@@ -28,13 +28,16 @@ Output shape (verified live against the committed TestConfiguration fixture):
   - <module path> [Line X; Line Y]
 
 Fixture truth (committed; values confirmed by calling the live tool):
-  - Catalog.Catalog -> 9 references, including the Configuration containment
+  - Catalog.Catalog -> 10 references, including the Configuration containment
     'Configuration - Catalogs - catalogs' and form-item data-path usages like
-    'Catalog.Catalog.Form.ItemForm.Form - Items.Code.Data path - Type: types'.
-  - CommonModule.Calc -> 2 references, including
-    'Configuration - Common modules - commonModules'.
+    'Catalog.Catalog.Form.ItemForm.Form - Items.Code.Data path - Type: types', plus
+    'CommonModules/tests_MathHelper/Module.bsl' in the extension.
+  - CommonModule.Calc -> 3 references, including its Configuration containment
+    and 'CommonModules/tests_SampleTests/Module.bsl' in the extension.
   - CommonModule.OK -> 2 references (same Configuration containment shape).
   - Subsystem.Subsystem -> 1 reference: 'Configuration - Subsystems - subsystems'.
+  Measured: extension BSL usages of an adopted copy are surfaced against the base object;
+  its extension-Configuration containment is not, because BM back-references use the base target.
   Every object in this tiny fixture is at least referenced by its Configuration
   containment, so there is no genuine 0-reference object to exercise the
   "No references found." branch — that branch is therefore NOT asserted here
@@ -100,11 +103,11 @@ def test_catalog_references_real_usages_and_does_not_mutate():
     assert_contains(r.text, "# References to Catalog.Catalog",
                     "heading must carry the resolved object FQN")
 
-    # Exact count is fixture-deterministic (9 real references). A miscount or a
+    # Exact count is fixture-deterministic (10 real references). A miscount or a
     # broken collector changes this number, so asserting the literal total is a
     # strong mutation guard (not a vague 'non-empty').
-    assert_contains(r.text, "**Total references found:** 9",
-                    "Catalog.Catalog has exactly 9 references in the fixture")
+    assert_contains(r.text, "**Total references found:** 10",
+                    "Catalog.Catalog has exactly 10 references in the fixture")
 
     # The Configuration containment reference (every top object has it). Proves the
     # back-reference collector ran and the path/feature formatting is correct.
@@ -120,15 +123,19 @@ def test_catalog_references_real_usages_and_does_not_mutate():
     assert_contains(r.text, "Catalog.Catalog - Input by string - Code",
                     "the input-by-string Code reference must be listed")
 
+    assert_contains(r.text, "CommonModules/tests_MathHelper/Module.bsl",
+                    "the extension BSL usage of the adopted Catalog must be listed")
+
     assert_no_diff("a read tool must not touch the project on disk")
 
 
 @e2e_test(tool="find_references", kind="read")
 def test_common_module_references_configuration_containment():
     """A CommonModule object resolves and its references are found. CommonModule.Calc
-    is referenced by the Configuration (it owns the module) -> exactly 2 references.
-    This proves object resolution + reference collection for a *different* metadata
-    type than Catalog, with its own deterministic count."""
+    has two metadata references and one indexed BSL usage of its adopted extension
+    copy -> exactly 3 references. This proves object resolution, adopted-target
+    augmentation and extension source scoping for a *different* metadata type than
+    Catalog, with its own deterministic count."""
     r = call("find_references", {
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Calc",
@@ -136,10 +143,12 @@ def test_common_module_references_configuration_containment():
     assert_ok(r, "find_references on CommonModule.Calc")
     assert_contains(r.text, "# References to CommonModule.Calc",
                     "heading must carry the CommonModule FQN")
-    assert_contains(r.text, "**Total references found:** 2",
-                    "CommonModule.Calc has exactly 2 references in the fixture")
+    assert_contains(r.text, "**Total references found:** 3",
+                    "CommonModule.Calc has exactly 3 references in the fixture")
     assert_contains(r.text, "Configuration - Common modules - commonModules",
                     "the Configuration commonModules containment reference must be listed")
+    assert_contains(r.text, "CommonModules/tests_SampleTests/Module.bsl",
+                    "the extension BSL usage of the adopted Calc module must be listed")
     assert_no_diff("a read tool must not touch the project on disk")
 
 
@@ -183,8 +192,8 @@ def test_russian_type_token_normalizes_and_yields_same_object():
     assert_not_contains(r.text, "Справочник",
                         "the Russian type token must be normalized away, not echoed")
     # Same underlying object -> same deterministic reference set.
-    assert_contains(r.text, "**Total references found:** 9",
-                    "Russian-token resolution must yield the identical 9-reference set")
+    assert_contains(r.text, "**Total references found:** 10",
+                    "Russian-token resolution must yield the identical 10-reference set")
     assert_contains(r.text, "Configuration - Catalogs - catalogs",
                     "Russian-token resolution must yield the identical references")
     assert_no_diff("a read tool must not touch the project on disk")
@@ -203,8 +212,8 @@ def test_plural_english_type_token_resolves_same_object():
     assert_ok(r, "find_references with English plural type token")
     assert_contains(r.text, "# References to Catalog.Catalog",
                     "plural type token must normalize to the singular FQN heading")
-    assert_contains(r.text, "**Total references found:** 9",
-                    "plural-token resolution must yield the identical 9-reference set")
+    assert_contains(r.text, "**Total references found:** 10",
+                    "plural-token resolution must yield the identical 10-reference set")
     assert_no_diff("a read tool must not touch the project on disk")
 
 

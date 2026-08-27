@@ -43,10 +43,13 @@ import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.AdoptedReferenceTargets;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslReferenceSearch;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 
 /**
  * Domain service that finds all references to a metadata object.
@@ -168,8 +171,10 @@ public class MetadataReferenceService
      * predefined-item incoming-reference check must fail CLOSED (block unless {@code force=true}) when
      * the BSL scan could not be consulted, since a missed BSL-only reference would otherwise be treated
      * as "genuinely zero references" and the delete would proceed unverified. This compatibility
-     * overload has no owning project, so its BSL step uses the complete workspace fallback; the
-     * project-aware overload below enables the scoped optimization without weakening completeness.
+     * overload has no owning project, so its source scan uses the complete workspace fallback. For an
+     * {@link MdObject}, however, it cannot discover adopted-extension counterparts without that project
+     * and therefore reports the strict scan incomplete; the project-aware overload below is required
+     * when that completeness signal protects a mutation.
      *
      * @param bmModel the BM model (already open in the caller's own transaction)
      * @param target the object to find references TO
@@ -178,8 +183,9 @@ public class MetadataReferenceService
      */
     public ReferenceScanResult collectReferencesForObjectStrict(IBmModel bmModel, IBmObject target, int limit)
     {
-        // No target project means the optimization cannot be proven safe. The collector therefore
-        // runs the complete workspace fallback, which remains complete when it succeeds.
+        // No target project means the source-scope optimization cannot be proven safe. The collector
+        // runs the complete workspace fallback; MdObject adopted-target augmentation remains
+        // undeterminable and is reflected in ReferenceScanResult.complete.
         return collectReferencesForObjectStrict(null, bmModel, target, limit);
     }
 
@@ -188,8 +194,9 @@ public class MetadataReferenceService
      * BSL step falls back to {@link IReferenceFinder#findAllReferences}, so a successful fallback still
      * yields {@link ReferenceScanResult#complete}={@code true}. This preserves {@code delete_metadata}'s
      * fail-closed predefined-item guard: omitting an extension reference, if one exists, could otherwise
-     * be reported as "no references" and allow a delete that leaves a dangling use. Only an unavailable
-     * finder or a scoped/fallback finder call that throws makes the BSL scan incomplete.
+     * be reported as "no references" and allow a delete that leaves a dangling use. An unavailable
+     * finder, a scoped/fallback finder call that throws, or an adopted-target lookup that could not be
+     * completed makes the BSL scan incomplete.
      *
      * @param project the project that owns {@code target}
      * @param bmModel the BM model (already open in the caller's own transaction)
@@ -782,6 +789,9 @@ public class MetadataReferenceService
                     return;
                 }
 
+                CascadeParticipantsResult participants =
+                    ProjectStateChecker.determineCascadeParticipants(sourceProject);
+
                 // Collect target URIs (including produced types)
                 List<URI> targetURIs = new ArrayList<>();
                 targetURIs.add(EcoreUtil.getURI((EObject) target));
@@ -801,15 +811,47 @@ public class MetadataReferenceService
                             }
                         }
                     }
+
+                    AdoptedReferenceTargets.Resolution adoptedTargets =
+                        AdoptedReferenceTargets.resolve((MdObject)target, participants);
+                    targetURIs.addAll(adoptedTargets.getTargetURIs());
+                    if (!adoptedTargets.isComplete())
+                    {
+                        // find_references remains best-effort and still searches every target found.
+                        // Strict destructive callers must not interpret a failed augmentation as proof
+                        // that the missing extension contains no adopted counterpart or BSL reference.
+                        bslScanComplete = false;
+                        Activator.logInfo("BSL adopted-target augmentation incomplete for project '" //$NON-NLS-1$
+                            + safeProjectName(sourceProject) + "' (" //$NON-NLS-1$
+                            + adoptedTargets.getFailureReason() + "); continuing with resolved targets."); //$NON-NLS-1$
+                    }
                 }
 
-                BslReferenceSearch.findReferences(resourceServiceProvider, finder, sourceProject, targetURIs,
-                    this::collectBslReferenceDescription, new NullProgressMonitor());
+                BslReferenceSearch.findReferences(resourceServiceProvider, finder, sourceProject,
+                    targetURIs, this::collectBslReferenceDescription, new NullProgressMonitor(),
+                    participants);
             }
             catch (Exception e)
             {
                 Activator.logError("Error finding BSL references", e); //$NON-NLS-1$
                 bslScanComplete = false;
+            }
+        }
+
+        private static String safeProjectName(IProject project)
+        {
+            if (project == null)
+            {
+                return "<unknown>"; //$NON-NLS-1$
+            }
+            try
+            {
+                String name = project.getName();
+                return name != null ? name : "<unknown>"; //$NON-NLS-1$
+            }
+            catch (RuntimeException e)
+            {
+                return "<unknown>"; //$NON-NLS-1$
             }
         }
 

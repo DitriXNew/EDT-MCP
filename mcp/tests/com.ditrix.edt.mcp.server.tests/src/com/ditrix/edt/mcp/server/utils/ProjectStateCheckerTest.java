@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,6 +33,7 @@ import org.junit.Test;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 
 /**
  * Tests for {@link ProjectStateChecker#buildingErrorOrNull(String)} and the cascade pre-flight
@@ -99,6 +101,29 @@ public class ProjectStateCheckerTest
         when(env.hasBmModelProjectNature(any(IProject.class))).thenReturn(null);
         when(env.resolveModelsForRefactoring(any(IProject.class))).thenReturn(available);
         return env;
+    }
+
+    @Test
+    public void failureAwareParticipantLookupDistinguishesNoExtensionsFromDiscoveryFailure()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        CascadeEnvironment noExtensions = mock(CascadeEnvironment.class);
+        when(noExtensions.getOpenDtProjects()).thenReturn(Collections.emptyList());
+
+        CascadeParticipantsResult empty =
+            ProjectStateChecker.determineCascadeParticipants(base, noExtensions);
+
+        assertTrue(empty.isDetermined());
+        assertTrue(empty.getParticipants().isEmpty());
+
+        CascadeEnvironment failed = mock(CascadeEnvironment.class);
+        when(failed.getOpenDtProjects()).thenThrow(new IllegalStateException("workspace changed")); //$NON-NLS-1$
+
+        CascadeParticipantsResult undetermined =
+            ProjectStateChecker.determineCascadeParticipants(base, failed);
+
+        assertFalse(undetermined.isDetermined());
+        assertTrue(undetermined.getParticipants().isEmpty());
     }
 
     @Test

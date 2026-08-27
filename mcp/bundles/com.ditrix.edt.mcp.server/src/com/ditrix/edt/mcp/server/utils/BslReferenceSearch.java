@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.function.Function;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
@@ -25,20 +24,21 @@ import org.eclipse.xtext.ui.editor.findrefs.IReferenceFinder;
 import org.eclipse.xtext.util.IAcceptor;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 
 /**
  * Runs the Xtext BSL reference finder over the target project and all of its open extension projects.
  * Source URIs come from the Xtext index itself, so the scope stays aligned with every resource kind the
  * finder knows instead of guessing from a workspace file walk.
  * <p>
- * Including extensions is precautionary, not a claim that the committed fixture contains a
- * cross-project BSL reference to the base EObject. No such reference was observed there: an adopted
- * metadata object in the extension has its own EObject and URI, and extension BSL resolves to that
- * adopted copy. The wider scope avoids assuming that cross-project references are impossible in every
- * configuration or platform model.
+ * Extension sources cover two distinct cases. Searching them for the base EObject URI remains a
+ * precaution: an adopted object has its own URI, so no direct cross-project BSL reference to that base
+ * URI was observed in the fixture. The caller also adds adopted-copy URIs as targets, however, and the
+ * fixture deliberately proves that an extension BSL usage of such a copy is found in this source scope.
  * <p>
- * The scope optimization fails CLOSED: unless the complete source-URI set can be established, this
- * helper calls {@link IReferenceFinder#findAllReferences} exactly as the previous implementation did.
+ * The scope optimization fails CLOSED: unless extension discovery completes and every indexed URI can
+ * be classified as either a workspace resource or a known non-workspace resource, this helper calls
+ * {@link IReferenceFinder#findAllReferences} exactly as the previous implementation did.
  * A successful fallback is therefore complete and must remain a successful BSL scan. This is
  * load-bearing for {@code delete_metadata}: its predefined-item safety check uses the same reference
  * scan, and silently searching a partial project set could turn a reference outside that partial set
@@ -70,13 +70,17 @@ public final class BslReferenceSearch
         IAcceptor<IReferenceDescription> acceptor, IProgressMonitor monitor)
     {
         findReferences(resourceServiceProvider, finder, baseProject, targetURIs, acceptor, monitor,
-            ProjectStateChecker::cascadeParticipants);
+            ProjectStateChecker.determineCascadeParticipants(baseProject));
     }
 
-    /** Package-visible seam for headless tests; production always uses {@link ProjectStateChecker}. */
-    static void findReferences(IResourceServiceProvider resourceServiceProvider, IReferenceFinder finder,
+    /**
+     * Variant for a caller that already resolved participants and needs that same snapshot for related
+     * work, such as adding adopted-extension target URIs. An undetermined result forces the complete
+     * workspace fallback.
+     */
+    public static void findReferences(IResourceServiceProvider resourceServiceProvider, IReferenceFinder finder,
         IProject baseProject, Iterable<URI> targetURIs, IAcceptor<IReferenceDescription> acceptor,
-        IProgressMonitor monitor, Function<IProject, List<IProject>> cascadeParticipants)
+        IProgressMonitor monitor, CascadeParticipantsResult cascadeParticipants)
     {
         ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, cascadeParticipants);
         String projectName = safeProjectName(baseProject);
@@ -96,7 +100,7 @@ public final class BslReferenceSearch
     }
 
     private static ScopeResolution resolveScope(IResourceServiceProvider resourceServiceProvider,
-        IProject baseProject, Function<IProject, List<IProject>> cascadeParticipants)
+        IProject baseProject, CascadeParticipantsResult cascadeParticipants)
     {
         if (resourceServiceProvider == null)
         {
@@ -140,8 +144,17 @@ public final class BslReferenceSearch
                         "Xtext index returned an invalid resource description"); //$NON-NLS-1$
                 }
                 URI resourceURI = description.getURI();
+                if (isKnownNonWorkspaceResource(resourceURI))
+                {
+                    continue;
+                }
+                if (!resourceURI.isPlatformResource())
+                {
+                    return ScopeResolution.failure("Xtext index contains an unclassifiable URI scheme: " //$NON-NLS-1$
+                        + schemeForLog(resourceURI));
+                }
                 String resourceProjectName = platformResourceProjectName(resourceURI);
-                if (resourceProjectName != null && projectNames.contains(resourceProjectName))
+                if (projectNames.contains(resourceProjectName))
                 {
                     sourceResourceURIs.add(resourceURI);
                 }
@@ -162,9 +175,9 @@ public final class BslReferenceSearch
     }
 
     private static Set<String> scopeProjectNames(IProject baseProject,
-        Function<IProject, List<IProject>> cascadeParticipants)
+        CascadeParticipantsResult cascadeParticipants)
     {
-        if (cascadeParticipants == null)
+        if (cascadeParticipants == null || !cascadeParticipants.isDetermined())
         {
             return null;
         }
@@ -173,7 +186,7 @@ public final class BslReferenceSearch
         {
             return null;
         }
-        List<IProject> participants = cascadeParticipants.apply(baseProject);
+        List<IProject> participants = cascadeParticipants.getParticipants();
         if (participants == null)
         {
             return null;
@@ -205,12 +218,6 @@ public final class BslReferenceSearch
 
     private static String platformResourceProjectName(URI uri)
     {
-        if (!uri.isPlatformResource())
-        {
-            // Assumption: every project-owned BSL source is indexed as a platform resource.
-            // If EDT uses another scheme for one, this skip would silently make the scoped scan incomplete.
-            return null;
-        }
         String platformString = uri.toPlatformString(true);
         if (platformString == null)
         {
@@ -222,6 +229,22 @@ public final class BslReferenceSearch
             throw new IllegalArgumentException("Platform resource URI has no project segment"); //$NON-NLS-1$
         }
         return path.segment(0);
+    }
+
+    private static boolean isKnownNonWorkspaceResource(URI uri)
+    {
+        // Observed non-workspace entries in EDT's BSL index are platform types under v8:/... and
+        // resources contributed by installed plug-ins under platform:/plugin/.... Neither can be an
+        // IWorkspace resource. Every other form is unknown and therefore forces the complete fallback.
+        return uri.isPlatformPlugin() || "v8".equalsIgnoreCase(uri.scheme()); //$NON-NLS-1$
+    }
+
+    private static String schemeForLog(URI uri)
+    {
+        String scheme = uri.scheme();
+        return scheme != null && !scheme.isEmpty()
+            ? "'" + scheme + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            : "<none>"; //$NON-NLS-1$
     }
 
     private static String safeProjectName(IProject project)

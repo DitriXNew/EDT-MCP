@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -607,6 +608,7 @@ public final class ProjectStateChecker
      *
      * @param base the project the cascade mutates; {@code null} yields an empty list
      * @return the participating projects, never {@code null}
+     * @see #determineCascadeParticipants(IProject) for callers where an empty result would narrow work
      */
     public static List<IProject> cascadeParticipants(IProject base)
     {
@@ -624,6 +626,77 @@ public final class ProjectStateChecker
             // operation that already happened - the caller falls back to awaiting what it can name
             // itself, which is what it did before the participants were awaited at all.
             return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Determines the open extension projects whose base is {@code base}, preserving the difference
+     * between a successful empty result and a failed discovery.
+     * <p>
+     * Unlike {@link #cascadeParticipants(IProject)}, this entry point is for callers where an empty
+     * list NARROWS an operation. Such callers must inspect {@link CascadeParticipantsResult#isDetermined()}
+     * and use their complete fallback when it is {@code false}; treating failure as "no extensions"
+     * could silently omit a real participant.
+     *
+     * @param base the base project; {@code null} is undeterminable
+     * @return the participant lookup result, never {@code null}
+     */
+    public static CascadeParticipantsResult determineCascadeParticipants(IProject base)
+    {
+        return determineCascadeParticipants(base, CascadeEnvironment.DEFAULT);
+    }
+
+    /** Package-visible seam for headless tests; production uses {@link CascadeEnvironment#DEFAULT}. */
+    static CascadeParticipantsResult determineCascadeParticipants(IProject base, CascadeEnvironment env)
+    {
+        if (base == null || env == null)
+        {
+            return CascadeParticipantsResult.undetermined();
+        }
+        try
+        {
+            return CascadeParticipantsResult.determined(findParticipants(base, env));
+        }
+        catch (RuntimeException e)
+        {
+            return CascadeParticipantsResult.undetermined();
+        }
+    }
+
+    /** Outcome of the failure-aware extension-participant lookup. */
+    public static final class CascadeParticipantsResult
+    {
+        private final List<IProject> participants;
+
+        private CascadeParticipantsResult(List<IProject> participants)
+        {
+            this.participants = participants;
+        }
+
+        static CascadeParticipantsResult determined(List<IProject> participants)
+        {
+            return new CascadeParticipantsResult(Collections.unmodifiableList(
+                new ArrayList<>(participants)));
+        }
+
+        static CascadeParticipantsResult undetermined()
+        {
+            return new CascadeParticipantsResult(null);
+        }
+
+        /** @return whether discovery completed, including the legitimate zero-extension result */
+        public boolean isDetermined()
+        {
+            return participants != null;
+        }
+
+        /**
+         * @return the discovered extensions, or an empty list when discovery was undeterminable;
+         *     check {@link #isDetermined()} before using it to narrow an operation
+         */
+        public List<IProject> getParticipants()
+        {
+            return participants != null ? participants : Collections.emptyList();
         }
     }
 
