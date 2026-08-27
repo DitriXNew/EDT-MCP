@@ -458,7 +458,7 @@ public class GetMetadataObjectsTool implements IMcpTool
             + "below is accepted in English singular or plural, and in the Russian spelling 1C " //$NON-NLS-1$
             + "registers for it - for most types the singular alone. Configuration metadata types: " //$NON-NLS-1$
             + acceptedTypes
-            + ".").toJson(); //$NON-NLS-1$
+            + ". See get_tool_guide('get_metadata_objects') for the full parameter list.").toJson(); //$NON-NLS-1$
     }
 
     /**
