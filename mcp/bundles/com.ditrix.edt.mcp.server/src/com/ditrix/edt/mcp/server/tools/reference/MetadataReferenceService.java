@@ -43,8 +43,9 @@ import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
-import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslReferenceSearch;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -105,7 +106,7 @@ public class MetadataReferenceService
         }
 
         // Collect all references
-        ReferenceCollector collector = new ReferenceCollector(bmModel, (IBmObject)targetObject, limit);
+        ReferenceCollector collector = new ReferenceCollector(project, bmModel, (IBmObject)targetObject, limit);
 
         try
         {
@@ -150,7 +151,9 @@ public class MetadataReferenceService
      */
     public List<ReferenceInfo> collectReferencesForObject(IBmModel bmModel, IBmObject target, int limit)
     {
-        ReferenceCollector collector = new ReferenceCollector(bmModel, target, limit);
+        // Without an owning project the BSL helper deliberately falls back to the complete workspace
+        // index. Keep this compatibility entry point complete.
+        ReferenceCollector collector = new ReferenceCollector(null, bmModel, target, limit);
         collector.collect();
         return collector.getAllReferences();
     }
@@ -159,15 +162,14 @@ public class MetadataReferenceService
      * Same collection engine as {@link #collectReferencesForObject}, but ALSO reports whether the BSL
      * code-reference scan (the 5th collection step, {@code collectBslReferences}) ran to completion -
      * see {@link ReferenceScanResult}. {@code find_references} itself stays best-effort: an unavailable
-     * Xtext resource-service-provider / {@link IReferenceFinder}, or a {@code findAllReferences}
+     * Xtext resource-service-provider / {@link IReferenceFinder}, or a scoped/fallback finder-call
      * exception, is caught and logged, and the (possibly incomplete) result is still returned - correct
      * for a diagnostic tool. A DESTRUCTIVE caller cannot accept that silently: delete_metadata's
      * predefined-item incoming-reference check must fail CLOSED (block unless {@code force=true}) when
      * the BSL scan could not be consulted, since a missed BSL-only reference would otherwise be treated
-     * as "genuinely zero references" and the delete would proceed unverified. This method changes
-     * NOTHING about how the BSL scan itself behaves - it only surfaces whether it completed, so
-     * {@code find_references} (which keeps calling {@link #collectReferencesForObject} /
-     * {@code executeReadonlyTask} directly) is entirely unaffected.
+     * as "genuinely zero references" and the delete would proceed unverified. This compatibility
+     * overload has no owning project, so its BSL step uses the complete workspace fallback; the
+     * project-aware overload below enables the scoped optimization without weakening completeness.
      *
      * @param bmModel the BM model (already open in the caller's own transaction)
      * @param target the object to find references TO
@@ -176,7 +178,29 @@ public class MetadataReferenceService
      */
     public ReferenceScanResult collectReferencesForObjectStrict(IBmModel bmModel, IBmObject target, int limit)
     {
-        ReferenceCollector collector = new ReferenceCollector(bmModel, target, limit);
+        // No target project means the optimization cannot be proven safe. The collector therefore
+        // runs the complete workspace fallback, which remains complete when it succeeds.
+        return collectReferencesForObjectStrict(null, bmModel, target, limit);
+    }
+
+    /**
+     * Project-aware strict scan. An undeterminable scoped source set NEVER becomes a partial scan: the
+     * BSL step falls back to {@link IReferenceFinder#findAllReferences}, so a successful fallback still
+     * yields {@link ReferenceScanResult#complete}={@code true}. This preserves {@code delete_metadata}'s
+     * fail-closed predefined-item guard: omitting an extension reference, if one exists, could otherwise
+     * be reported as "no references" and allow a delete that leaves a dangling use. Only an unavailable
+     * finder or a scoped/fallback finder call that throws makes the BSL scan incomplete.
+     *
+     * @param project the project that owns {@code target}
+     * @param bmModel the BM model (already open in the caller's own transaction)
+     * @param target the object to find references TO
+     * @param limit result-size hint, same semantics as {@link #collectReferencesForObject}
+     * @return the collected references plus whether the BSL step completed (never {@code null})
+     */
+    public ReferenceScanResult collectReferencesForObjectStrict(IProject project, IBmModel bmModel,
+        IBmObject target, int limit)
+    {
+        ReferenceCollector collector = new ReferenceCollector(project, bmModel, target, limit);
         collector.collect();
         return new ReferenceScanResult(collector.getAllReferences(), collector.isBslScanComplete());
     }
@@ -393,8 +417,8 @@ public class MetadataReferenceService
     /**
      * Result of {@link #collectReferencesForObjectStrict}: the collected references AND whether the
      * BSL code-reference scan ran to completion. {@code complete=false} means the Xtext reference index
-     * was unavailable (no resource-service-provider / {@link IReferenceFinder}) or {@code
-     * findAllReferences} threw - a BSL-only incoming reference could have been MISSED, so a caller that
+     * was unavailable (no resource-service-provider / {@link IReferenceFinder}) or the scoped/fallback
+     * finder call threw - a BSL-only incoming reference could have been MISSED, so a caller that
      * must fail CLOSED (delete_metadata's predefined-item check) should treat the reference state as
      * UNVERIFIED, never as "genuinely zero references". Public, simple-data-holder style, matching
      * {@link ReferenceInfo}.
@@ -423,6 +447,7 @@ public class MetadataReferenceService
     private static class ReferenceCollector extends AbstractBmTask<Void>
     {
 
+        private final IProject sourceProject;
         private final IBmModel bmModel;
         private final IBmObject target;
         /** Non-null exactly when {@code target instanceof MdObject} - see the class comment. */
@@ -435,8 +460,8 @@ public class MetadataReferenceService
         private org.eclipse.emf.ecore.resource.ResourceSet lineResolveResourceSet;
         /**
          * Whether {@link #collectBslReferences} ran to completion - {@code false} when the Xtext
-         * resource-service-provider / {@link IReferenceFinder} was unavailable, or {@code
-         * findAllReferences} threw. {@code find_references} itself never reads this (best-effort by
+         * resource-service-provider / {@link IReferenceFinder} was unavailable, or the scoped/fallback
+         * finder call threw. {@code find_references} itself never reads this (best-effort by
          * design); {@link MetadataReferenceService#collectReferencesForObjectStrict} surfaces it to a
          * caller that must fail CLOSED on an incomplete scan. Default {@code true}: most scans complete.
          */
@@ -448,9 +473,10 @@ public class MetadataReferenceService
             return bslScanComplete;
         }
 
-        ReferenceCollector(IBmModel bmModel, IBmObject target, int limit)
+        ReferenceCollector(IProject sourceProject, IBmModel bmModel, IBmObject target, int limit)
         {
             super("Find references to " + safeTargetName(target)); //$NON-NLS-1$
+            this.sourceProject = sourceProject;
             this.bmModel = bmModel;
             this.target = target;
             this.targetAsMdObject = (target instanceof MdObject) ? (MdObject)target : null;
@@ -777,8 +803,8 @@ public class MetadataReferenceService
                     }
                 }
 
-                // Find all references in BSL code
-                finder.findAllReferences(targetURIs, null, this::collectBslReferenceDescription, new NullProgressMonitor());
+                BslReferenceSearch.findReferences(resourceServiceProvider, finder, sourceProject, targetURIs,
+                    this::collectBslReferenceDescription, new NullProgressMonitor());
             }
             catch (Exception e)
             {

@@ -2331,12 +2331,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     MetadataReferenceService referenceService = new MetadataReferenceService();
                     List<Map<String, Object>> refs = new ArrayList<>();
                     java.util.Set<String> seen = new java.util.HashSet<>();
-                    boolean completed = collectOnePredefinedItemReferences(referenceService, bmModel, item,
-                        ownerBmId, seen, refs);
+                    boolean completed = collectOnePredefinedItemReferences(referenceService, project,
+                        bmModel, item, ownerBmId, seen, refs);
                     for (PredefinedItem descendant : PredefinedWriter.descendants(item))
                     {
-                        completed = collectOnePredefinedItemReferences(referenceService, bmModel, descendant,
-                            ownerBmId, seen, refs) && completed;
+                        completed = collectOnePredefinedItemReferences(referenceService, project, bmModel,
+                            descendant, ownerBmId, seen, refs) && completed;
                     }
                     return new PredefinedRefScan(refs, completed);
                 });
@@ -2372,14 +2372,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      *     scans, per {@link PredefinedRefScan#completed})
      */
     private static boolean collectOnePredefinedItemReferences(MetadataReferenceService referenceService,
-        IBmModel bmModel, PredefinedItem item, long ownerTopId, java.util.Set<String> seen,
+        IProject project, IBmModel bmModel, PredefinedItem item, long ownerTopId, java.util.Set<String> seen,
         List<Map<String, Object>> out)
     {
         MetadataReferenceService.ReferenceScanResult scanResult;
         try
         {
-            scanResult = referenceService.collectReferencesForObjectStrict(bmModel, (IBmObject)item,
-                PREDEFINED_REF_SCAN_LIMIT);
+            scanResult = referenceService.collectReferencesForObjectStrict(project, bmModel,
+                (IBmObject)item, PREDEFINED_REF_SCAN_LIMIT);
         }
         catch (Exception e)
         {
