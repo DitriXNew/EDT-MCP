@@ -109,6 +109,7 @@ public class ProjectStateCheckerTest
         IProject base = mockOpenProject("Base"); //$NON-NLS-1$
         CascadeEnvironment noExtensions = mock(CascadeEnvironment.class);
         when(noExtensions.getOpenDtProjects()).thenReturn(Collections.emptyList());
+        when(noExtensions.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
 
         CascadeParticipantsResult empty =
             ProjectStateChecker.determineCascadeParticipants(base, noExtensions);
@@ -124,6 +125,23 @@ public class ProjectStateCheckerTest
 
         assertFalse(undetermined.isDetermined());
         assertTrue(undetermined.getParticipants().isEmpty());
+    }
+
+    @Test
+    public void extensionWithUnavailableBaseResolutionIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, extension));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
+        when(environment.resolveBaseProject(extension)).thenReturn(null);
+
+        CascadeParticipantsResult result =
+            ProjectStateChecker.determineCascadeParticipants(base, environment);
+
+        assertFalse(result.isDetermined());
     }
 
     @Test

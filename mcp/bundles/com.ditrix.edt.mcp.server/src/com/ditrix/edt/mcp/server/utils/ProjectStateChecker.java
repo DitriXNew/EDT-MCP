@@ -34,18 +34,25 @@ public final class ProjectStateChecker
     /** Bounds passes that discover previously unseen participants while EDT contexts keep changing. */
     private static final int MAX_NEW_PARTICIPANT_DISCOVERY_PASSES = 3;
 
+    private static final String V8_EXTENSION_PROJECT_NATURE =
+        "com._1c.g5.v8.dt.core.V8ExtensionNature"; //$NON-NLS-1$
+
     /**
      * Persistent project-description natures declared by EDT 2026.1 for projects that can own a BM
      * model. Unlike {@link IDtProjectManager#getDtProject(IProject)} and
      * {@code IV8ProjectManager.getProjects()}, these do not disappear when EDT disposes and restarts a
      * project context: EDT's source removes both runtime registrations during disposal, while the
      * nature IDs remain in the Eclipse {@code .project} description until the project is converted or
-     * deleted. That makes the nature the safe permanent/non-EDT discriminator for this bounded wait.
+     * deleted. That makes the nature the safe permanent/non-EDT discriminator for the bounded wait and
+     * the failure-aware participant lookup.
      */
     private static final List<String> BM_MODEL_PROJECT_NATURES = Arrays.asList(
         "com._1c.g5.v8.dt.core.V8ConfigurationNature", //$NON-NLS-1$
-        "com._1c.g5.v8.dt.core.V8ExtensionNature", //$NON-NLS-1$
+        V8_EXTENSION_PROJECT_NATURE,
         "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"); //$NON-NLS-1$
+
+    private static final List<String> V8_EXTENSION_PROJECT_NATURES =
+        Collections.singletonList(V8_EXTENSION_PROJECT_NATURE);
 
     /**
      * Project state enumeration.
@@ -637,6 +644,12 @@ public final class ProjectStateChecker
      * list NARROWS an operation. Such callers must inspect {@link CascadeParticipantsResult#isDetermined()}
      * and use their complete fallback when it is {@code false}; treating failure as "no extensions"
      * could silently omit a real participant.
+     * <p>
+     * The runtime DT registry is cross-checked against the permanent extension nature. During EDT
+     * project-context disposal/restart, an open extension can retain that nature while disappearing
+     * from the registry. The nature does not say which base the extension belongs to, so any open
+     * nature-bearing extension missing from the registry makes the whole result undeterminable, even
+     * when it is unrelated to {@code base}. This deliberately widens only during that transient window.
      *
      * @param base the base project; {@code null} is undeterminable
      * @return the participant lookup result, never {@code null}
@@ -655,7 +668,39 @@ public final class ProjectStateChecker
         }
         try
         {
-            return CascadeParticipantsResult.determined(findParticipants(base, env));
+            List<IProject> openDtProjects = env.getOpenDtProjects();
+            List<IProject> openExtensions = env.getOpenExtensionNatureProjects();
+            if (openDtProjects == null || openExtensions == null)
+            {
+                return CascadeParticipantsResult.undetermined();
+            }
+
+            Set<String> registeredProjectNames = new HashSet<>();
+            for (IProject registeredProject : openDtProjects)
+            {
+                registeredProjectNames.add(requiredProjectName(registeredProject));
+            }
+
+            List<IProject> participants = new ArrayList<>();
+            for (IProject extension : openExtensions)
+            {
+                if (!registeredProjectNames.contains(requiredProjectName(extension)))
+                {
+                    return CascadeParticipantsResult.undetermined();
+                }
+                IProject resolvedBase = env.resolveBaseProject(extension);
+                if (resolvedBase == null)
+                {
+                    // A V8ExtensionNature project must have a base. Here null can also mean that the
+                    // V8 runtime registration disappeared, so it is not proof of an unrelated project.
+                    return CascadeParticipantsResult.undetermined();
+                }
+                if (base.equals(resolvedBase))
+                {
+                    participants.add(extension);
+                }
+            }
+            return CascadeParticipantsResult.determined(participants);
         }
         catch (RuntimeException e)
         {
@@ -717,6 +762,20 @@ public final class ProjectStateChecker
         return participants;
     }
 
+    private static String requiredProjectName(IProject project)
+    {
+        if (project == null)
+        {
+            throw new IllegalStateException("Project enumeration contained null"); //$NON-NLS-1$
+        }
+        String name = project.getName();
+        if (name == null || name.isEmpty())
+        {
+            throw new IllegalStateException("Project enumeration contained an unnamed project"); //$NON-NLS-1$
+        }
+        return name;
+    }
+
     private static String participantBuildingError(IProject base, IProject participant)
     {
         return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
@@ -749,6 +808,13 @@ public final class ProjectStateChecker
     {
         /** The open EDT projects currently in the workspace (participants and unrelated alike). */
         List<IProject> getOpenDtProjects();
+
+        /**
+         * The open workspace projects permanently marked as configuration extensions. This is an
+         * independent completeness check for {@link #getOpenDtProjects()}, not a participant list.
+         * An unreadable project description must fail the lookup rather than look like "not an extension".
+         */
+        List<IProject> getOpenExtensionNatureProjects();
 
         /**
          * Resolves the BASE (parent) project a dependent project derives from, or {@code null} when
@@ -807,6 +873,32 @@ public final class ProjectStateChecker
                 {
                     if (candidate.exists() && candidate.isOpen()
                         && dtProjectManager.getDtProject(candidate) != null)
+                    {
+                        result.add(candidate);
+                    }
+                }
+                return result;
+            }
+
+            @Override
+            public List<IProject> getOpenExtensionNatureProjects()
+            {
+                List<IProject> result = new ArrayList<>();
+                for (IProject candidate : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                    .getRoot().getProjects())
+                {
+                    if (!candidate.exists() || !candidate.isOpen())
+                    {
+                        continue;
+                    }
+                    Boolean extensionNature =
+                        ProjectContext.hasAnyNature(candidate, V8_EXTENSION_PROJECT_NATURES);
+                    if (extensionNature == null)
+                    {
+                        throw new IllegalStateException(
+                            "Could not read project nature for: " + candidate.getName()); //$NON-NLS-1$
+                    }
+                    if (extensionNature.booleanValue())
                     {
                         result.add(candidate);
                     }

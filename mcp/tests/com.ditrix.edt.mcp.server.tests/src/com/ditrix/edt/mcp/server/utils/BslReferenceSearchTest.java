@@ -33,6 +33,7 @@ import org.eclipse.xtext.util.IAcceptor;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeParticipantsResult;
 
 /**
@@ -49,6 +50,8 @@ public class BslReferenceSearchTest
         IProject base = project("Base"); //$NON-NLS-1$
         IProject extension1 = project("Base.tests"); //$NON-NLS-1$
         IProject extension2 = project("Base.extra"); //$NON-NLS-1$
+        IProject unrelatedExtension = project("Other.tests"); //$NON-NLS-1$
+        IProject otherBase = project("Other"); //$NON-NLS-1$
         URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
         URI extension1URI =
             platformURI("Base.tests", "src/CommonModules/Extension/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -75,9 +78,19 @@ public class BslReferenceSearchTest
         Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
         IAcceptor<IReferenceDescription> acceptor = ignored -> { };
         NullProgressMonitor monitor = new NullProgressMonitor();
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(
+            Arrays.asList(base, extension1, extension2, unrelatedExtension));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(
+            Arrays.asList(extension1, extension2, unrelatedExtension));
+        when(environment.resolveBaseProject(extension1)).thenReturn(base);
+        when(environment.resolveBaseProject(extension2)).thenReturn(base);
+        when(environment.resolveBaseProject(unrelatedExtension)).thenReturn(otherBase);
+        CascadeParticipantsResult participants =
+            ProjectStateChecker.determineCascadeParticipants(base, environment);
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
-            monitor, CascadeParticipantsResult.determined(Arrays.asList(extension1, extension2)));
+            monitor, participants);
 
         @SuppressWarnings({ "rawtypes", "unchecked" })
         ArgumentCaptor<Iterable<URI>> sources = ArgumentCaptor.forClass((Class)Iterable.class);
@@ -134,9 +147,10 @@ public class BslReferenceSearchTest
     }
 
     @Test
-    public void undeterminableParticipantLookupFallsBackToCompleteWorkspaceSearch()
+    public void unregisteredOpenExtensionForcesCompleteWorkspaceFallback()
     {
         IProject base = project("Base"); //$NON-NLS-1$
+        IProject unregisteredExtension = project("Other.tests"); //$NON-NLS-1$
         URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
         IResourceDescription baseDescription = description(baseURI);
         IResourceDescriptions index = mock(IResourceDescriptions.class);
@@ -146,9 +160,15 @@ public class BslReferenceSearchTest
         Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
         IAcceptor<IReferenceDescription> acceptor = ignored -> { };
         NullProgressMonitor monitor = new NullProgressMonitor();
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Collections.singletonList(base));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Collections.singletonList(unregisteredExtension));
+        CascadeParticipantsResult participants =
+            ProjectStateChecker.determineCascadeParticipants(base, environment);
 
         BslReferenceSearch.findReferences(resourceServiceProvider, finder, base, targets, acceptor,
-            monitor, CascadeParticipantsResult.undetermined());
+            monitor, participants);
 
         verify(finder, never()).findReferences(any(), any(), any(), any(), any());
         verify(finder).findAllReferences(eq(targets), isNull(), eq(acceptor), eq(monitor));
