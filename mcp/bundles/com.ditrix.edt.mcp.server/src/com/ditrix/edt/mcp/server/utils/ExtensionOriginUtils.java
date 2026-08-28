@@ -11,6 +11,7 @@ import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 
 import com._1c.g5.v8.dt.core.platform.IDependentProject;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -155,17 +156,35 @@ public final class ExtensionOriginUtils
             {
                 return DeclaredBaseProject.UNREADABLE;
             }
+            // A manifest being rewritten (save, refresh, git checkout) can be read back truncated,
+            // and a truncation that lands past the mandatory headers but before Base-Project parses
+            // cleanly into a map that merely LOOKS unlinked. Bracket the read with the resource
+            // modification stamp - the same change-detection this search already applies to the Xtext
+            // index - so a concurrently written manifest proves nothing instead of proving "unlinked".
+            long stampBefore = manifestFile.getModificationStamp();
+            if (stampBefore == IResource.NULL_STAMP)
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            Map<String, String> headers;
             try (InputStream contents = manifestFile.getContents(true))
             {
-                Map<String, String> headers = ProjectManifest.parseProjectManifest(contents);
-                if (headers == null)
-                {
-                    return DeclaredBaseProject.UNREADABLE;
-                }
-                String declared = headers.get(ProjectManifest.BASE_PROJECT);
-                return declared == null || declared.trim().isEmpty()
-                    ? DeclaredBaseProject.NONE : DeclaredBaseProject.DECLARED;
+                headers = ProjectManifest.parseProjectManifest(contents);
             }
+            if (manifestFile.getModificationStamp() != stampBefore)
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            // Manifest-Version and Runtime-Version are mandatory in every DT project kind (verified
+            // on configuration, extension, external-objects and a freshly created external-objects
+            // project). Their absence means this is not a complete manifest, however well it parsed.
+            if (headers == null || isBlank(headers.get(ProjectManifest.MANIFEST_VERSION))
+                || isBlank(headers.get(ProjectManifest.RUNTIME_VERSION)))
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            return isBlank(headers.get(ProjectManifest.BASE_PROJECT))
+                ? DeclaredBaseProject.NONE : DeclaredBaseProject.DECLARED;
         }
         catch (Exception e)
         {
@@ -176,6 +195,12 @@ public final class ExtensionOriginUtils
                 + project.getName(), e);
             return DeclaredBaseProject.UNREADABLE;
         }
+    }
+
+    /** A header is present only when it carries a non-blank value. */
+    private static boolean isBlank(String value)
+    {
+        return value == null || value.trim().isEmpty();
     }
 
     /**

@@ -7,9 +7,18 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.core.platform.ProjectManifest;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 
 /**
@@ -79,5 +88,81 @@ public class ExtensionOriginUtilsTest
             ExtensionOriginUtils.originLabel(ObjectBelonging.NATIVE, true, false));
         assertEquals(ExtensionOriginUtils.ORIGIN_CORE,
             ExtensionOriginUtils.originLabel(ObjectBelonging.NATIVE, false, false));
+    }
+
+    /**
+     * The manifest is the PERMANENT proof of a dependent project's link, because a null runtime
+     * parent also means "not wired yet" or "parent not accessible". These cases pin what counts as
+     * proof: only a complete manifest without Base-Project may be read as genuinely unlinked.
+     */
+    @Test
+    public void declaredBaseProjectReadsTheManifest() throws Exception
+    {
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.NONE,
+            ExtensionOriginUtils.readDeclaredBaseProject(projectWithManifest(
+                "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n"))); //$NON-NLS-1$
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.DECLARED,
+            ExtensionOriginUtils.readDeclaredBaseProject(projectWithManifest(
+                "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\nBase-Project: Base\n"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A manifest rewritten during a save, refresh or git checkout can be read back truncated. A
+     * truncation that lands past the mandatory headers but before Base-Project parses CLEANLY into a
+     * map that merely looks unlinked - so the mandatory headers must be checked, and a blank
+     * Base-Project value must not read as a declaration either.
+     */
+    @Test
+    public void incompleteManifestIsUnreadableRatherThanUnlinked() throws Exception
+    {
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(projectWithManifest(""))); //$NON-NLS-1$
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(
+                projectWithManifest("Manifest-Version: 1.0\n"))); //$NON-NLS-1$
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(
+                projectWithManifest("Runtime-Version: 8.3.27\n"))); //$NON-NLS-1$
+    }
+
+    /** A manifest that changes under the read proves nothing about the link. */
+    @Test
+    public void manifestWrittenDuringTheReadIsUnreadable() throws Exception
+    {
+        IProject project = projectWithManifest(
+            "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n"); //$NON-NLS-1$
+        IFile manifest = project.getFile(ProjectManifest.DT_PROJECT_MANIFEST);
+        when(manifest.getModificationStamp()).thenReturn(1L, 2L);
+
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(project));
+    }
+
+    /** A missing manifest is a malformed project, not an unlinked one. */
+    @Test
+    public void missingManifestIsUnreadable()
+    {
+        IProject project = mock(IProject.class);
+        IFile manifest = mock(IFile.class);
+        when(manifest.exists()).thenReturn(false);
+        when(project.getFile(ProjectManifest.DT_PROJECT_MANIFEST)).thenReturn(manifest);
+
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(project));
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(null));
+    }
+
+    private static IProject projectWithManifest(String content) throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IFile manifest = mock(IFile.class);
+        when(manifest.exists()).thenReturn(true);
+        when(manifest.getModificationStamp()).thenReturn(42L);
+        when(manifest.getContents(true)).thenAnswer(invocation -> new ByteArrayInputStream(
+            content.getBytes(StandardCharsets.UTF_8)));
+        when(project.getName()).thenReturn("Probe"); //$NON-NLS-1$
+        when(project.getFile(ProjectManifest.DT_PROJECT_MANIFEST)).thenReturn(manifest);
+        return project;
     }
 }

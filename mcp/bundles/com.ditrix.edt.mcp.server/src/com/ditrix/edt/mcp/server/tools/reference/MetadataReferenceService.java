@@ -451,6 +451,43 @@ public class MetadataReferenceService
      * MdObject-only collection steps (produced types / predefined items / fields) that {@link
      * #findReferences} relies on for a top object and that simply do not apply to anything else.
      */
+    /**
+     * The workspace project segment of a platform-resource path ({@code /Project/src/...}), or
+     * {@code null} when the path carries none.
+     */
+    static String extractProjectName(String path)
+    {
+        if (path == null)
+        {
+            return null;
+        }
+        int srcIdx = path.indexOf("/src/"); //$NON-NLS-1$
+        if (srcIdx <= 0)
+        {
+            return null;
+        }
+        String head = path.substring(0, srcIdx);
+        int lastSlash = head.lastIndexOf('/');
+        String name = lastSlash >= 0 ? head.substring(lastSlash + 1) : head;
+        return name.isEmpty() ? null : name;
+    }
+
+    /**
+     * Prefixes {@code modulePath} with {@code projectName} when the reference comes from a project
+     * other than the one being searched, so a base module and its adopted copy stay distinct in both
+     * the deduplication key and the rendered row.
+     */
+    static String qualifyWithProject(String modulePath, String projectName,
+        String searchedProjectName)
+    {
+        if (projectName == null || searchedProjectName == null
+            || projectName.equals(searchedProjectName))
+        {
+            return modulePath;
+        }
+        return projectName + "/" + modulePath; //$NON-NLS-1$
+    }
+
     private static class ReferenceCollector extends AbstractBmTask<Void>
     {
 
@@ -892,8 +929,14 @@ public class MetadataReferenceService
                 path = sourceUri.toString();
             }
 
-            // Extract module path from URI
-            String modulePath = extractModulePath(path);
+            // Extract module path from URI, keeping the OWNING PROJECT whenever it is not the project
+            // being searched. An adopted copy in an extension keeps the base module's relative path,
+            // so two genuinely different usages would otherwise collapse: identical relative path plus
+            // identical line IS the whole deduplication key, and even with different lines the rows
+            // would read as one module. Only cross-project rows are qualified, so a search that stays
+            // inside its own project renders exactly as before.
+            String modulePath = qualifyWithProject(extractModulePath(path), extractProjectName(path),
+                sourceProject == null ? null : sourceProject.getName());
 
             // Extract line number - we need to load the EObject and use NodeModelUtils
             int line = extractLineNumberFromSourceUri(sourceUri);
