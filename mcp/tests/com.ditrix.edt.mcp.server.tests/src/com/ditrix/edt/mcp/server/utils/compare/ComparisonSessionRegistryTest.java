@@ -15,6 +15,10 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -88,10 +92,22 @@ public class ComparisonSessionRegistryTest
             ComparisonScope.EMPTY_SCOPE);
     }
 
-    /** A settable clock, so a TTL can be tested without sleeping through it. */
+    /**
+     * A settable elapsed-time source, so a TTL can be tested without sleeping through it.
+     * <p>
+     * The tests move it in MILLISECONDS, which is the scale every budget in the registry is stated
+     * in, while the registry takes a NANOSECOND ticker - so {@link #ticker()} is the seam and this
+     * field is the dial. Keeping the two apart is what lets a test say
+     * {@code clock.now += TTL + 1} and mean it.
+     */
     private static final class FakeClock
     {
         long now = 1_000L;
+
+        ElapsedTime.Ticker ticker()
+        {
+            return () -> now * 1_000_000L;
+        }
     }
 
     /** Records what the registry ended, how, and can be told to fail either way. */
@@ -185,6 +201,13 @@ public class ComparisonSessionRegistryTest
         final FakeClock clock;
         int paused;
 
+        /**
+         * A one-shot correction applied on the FIRST pause, so a wait can be shown to survive the
+         * machine's clock moving under it - the case an absolute deadline cannot get right, because
+         * the reading it was computed from no longer exists.
+         */
+        long stepBackOnFirstPauseMillis;
+
         FakePause(FakeClock clock)
         {
             this.clock = clock;
@@ -195,6 +218,11 @@ public class ComparisonSessionRegistryTest
         {
             paused++;
             clock.now += millis;
+            if (stepBackOnFirstPauseMillis > 0L)
+            {
+                clock.now -= stepBackOnFirstPauseMillis;
+                stepBackOnFirstPauseMillis = 0L;
+            }
         }
     }
 
@@ -206,8 +234,8 @@ public class ComparisonSessionRegistryTest
 
     private ComparisonSessionRegistry registry()
     {
-        return new ComparisonSessionRegistry(() -> clock.now, TTL, releaser, liveHandles, launchProgress,
-            pause);
+        return new ComparisonSessionRegistry(clock.ticker(), TTL, releaser, liveHandles,
+            launchProgress, pause);
     }
 
     // ==================== The slot is CLAIMED, not merely found free ====================
@@ -2319,6 +2347,174 @@ public class ComparisonSessionRegistryTest
             }
         }
         return null;
+    }
+
+
+    // ==================== every budget here is ELAPSED time, not a moment on a clock ====================
+    //
+    // The three deadlines this registry keeps - the claim, the idle TTL, the wait for a launch to
+    // begin - used to be read off the system's wall clock, which is not a measure of elapsed time at
+    // all: NTP corrects it, an operator sets it, and a virtual machine resumed from a snapshot hands
+    // the JVM a reading from before the wait started. The two directions break it in opposite ways,
+    // and only one of them is reachable through this seam, so each is pinned in the way it can be. A
+    // correction BACKWARDS is scripted below. A jump FORWARD cannot be scripted at all once the
+    // source is monotonic - there is no such jump to script - so what pins that half is the WIRING:
+    // the ratchets at the end of this block assert that neither this class nor the engine that
+    // installs it names the wall clock.
+
+    /**
+     * Mirrors {@code ComparisonSessionRegistry.CLAIM_BUDGET_MILLIS} (private): how long a claim may
+     * stand before the slot is taken back from it.
+     */
+    private static final long CLAIM_BUDGET = 5L * 60L * 1000L;
+
+    /** An hour, which is the size of the ordinary daylight-saving or NTP correction. */
+    private static final long AN_HOUR = 3_600_000L;
+
+    /**
+     * A launch worker dies holding the slot, and then the machine's clock is corrected backwards.
+     * The claim's budget is a span of REAL time, so the correction may not buy the dead claim any: a
+     * whole budget of elapsed time after it, the slot belongs to whoever is actually there.
+     */
+    @Test
+    public void testAClockCorrectedBackwardsDoesNotKeepAnAbandonedClaimAlive()
+    {
+        ComparisonSessionRegistry registry = registry();
+        registry.claimSlot("Trade"); //$NON-NLS-1$
+
+        // Corrected backwards, and OBSERVED - a step nobody looks at is a step nobody can decline
+        // to charge for.
+        clock.now -= AN_HOUR;
+        assertFalse("a correction is not elapsed time, so the claim is still inside its budget", //$NON-NLS-1$
+            registry.claimSlot("Erp").granted()); //$NON-NLS-1$
+
+        clock.now += CLAIM_BUDGET + 1;
+
+        assertTrue("a whole claim budget of REAL time has passed since the claim was taken, and " //$NON-NLS-1$
+            + "that is what the budget is about - not where the clock happens to point", //$NON-NLS-1$
+            registry.claimSlot("Erp").granted()); //$NON-NLS-1$
+    }
+
+    /**
+     * The same correction against the idle sweep. The session is deliberately NOT looked up in
+     * between: a lookup restarts its TTL and makes the arithmetic self-consistent again, which is
+     * exactly what hides this.
+     */
+    @Test
+    public void testAClockCorrectedBackwardsDoesNotPostponeTheIdleSweep()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        registry.register(handle, batch());
+
+        clock.now -= AN_HOUR;
+        assertEquals("a correction ages nothing: no time has passed", 0, registry.sweep()); //$NON-NLS-1$
+
+        clock.now += TTL + 1;
+
+        assertEquals("the session then sat untouched for a whole TTL of REAL time, and that is " //$NON-NLS-1$
+            + "what the TTL is about", 1, registry.sweep()); //$NON-NLS-1$
+    }
+
+    /**
+     * The correction arriving in the MIDDLE of a wait, which is the case an absolute deadline gets
+     * wrong however carefully it was computed: the reading it was computed from is gone.
+     *
+     * <p>The numbers are chosen so that the broken shape is bounded too, and merely LONGER - a
+     * deadline of "the reading at the start plus the budget" has to climb the whole hour back before
+     * it can expire, which is some 72 000 further polls. A test that hung instead would prove
+     * nothing about which shape it was measuring.</p>
+     */
+    @Test
+    public void testAClockCorrectedBackwardsMidWaitDoesNotExtendTheWaitForALaunchToBegin()
+    {
+        ComparisonSessionRegistry registry = registry();
+        ComparisonProcessHandle handle = handle("Trade"); //$NON-NLS-1$
+        liveHandles.live = Collections.singletonList(handle);
+        String id = registry.register(handle, batch());
+        launchProgress.begun = Boolean.FALSE;
+        pause.stepBackOnFirstPauseMillis = AN_HOUR;
+
+        registry.handBack(id, SlotHandback.Ending.CANCELLED);
+
+        // The first poll buys nothing, because the hour it stepped back cancels the 50ms it slept;
+        // every poll after it buys its 50ms, and the budget is spent by those.
+        assertEquals("a correction mid-wait must cost the wait nothing and buy it nothing", //$NON-NLS-1$
+            PLATFORM_START_BUDGET_POLLS + 1, pause.paused);
+    }
+
+    /**
+     * The production WIRING, pinned where no behavioural test can reach it: a scripted source proves
+     * the arithmetic and cannot prove which clock the shipped registry is handed. This is the shape
+     * {@code GetComparisonNodeToolTest} already uses for the call budget - the value of the rule is
+     * that grepping the file for the name keeps returning nothing, so the javadoc says "the wall
+     * clock" in words rather than spelling the call.
+     *
+     * @throws IOException when the source cannot be read
+     */
+    @Test
+    public void testTheRegistryDoesNotNameTheSystemWallClock() throws IOException
+    {
+        String source = readSource("utils/compare/ComparisonSessionRegistry.java"); //$NON-NLS-1$
+
+        // Positive control first: a scan that read the wrong file - or nothing - would pass the
+        // absence assertion over an empty string and prove nothing at all.
+        assertTrue("the scan did not read ComparisonSessionRegistry", //$NON-NLS-1$
+            source.contains("class ComparisonSessionRegistry")); //$NON-NLS-1$
+        // The BARE method name, not "System.currentTimeMillis": a mutation that put the wall clock
+        // back as the method REFERENCE System::currentTimeMillis walked straight past the dotted
+        // form of this check, which is the one shape the production wiring would actually use.
+        assertFalse("a budget read off the wall clock is not a budget - a correction backwards keeps " //$NON-NLS-1$
+            + "a dead claim alive and a jump forward reclaims a session that was just touched - so " //$NON-NLS-1$
+            + "this file must not name it in any form, not even in a comment", //$NON-NLS-1$
+            source.contains("currentTimeMillis")); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal, because the registry can be innocent and still be handed the wrong source:
+     * the seam is a constructor parameter, and only the engine decides what goes into it.
+     *
+     * @throws IOException when the source cannot be read
+     */
+    @Test
+    public void testTheEngineInstallsTheRegistryWithTheMonotonicSource() throws IOException
+    {
+        String source = readSource("utils/compare/ComparisonEngine.java"); //$NON-NLS-1$
+
+        assertTrue("the scan did not read ComparisonEngine", //$NON-NLS-1$
+            source.contains("class ComparisonEngine")); //$NON-NLS-1$
+        assertTrue("the registry the engine installs must be measured against the monotonic source", //$NON-NLS-1$
+            source.contains("new ComparisonSessionRegistry(System::nanoTime")); //$NON-NLS-1$
+    }
+
+    /**
+     * Reads one bundle source file, by walking up from the working directory exactly as the
+     * source-scanning ratchets elsewhere in this suite do.
+     *
+     * @param relative path under the bundle's {@code src/com/ditrix/edt/mcp/server}
+     * @return the file's text
+     * @throws IOException when it cannot be read
+     */
+    private static String readSource(String relative) throws IOException
+    {
+        String base = "bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server/"; //$NON-NLS-1$
+        File dir = new File(System.getProperty("user.dir")); //$NON-NLS-1$
+        for (int i = 0; i < 12 && dir != null; i++)
+        {
+            for (String prefix : Arrays.asList("", "mcp/")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                File candidate = new File(dir, prefix + base + relative);
+                if (candidate.isFile())
+                {
+                    return new String(Files.readAllBytes(candidate.toPath()), StandardCharsets.UTF_8);
+                }
+            }
+            dir = dir.getParentFile();
+        }
+        fail("could not locate " + relative + " by walking up from user.dir=" //$NON-NLS-1$ //$NON-NLS-2$
+            + System.getProperty("user.dir")); //$NON-NLS-1$
+        return null; // unreachable
     }
 
     // ==================== The id token rests on nothing a machine can wind back ====================

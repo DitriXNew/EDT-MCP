@@ -520,6 +520,221 @@ public class FormStructureReaderTest
             md.contains("_(no event handlers)_")); //$NON-NLS-1$
     }
 
+
+    // ==================== the handler walk is bounded by VISITS, so it may not recurse ====================
+    //
+    // MAX_NODES caps how many elements the walk LOOKS AT, and that is not a cap on how DEEP it goes:
+    // on a chain of nested elements the two are the same number. A walk that re-entered itself once
+    // per element therefore stood thousands of frames deep before the budget could decline anything,
+    // and the failure was not a truncated table - StackOverflowError is an Error, GetComparisonNodeTool
+    // catches RuntimeException, and the MCP request came back with no result at all.
+
+    /**
+     * One less than the walk's own budget, so the traversal reaches the BOTTOM of the chain instead
+     * of stopping on the cap - the point being the depth it survives, not the cap it honours.
+     */
+    private static final int CHAIN_DEPTH = MAX_NODES - 1;
+
+    /**
+     * The stack the deep walk is given. Small on purpose: the depth the walk can reach is itself
+     * bounded by MAX_NODES, so a recursive walk cannot be made to overflow a default stack by
+     * feeding it a bigger form - the only dial left is the stack. A traversal whose stack use does
+     * not grow with the form fits in this whatever the form looks like.
+     */
+    private static final int WALK_STACK_BYTES = 256 * 1024;
+
+    /**
+     * Renders on a thread with a deliberately small stack, and reports what the walk did with it.
+     *
+     * @param form the form model
+     * @param rowLimit the caller's row limit
+     * @return the rendered document
+     * @throws Throwable whatever the render threw - a StackOverflowError included, which is the
+     *             whole point: it is an Error, so a test that let it be swallowed would pass over
+     *             the defect
+     */
+    private static String renderOnASmallStack(EObject form, int rowLimit) throws Throwable
+    {
+        Object[] outcome = new Object[2];
+        Runnable render = () -> {
+            try
+            {
+                outcome[0] = FormStructureReader.render("CommonForm.F", form, "en", rowLimit); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            catch (Throwable t) // NOSONAR an Error is exactly what this test is about
+            {
+                outcome[1] = t;
+            }
+        };
+        Thread walker = new Thread(null, render, "form-structure-deep-walk", WALK_STACK_BYTES); //$NON-NLS-1$
+        walker.start();
+        walker.join();
+        if (outcome[1] != null)
+        {
+            throw (Throwable)outcome[1];
+        }
+        return (String)outcome[0];
+    }
+
+    /**
+     * A chain of nested groups as deep as the walk's budget allows it to go, with the ONE handler in
+     * the form at the very bottom - so a walk that came back without that row did not reach it.
+     *
+     * @return the form
+     */
+    private static EObject formWhoseOnlyHandlerIsAtTheBottomOfADeepChain()
+    {
+        EObject form = newForm();
+        EObject parent = form;
+        for (int i = 0; i < CHAIN_DEPTH; i++)
+        {
+            EObject group = newItem(MODEL.formGroup, "G" + i, i); //$NON-NLS-1$
+            addItem(parent, group);
+            parent = group;
+        }
+        addHandler(parent, "OnChange", null, "DeepestOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        return form;
+    }
+
+    /**
+     * The depth pin. The row limit is 1 on purpose: the ITEM outline still recurses, and its depth is
+     * bounded by exactly that limit, so what this measures is the handler walk and nothing else.
+     *
+     * @throws Throwable when the walk ran the thread out of stack
+     */
+    @Test
+    public void testTheHandlerWalkCrossesAChainDeeperThanItsThreadStack() throws Throwable
+    {
+        String md = renderOnASmallStack(formWhoseOnlyHandlerIsAtTheBottomOfADeepChain(), 1);
+
+        assertTrue("the walk must reach the bottom of the chain, not the bottom of the stack: " + md, //$NON-NLS-1$
+            md.contains("| G" + (CHAIN_DEPTH - 1) + " | OnChange | DeepestOnChange |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The same walk, this time asked whether it thinks it was cut short. It was not: the chain is one
+     * element shorter than the budget, so a report of truncation here would mean the budget branch
+     * fired on a form the walk had read completely.
+     *
+     * @throws Throwable when the walk ran the thread out of stack
+     */
+    @Test
+    public void testTheDeepWalkDoesNotReportItselfCutShort() throws Throwable
+    {
+        String md = renderOnASmallStack(formWhoseOnlyHandlerIsAtTheBottomOfADeepChain(), 1);
+
+        assertFalse("nothing was declined, so no walk-cut note is due: " + md, //$NON-NLS-1$
+            md.contains("the handler walk stopped")); //$NON-NLS-1$
+    }
+
+    // ==================== the ORDER of the walk is what the table prints ====================
+    //
+    // Depth-first pre-order: an element's own handler rows, then the whole subtree under each 'items'
+    // child in list order, then the subtree under each singular containment in the order
+    // SINGULAR_ITEM_CONTAINMENTS declares. A stack that pushed siblings in forward order would
+    // reverse every one of those three, and nothing else in this suite would notice.
+
+    /**
+     * A form built so that each of the three orderings is separately observable: siblings A/T/B at
+     * the root, a subtree under A, and a Table carrying an items child, an auto command bar and a
+     * context menu at once.
+     *
+     * @return the form
+     */
+    private static EObject formWhoseHandlersSpellOutTheWalkOrder()
+    {
+        EObject form = newForm();
+        addHandler(form, "OnOpen", null, "FormOnOpen"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        EObject groupA = newItem(MODEL.formGroup, "A", 1); //$NON-NLS-1$
+        addHandler(groupA, "OnChange", null, "AOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject a1 = newItem(MODEL.formField, "A1", 2); //$NON-NLS-1$
+        addHandler(a1, "OnChange", null, "A1OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(groupA, a1);
+        EObject a2 = newItem(MODEL.formField, "A2", 3); //$NON-NLS-1$
+        addHandler(a2, "OnChange", null, "A2OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(groupA, a2);
+        addItem(form, groupA);
+
+        EObject table = newItem(MODEL.table, "T", 4); //$NON-NLS-1$
+        addHandler(table, "OnChange", null, "TOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject t1 = newItem(MODEL.formField, "T1", 5); //$NON-NLS-1$
+        addHandler(t1, "OnChange", null, "T1OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(table, t1);
+        EObject tableBar = newItem(MODEL.autoCommandBar, "TBar", 6); //$NON-NLS-1$
+        addHandler(tableBar, "OnChange", null, "TBarOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(table.eClass().getEStructuralFeature("autoCommandBar"), tableBar); //$NON-NLS-1$
+        EObject tableMenu = newItem(MODEL.formGroup, "TMenu", 7); //$NON-NLS-1$
+        addHandler(tableMenu, "OnChange", null, "TMenuOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(table.eClass().getEStructuralFeature("contextMenu"), tableMenu); //$NON-NLS-1$
+        addItem(form, table);
+
+        EObject fieldB = newItem(MODEL.formField, "B", 8); //$NON-NLS-1$
+        addHandler(fieldB, "OnChange", null, "BOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(form, fieldB);
+
+        EObject formBar = newItem(MODEL.autoCommandBar, "FBar", 9); //$NON-NLS-1$
+        addHandler(formBar, "OnChange", null, "FBarOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        form.eSet(form.eClass().getEStructuralFeature("autoCommandBar"), formBar); //$NON-NLS-1$
+
+        return form;
+    }
+
+    /**
+     * The whole table, as one literal block. A pin on membership would survive every reordering; the
+     * order IS the observable, so the order is what is written down.
+     */
+    @Test
+    public void testTheHandlerTableIsInTheWalksDepthFirstPreOrder()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseHandlersSpellOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("the rows must come out in the order the walk visits the elements: " + md, //$NON-NLS-1$
+            md.contains("| (form) | OnOpen | FormOnOpen |\n" //$NON-NLS-1$
+                + "| A | OnChange | AOnChange |\n" //$NON-NLS-1$
+                + "| A1 | OnChange | A1OnChange |\n" //$NON-NLS-1$
+                + "| A2 | OnChange | A2OnChange |\n" //$NON-NLS-1$
+                + "| T | OnChange | TOnChange |\n" //$NON-NLS-1$
+                + "| T1 | OnChange | T1OnChange |\n" //$NON-NLS-1$
+                + "| TBar | OnChange | TBarOnChange |\n" //$NON-NLS-1$
+                + "| TMenu | OnChange | TMenuOnChange |\n" //$NON-NLS-1$
+                + "| B | OnChange | BOnChange |\n" //$NON-NLS-1$
+                + "| FBar | OnChange | FBarOnChange |\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal for the one ordering a chain cannot show: two SINGULAR containments on the same
+     * element must come out in the order {@code SINGULAR_ITEM_CONTAINMENTS} declares them, and a
+     * table with only an auto command bar would pass whichever way they were pushed.
+     */
+    @Test
+    public void testTwoSingularContainmentsOnOneElementKeepTheirDeclarationOrder()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseHandlersSpellOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("autoCommandBar is declared before contextMenu, so it is walked first: " + md, //$NON-NLS-1$
+            md.indexOf("| TBar | OnChange | TBarOnChange |") //$NON-NLS-1$
+                < md.indexOf("| TMenu | OnChange | TMenuOnChange |")); //$NON-NLS-1$
+    }
+
+    /**
+     * And its own literal for the ordering a single-level form cannot show: a child's whole SUBTREE
+     * is walked before the next sibling is reached, so A2 - two levels down under the first sibling -
+     * precedes B, which is the second sibling.
+     */
+    @Test
+    public void testASubtreeIsFinishedBeforeTheNextSiblingIsReached()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseHandlersSpellOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("depth-first: everything under A comes before B: " + md, //$NON-NLS-1$
+            md.indexOf("| A2 | OnChange | A2OnChange |") //$NON-NLS-1$
+                < md.indexOf("| B | OnChange | BOnChange |")); //$NON-NLS-1$
+    }
+
     @Test
     public void testRenderDetailedEnumReadsLiteralNotName()
     {
@@ -955,6 +1170,14 @@ public class FormStructureReaderTest
             tableBar.setEType(autoCommandBar);
             tableBar.setContainment(true);
             table.getEStructuralFeatures().add(tableBar);
+            // A SECOND singular item containment on the same element, so that the order the walk
+            // takes them in is observable at all: with one of them present every push order looks
+            // alike. Left unset by every other fixture here, so nothing else changes.
+            EReference tableMenu = factory.createEReference();
+            tableMenu.setName("contextMenu"); //$NON-NLS-1$
+            tableMenu.setEType(formGroup);
+            tableMenu.setContainment(true);
+            table.getEStructuralFeatures().add(tableMenu);
 
             // Form: items + attributes + formCommands + autoCommandBar.
             form = factory.createEClass();

@@ -16,7 +16,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.LongSupplier;
 
 import com._1c.g5.v8.dt.compare.core.CompareMergeProcessBatch;
 import com._1c.g5.v8.dt.compare.core.ComparisonProcessHandle;
@@ -126,7 +125,18 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * a lease is open the sweep passes the session over, and closing the lease touches it, so the TTL
  * restarts from the end of the read rather than from its beginning.
  *
- * <p>Every method that touches the map does so under this object's monitor: the sweep runs from
+ * <h2>Every budget here is ELAPSED time, not a moment on the wall clock</h2>
+ * Three deadlines live in this class - the five minutes a preparing launch may hold the slot, the
+ * thirty minutes a session may sit untouched, the ten seconds a hand-back gives EDT to begin - and
+ * every one of them is a statement about how much time has PASSED. None of them is rendered, none
+ * of them is compared against a reading from anywhere else, and none of them survives the wall
+ * clock being corrected: a correction BACKWARDS keeps a dead launch worker's claim inside its
+ * budget and refuses every later comparison on its account, while a jump FORWARD past the TTL makes
+ * the next sweep reclaim a comparison a caller had just touched. So every reading here comes from
+ * {@link ElapsedTime}, which accumulates forward progress and can neither step back nor jump, and
+ * the readings kept in this class mean nothing outside it.
+ * <p>
+ * Every method that touches the map does so under this object's monitor: the sweep runs from
  * whichever call happens to touch the registry next, so it races with ordinary lookups by
  * construction. The ONE deliberate exception is the wait inside
  * {@link #handBack(String, SlotHandback.Ending)}, which takes and releases the monitor per reading
@@ -181,10 +191,12 @@ public final class ComparisonSessionRegistry
      * released, or read the tree of, something it had never heard of. The token is what makes that
      * unrepresentable.
      * <p>
-     * <b>Why it is drawn and not derived.</b> The token used to be a counter seeded from
-     * {@code System.currentTimeMillis()}, and that seeding held only while the clock moved
-     * FORWARD. It was an assumption about the machine, and two ordinary events break it: a clock
-     * corrected backwards, by NTP or by hand, and a virtual machine resumed from a snapshot.
+     * <b>Why it is drawn and not derived.</b> The token used to be a counter seeded from the
+     * system's wall clock (named in words, because a ratchet in
+     * {@code ComparisonSessionRegistryTest} greps this file for the call), and that seeding held
+     * only while the clock moved FORWARD. It was an assumption about the machine, and two
+     * ordinary events break it: a clock corrected backwards, by NTP or by hand, and a virtual
+     * machine resumed from a snapshot.
      * Either one hands the next JVM a seed an earlier JVM already used, so the collision the token
      * exists to rule out becomes reachable again - and the client that quotes an id from a
      * finished job is the one that pays, by addressing somebody else's comparison with it. A drawn
@@ -367,7 +379,10 @@ public final class ComparisonSessionRegistry
         }
 
         /**
-         * @return when the comparison was registered
+         * @return the registry's {@link ElapsedTime} reading when the comparison was registered.
+         *     NOT a timestamp: it counts milliseconds since the registry was made, it cannot be
+         *     rendered as a date, and it is comparable only with other readings from the same
+         *     registry
          */
         public long startedAtMillis()
         {
@@ -375,7 +390,8 @@ public final class ComparisonSessionRegistry
         }
 
         /**
-         * @return when the comparison was last looked up
+         * @return the registry's {@link ElapsedTime} reading when the comparison was last looked
+         *     up, on the same scale and with the same limits as {@link #startedAtMillis()}
          */
         public long lastTouchedMillis()
         {
@@ -467,13 +483,48 @@ public final class ComparisonSessionRegistry
     }
 
     /**
+     * One launch's hold on EDT's single comparison slot, from {@link #claimSlot(String)} until the
+     * launch either registers its session or gives up.
+     *
+     * <h2>Why the three facts are one object</h2>
+     * They used to be three fields, and the third of them - when the claim was taken - was a bare
+     * {@code long} that existed whether a claim did or not. On the wall clock that was survivable
+     * by accident: an unset field held zero, zero read as 1970, and the age computed from it was
+     * enormous, so a claim that was never taken would at worst have looked stale. On the elapsed
+     * scale this class measures with, zero is the moment the registry was made - the NEWEST reading
+     * there is - so the same accident would have read a phantom claim as freshly taken and held the
+     * slot against every later launch. Nothing depended on the old reasoning either way, because a
+     * null-check on the id guarded the read; but a field whose default silently changes meaning
+     * with its unit is a trap laid for the next reader, and a claim that cannot exist without its
+     * own timestamp does not lay it.
+     */
+    private static final class StandingClaim
+    {
+        /** The id the launch must register under. */
+        final String comparisonId;
+
+        /** The project it was taken for, for the refusal a second launch gets (may be null). */
+        final String projectName;
+
+        /** The registry's own {@link ElapsedTime} reading when it was taken - never a timestamp. */
+        final long takenAtMillis;
+
+        StandingClaim(String comparisonId, String projectName, long takenAtMillis)
+        {
+            this.comparisonId = comparisonId;
+            this.projectName = projectName;
+            this.takenAtMillis = takenAtMillis;
+        }
+    }
+
+    /**
      * The stand-in returned by {@link #shared()} when no facade is installed - before the bundle
      * starts and after it stops. It answers every LOOKUP with "nothing" and ends nothing, both of
      * which are true, and it REFUSES to register: a session recorded here would be owned by nobody
      * and would leak the comparison it names.
      */
     private static final ComparisonSessionRegistry DETACHED = new ComparisonSessionRegistry(
-        System::currentTimeMillis, DEFAULT_IDLE_TTL_MILLIS, (session, ending) -> {
+        System::nanoTime, DEFAULT_IDLE_TTL_MILLIS, (session, ending) -> {
             // nothing to end: nothing can be registered here
         }, projectName -> PlatformAnswer.of(Collections.emptyList()),
         session -> PlatformAnswer.unavailable(), millis -> {
@@ -483,7 +534,7 @@ public final class ComparisonSessionRegistry
     private final Map<String, ComparisonSession> sessions = new LinkedHashMap<>();
     private final AtomicLong idGenerator = new AtomicLong(1);
     private final String instanceToken = mintInstanceToken();
-    private final LongSupplier clock;
+    private final ElapsedTime clock;
     private final long idleTtlMillis;
     private final Releaser releaser;
     private final LiveHandles liveHandles;
@@ -492,22 +543,18 @@ public final class ComparisonSessionRegistry
     private final boolean attached;
 
     /**
-     * The id claimed by a launch that is preparing but has not registered its session yet, or
-     * {@code null} when nobody is preparing one. See {@link SlotClaim}.
+     * The claim held by a launch that is preparing but has not registered its session yet, or
+     * {@code null} when nobody is preparing one. See {@link SlotClaim} and {@link StandingClaim}.
      */
-    private String claimedComparisonId;
-
-    /** The project the standing claim was taken for, for the refusal a second launch gets. */
-    private String claimedProjectName;
-
-    /** When the standing claim was taken, measured by {@link #clock}. */
-    private long claimedAtMillis;
+    private StandingClaim claim;
 
     /** Set once by {@link #closeAndReleaseAll()}; from then on nothing may be registered. */
     private boolean closed;
 
     /**
-     * @param clock the millisecond clock (injected so the TTL is testable without sleeping)
+     * @param ticker the MONOTONIC time source every budget here is measured against (injected so
+     *     the TTL is testable without sleeping); see {@link ElapsedTime} for why this is not the
+     *     wall clock
      * @param idleTtlMillis how long a session may sit untouched
      * @param releaser ends one comparison on the platform
      * @param liveHandles asks EDT what it currently holds
@@ -515,16 +562,16 @@ public final class ComparisonSessionRegistry
      * @param pause how {@link #handBack(String, SlotHandback.Ending)} waits between two of those
      *     questions
      */
-    ComparisonSessionRegistry(LongSupplier clock, long idleTtlMillis, Releaser releaser,
+    ComparisonSessionRegistry(ElapsedTime.Ticker ticker, long idleTtlMillis, Releaser releaser,
         LiveHandles liveHandles, LaunchProgress launchProgress, Pause pause)
     {
-        this(clock, idleTtlMillis, releaser, liveHandles, launchProgress, pause, true);
+        this(ticker, idleTtlMillis, releaser, liveHandles, launchProgress, pause, true);
     }
 
-    private ComparisonSessionRegistry(LongSupplier clock, long idleTtlMillis, Releaser releaser,
+    private ComparisonSessionRegistry(ElapsedTime.Ticker ticker, long idleTtlMillis, Releaser releaser,
         LiveHandles liveHandles, LaunchProgress launchProgress, Pause pause, boolean attached)
     {
-        this.clock = clock;
+        this.clock = new ElapsedTime(ticker);
         this.idleTtlMillis = idleTtlMillis;
         this.releaser = releaser;
         this.liveHandles = liveHandles;
@@ -598,9 +645,9 @@ public final class ComparisonSessionRegistry
                 + "EDT and try again.")); //$NON-NLS-1$
         }
         expireStaleClaim();
-        if (claimedComparisonId != null)
+        if (claim != null)
         {
-            return SlotClaim.refused(ComparisonFailures.launchInFlight(claimedProjectName));
+            return SlotClaim.refused(ComparisonFailures.launchInFlight(claim.projectName));
         }
         // Asked here and not before: this reclaims every session past its TTL, so a slot held by
         // an abandoned comparison is given back to the caller entitled to it in the same
@@ -610,10 +657,8 @@ public final class ComparisonSessionRegistry
         {
             return SlotClaim.refused(ComparisonFailures.alreadyRunning(active));
         }
-        claimedComparisonId = nextComparisonId();
-        claimedProjectName = projectName;
-        claimedAtMillis = clock.getAsLong();
-        return SlotClaim.granted(claimedComparisonId);
+        claim = new StandingClaim(nextComparisonId(), projectName, clock.millis());
+        return SlotClaim.granted(claim.comparisonId);
     }
 
     /**
@@ -632,7 +677,7 @@ public final class ComparisonSessionRegistry
         CompareMergeProcessBatch batch)
     {
         requireRegistrable();
-        if (comparisonId == null || !comparisonId.equals(claimedComparisonId))
+        if (!isStanding(comparisonId))
         {
             // Reachable two ways, and neither may become a session: the claim was withdrawn by the
             // launch's own failure path, or it outlived CLAIM_BUDGET_MILLIS and the slot went to
@@ -642,8 +687,7 @@ public final class ComparisonSessionRegistry
                 + "longer holds EDT's single comparison slot, so nothing was handed to the " //$NON-NLS-1$
                 + "platform. Start compare_configurations again."); //$NON-NLS-1$
         }
-        claimedComparisonId = null;
-        claimedProjectName = null;
+        claim = null;
         return put(comparisonId, handle, batch);
     }
 
@@ -662,13 +706,21 @@ public final class ComparisonSessionRegistry
      */
     public synchronized boolean withdrawClaim(String comparisonId)
     {
-        if (comparisonId == null || !comparisonId.equals(claimedComparisonId))
+        if (!isStanding(comparisonId))
         {
             return false;
         }
-        claimedComparisonId = null;
-        claimedProjectName = null;
+        claim = null;
         return true;
+    }
+
+    /**
+     * @param comparisonId the id a launch believes it holds (may be {@code null})
+     * @return {@code true} when that is the claim standing right now
+     */
+    private boolean isStanding(String comparisonId)
+    {
+        return comparisonId != null && claim != null && comparisonId.equals(claim.comparisonId);
     }
 
     /**
@@ -679,11 +731,9 @@ public final class ComparisonSessionRegistry
      */
     private void expireStaleClaim()
     {
-        if (claimedComparisonId != null
-            && clock.getAsLong() - claimedAtMillis >= CLAIM_BUDGET_MILLIS)
+        if (claim != null && clock.millis() - claim.takenAtMillis >= CLAIM_BUDGET_MILLIS)
         {
-            claimedComparisonId = null;
-            claimedProjectName = null;
+            claim = null;
         }
     }
 
@@ -787,7 +837,7 @@ public final class ComparisonSessionRegistry
             ? null
             : handle.getMainDescriptor().getProjectName();
         sessions.put(comparisonId,
-            new ComparisonSession(comparisonId, projectName, handle, batch, clock.getAsLong()));
+            new ComparisonSession(comparisonId, projectName, handle, batch, clock.millis()));
         return comparisonId;
     }
 
@@ -866,7 +916,7 @@ public final class ComparisonSessionRegistry
             sessions.remove(comparisonId);
             return Optional.empty();
         }
-        session.lastTouchedMillis = clock.getAsLong();
+        session.lastTouchedMillis = clock.millis();
         return Optional.of(session);
     }
 
@@ -1045,7 +1095,7 @@ public final class ComparisonSessionRegistry
      */
     private void awaitPlatformStart(String comparisonId)
     {
-        awaitPlatformStart(comparisonId, clock.getAsLong() + PLATFORM_START_BUDGET_MILLIS);
+        awaitPlatformStart(comparisonId, clock.millis() + PLATFORM_START_BUDGET_MILLIS);
     }
 
     /**
@@ -1064,7 +1114,7 @@ public final class ComparisonSessionRegistry
             {
                 return;
             }
-            if (clock.getAsLong() >= deadline)
+            if (clock.millis() >= deadline)
             {
                 return;
             }
@@ -1161,7 +1211,7 @@ public final class ComparisonSessionRegistry
      */
     private int sweepExpired()
     {
-        long deadline = clock.getAsLong() - idleTtlMillis;
+        long deadline = clock.millis() - idleTtlMillis;
         List<ComparisonSession> expired = new ArrayList<>();
         for (ComparisonSession session : sessions.values())
         {
@@ -1211,8 +1261,7 @@ public final class ComparisonSessionRegistry
         // A standing claim goes with them. It names no handle, so there is nothing to end - but
         // leaving it would let a launch still in flight adopt it into a registry nobody will sweep
         // again, which is the very thing the closed flag exists to refuse.
-        claimedComparisonId = null;
-        claimedProjectName = null;
+        claim = null;
     }
 
     /**
@@ -1274,7 +1323,7 @@ public final class ComparisonSessionRegistry
      */
     private void awaitQueuedLaunches()
     {
-        long deadline = clock.getAsLong() + PLATFORM_START_BUDGET_MILLIS;
+        long deadline = clock.millis() + PLATFORM_START_BUDGET_MILLIS;
         for (String comparisonId : registeredIds())
         {
             awaitPlatformStart(comparisonId, deadline);
@@ -1564,7 +1613,7 @@ public final class ComparisonSessionRegistry
         if (session != null && session.leases > 0)
         {
             session.leases--;
-            session.lastTouchedMillis = clock.getAsLong();
+            session.lastTouchedMillis = clock.millis();
         }
     }
 

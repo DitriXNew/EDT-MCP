@@ -7,7 +7,9 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
@@ -119,8 +121,20 @@ public final class FormStructureReader
     /**
      * Upper bound on total visited item nodes for {@link #render}, guarding a pathological form.
      * Shared with the other whole-form walks (the delete prompt's content count) so one form-wide
-     * traversal budget is stated once: an unbounded recursion would raise a {@code StackOverflowError},
-     * which is an {@link Error} and would escape every {@code catch (Exception)} on the way out.
+     * traversal budget is stated once.
+     *
+     * <p><b>It bounds VISITS, not DEPTH, and the difference is not academic.</b> When the elements
+     * are nested in a chain the two are the same number, so a walk that re-enters itself once per
+     * element can stand this many frames deep before the budget declines anything - and the failure
+     * that follows is not a truncated table: {@code StackOverflowError} is an {@link Error}, it
+     * escapes every {@code catch (Exception)} and every {@code catch (RuntimeException)} on the way
+     * out, and the caller gets no result at all rather than a short one. {@link #collectHandlers}
+     * therefore walks with an explicit stack and takes this only for the node cap it is.</p>
+     *
+     * <p>The boundary, stated rather than left to be discovered: {@link #appendItem} still recurses.
+     * Its depth is bounded by the {@code rowLimit} its caller hands down - which is this ceiling
+     * only when nobody narrows it, and the comparison report narrows it to the caller's row
+     * limit.</p>
      */
     public static final int MAX_NODES = 5000;
 
@@ -541,7 +555,7 @@ public final class FormStructureReader
         sb.append("## Event handlers\n\n"); //$NON-NLS-1$
         List<String[]> handlers = new ArrayList<>();
         boolean[] walkCutShort = {false};
-        // collectHandlers recurses the form root's 'items' AND its singular containments (the form-wide
+        // collectHandlers walks the form root's 'items' AND its singular containments (the form-wide
         // auto command bar, context menus, tooltips), so the whole element tree is covered from here. It
         // shares the same MAX_NODES bound as the item-outline pass (its own fresh budget, since it is an
         // independent walk) so the Event-handlers section honours the same cap on a pathological form.
@@ -554,7 +568,7 @@ public final class FormStructureReader
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        // The walk keeps its OWN budget: that one guards the recursion against a pathological form
+        // The walk keeps its OWN budget: that one guards the traversal against a pathological form
         // and is not a caller preference, so the rows are capped here, where the caller's limit is
         // what decides how much of the document it asked for.
         int shown = Math.min(limit, handlers.size());
@@ -1033,52 +1047,122 @@ public final class FormStructureReader
     }
 
     /**
-     * Appends one {@code [owner, event, handler]} row per bound event handler of {@code element} to
-     * {@code rows}, then recurses into the element's child items (and singular item containments) so the
-     * whole subtree is covered. Each handler exposes its own {@code name} (the BSL procedure) and a
-     * single {@code event} reference whose {@code name} (en) / {@code nameRu} (ru) is the event name.
+     * Appends one {@code [owner, event, handler]} row per bound event handler of {@code root} to
+     * {@code rows}, then covers the whole subtree below it - the child items and the singular item
+     * containments alike. Each handler exposes its own {@code name} (the BSL procedure) and a
+     * single {@code event} reference whose {@code name} (en) / {@code nameRu} (ru) is the event
+     * name.
      *
-     * @param element the form root or a form item whose {@code handlers} list is read
-     * @param ownerLabel the Element-column label for handlers directly on {@code element}
+     * <h2>The descent uses an explicit stack, and that is not a matter of taste</h2>
+     * This walk used to re-enter itself once per element, and {@code budget} does not bound the
+     * DEPTH it can reach - it bounds the number of elements VISITED. A form whose elements are
+     * nested deeply enough therefore ran the walking thread out of stack before the budget could
+     * decline anything, and a {@code StackOverflowError} is not a truncated table: it is an
+     * {@code Error}, {@code GetComparisonNodeTool} catches {@code RuntimeException}, and the MCP
+     * request ended with no result at all. Widening that catch is not the answer either - an
+     * {@code Error} leaves the JVM in a state this bundle cannot reason about, and the comparison
+     * feature deliberately rethrows one rather than turning it into a JSON error. Heap is a bound
+     * the workbench can be given more of; the walking thread's stack is not. This is the same
+     * conversion, for the same reason, as {@code CompareConfigurationsTool.collectTopNodes}.
+     * <p>
+     * <b>The ORDER is the recursion's own, and it is what the rendered table prints.</b> An
+     * element's own handler rows come first, then the whole subtree under each {@code items} child
+     * in list order, then the subtree under each singular containment in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - plain depth-first pre-order.
+     * {@link #pushHandlerChildren} reproduces it by pushing children in REVERSE, so the first child
+     * is the next one popped.
+     * <p>
+     * <b>{@code budget} and {@code cutShort} keep their exact meaning</b>, including WHICH element
+     * trips the cut: an element is charged when it is VISITED, and the stack visits elements in the
+     * very order the recursion did. Once the budget is gone the remaining pending elements are
+     * still popped and still raise {@code cutShort}, exactly as the recursion's remaining calls
+     * returned through the same branch - and, exactly as before, they push no children of their
+     * own, so the stack cannot grow past what the charged elements put on it.
+     *
+     * @param root the form root, whose {@code handlers} list is read first
+     * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
      * @param language the event-name language CODE
      * @param rows the accumulator receiving {@code {owner, event, handler}} rows
      * @param budget the shared per-visited-element node budget, capping the walk on a pathological form
      * @param cutShort raised when the budget actually DECLINED an element, so the caller can report
      *            a walk that stopped early instead of publishing a short list as a complete one.
-     *            Set only on the budget branch: a {@code null} child drops nothing, and a form with
+     *            Set only on the budget branch: a {@code null} element drops nothing, and a form with
      *            exactly {@link #MAX_NODES} elements drains the budget to zero while every element
      *            is still visited - the same off-by-one the item outline is gated against
      */
-    private static void collectHandlers(EObject element, String ownerLabel, String language,
+    private static void collectHandlers(EObject root, String rootOwnerLabel, String language,
         List<String[]> rows, int[] budget, boolean[] cutShort)
     {
-        if (element == null)
+        if (root == null)
         {
             return;
         }
-        if (budget[0] <= 0)
+        Deque<PendingElement> pending = new ArrayDeque<>();
+        pending.push(new PendingElement(root, rootOwnerLabel));
+        while (!pending.isEmpty())
         {
-            cutShort[0] = true;
-            return;
+            PendingElement current = pending.pop();
+            if (budget[0] <= 0)
+            {
+                cutShort[0] = true;
+                continue;
+            }
+            budget[0]--;
+            for (EObject handler : getReferenceList(current.element, FEATURE_HANDLERS))
+            {
+                String procName = stringValue(getValue(handler, FEATURE_NAME));
+                String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
+                rows.add(new String[] {current.ownerLabel, eventName, procName});
+            }
+            pushHandlerChildren(current.element, pending);
         }
-        budget[0]--;
-        for (EObject handler : getReferenceList(element, FEATURE_HANDLERS))
+    }
+
+    /**
+     * Puts one element's children on the handler walk's stack in the order that reproduces the
+     * descent the recursion made: REVERSED, and the singular containments BEFORE the {@code items}
+     * children, so that the first {@code items} child is the next one popped and the singular ones
+     * come out last - which is the order the recursion visited them in.
+     *
+     * @param element the element whose children are to be walked
+     * @param pending the walk's stack
+     */
+    private static void pushHandlerChildren(EObject element, Deque<PendingElement> pending)
+    {
+        for (int i = SINGULAR_ITEM_CONTAINMENTS.length - 1; i >= 0; i--)
         {
-            String procName = stringValue(getValue(handler, FEATURE_NAME));
-            String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
-            rows.add(new String[] {ownerLabel, eventName, procName});
-        }
-        for (EObject child : getReferenceList(element, FEATURE_ITEMS))
-        {
-            collectHandlers(child, nameOf(child), language, rows, budget, cutShort);
-        }
-        for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
-        {
-            EObject child = getSingleReference(element, featureName);
+            EObject child = getSingleReference(element, SINGULAR_ITEM_CONTAINMENTS[i]);
             if (child != null)
             {
-                collectHandlers(child, nameOf(child), language, rows, budget, cutShort);
+                pending.push(new PendingElement(child, nameOf(child)));
             }
+        }
+        List<EObject> items = getReferenceList(element, FEATURE_ITEMS);
+        for (int i = items.size() - 1; i >= 0; i--)
+        {
+            EObject child = items.get(i);
+            pending.push(new PendingElement(child, nameOf(child)));
+        }
+    }
+
+    /**
+     * One element waiting on the handler walk's stack, with the Element-column label its own
+     * handler rows are written under.
+     *
+     * <p>The label is carried rather than recomputed at pop time because the form ROOT's label is
+     * not its name - it is {@link #FORM_OWNER_LABEL} - and a walk that re-derived the label would
+     * have to recognise the root by identity to keep that one row right.</p>
+     */
+    private static final class PendingElement
+    {
+        final EObject element;
+
+        final String ownerLabel;
+
+        PendingElement(EObject element, String ownerLabel)
+        {
+            this.element = element;
+            this.ownerLabel = ownerLabel;
         }
     }
 

@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
+import com.ditrix.edt.mcp.server.utils.compare.ElapsedTime;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 
 /**
@@ -101,7 +102,7 @@ public class GetComparisonNodeTool implements IMcpTool
 
     private final NodeSource source;
 
-    private final Ticker ticker;
+    private final ElapsedTime.Ticker ticker;
 
     /** Production constructor: resolves the engine lazily, so construction touches no EDT service. */
     public GetComparisonNodeTool()
@@ -118,7 +119,7 @@ public class GetComparisonNodeTool implements IMcpTool
      * @param source the read port
      * @param ticker the elapsed-time source this call's budget is spent against
      */
-    GetComparisonNodeTool(NodeSource source, Ticker ticker)
+    GetComparisonNodeTool(NodeSource source, ElapsedTime.Ticker ticker)
     {
         this.source = source;
         this.ticker = ticker;
@@ -127,79 +128,38 @@ public class GetComparisonNodeTool implements IMcpTool
     // ==================== The call's own budget ====================
 
     /**
-     * The elapsed-time source a call budget is measured against - {@code System::nanoTime} in
-     * production, a scripted one in a test.
-     *
-     * <h2>Why not the system clock</h2>
-     * {@code waitSeconds} is an upper bound on how long this MCP call may block, and a bound is
-     * only a bound if the thing measuring it cannot be moved. The system's wall clock can be:
-     * NTP corrects it, an operator sets it, and a virtual machine resumed from a snapshot hands
-     * the JVM a reading from before the call started. Every one of those STEPS IT BACK, and a
-     * deadline computed as "the reading at the start plus the budget" then sits that much further
-     * into the future - a 25-second promise becomes minutes or hours of a blocked call, with
-     * nothing in the log to say why. That is what this file used to do, and the name of the wall
-     * clock is deliberately not written down anywhere in it any more, so that grepping for it
-     * keeps returning nothing - {@code GetComparisonNodeToolTest} fails the build if it comes
-     * back.
-     *
-     * <h2>What it is used for, and what it is not</h2>
-     * Elapsed time inside one call, and nothing else. It is not a timestamp, it cannot be
-     * rendered, and it must not be compared against a reading taken from any other source - the
-     * origin of {@code nanoTime} is arbitrary and may be negative, which is exactly why
-     * {@link Budget} accumulates DIFFERENCES rather than comparing against an absolute instant.
-     */
-    @FunctionalInterface
-    interface Ticker
-    {
-        /**
-         * @return a monotonically advancing reading in nanoseconds, whose origin is arbitrary
-         */
-        long nanoTime();
-    }
-
-    /**
-     * How much of one call's {@code waitSeconds} is left, spent against a {@link Ticker}.
+     * How much of one call's {@code waitSeconds} is left, spent against an {@link ElapsedTime}.
      *
      * <h2>Differences, not an absolute deadline</h2>
-     * The budget is spent by the FORWARD progress of the time source: each reading charges
-     * {@code now - last}, and the sum is compared against the budget. Two things follow, and both
-     * are the reason this is not the one-liner {@code start + budget}:
-     * <ul>
-     *   <li>the origin of {@code System.nanoTime()} is arbitrary and may sit anywhere in the
-     *       {@code long} range, so {@code start + budget} can overflow and {@code now < deadline}
-     *       is then simply the wrong comparison - the platform's own javadoc says to subtract;</li>
-     *   <li>a reading that goes BACKWARDS spends nothing. It cannot refund what was already spent,
-     *       so no step of the source can push the end of the wait further away than the budget the
-     *       caller asked for. That is the property that has to hold for {@code waitSeconds} to be
-     *       a bound at all, and it is a property of this class rather than of the machine.</li>
-     * </ul>
+     * The budget is spent by the FORWARD progress of a monotonic time source, and WHY that is not
+     * the one-liner {@code start + budget} - the arbitrary origin that can overflow it, the step
+     * backwards that would otherwise extend the wait - is written down once on {@link ElapsedTime}
+     * rather than repeated here. {@code waitSeconds} is an upper bound on how long this MCP call
+     * may block, and a bound is only a bound if the thing measuring it cannot be moved. The wall
+     * clock can be, so its name is deliberately not written anywhere in this file - not even in a
+     * comment - and {@code GetComparisonNodeToolTest} fails the build if it comes back.
      *
      * <h2>One budget, several waits</h2>
      * One instance is shared by every wait in a call - the address resolution and the node status
      * alike - so the sum of them is bounded, not each one separately. Time spent between two
-     * {@link #expired()} calls is charged by the next one, because it is charged from the previous
-     * READING and not from the previous loop.
+     * {@link #expired()} calls is charged by the next one, because {@link ElapsedTime} charges from
+     * the previous READING and not from the previous loop.
      */
     static final class Budget
     {
-        private final Ticker ticker;
+        private final ElapsedTime elapsed;
 
         private final long budgetNanos;
-
-        private long lastReading;
-
-        private long spentNanos;
 
         /**
          * @param ticker the elapsed-time source
          * @param budgetNanos how many nanoseconds this call may spend waiting; negative is read as
          *            zero
          */
-        Budget(Ticker ticker, long budgetNanos)
+        Budget(ElapsedTime.Ticker ticker, long budgetNanos)
         {
-            this.ticker = ticker;
+            this.elapsed = new ElapsedTime(ticker);
             this.budgetNanos = Math.max(0L, budgetNanos);
-            this.lastReading = ticker.nanoTime();
         }
 
         /**
@@ -209,16 +169,7 @@ public class GetComparisonNodeTool implements IMcpTool
          */
         boolean expired()
         {
-            long now = ticker.nanoTime();
-            long step = now - lastReading;
-            lastReading = now;
-            if (step > 0L)
-            {
-                // Saturating, so that one enormous step cannot wrap the total back to "plenty
-                // left" - the failure this whole class exists to make unreachable.
-                spentNanos = spentNanos > Long.MAX_VALUE - step ? Long.MAX_VALUE : spentNanos + step;
-            }
-            return spentNanos >= budgetNanos;
+            return elapsed.nanos() >= budgetNanos;
         }
     }
 

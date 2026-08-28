@@ -351,7 +351,10 @@ public final class ComparisonEngine
     private ComparisonEngine(Backend backend, long idleTtlMillis)
     {
         this.backend = backend;
-        this.sessions = new ComparisonSessionRegistry(System::currentTimeMillis, idleTtlMillis,
+        // The MONOTONIC source, not the wall clock: every budget the registry keeps - the claim,
+        // the idle TTL, the wait for a launch to begin - is a span of ELAPSED time, and a clock
+        // correction moves a wall-clock reading in both directions. See ElapsedTime.
+        this.sessions = new ComparisonSessionRegistry(System::nanoTime, idleTtlMillis,
             this::end, backend::handles, this::hasBegunOnPlatform, Thread::sleep);
     }
 

@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonNodeRenderer;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
+import com.ditrix.edt.mcp.server.utils.compare.ElapsedTime;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -1169,7 +1170,7 @@ public class GetComparisonNodeToolTest
      * jumped back) instead of restating the arithmetic under test.
      */
     private static final class SteppingTicker
-        implements GetComparisonNodeTool.Ticker
+        implements ElapsedTime.Ticker
     {
         private final long[] steps;
 
