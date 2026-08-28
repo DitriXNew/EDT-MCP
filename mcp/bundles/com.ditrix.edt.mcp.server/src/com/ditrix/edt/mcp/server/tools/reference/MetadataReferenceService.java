@@ -401,6 +401,17 @@ public class MetadataReferenceService
          */
         public IBmObject sourceObject;
 
+        /**
+         * What makes this reference UNIQUE, which is not always what is displayed. A BSL row shows a
+         * friendly module path with everything up to {@code /src/} removed, and two different resources
+         * can reduce to the same friendly path - an adopted copy keeps the base module's relative path,
+         * and a source URI that carries no {@code /src/} segment at all is shortened to its last three
+         * segments. Deduplicating on the displayed path therefore drops real references. Defaults to
+         * {@link #sourcePath} so a caller that has nothing better keeps the previous behaviour.
+         */
+        public String identityPath;
+
+
         /** Constructor for metadata references. */
         public ReferenceInfo(String category, String sourcePath, String feature, IBmObject sourceObject)
         {
@@ -408,16 +419,24 @@ public class MetadataReferenceService
             this.sourcePath = sourcePath;
             this.feature = feature;
             this.isBslReference = false;
+            this.identityPath = sourcePath;
             this.sourceObject = sourceObject;
         }
 
         /** Constructor for BSL code references (no live source object - see {@link #sourceObject}). */
         public ReferenceInfo(String category, String sourcePath, int line)
         {
+            this(category, sourcePath, line, sourcePath);
+        }
+
+        /** Constructor for BSL code references whose identity differs from what is displayed. */
+        public ReferenceInfo(String category, String sourcePath, int line, String identityPath)
+        {
             this.category = category;
             this.sourcePath = sourcePath;
             this.line = line;
             this.isBslReference = true;
+            this.identityPath = identityPath == null ? sourcePath : identityPath;
         }
     }
 
@@ -595,7 +614,7 @@ public class MetadataReferenceService
         private boolean addReference(ReferenceInfo ref)
         {
             // Create unique key
-            String key = ref.category + ":" + ref.sourcePath + ":" + //$NON-NLS-1$ //$NON-NLS-2$
+            String key = ref.category + ":" + ref.identityPath + ":" + //$NON-NLS-1$ //$NON-NLS-2$
                 (ref.isBslReference ? ref.line : ref.feature);
 
             // Skip duplicates
@@ -942,7 +961,7 @@ public class MetadataReferenceService
             int line = extractLineNumberFromSourceUri(sourceUri);
 
             // Use addReference for deduplication
-            addReference(new ReferenceInfo("BSL modules", modulePath, line)); //$NON-NLS-1$
+            addReference(new ReferenceInfo("BSL modules", modulePath, line, path)); //$NON-NLS-1$
         }
 
         private String extractModulePath(String path)
