@@ -20,6 +20,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -55,6 +56,17 @@ public class ComparisonEngineTest
         final List<ComparisonProcessHandle> cancelled = new ArrayList<>();
         final List<ComparisonProcessHandle> stopped = new ArrayList<>();
         final List<CompareMergeProcessBatch> started = new ArrayList<>();
+
+        /** The path the platform was last handed to restore from. */
+        String restoredFrom;
+        /** The entry names the file on THAT path held at the moment the platform opened it. */
+        List<String> entriesSeen = Collections.emptyList();
+        /** Whether that path was a regular file then - what EDT's own reader branches on. */
+        boolean handedARegularFile;
+        /** Stands in for another process replacing the caller's file while the platform reads. */
+        Runnable beforeReading;
+        /** Whether the platform's failure quotes the path it was handed, as a real one would. */
+        boolean failNamingThePathItWasHanded;
 
         boolean available = true;
         /** Whether the platform can be REACHED at all - the reading half of "service present". */
@@ -134,6 +146,20 @@ public class ComparisonEngineTest
             throws IOException
         {
             calls.add("restoreMergeSettings"); //$NON-NLS-1$
+            restoredFrom = fileName;
+            if (beforeReading != null)
+            {
+                beforeReading.run();
+            }
+            // Read where EDT reads: inside the call, from the path it was handed. Recording the
+            // path alone would not tell a snapshot from the caller's file after a replacement -
+            // both are "a path" - and it is the CONTENT the platform matches its entry against.
+            handedARegularFile = Files.isRegularFile(Paths.get(fileName));
+            entriesSeen = entryNamesOf(fileName);
+            if (failNamingThePathItWasHanded)
+            {
+                throw new IOException("could not read '" + fileName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
             if (fileFailure != null)
             {
                 throw fileFailure;
@@ -846,6 +872,267 @@ public class ComparisonEngineTest
             "nowhere/missing.zip"); //$NON-NLS-1$
 
         assertEquals(Collections.singletonList("restoreMergeSettings"), backend.calls); //$NON-NLS-1$
+    }
+
+    // ==== the check and the restore read ONE file, not one path twice ====
+
+    /**
+     * The finding: {@code zipHoldsNothingFor} opened the caller's path, satisfied itself that the
+     * archive held this comparison's entry, and closed it - and the platform then opened the SAME
+     * PATH again. A process replacing the file in between got a comparison that restored NOTHING
+     * and said nothing about it, which is the exact failure the check exists to prevent, reached
+     * straight through the check.
+     * <p>
+     * The assertion is on what the platform READ, not on the path it was handed: a path is a path
+     * either way, and only the content tells a private snapshot from the caller's file after
+     * somebody else has written over it.
+     */
+    @Test
+    public void aZipReplacedAfterItsCheckIsStillTheOneThePlatformReads() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        backend.beforeReading = replaceWith(zip, "X_Y_Z.xml"); //$NON-NLS-1$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertEquals("the platform must read the archive that was checked, not whatever is on " //$NON-NLS-1$
+            + "the caller's path by the time it opens it", //$NON-NLS-1$
+            List.of("Main_Other_Ancestor.xml"), backend.entriesSeen); //$NON-NLS-1$
+    }
+
+    /**
+     * And the snapshot is the platform's to read on its own terms: EDT's reader takes the path as a
+     * REGULAR FILE and asserts its extension is {@code zip} before it opens anything (measured from
+     * {@code ComparisonManager.deserializeMergeSettings}, {@code com._1c.g5.v8.dt.compare} 29.0.0).
+     * A temporary named anything else would fail the launch on a file the caller never chose.
+     */
+    @Test
+    public void theFileHandedToThePlatformIsARegularZip() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertTrue("EDT asserts the extension before it opens anything: " + backend.restoredFrom, //$NON-NLS-1$
+            backend.restoredFrom.endsWith(".zip")); //$NON-NLS-1$
+        assertTrue("and reads a directory instead when the path is not a regular file: " //$NON-NLS-1$
+            + backend.restoredFrom, backend.handedARegularFile);
+    }
+
+    /**
+     * The snapshot is a copy and not the caller's own file - pinned separately because the content
+     * assertion above would also pass if the caller's file simply had not been replaced yet, and
+     * this one would not.
+     */
+    @Test
+    public void theFileHandedToThePlatformIsNotTheCallersOwnPath() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertNotEquals("the platform reads the snapshot; the caller's path is only named", //$NON-NLS-1$
+            zip.toString(), backend.restoredFrom);
+    }
+
+    /** A snapshot that outlived its restore would be litter, one file per launch. */
+    @Test
+    public void theSnapshotIsRemovedOnceTheDecisionsAreRestored() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertFalse("the snapshot must not outlive the call that took it: " + backend.restoredFrom, //$NON-NLS-1$
+            Files.exists(Paths.get(backend.restoredFrom)));
+    }
+
+    /**
+     * And on the REFUSING path, which is the one a clean-up written after the restore would miss:
+     * the platform is never asked there, so nothing records the temporary's name and only the
+     * directory can be asked whether one was left behind.
+     */
+    @Test
+    public void theSnapshotIsRemovedWhenTheArchiveIsRefused() throws IOException
+    {
+        Path zip = zipHolding("foreign.zip", "X_Y_Z.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> before = snapshotsInTheTempArea();
+
+        try
+        {
+            engineOver(new RecordingBackend()).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("expected the unaddressed archive to be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            // The refusal is pinned elsewhere; what is left in the temp area is the point.
+        }
+
+        List<String> left = snapshotsInTheTempArea();
+        left.removeAll(before);
+        assertEquals("a refused write must not leave its snapshot behind", List.of(), left); //$NON-NLS-1$
+    }
+
+    /**
+     * A DIRECTORY named {@code .zip} is not an archive, and it must reach the platform as the
+     * caller's own path - the pinned "not read is not a refusal" answer.
+     * <p>
+     * The reason this needs its own pin: {@code Files.copy} calls a directory copied once it has
+     * created an EMPTY DIRECTORY of the target's name, so a snapshot taken that way "succeeds",
+     * the lookup then fails open on it, and EDT is handed a directory - which its reader lists for
+     * archives, finds none in, and restores nothing from, silently. That is the failure the check
+     * exists against, produced by the check's own snapshot.
+     */
+    @Test
+    public void aZipPathThatIsADirectoryIsLeftToThePlatformAsTheCallersOwnPath() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path dir = Files.createTempDirectory("comparison-engine-test"); //$NON-NLS-1$
+        dir.toFile().deleteOnExit();
+        Path notAnArchive = dir.resolve("rules.zip"); //$NON-NLS-1$
+        Files.createDirectory(notAnArchive);
+        notAnArchive.toFile().deleteOnExit();
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            notAnArchive.toString());
+
+        assertEquals("nothing was snapshotted and nothing was learnt, so the caller's own path " //$NON-NLS-1$
+            + "is what the platform is asked about", //$NON-NLS-1$
+            notAnArchive.toString(), backend.restoredFrom);
+    }
+
+    /**
+     * The platform is reading a temporary, so what it says about a failure carries the
+     * temporary's name - and a caller told "could not read /tmp/edt-mcp-merge-rules1234.zip" has
+     * been handed the name of a file they never chose, cannot inspect, and by then no longer
+     * exists. The snapshot's name is taken back out of the message.
+     */
+    @Test
+    public void aPlatformFailureIsReportedAgainstTheCallersFileAndNotTheSnapshot() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        backend.failNamingThePathItWasHanded = true;
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                zip.toString());
+            fail("expected the platform's failure to be reported"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertFalse("the temporary is not a file the caller can act on: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("edt-mcp-merge-rules")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The other half of that substitution, in its own method: the caller's path has to be there
+     * TWICE over - as the file this call was about, and as the file the platform failed on - so a
+     * substitution that simply deleted the temporary's name would be caught here.
+     */
+    @Test
+    public void aPlatformFailureQuotesTheCallersPathWhereItNamedTheSnapshot() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        backend.failNamingThePathItWasHanded = true;
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                zip.toString());
+            fail("expected the platform's failure to be reported"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the platform's own sentence must name the caller's file: " //$NON-NLS-1$
+                + e.getMessage(),
+                e.getMessage().contains("could not read '" + zip + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * @return the names of the snapshots this class's own prefix owns in the system temp area
+     * @throws IOException when the temp area cannot be listed
+     */
+    private static List<String> snapshotsInTheTempArea() throws IOException
+    {
+        Path temp = Paths.get(System.getProperty("java.io.tmpdir")); //$NON-NLS-1$
+        List<String> names = new ArrayList<>();
+        try (java.util.stream.Stream<Path> list = Files.list(temp))
+        {
+            for (Path each : list.toList())
+            {
+                String name = each.getFileName().toString();
+                if (name.startsWith("edt-mcp-merge-rules")) //$NON-NLS-1$
+                {
+                    names.add(name);
+                }
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Stands in for the other process: writes a different one-entry archive over an existing path.
+     * <p>
+     * A seam rather than a second thread: the window between the check and the platform's own open
+     * is microseconds wide and nothing blocks in it, so a racing thread would occupy it by luck or
+     * not at all - and a test that reproduces a defect by luck proves nothing on the run where it
+     * loses.
+     *
+     * @param target the path to overwrite
+     * @param entryName the entry the replacement holds
+     * @return the interference
+     */
+    private static Runnable replaceWith(Path target, String entryName)
+    {
+        return () -> {
+            try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(target)))
+            {
+                out.putNextEntry(new ZipEntry(entryName));
+                out.write("<Settings/>".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+                out.closeEntry();
+            }
+            catch (IOException e)
+            {
+                throw new java.io.UncheckedIOException(e);
+            }
+        };
+    }
+
+    /**
+     * @param fileName the path to read
+     * @return the entry names the archive on it holds, or an empty list when there is no readable
+     *         archive there - which is what an {@code .xml} path and a missing file both are
+     */
+    private static List<String> entryNamesOf(String fileName)
+    {
+        List<String> names = new ArrayList<>();
+        try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(fileName))
+        {
+            java.util.Enumeration<? extends ZipEntry> entries = archive.entries();
+            while (entries.hasMoreElements())
+            {
+                names.add(entries.nextElement().getName());
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return List.of();
+        }
+        return names;
     }
 
     private static ComparisonProcessHandle threeWayHandle(String main, String other, String ancestor)

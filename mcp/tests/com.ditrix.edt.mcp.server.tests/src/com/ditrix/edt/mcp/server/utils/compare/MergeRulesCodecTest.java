@@ -2630,6 +2630,188 @@ public class MergeRulesCodecTest
         };
     }
 
+    // ==== A SUCCEEDING write installs over its own reservation, and never over what replaced it ====
+
+    /**
+     * The finding: the installation carried an unconditional {@code REPLACE_EXISTING} and the
+     * recorded reservation identity was consulted ONLY after an exception.
+     * <p>
+     * So the loss the failure path was taught to avoid was still reachable along the path nobody
+     * was watching - the SUCCESSFUL one. Another process removes the empty reservation, puts its
+     * own rules file there, and the move replaces it; the caller is told the document was written,
+     * and the decisions that were on that path are gone with nothing said about them.
+     * <p>
+     * The assertion is on the CONTENT of the file that got there first, not on the outcome of the
+     * write: a refusal that had already replaced the bytes would be no refusal at all.
+     */
+    @Test
+    public void testASucceedingWriteDoesNotInstallOverTheFileThatReplacedItsReservation()
+        throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null, replaceReservationAndCarryOn(target));
+            fail("a write whose reservation was replaced must refuse to install over the file " //$NON-NLS-1$
+                + "that replaced it"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            // The refusal is expected; what is on disk afterwards is the point.
+        }
+
+        assertEquals("the file that replaced the reservation is not this call's to overwrite", //$NON-NLS-1$
+            FOREIGN_DECISIONS,
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The other half of the same refusal: it must not leave the scratch file behind either. A
+     * temporary abandoned in the caller's own directory is litter this write is responsible for,
+     * and the refusal is a failing exit like any other.
+     */
+    @Test
+    public void testAWriteRefusedAtInstallationLeavesOnlyTheFileThatReplacedItsReservation()
+        throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null, replaceReservationAndCarryOn(target));
+            fail("the write must refuse rather than install"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            // The refusal is expected; the directory listing below is the point.
+        }
+
+        try (Stream<Path> list = Files.list(workDir))
+        {
+            assertEquals("the refused write must leave the foreign file and nothing of its own", //$NON-NLS-1$
+                List.of(target), list.toList());
+        }
+    }
+
+    /**
+     * A file left on the caller's path is a fact the caller has to be given, and the refusal that
+     * comes from the INSTALLATION owes them the same sentence as the one that comes from a failure
+     * - the file it declined to touch may hold somebody's decisions.
+     */
+    @Test
+    public void testAWriteRefusedAtInstallationSaysWhatIsOnThePathAndWhy() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MUST_NOT_EXIST, null, replaceReservationAndCarryOn(target));
+            fail("the write must refuse rather than install"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            assertTrue("the refusal must say the file was left where it is: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains("LEFT THERE")); //$NON-NLS-1$
+            assertTrue("and name the path it was left on: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(target.toString()));
+            // And say what stopped the installation, which is not the same fact: the sentence
+            // above is about the CLEAN-UP declining to remove the file, and a caller told only
+            // that would not know whether their document was written over it or not.
+            assertTrue("and say the path no longer holds this write's reservation: " //$NON-NLS-1$
+                + e.getMessage(),
+                e.getMessage().contains("NOT the empty reservation this write claimed")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The control, and the half that keeps the fix from being "never install": a reservation still
+     * holding the empty file this call claimed is replaced by the document exactly as before. A
+     * check that refused here would break every MUST_NOT_EXIST write there is.
+     * <p>
+     * It goes through the SAME seam as the tests above, with an interference that touches nothing,
+     * so a check that simply refused whenever the seam had run would still be caught.
+     */
+    @Test
+    public void testASucceedingWriteStillInstallsOverItsOwnReservation() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST, null, () -> {
+                // Nothing interferes: the reservation is exactly as the write left it.
+            });
+
+        assertEquals(FIXTURE, new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The branch the refusal deliberately does NOT take: the reservation was REMOVED and nothing
+     * put back. Nothing is on the path, so nothing can be destroyed by installing there, and
+     * {@code MUST_NOT_EXIST} asked for a free path in the first place - refusing here would fail a
+     * write that loses nobody anything.
+     */
+    @Test
+    public void testAWriteWhoseReservationVanishedStillInstallsOnTheEmptyPath() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+
+        MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MUST_NOT_EXIST, null, removeReservationAndCarryOn(target));
+
+        assertEquals(FIXTURE, new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Stands in for the other process on the SUCCESS path: takes the reserved path away and puts
+     * its own file there, then lets the write carry on to its installation.
+     * <p>
+     * A seam rather than a second thread, for the reason {@code replaceReservationThenFail} is
+     * one: the window is microseconds wide and nothing in the codec blocks in it, so a racing
+     * thread would occupy it by luck or not at all.
+     *
+     * @param target the path the write reserved
+     * @return the interference
+     */
+    private static Runnable replaceReservationAndCarryOn(Path target)
+    {
+        return () -> {
+            try
+            {
+                // Deleted and recreated, which is what a replacement is: on a POSIX store the new
+                // file has its own inode, and on NTFS - where this view answers no file key - it
+                // is a file of a different SIZE, which is the half of the fallback that matters.
+                Files.delete(target);
+                Files.write(target, FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8));
+            }
+            catch (IOException e)
+            {
+                throw new UncheckedIOException(e);
+            }
+        };
+    }
+
+    /**
+     * @param target the path the write reserved
+     * @return an interference that removes the reservation and puts nothing in its place
+     */
+    private static Runnable removeReservationAndCarryOn(Path target)
+    {
+        return () -> {
+            try
+            {
+                Files.delete(target);
+            }
+            catch (IOException e)
+            {
+                throw new UncheckedIOException(e);
+            }
+        };
+    }
+
     /**
      * @return an interference that only fails, leaving the reservation exactly as the write made it
      */

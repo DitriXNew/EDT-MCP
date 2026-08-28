@@ -623,10 +623,17 @@ public final class FormStructureReader
      * <p>
      * <b>{@code budget} and {@code truncated} keep their exact meaning</b>, including WHICH element
      * trips the cut: an element is charged when it is VISITED, and the stack visits elements in the
-     * very order the recursion did. Once the budget is gone the elements already pushed are still
-     * popped and still raise {@code truncated}, exactly as the recursion's remaining calls returned
-     * through the same branch - and, exactly as before, they push no children of their own, so the
-     * stack cannot grow past what the charged elements put on it.
+     * very order the recursion did. An element the budget cannot reach raises {@code truncated}
+     * whether it is declined at the pop or left off the stack by {@link #pushOutlineChildren} -
+     * see there for why those are the same elements.
+     * <p>
+     * <b>The budget bounds the PENDING work too, and that is the whole reason it is stated.</b> The
+     * first de-recursion pushed every child before the outer loop could look at the budget again,
+     * so a single element with far more children than {@link #MAX_NODES} allocated a
+     * {@link PendingItem} for each of them even at {@code limit=1} - the recursion had returned at
+     * the budget instead, so the conversion traded stack depth for heap. The stack now holds at
+     * most {@code budget} entries (or the single root entry when the budget is already gone), which
+     * is the bound the guard advertises.
      *
      * @param sb the output buffer
      * @param item the item to render, together with everything below it
@@ -638,7 +645,29 @@ public final class FormStructureReader
     private static void appendItem(StringBuilder sb, EObject item, int depth, String language,
         int[] budget, boolean[] truncated)
     {
-        Deque<PendingItem> pending = new ArrayDeque<>();
+        appendItem(sb, item, depth, language, budget, truncated, new ArrayDeque<>());
+    }
+
+    /**
+     * The outline walk itself, with its stack handed in.
+     * <p>
+     * The stack is a parameter for ONE reason: the bound above is a statement about a structure
+     * that is otherwise a local, and a test that could only read the rendered outline would be
+     * pinning the symptom (an allocation) instead of the bound. Production creates its own on every
+     * call - {@link #appendItem(StringBuilder, EObject, int, String, int[], boolean[])} - and
+     * nothing outside this class can reach this overload.
+     *
+     * @param sb the output buffer
+     * @param item the item to render, together with everything below it
+     * @param depth the indentation level of {@code item}'s own line
+     * @param language the title language CODE
+     * @param budget the shared per-visited-element node budget
+     * @param truncated raised when the budget actually DECLINED an element
+     * @param pending the walk's stack, empty on entry and drained on exit
+     */
+    static void appendItem(StringBuilder sb, EObject item, int depth, String language,
+        int[] budget, boolean[] truncated, Deque<PendingItem> pending)
+    {
         pending.push(new PendingItem(item, depth));
         while (!pending.isEmpty())
         {
@@ -650,7 +679,7 @@ public final class FormStructureReader
             }
             budget[0]--;
             appendItemLine(sb, current.item, current.depth, language);
-            pushOutlineChildren(current.item, current.depth, language, pending);
+            pushOutlineChildren(current.item, current.depth, language, pending, budget, truncated);
         }
     }
 
@@ -698,43 +727,111 @@ public final class FormStructureReader
     }
 
     /**
-     * Puts one element's children on the outline walk's stack in the order that reproduces the
-     * descent the recursion made: REVERSED, and the singular containments BEFORE the {@code items}
-     * children, so that the first {@code items} child is the next one popped and the singular ones
-     * come out last. Every child is pushed one level deeper than its parent, which is the depth its
-     * own line will be indented to.
+     * Puts as many of one element's children on the outline walk's stack as the budget can still
+     * reach, in the order that reproduces the descent the recursion made: REVERSED, and the
+     * singular containments BEFORE the {@code items} children, so that the first {@code items}
+     * child is the next one popped and the singular ones come out last. Every child is pushed one
+     * level deeper than its parent, which is the depth its own line will be indented to.
      *
      * <p>The singular item-bearing containments live OUTSIDE {@code items} (a table's command bar, an
      * item's context menu / extended tooltip). Their names occupy the form-wide namespace, so they
      * must be discoverable - but a designer-default child (no nested items, no title) is noise and is
      * skipped to keep the outline lean. That test is applied HERE, at push time, exactly where the
      * recursion applied it before calling itself: a child that fails it is never visited, so it is
-     * never charged to the budget either.</p>
+     * never charged to the budget either - and it is not counted against the room the budget has,
+     * for the same reason.</p>
      *
      * @param element the element whose children are to be walked
      * @param depth the indentation level of {@code element}'s own line
      * @param language the title language CODE, for the designer-default test
      * @param pending the walk's stack
+     * @param budget the shared per-visited-element node budget, already charged for {@code element}
+     * @param truncated raised when a child this element has is left off the stack
      */
     private static void pushOutlineChildren(EObject element, int depth, String language,
-        Deque<PendingItem> pending)
+        Deque<PendingItem> pending, int[] budget, boolean[] truncated)
     {
-        int childDepth = depth + 1;
-        for (int i = SINGULAR_ITEM_CONTAINMENTS.length - 1; i >= 0; i--)
-        {
-            EObject child = getSingleReference(element, SINGULAR_ITEM_CONTAINMENTS[i]);
-            if (child != null
-                && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
-                    || !titleOf(child, language).isEmpty()))
-            {
-                pending.push(new PendingItem(child, childDepth));
-            }
-        }
         List<EObject> items = getReferenceList(element, FEATURE_ITEMS);
-        for (int i = items.size() - 1; i >= 0; i--)
+        List<EObject> singular = outlineSingularChildren(element, language);
+        int reachable =
+            makeRoomForReachableChildren(items.size() + singular.size(), pending, budget, truncated);
+        int keptItems = Math.min(items.size(), reachable);
+        int childDepth = depth + 1;
+        for (int i = reachable - keptItems - 1; i >= 0; i--)
+        {
+            pending.push(new PendingItem(singular.get(i), childDepth));
+        }
+        for (int i = keptItems - 1; i >= 0; i--)
         {
             pending.push(new PendingItem(items.get(i), childDepth));
         }
+    }
+
+    /**
+     * The singular item-bearing containments of one element that the outline shows, in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - which is the order they are VISITED in, after
+     * the {@code items} children.
+     *
+     * @param element the element whose singular containments these are
+     * @param language the title language CODE, for the designer-default test
+     * @return the eligible children, at most {@link #SINGULAR_ITEM_CONTAINMENTS}{@code .length} of
+     *         them
+     */
+    private static List<EObject> outlineSingularChildren(EObject element, String language)
+    {
+        List<EObject> eligible = new ArrayList<>(SINGULAR_ITEM_CONTAINMENTS.length);
+        for (String containment : SINGULAR_ITEM_CONTAINMENTS)
+        {
+            EObject child = getSingleReference(element, containment);
+            if (child != null && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
+                || !titleOf(child, language).isEmpty()))
+            {
+                eligible.add(child);
+            }
+        }
+        return eligible;
+    }
+
+    /**
+     * How many of one element's children the budget can still reach, with the stack trimmed to
+     * leave room for exactly those.
+     *
+     * <h2>Why this drops nothing the walk would have shown</h2>
+     * Children are popped in visit order, so reaching the child at index {@code i} means popping
+     * children {@code 0..i-1} first; each of those pops either spends a unit of budget or finds the
+     * budget already gone, in which case every pop after it does too. A child at index {@code i}
+     * can therefore be VISITED only when {@code i} is below the remaining budget, and the ones past
+     * that point are exactly the ones the old walk pushed, popped, and declined. Leaving them off
+     * the stack changes nothing but the heap - which is why {@code truncated} is raised here
+     * instead: the pop that used to raise it no longer happens.
+     * <p>
+     * The same argument runs down the stack. Entries already on it are popped only AFTER the new
+     * children and everything below them, so an entry lying more than {@code budget} pops from the
+     * top cannot be visited either, and the surplus is removed from the BOTTOM. That is what keeps
+     * the bound a bound: capping each push alone would still let one push per level accumulate.
+     *
+     * @param childCount how many children the element has, singular containments included
+     * @param pending the walk's stack, holding the entries pushed by ancestors
+     * @param budget the shared per-visited-element node budget, already charged for the element
+     *            whose children these are
+     * @param dropped raised when anything was left off the stack or removed from it
+     * @return how many of the children to push, counted from the first in visit order
+     */
+    private static int makeRoomForReachableChildren(int childCount, Deque<?> pending, int[] budget,
+        boolean[] dropped)
+    {
+        int reachable = Math.min(childCount, budget[0]);
+        if (reachable < childCount)
+        {
+            dropped[0] = true;
+        }
+        int room = budget[0] - reachable;
+        while (pending.size() > room)
+        {
+            pending.removeLast();
+            dropped[0] = true;
+        }
+        return reachable;
     }
 
     /**
@@ -744,8 +841,11 @@ public final class FormStructureReader
      * <p>The depth is carried rather than derived at pop time because a stack holds elements from
      * several levels at once: the next pop is not one level below the previous one, it is one level
      * below whichever element pushed it.</p>
+     *
+     * <p>Package-private so a test can hand the walk a stack it can measure; see
+     * {@link FormStructureReader#appendItem(StringBuilder, EObject, int, String, int[], boolean[], Deque)}.</p>
      */
-    private static final class PendingItem
+    static final class PendingItem
     {
         final EObject item;
 
@@ -1172,10 +1272,16 @@ public final class FormStructureReader
      * <p>
      * <b>{@code budget} and {@code cutShort} keep their exact meaning</b>, including WHICH element
      * trips the cut: an element is charged when it is VISITED, and the stack visits elements in the
-     * very order the recursion did. Once the budget is gone the remaining pending elements are
-     * still popped and still raise {@code cutShort}, exactly as the recursion's remaining calls
-     * returned through the same branch - and, exactly as before, they push no children of their
-     * own, so the stack cannot grow past what the charged elements put on it.
+     * very order the recursion did. An element the budget cannot reach raises {@code cutShort}
+     * whether it is declined at the pop or left off the stack by {@link #pushHandlerChildren} -
+     * see {@link #makeRoomForReachableChildren} for why those are the same elements.
+     * <p>
+     * <b>The budget bounds the PENDING work too.</b> The first de-recursion pushed every child
+     * before the outer loop could look at the budget again, so one element with far more children
+     * than {@link #MAX_NODES} allocated a {@link PendingElement} for each of them - the recursion
+     * had returned at the budget instead, so the conversion traded stack depth for heap. The stack
+     * now holds at most {@code budget} entries (or the single root entry when the budget is already
+     * gone), which is the bound the guard advertises.
      *
      * @param root the form root, whose {@code handlers} list is read first
      * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
@@ -1191,11 +1297,32 @@ public final class FormStructureReader
     private static void collectHandlers(EObject root, String rootOwnerLabel, String language,
         List<String[]> rows, int[] budget, boolean[] cutShort)
     {
+        collectHandlers(root, rootOwnerLabel, language, rows, budget, cutShort, new ArrayDeque<>());
+    }
+
+    /**
+     * The handler walk itself, with its stack handed in.
+     * <p>
+     * The stack is a parameter for the reason it is one on the outline walk: the bound above is a
+     * statement about a structure that is otherwise a local, and only a test that can measure that
+     * structure pins the bound rather than a symptom of it. Production creates its own on every
+     * call and nothing outside this class can reach this overload.
+     *
+     * @param root the form root, whose {@code handlers} list is read first
+     * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
+     * @param language the event-name language CODE
+     * @param rows the accumulator receiving {@code {owner, event, handler}} rows
+     * @param budget the shared per-visited-element node budget
+     * @param cutShort raised when the budget actually DECLINED an element
+     * @param pending the walk's stack, empty on entry and drained on exit
+     */
+    static void collectHandlers(EObject root, String rootOwnerLabel, String language,
+        List<String[]> rows, int[] budget, boolean[] cutShort, Deque<PendingElement> pending)
+    {
         if (root == null)
         {
             return;
         }
-        Deque<PendingElement> pending = new ArrayDeque<>();
         pending.push(new PendingElement(root, rootOwnerLabel));
         while (!pending.isEmpty())
         {
@@ -1212,35 +1339,65 @@ public final class FormStructureReader
                 String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
                 rows.add(new String[] {current.ownerLabel, eventName, procName});
             }
-            pushHandlerChildren(current.element, pending);
+            pushHandlerChildren(current.element, pending, budget, cutShort);
         }
     }
 
     /**
-     * Puts one element's children on the handler walk's stack in the order that reproduces the
-     * descent the recursion made: REVERSED, and the singular containments BEFORE the {@code items}
-     * children, so that the first {@code items} child is the next one popped and the singular ones
-     * come out last - which is the order the recursion visited them in.
+     * Puts as many of one element's children on the handler walk's stack as the budget can still
+     * reach, in the order that reproduces the descent the recursion made: REVERSED, and the
+     * singular containments BEFORE the {@code items} children, so that the first {@code items}
+     * child is the next one popped and the singular ones come out last - which is the order the
+     * recursion visited them in.
      *
      * @param element the element whose children are to be walked
      * @param pending the walk's stack
+     * @param budget the shared per-visited-element node budget, already charged for {@code element}
+     * @param cutShort raised when a child this element has is left off the stack
      */
-    private static void pushHandlerChildren(EObject element, Deque<PendingElement> pending)
+    private static void pushHandlerChildren(EObject element, Deque<PendingElement> pending,
+        int[] budget, boolean[] cutShort)
     {
-        for (int i = SINGULAR_ITEM_CONTAINMENTS.length - 1; i >= 0; i--)
-        {
-            EObject child = getSingleReference(element, SINGULAR_ITEM_CONTAINMENTS[i]);
-            if (child != null)
-            {
-                pending.push(new PendingElement(child, nameOf(child)));
-            }
-        }
         List<EObject> items = getReferenceList(element, FEATURE_ITEMS);
-        for (int i = items.size() - 1; i >= 0; i--)
+        List<EObject> singular = handlerSingularChildren(element);
+        int reachable =
+            makeRoomForReachableChildren(items.size() + singular.size(), pending, budget, cutShort);
+        int keptItems = Math.min(items.size(), reachable);
+        for (int i = reachable - keptItems - 1; i >= 0; i--)
+        {
+            EObject child = singular.get(i);
+            pending.push(new PendingElement(child, nameOf(child)));
+        }
+        for (int i = keptItems - 1; i >= 0; i--)
         {
             EObject child = items.get(i);
             pending.push(new PendingElement(child, nameOf(child)));
         }
+    }
+
+    /**
+     * The singular item-bearing containments of one element, in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - which is the order they are VISITED in, after
+     * the {@code items} children. Unlike the outline walk, the handler walk keeps every one of
+     * them: a designer-default command bar shows nothing in an outline but may still carry a bound
+     * handler.
+     *
+     * @param element the element whose singular containments these are
+     * @return the children present, at most {@link #SINGULAR_ITEM_CONTAINMENTS}{@code .length} of
+     *         them
+     */
+    private static List<EObject> handlerSingularChildren(EObject element)
+    {
+        List<EObject> present = new ArrayList<>(SINGULAR_ITEM_CONTAINMENTS.length);
+        for (String containment : SINGULAR_ITEM_CONTAINMENTS)
+        {
+            EObject child = getSingleReference(element, containment);
+            if (child != null)
+            {
+                present.add(child);
+            }
+        }
+        return present;
     }
 
     /**
@@ -1250,8 +1407,11 @@ public final class FormStructureReader
      * <p>The label is carried rather than recomputed at pop time because the form ROOT's label is
      * not its name - it is {@link #FORM_OWNER_LABEL} - and a walk that re-derived the label would
      * have to recognise the root by identity to keep that one row right.</p>
+     *
+     * <p>Package-private so a test can hand the walk a stack it can measure; see
+     * {@link FormStructureReader#collectHandlers(EObject, String, String, List, int[], boolean[], Deque)}.</p>
      */
-    private static final class PendingElement
+    static final class PendingElement
     {
         final EObject element;
 

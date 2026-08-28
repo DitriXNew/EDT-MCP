@@ -7,9 +7,13 @@
 package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -789,35 +793,192 @@ public final class ComparisonEngine
      * and a zip that cannot address this comparison is refused instead. The refusal is raised
      * BEFORE {@link Backend#restoreMergeSettings} is called, so the platform is never asked and
      * the launch that would have taken EDT's single comparison slot never happens.
+     *
+     * <h2>The check and the restore read ONE snapshot, not the same path twice</h2>
+     * They used to be two independent opens of the caller's path: this method validated the file
+     * and closed it, and the platform then opened the path again. A process that replaced the file
+     * in between got a comparison that restored NOTHING and said nothing about it - which is the
+     * exact failure the check exists to prevent, walked straight past the check. So a zip is
+     * copied to a private temporary first, and both the check and the platform read THAT.
      * <p>
-     * Only a zip is examined. An {@code .xml} file is the document itself and carries no address,
-     * so there is nothing to disprove about it and its path through here is unchanged. That is a
-     * statement about ADDRESSING and not about readability: EDT 2026.2 refuses an {@code .xml}
-     * rules file outright ({@code Can read merge settings from a zip file}), which is a loud
-     * failure from the platform itself and needs no help from here - see {@link MergeRulesCodec}.
+     * <b>Handing the platform a different path is safe, and it is the file NAME that says so.</b>
+     * Measured from {@code ComparisonManager} bytecode ({@code com._1c.g5.v8.dt.compare} 29.0.0,
+     * EDT 2026.2.0): {@code deserializeMergeSettings} asserts only that the extension is
+     * {@code zip} and then hands the string to {@code deserializeMergeSettingsFromZipFile}, which
+     * opens it with {@code new ZipFile(path)} and matches each entry against
+     * {@code getComparisonSessionStringId(handle)} - computed from the HANDLE's three descriptors,
+     * with nothing in it read from the file's name or its directory. The temporary therefore keeps
+     * the {@code .zip} extension and nothing else about the caller's path matters. The same
+     * measurement says the archive is read to the end inside that method - the settings are
+     * deserialized while the {@code ZipFile} is still open and it is closed before the return - so
+     * deleting the temporary once the call comes back cannot take anything away from the caller.
+     * <p>
+     * <b>A snapshot that cannot be taken changes nothing.</b> The copy is best-effort: when it
+     * fails - a path that is not a file, an unreadable one, no room for the temporary - the
+     * caller's own path is handed to the platform unvalidated, exactly as it was before this
+     * existed. That is the same answer this method already gave to a zip it could not open: not
+     * read is not "does not address this comparison", and the platform fails the launch naming the
+     * file. Refusing here instead would turn an environment problem into a refusal about the
+     * caller's file.
+     * <p>
+     * Only a zip is examined, and only a zip is copied. An {@code .xml} file is the document
+     * itself and carries no address, so there is nothing to disprove about it, nothing to be
+     * disproved of by a replacement, and its path through here is unchanged. That is a statement
+     * about ADDRESSING and not about readability: EDT 2026.2 refuses an {@code .xml} rules file
+     * outright ({@code Can read merge settings from a zip file}), which is a loud failure from the
+     * platform itself and needs no help from here - see {@link MergeRulesCodec}.
      *
      * @param handle the comparison the decisions belong to
      * @param fileName the rules file, {@code .xml} or {@code .zip}
      * @return the restored decisions, to be handed to the process settings before the launch
+     * <b>The message names the caller's file, and the snapshot's name is taken out of it.</b> The
+     * platform is reading a temporary, so a failure it reports can carry that temporary's name -
+     * and a caller handed "could not read /tmp/edt-mcp-merge-rules1234.zip" has been told about a
+     * file they never chose and cannot inspect. Every occurrence of the snapshot's path in the
+     * described failure is therefore replaced by theirs, which is where those bytes came from. The
+     * promise is about the message this method BUILDS: the {@code cause} keeps the platform's own
+     * wording, and a {@link RuntimeException} from the platform propagates as the platform threw
+     * it, exactly as it did before a snapshot existed.
+     *
      * @throws IllegalStateException when the file cannot be read, is not a rules file, or is a zip
-     *     that holds no entry this comparison would restore from - the message names the file,
-     *     because that is the thing the caller can fix
+     *     that holds no entry this comparison would restore from - the message names the CALLER's
+     *     file, because that is the thing the caller can fix
      */
     public RestoredMergeSettings restoreMergeSettings(ComparisonProcessHandle handle, String fileName)
     {
-        String unaddressed = zipHoldsNothingFor(handle, fileName);
-        if (unaddressed != null)
-        {
-            throw new IllegalStateException(unaddressed);
-        }
+        Path snapshot = snapshotOfZip(fileName);
         try
         {
-            return backend.restoreMergeSettings(handle, fileName);
+            String unaddressed = zipHoldsNothingFor(handle, fileName, snapshot);
+            if (unaddressed != null)
+            {
+                throw new IllegalStateException(unaddressed);
+            }
+            return backend.restoreMergeSettings(handle,
+                snapshot == null ? fileName : snapshot.toString());
         }
         catch (IOException | InvalidPreferencesFormatException e)
         {
             throw new IllegalStateException("Could not read the merge-rules file '" + fileName //$NON-NLS-1$
-                + "': " + ComparisonFailures.describe(e), e); //$NON-NLS-1$
+                + "': " + aboutTheCallersFile(ComparisonFailures.describe(e), fileName, snapshot), //$NON-NLS-1$
+                e);
+        }
+        finally
+        {
+            discard(snapshot);
+        }
+    }
+
+    /**
+     * Copies a zipped rules file to a private temporary, so that what is CHECKED and what the
+     * platform RESTORES are one file rather than one path read twice.
+     * <p>
+     * The temporary keeps the {@code .zip} extension because the platform asserts on it, and
+     * carries nothing else of the caller's path - see {@link #restoreMergeSettings} for the
+     * measurement that says nothing else is read from it.
+     * <p>
+     * Every failure answers {@code null}, which means "there is no snapshot" and never "the file is
+     * bad": a caller's path that is not a zip has nothing to snapshot, and one that could not be
+     * copied was not judged. Both leave the caller's own path to be handed to the platform.
+     *
+     * @param fileName the caller's path
+     * @return the private copy, or {@code null} when there is nothing to copy or the copy failed
+     */
+    private static Path snapshotOfZip(String fileName)
+    {
+        if (fileName == null)
+        {
+            return null;
+        }
+        Path path;
+        try
+        {
+            path = Paths.get(fileName);
+        }
+        catch (InvalidPathException e)
+        {
+            // A spelling that is not even a path was refused by the tool long before a handle
+            // existed; nothing is claimed about one that somehow arrives here.
+            return null;
+        }
+        if (!MergeRulesCodec.isZip(path))
+        {
+            return null;
+        }
+        Path copy = null;
+        try
+        {
+            copy = Files.createTempFile("edt-mcp-merge-rules", MergeRulesCodec.ZIP_EXTENSION); //$NON-NLS-1$
+            // Streamed INTO the file that was just created, rather than Files.copy(path, copy,
+            // REPLACE_EXISTING), and both halves of that matter. REPLACE_EXISTING unlinks the
+            // temporary and creates a new file carrying the SOURCE's mode, so a rules file that
+            // is 0644 inside somebody's private directory would be re-created 0644 in the shared
+            // temp area - the copy would stop being private exactly when the original was not.
+            // And Files.copy calls a DIRECTORY copied when it has created an empty directory of
+            // that name: a directory named '<something>.zip' would then become a "snapshot" the
+            // platform is handed, where EDT lists it, finds no archive, and restores nothing -
+            // the silent no-op this whole check exists against. Opening it for reading refuses it
+            // instead, and the caller's own path is what goes to the platform.
+            try (InputStream source = Files.newInputStream(path);
+                OutputStream target =
+                    Files.newOutputStream(copy, StandardOpenOption.TRUNCATE_EXISTING))
+            {
+                source.transferTo(target);
+            }
+            return copy;
+        }
+        catch (IOException | RuntimeException e) // NOSONAR no snapshot is a state, not a failure
+        {
+            discard(copy);
+            return null;
+        }
+    }
+
+    /**
+     * Puts the caller's own path back into a failure the platform reported about the snapshot.
+     * <p>
+     * The snapshot holds the caller's bytes, so a failure about it IS a failure about their file -
+     * but only its name is one they can act on. Substituted rather than suppressed: the rest of
+     * the platform's wording is the only account of what went wrong.
+     *
+     * @param described the failure as {@code ComparisonFailures} rendered it
+     * @param fileName the caller's path
+     * @param snapshot the private copy the platform was reading, or {@code null} when there was
+     *     none and the platform was reading the caller's path already
+     * @return the description with the temporary's name replaced by the caller's
+     */
+    private static String aboutTheCallersFile(String described, String fileName, Path snapshot)
+    {
+        if (described == null || snapshot == null)
+        {
+            return described;
+        }
+        return described.replace(snapshot.toString(), fileName);
+    }
+
+    /**
+     * Removes a snapshot, and says nothing when it cannot.
+     * <p>
+     * The decisions are already restored by the time this runs, so a temporary that survives is
+     * litter in the system temp area and not a fact about the caller's comparison. Failing the
+     * launch over it - or reporting it - would put an unrelated environment problem in front of
+     * work that succeeded.
+     *
+     * @param snapshot the copy to remove, or {@code null} when none was taken
+     */
+    private static void discard(Path snapshot)
+    {
+        if (snapshot == null)
+        {
+            return;
+        }
+        try
+        {
+            Files.deleteIfExists(snapshot);
+        }
+        catch (IOException | RuntimeException e) // NOSONAR litter in the temp area is not an answer
+        {
+            // Nothing to say and nobody to say it to.
         }
     }
 
@@ -865,38 +1026,30 @@ public final class ComparisonEngine
      *
      * <h2>Three ways to answer, and only one of them refuses</h2>
      * <ul>
-     *   <li>The file is not a zip - nothing is claimed, because an xml file is the document
-     *       itself and has no entry to address.</li>
-     *   <li>The archive could not be opened or read - nothing is claimed either. The platform
-     *       opens the SAME path with its own {@code ZipFile} and fails the launch naming the file,
-     *       so a refusal invented here would put this plugin's words on a file it did not manage
-     *       to look at.</li>
-     *   <li>The archive was read and the entry is not in it - refused, naming the id that was
+     *   <li>There is no snapshot - nothing is claimed. Either the file is not a zip (an xml file is
+     *       the document itself and has no entry to address) or the copy could not be taken, and a
+     *       file this call did not manage to hold still is one it has learnt nothing about.</li>
+     *   <li>The snapshot could not be opened or read - nothing is claimed either. The platform
+     *       opens the SAME snapshot with its own {@code ZipFile} and fails the launch naming the
+     *       file, so a refusal invented here would put this plugin's words on an archive it did
+     *       not manage to look at.</li>
+     *   <li>The snapshot was read and the entry is not in it - refused, naming the id that was
      *       looked for and what the archive holds instead.</li>
      * </ul>
+     * <p>
+     * The snapshot is what is READ and {@code fileName} is what is NAMED: the caller has a path
+     * they can inspect and re-send, and the temporary this call happened to copy it into is not it.
      *
      * @param handle the comparison the decisions would belong to
-     * @param fileName the caller's path
+     * @param fileName the caller's path, for the message
+     * @param snapshot the private copy the platform will also read, or {@code null} when none was
+     *     taken
      * @return the refusal, or {@code null} when nothing was disproved
      */
-    private static String zipHoldsNothingFor(ComparisonProcessHandle handle, String fileName)
+    private static String zipHoldsNothingFor(ComparisonProcessHandle handle, String fileName,
+        Path snapshot)
     {
-        if (handle == null || fileName == null)
-        {
-            return null;
-        }
-        Path path;
-        try
-        {
-            path = Paths.get(fileName);
-        }
-        catch (InvalidPathException e)
-        {
-            // A spelling that is not even a path was refused by the tool long before a handle
-            // existed; nothing is claimed about one that somehow arrives here.
-            return null;
-        }
-        if (!MergeRulesCodec.isZip(path))
+        if (handle == null || fileName == null || snapshot == null)
         {
             return null;
         }
@@ -904,11 +1057,11 @@ public final class ComparisonEngine
         MergeRulesCodec.ZipEntryLookup lookup;
         try
         {
-            lookup = MergeRulesCodec.lookUpEntry(path, entryId);
+            lookup = MergeRulesCodec.lookUpEntry(snapshot, entryId);
         }
         catch (IOException e)
         {
-            // Not read is not "does not address this comparison"; see the third case above.
+            // Not read is not "does not address this comparison"; see the second case above.
             return null;
         }
         if (lookup.found())

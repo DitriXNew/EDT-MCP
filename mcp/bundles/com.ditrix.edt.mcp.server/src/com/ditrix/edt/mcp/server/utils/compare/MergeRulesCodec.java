@@ -487,8 +487,11 @@ public final class MergeRulesCodec
      * <b>The move itself always replaces</b>, and it has to: it moves the temporary onto the
      * target. What {@link Target#MUST_NOT_EXIST} adds is a RESERVATION taken before a single byte
      * is written - {@code Files.createFile}, the create-if-absent the filesystem performs as one
-     * indivisible operation - so the file the move then replaces is this call's own reservation
-     * and never somebody else's rules. A reservation that is not consumed is removed again - on
+     * indivisible operation - and a check, taken as the last step before the move, that the path
+     * still holds THAT file; a path holding anything else is refused rather than replaced. The
+     * check NARROWS the window and does not close it - POSIX has no "rename only if the target is
+     * still this file" - and {@code refuseUnlessThePathStillHoldsTheReservation} says exactly what
+     * is left of it. A reservation that is not consumed is removed again - on
      * EVERY failure that can follow it, including the one that creates the scratch file - so a
      * failed write leaves the path as free as it found it. An empty file left there would be
      * worse than the failure it followed: the write reports an I/O error, and every later write
@@ -631,6 +634,15 @@ public final class MergeRulesCodec
             // caller's path is readable by its owner alone, and a reader that lost the race gets a
             // permission error on a file that is about to be perfectly readable.
             inheritPermissions(resolved, temporary);
+            if (target == Target.MUST_NOT_EXIST)
+            {
+                // The move below replaces whatever is on the path, so the LAST step before it is
+                // the question the clean-up asks after a failure: is what is on the path still
+                // this call's own reservation? Asked only on the failure path, as it used to be,
+                // the successful write replaced a foreign file and reported the document as
+                // written.
+                refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
+            }
             try
             {
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING,
@@ -638,6 +650,13 @@ public final class MergeRulesCodec
             }
             catch (AtomicMoveNotSupportedException e)
             {
+                if (target == Target.MUST_NOT_EXIST)
+                {
+                    // Asked AGAIN, not carried over from before the attempt: the atomic move did
+                    // not happen, this one replaces just as widely, and the window between the two
+                    // is another one somebody can write into.
+                    refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
+                }
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING);
             }
         }
@@ -661,6 +680,97 @@ public final class MergeRulesCodec
                 }
             }
             throw e;
+        }
+    }
+
+    /**
+     * Refuses to install the document when the path no longer holds the empty file this call
+     * reserved.
+     *
+     * <h2>What was wrong with installing unconditionally</h2>
+     * The final move carries {@code REPLACE_EXISTING} and has to: under
+     * {@link Target#MUST_NOT_EXIST} there IS a file on the path by then - the reservation. The
+     * reasoning that made that safe ("the file the move replaces is this call's own reservation")
+     * is true of the moment the reservation was taken and of no moment after it. Between the claim
+     * and the installation the path is an ordinary name in a directory anybody may write to:
+     * another process - another run of this very tool - can remove the empty reservation and put
+     * its own rules file there. The move then DESTROYED that file and the write reported success,
+     * which is the loss this {@code Target} exists to prevent, reached along the one path nobody
+     * was watching: the recorded identity was consulted after an exception and never otherwise.
+     *
+     * <h2>The same judgement as the clean-up, not a second one</h2>
+     * {@link #isTheSameFile} decides it, exactly as {@code releaseReservation} decides it: by
+     * SHAPE first - an empty regular file created and last modified at the recorded instants -
+     * with {@code fileKey()} allowed only to NARROW that answer, because a POSIX store hands a
+     * freed inode straight back to the next create in the same directory and a matching key alone
+     * therefore proves nothing. One question, one answer, in both directions.
+     *
+     * <h2>DECLARED LIMITATION: the window is narrowed, not closed</h2>
+     * This reads the path and then renames onto it, and POSIX offers no "rename only if the target
+     * is still this exact file": {@code rename(2)} replaces whatever the name resolves to at the
+     * instant it runs, and neither {@code ATOMIC_MOVE} nor any other {@link StandardCopyOption}
+     * adds a precondition to it. A replacement landing between this read and the rename is
+     * therefore still destroyed, silently, exactly as before. What the check removes is the WIDE
+     * window - the bytes, the temporary, the permission inheritance, everything a write does
+     * between the claim and the installation; what it leaves is the gap between two adjacent
+     * syscalls. That is a difference of degree, and it is written down rather than implied,
+     * because a caller reading "the move replaces only this call's own reservation" would be
+     * reading a guarantee this filesystem cannot give. The store that answers
+     * {@code AtomicMoveNotSupportedException} gets a second gap of the same width, which is why
+     * the fallback move asks this question again instead of carrying the first answer over.
+     * <p>
+     * The widest of those gaps is the branch where the reservation was found GONE: nothing is on
+     * the path, so the move goes ahead with {@code REPLACE_EXISTING} and a file created there in
+     * the meantime is replaced. Narrowing that one means moving without
+     * {@code REPLACE_EXISTING}, which on this JDK is a {@code stat} followed by the same
+     * {@code rename} - a narrower window, not a closed one, on a branch that already requires
+     * somebody to have removed this call's reservation. It is left as it is, and named here, rather
+     * than closed by a construction that would still not be atomic.
+     *
+     * @param path the reserved path
+     * @param taken the identity recorded when the reservation was claimed, or {@code null} when
+     *     none could be
+     * @throws IOException when the path holds something this call did not reserve, or when what it
+     *     holds could not be read - in which case nothing may be installed over it either
+     */
+    private static void refuseUnlessThePathStillHoldsTheReservation(Path path,
+        BasicFileAttributes taken) throws IOException
+    {
+        if (taken == null)
+        {
+            throw new FileAlreadyExistsException(path.toString(), null,
+                "the empty file this write claimed could not be identified when it was claimed, " //$NON-NLS-1$
+                    + "so what is on that path now cannot be shown to be that reservation, and " //$NON-NLS-1$
+                    + "installing over it could replace a file this call never wrote"); //$NON-NLS-1$
+        }
+        BasicFileAttributes present;
+        try
+        {
+            present =
+                Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        }
+        catch (NoSuchFileException e) // NOSONAR an empty path holds nobody's decisions
+        {
+            // The reservation is gone - removed by whoever else was working on that path. There is
+            // nothing on it to be destroyed and MUST_NOT_EXIST asked for a free path, so the move
+            // goes ahead and creates the file. This is the branch the residual window above
+            // applies to in full: a file created here between this read and the rename is
+            // replaced.
+            return;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            throw new IOException("Cannot write merge rules to '" + path //$NON-NLS-1$
+                + "': what is on that path could not be read (" + describeFailure(e) //$NON-NLS-1$
+                + "), so it cannot be shown to be the empty reservation this write claimed and " //$NON-NLS-1$
+                + "installing over it could replace a file this call never wrote.", e); //$NON-NLS-1$
+        }
+        if (!isTheSameFile(taken, present))
+        {
+            throw new FileAlreadyExistsException(path.toString(), null,
+                "the file on it is NOT the empty reservation this write claimed - something " //$NON-NLS-1$
+                    + "replaced it while this write was preparing its document, and installing " //$NON-NLS-1$
+                    + "over it would discard whatever decisions that file holds"); //$NON-NLS-1$
         }
     }
 

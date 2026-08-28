@@ -12,6 +12,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -1080,6 +1082,304 @@ public class FormStructureReaderTest
     // ==================== Dynamic EMF model shaped like a managed form ====================
 
     private static final FormLikeModel MODEL = new FormLikeModel();
+
+    // ============ the advertised budget bounds the PENDING work, not only the visited work ============
+    //
+    // The finding: the de-recursion pushed EVERY child before the outer loop could look at the budget
+    // again, so one element with far more direct children than the budget allocated a PendingItem (or,
+    // in the handler walk, a PendingElement) for each of them even at limit=1. The recursion had
+    // RETURNED at the budget instead, so the conversion had traded stack depth for heap. Every pin
+    // below asserts the BOUND on the structure, never a duration - and the walks are driven through
+    // their package-private overloads because the bound is a statement about a structure that is
+    // otherwise a local, and a test reading only the rendered outline would be pinning an allocation
+    // it cannot see.
+
+    /** Direct children of one element, chosen far past any budget these tests hand the walks. */
+    private static final int CHILDREN_FAR_PAST_THE_BUDGET = 5000;
+
+    /** The budget these tests run the walks under: small, so "bounded by it" is a real assertion. */
+    private static final int SMALL_BUDGET = 4;
+
+    /**
+     * An {@link ArrayDeque} that remembers the largest size it ever held.
+     *
+     * <p>{@code addFirst} is the one override needed: {@code ArrayDeque.push} delegates to it, so a
+     * walk that pushes and a walk that adds are both measured.</p>
+     *
+     * @param <E> the element type
+     */
+    private static final class MeasuringDeque<E>
+        extends ArrayDeque<E>
+    {
+        private static final long serialVersionUID = 1L;
+
+        /** The largest size this deque ever held. */
+        int peak;
+
+        @Override
+        public void addFirst(E element)
+        {
+            super.addFirst(element);
+            peak = Math.max(peak, size());
+        }
+    }
+
+    /**
+     * @param children how many direct children to give the element
+     * @return an element carrying that many childless items
+     */
+    private static EObject elementWithChildren(int children)
+    {
+        EObject group = newItem(MODEL.formGroup, "G", 1); //$NON-NLS-1$
+        for (int i = 0; i < children; i++)
+        {
+            addItem(group, newItem(MODEL.formField, "C" + i, 100 + i)); //$NON-NLS-1$
+        }
+        return group;
+    }
+
+    @Test
+    public void testTheOutlineWalksPendingStackIsBoundedByItsBudget()
+    {
+        MeasuringDeque<FormStructureReader.PendingItem> pending = new MeasuringDeque<>();
+
+        FormStructureReader.appendItem(new StringBuilder(),
+            elementWithChildren(CHILDREN_FAR_PAST_THE_BUDGET), 0, "en", //$NON-NLS-1$
+            new int[] {SMALL_BUDGET}, new boolean[] {false}, pending);
+
+        assertTrue("the walk may not hold more pending items than its budget can ever visit - " //$NON-NLS-1$
+            + "peaked at " + pending.peak + " on an element with " + CHILDREN_FAR_PAST_THE_BUDGET //$NON-NLS-1$ //$NON-NLS-2$
+            + " children under a budget of " + SMALL_BUDGET, pending.peak <= SMALL_BUDGET); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheHandlerWalksPendingStackIsBoundedByItsBudget()
+    {
+        MeasuringDeque<FormStructureReader.PendingElement> pending = new MeasuringDeque<>();
+
+        FormStructureReader.collectHandlers(elementWithChildren(CHILDREN_FAR_PAST_THE_BUDGET),
+            "Form", "en", new ArrayList<>(), new int[] {SMALL_BUDGET}, new boolean[] {false}, //$NON-NLS-1$ //$NON-NLS-2$
+            pending);
+
+        assertTrue("the walk may not hold more pending elements than its budget can ever visit - " //$NON-NLS-1$
+            + "peaked at " + pending.peak + " on an element with " + CHILDREN_FAR_PAST_THE_BUDGET //$NON-NLS-1$ //$NON-NLS-2$
+            + " children under a budget of " + SMALL_BUDGET, pending.peak <= SMALL_BUDGET); //$NON-NLS-1$
+    }
+
+    /**
+     * The half a bound alone would let through: WHICH elements come out, and which one trips the cut.
+     * Children the budget cannot reach are now left off the stack instead of being pushed, popped and
+     * declined - so the emitted lines, their order and the truncation flag must be exactly what the
+     * pushing-everything walk produced.
+     */
+    @Test
+    public void testTheOutlineEmitsExactlyTheElementsTheBudgetCanReach()
+    {
+        StringBuilder sb = new StringBuilder();
+        boolean[] truncated = {false};
+
+        FormStructureReader.appendItem(sb, elementWithChildren(10), 0, "en", //$NON-NLS-1$
+            new int[] {SMALL_BUDGET}, truncated, new ArrayDeque<>());
+
+        assertEquals("the budget is spent on the element and the first three of its children, " //$NON-NLS-1$
+            + "in list order", //$NON-NLS-1$
+            "- G (type: FormGroup, id: 1)\n" //$NON-NLS-1$
+                + "  - C0 (type: FormField, id: 100)\n" //$NON-NLS-1$
+                + "  - C1 (type: FormField, id: 101)\n" //$NON-NLS-1$
+                + "  - C2 (type: FormField, id: 102)\n", //$NON-NLS-1$
+            sb.toString());
+    }
+
+    /**
+     * And the flag itself, in its own method: the elements that used to raise it at the pop are no
+     * longer popped, so a walk that simply stopped pushing them would report a form it had cut as
+     * complete. JUnit stops a method at its first failed assertion, which is why this is not an
+     * extra line on the pin above.
+     */
+    @Test
+    public void testTheOutlineStillReportsTheChildrenItLeftOffTheStack()
+    {
+        boolean[] truncated = {false};
+
+        FormStructureReader.appendItem(new StringBuilder(), elementWithChildren(10), 0, "en", //$NON-NLS-1$
+            new int[] {SMALL_BUDGET}, truncated, new ArrayDeque<>());
+
+        assertTrue("children the budget could not reach were dropped, and that must be reported", //$NON-NLS-1$
+            truncated[0]);
+    }
+
+    /**
+     * The same for the handler walk: the rows are the ones the elements the budget reaches carry, in
+     * the walk's own order.
+     */
+    @Test
+    public void testTheHandlerWalkCollectsExactlyTheRowsTheBudgetCanReach()
+    {
+        EObject group = newItem(MODEL.formGroup, "G", 1); //$NON-NLS-1$
+        for (int i = 0; i < 10; i++)
+        {
+            EObject child = newItem(MODEL.formField, "C" + i, 100 + i); //$NON-NLS-1$
+            addHandler(child, "OnChange", null, "C" + i + "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            addItem(group, child);
+        }
+        List<String[]> rows = new ArrayList<>();
+
+        FormStructureReader.collectHandlers(group, "G", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {SMALL_BUDGET}, new boolean[] {false}, new ArrayDeque<>());
+
+        List<String> handlers = new ArrayList<>();
+        for (String[] row : rows)
+        {
+            handlers.add(row[2]);
+        }
+        assertEquals("the budget reaches the group and its first three children", //$NON-NLS-1$
+            List.of("C0OnChange", "C1OnChange", "C2OnChange"), handlers); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * A singular containment is a child like any other as far as the room goes: it is VISITED after
+     * the {@code items} children, so it is the first thing dropped when there is room for only some
+     * of them. A walk that counted only {@code items} would push it past the budget's reach.
+     */
+    @Test
+    public void testTheOutlineCountsSingularContainmentsAgainstTheSameRoom()
+    {
+        EObject table = newItem(MODEL.table, "T", 1); //$NON-NLS-1$
+        addItem(table, newItem(MODEL.formField, "T1", 2)); //$NON-NLS-1$
+        addItem(table, newItem(MODEL.formField, "T2", 3)); //$NON-NLS-1$
+        EObject bar = newItem(MODEL.autoCommandBar, "TBar", 4); //$NON-NLS-1$
+        addItem(bar, newItem(MODEL.formField, "TBarButton", 5)); //$NON-NLS-1$
+        table.eSet(table.eClass().getEStructuralFeature("autoCommandBar"), bar); //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder();
+
+        FormStructureReader.appendItem(sb, table, 0, "en", new int[] {3}, //$NON-NLS-1$
+            new boolean[] {false}, new ArrayDeque<>());
+
+        assertEquals("room for two children goes to the two items; the command bar is visited " //$NON-NLS-1$
+            + "after them and is therefore the one dropped", //$NON-NLS-1$
+            "- T (type: Table, id: 1)\n" //$NON-NLS-1$
+                + "  - T1 (type: FormField, id: 2)\n" //$NON-NLS-1$
+                + "  - T2 (type: FormField, id: 3)\n", //$NON-NLS-1$
+            sb.toString());
+    }
+
+    /**
+     * The other direction, and the one an over-eager trim breaks: an entry an ANCESTOR left on the
+     * stack is popped after the current element's whole subtree, but the budget may still reach it,
+     * and dropping it would lose an element the walk had every right to show.
+     * <p>
+     * {@code B} is the pin. It is pushed by the root, sits UNDER {@code A} on the stack for the whole
+     * of {@code A}'s subtree, and is still within the budget when its turn comes.
+     */
+    @Test
+    public void testTheOutlineKeepsAncestorSiblingsTheBudgetCanStillReach()
+    {
+        EObject root = newItem(MODEL.formGroup, "R", 1); //$NON-NLS-1$
+        EObject a = newItem(MODEL.formGroup, "A", 2); //$NON-NLS-1$
+        addItem(a, newItem(MODEL.formField, "A0", 3)); //$NON-NLS-1$
+        addItem(root, a);
+        addItem(root, newItem(MODEL.formField, "B", 4)); //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder();
+        boolean[] truncated = {false};
+
+        FormStructureReader.appendItem(sb, root, 0, "en", new int[] {SMALL_BUDGET}, truncated, //$NON-NLS-1$
+            new ArrayDeque<>());
+
+        assertEquals("the budget covers every element, so every element is shown", //$NON-NLS-1$
+            "- R (type: FormGroup, id: 1)\n" //$NON-NLS-1$
+                + "  - A (type: FormGroup, id: 2)\n" //$NON-NLS-1$
+                + "    - A0 (type: FormField, id: 3)\n" //$NON-NLS-1$
+                + "  - B (type: FormField, id: 4)\n", //$NON-NLS-1$
+            sb.toString());
+    }
+
+    /**
+     * And the flag on that same walk, in its own method: nothing was dropped, so a walk that trimmed
+     * an ancestor's sibling and then rendered it anyway - or one that raised the flag while dropping
+     * nothing - is caught here rather than by the text above.
+     */
+    @Test
+    public void testTheOutlineReportsNoTruncationWhenTheBudgetCoversEverything()
+    {
+        EObject root = newItem(MODEL.formGroup, "R", 1); //$NON-NLS-1$
+        EObject a = newItem(MODEL.formGroup, "A", 2); //$NON-NLS-1$
+        addItem(a, newItem(MODEL.formField, "A0", 3)); //$NON-NLS-1$
+        addItem(root, a);
+        addItem(root, newItem(MODEL.formField, "B", 4)); //$NON-NLS-1$
+        boolean[] truncated = {false};
+
+        FormStructureReader.appendItem(new StringBuilder(), root, 0, "en", //$NON-NLS-1$
+            new int[] {SMALL_BUDGET}, truncated, new ArrayDeque<>());
+
+        assertFalse("no element was declined, so nothing may be reported as truncated", //$NON-NLS-1$
+            truncated[0]);
+    }
+
+    /**
+     * The trim proper, which is the half that makes the bound a bound: capping each push alone still
+     * lets one push per level accumulate on the stack, so the entries an ancestor left behind that
+     * the budget can no longer reach are removed from the BOTTOM.
+     * <p>
+     * {@code A}'s ten children take the whole of the remaining budget, so {@code B}, {@code C} and
+     * {@code D} - pushed by the root, lying under them - can never be visited. The old walk pushed,
+     * popped and declined them; this one drops them, and the OUTPUT must be the same either way.
+     */
+    @Test
+    public void testTheOutlineTrimsPendingSiblingsTheBudgetCanNoLongerReach()
+    {
+        EObject root = newItem(MODEL.formGroup, "R", 1); //$NON-NLS-1$
+        EObject a = newItem(MODEL.formGroup, "A", 2); //$NON-NLS-1$
+        for (int i = 0; i < 10; i++)
+        {
+            addItem(a, newItem(MODEL.formField, "A" + i, 100 + i)); //$NON-NLS-1$
+        }
+        addItem(root, a);
+        addItem(root, newItem(MODEL.formField, "B", 3)); //$NON-NLS-1$
+        addItem(root, newItem(MODEL.formField, "C", 4)); //$NON-NLS-1$
+        addItem(root, newItem(MODEL.formField, "D", 5)); //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder();
+
+        FormStructureReader.appendItem(sb, root, 0, "en", new int[] {5}, new boolean[] {false}, //$NON-NLS-1$
+            new ArrayDeque<>());
+
+        assertEquals("A's subtree spends the budget before B, C and D can be reached", //$NON-NLS-1$
+            "- R (type: FormGroup, id: 1)\n" //$NON-NLS-1$
+                + "  - A (type: FormGroup, id: 2)\n" //$NON-NLS-1$
+                + "    - A0 (type: FormField, id: 100)\n" //$NON-NLS-1$
+                + "    - A1 (type: FormField, id: 101)\n" //$NON-NLS-1$
+                + "    - A2 (type: FormField, id: 102)\n", //$NON-NLS-1$
+            sb.toString());
+    }
+
+    /**
+     * The handler walk's own no-over-trim pin: {@code B} carries a handler, sits under {@code A} on
+     * the stack for the whole of {@code A}'s subtree, and is still within the budget.
+     */
+    @Test
+    public void testTheHandlerWalkKeepsAncestorSiblingsTheBudgetCanStillReach()
+    {
+        EObject root = newItem(MODEL.formGroup, "R", 1); //$NON-NLS-1$
+        EObject a = newItem(MODEL.formGroup, "A", 2); //$NON-NLS-1$
+        EObject a0 = newItem(MODEL.formField, "A0", 3); //$NON-NLS-1$
+        addHandler(a0, "OnChange", null, "A0OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(a, a0);
+        addItem(root, a);
+        EObject b = newItem(MODEL.formField, "B", 4); //$NON-NLS-1$
+        addHandler(b, "OnChange", null, "BOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addItem(root, b);
+        List<String[]> rows = new ArrayList<>();
+
+        FormStructureReader.collectHandlers(root, "R", "en", rows, new int[] {SMALL_BUDGET}, //$NON-NLS-1$ //$NON-NLS-2$
+            new boolean[] {false}, new ArrayDeque<>());
+
+        List<String> handlers = new ArrayList<>();
+        for (String[] row : rows)
+        {
+            handlers.add(row[2]);
+        }
+        assertEquals("the budget covers every element, so every handler is collected", //$NON-NLS-1$
+            List.of("A0OnChange", "BOnChange"), handlers); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 
     private static EObject newForm()
     {
