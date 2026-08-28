@@ -133,6 +133,8 @@ public class CleanProjectToolTest
                 error.contains("list_projects")); //$NON-NLS-1$
             assertTrue("the error must name the lever that raises the bound: " + error, //$NON-NLS-1$
                 error.contains("'timeout'")); //$NON-NLS-1$
+            assertTrue("a running clean has an unknown mutation outcome, so isolation must reset: " //$NON-NLS-1$
+                + error, error.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
         }
         finally
         {
@@ -211,6 +213,8 @@ public class CleanProjectToolTest
             error.contains("refresh refused")); //$NON-NLS-1$
         assertTrue("a real failure must not be dressed up as a timeout: " + error, //$NON-NLS-1$
             !error.contains("did not finish within")); //$NON-NLS-1$
+        assertTrue("a clean action that threw may already have changed the model: " + error, //$NON-NLS-1$
+            error.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
     }
 
     /**

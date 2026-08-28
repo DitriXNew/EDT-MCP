@@ -93,6 +93,24 @@ def select_shard(tests, index, total):
     return tests[index - 1::total] if total > 1 else tests
 
 
+def schedule_tests(selected, registry, per_shard=False):
+    """Return (ordinary/deferred loop tests, post-cleanup EDT-log ratchets).
+
+    The log ratchet is registered as a testcase, but cannot execute in the ordinary loop: final
+    cleanup makes MCP calls too, so running it there certifies an unfinished log. A shard always
+    owns the registry's ratchet even when round-robin selection assigned that registry row to a
+    different shard. An unsharded filtered run preserves the old filter behaviour and runs it only
+    when selected.
+    """
+    source = registry if per_shard else selected
+    ratchets = [t for t in source if t.get("last")
+                and t["tool"] == "_edt_log_ratchet"]
+    ordinary = [t for t in selected if t not in ratchets
+                and t["tool"] != "_edt_log_ratchet"]
+    return ([t for t in ordinary if not t.get("last")]
+            + [t for t in ordinary if t.get("last")], ratchets)
+
+
 def write_junit(results, path, final_clean, cleanup_failed=False, status_error=None,
                 unresolved_mutation=False):
     # Skips are neither pass nor failure: they are reported as JUnit <skipped/> and
@@ -340,23 +358,26 @@ def main():
     shard_note = ""
     if shard_total > 1:
         shard_note = " [shard %d/%d of %d selected]" % (shard_index, shard_total, len(tests))
-    tests = selected
+    # Ordinary deferred tests keep registry order at the end of the main loop. The EDT-log ratchet
+    # is held one step longer: final_cleanup below still calls the plugin, so only a check AFTER it
+    # covers the complete run. It remains an ordinary result/JUnit testcase, not runner output.
+    tests, log_ratchets = schedule_tests(selected, harness.REGISTRY, shard_total > 1)
 
     print("EDT-MCP e2e: %d test(s)%s against %s, project=%s"
-          % (len(tests), shard_note, harness.MCP_URL, harness.PROJECT))
+          % (len(tests) + len(log_ratchets), shard_note, harness.MCP_URL, harness.PROJECT))
     harness.wait_for_server()
     harness.initialize()     # proper MCP handshake (captures Mcp-Session-Id if issued)
-    if not harness.wait_for_project_ready():
-        # The config never reached 'ready' (still building / not_available). Every
+    ready_failure = []
+    if not harness.wait_for_project_ready(failure_details=ready_failure):
+        # At least one EDT project never reached 'ready'. Every
         # metadata tool would then fail with "Could not get configuration", so running
         # the suite produces a wall of cascade failures that hides the real cause.
         # Abort with ONE actionable message + the project state, instead.
-        print("\nERROR: the configuration did not finish indexing (no project reached "
-              "'ready') within the wait_for_project_ready timeout. Metadata tools cannot "
-              "resolve the configuration yet, so the suite is aborted before it starts.\n"
+        print("\nERROR: %s. Metadata tools cannot resolve the configuration yet, so the suite "
+              "is aborted before it starts.\n"
               "If the runner is just slow (a cold cloud runner indexes the whole config "
               "from scratch), raise E2E_PROJECT_READY_TIMEOUT. If it never goes ready, the "
-              "project import/build is broken — check the EDT log.")
+              "project import/build is broken — check the EDT log." % ready_failure[0])
         try:
             print("---- list_projects ----")
             print(harness.call("list_projects", {}).text)
@@ -441,9 +462,17 @@ def main():
         status, msg, timed_out = _run_with_timeout(harness, t, args.test_timeout)
         dur = time.time() - start
         results.append((t, status, msg, dur))
-        head = msg.splitlines()[0] if msg else ""
+        lines = msg.splitlines() if msg else []
+        head = lines[0] if lines else ""
         print("[%-7s] %s::%s (%.2fs)%s" % (status.upper(), t["tool"], t["name"], dur,
                                            " - " + head if head else ""))
+        # A failure's DETAIL (the on-disk delta, the offending payload) lives on the lines
+        # after the first. Printing only the head loses it unless --junit-xml was passed,
+        # which turns every red test into a second full run just to see why. Failures are
+        # worth the vertical space; passes and skips stay one line.
+        if status not in ("pass", "skip"):
+            for extra in lines[1:]:
+                print("            " + extra)
         # A per-CALL timeout aborts the run for the same reason a per-TEST one does: the server
         # is still busy with work we cannot cancel, and every later test would be reading a
         # model it is still writing.
@@ -496,6 +525,41 @@ def main():
             # model may still be out of sync. Do not call the run green over that either.
             print("!! final cleanup could not sync the model: %s" % e)
             cleanup_failed = True
+
+    # This is deliberately the LAST MCP-using phase on a normal run. The ratchet's result is
+    # appended to the same results list as every other test, so a post-cleanup plugin ERROR is a
+    # JUnit testcase failure and contributes to nfail/exit status below. Do not reset the fixture
+    # here: final_cleanup just established the final disk/model state, and this testcase is read-only.
+    ratchet_blocked = aborted_after is not None or harness.calls_aborted()
+    for t in log_ratchets:
+        if ratchet_blocked:
+            reason = ("skipped: the run was aborted before its final log could be certified"
+                      if aborted_after is not None else
+                      "skipped: final cleanup left the MCP call latch armed, so the EDT log may "
+                      "still be changing")
+            results.append((t, "skip", reason, 0.0))
+            print("[%-7s] %s::%s - %s" % ("SKIP", t["tool"], t["name"], reason))
+            continue
+        harness.begin_test_calls()
+        start = time.time()
+        status, msg, timed_out = _run_with_timeout(harness, t, args.test_timeout)
+        dur = time.time() - start
+        results.append((t, status, msg, dur))
+        lines = msg.splitlines() if msg else []
+        head = lines[0] if lines else ""
+        print("[%-7s] %s::%s (%.2fs)%s" %
+              (status.upper(), t["tool"], t["name"], dur, " - " + head if head else ""))
+        if status not in ("pass", "skip"):
+            for extra in lines[1:]:
+                print("            " + extra)
+        if timed_out or harness.calls_aborted():
+            ratchet_blocked = True
+            aborted_after = "%s::%s" % (t["tool"], t["name"])
+            abort_cause = ("the post-cleanup log ratchet outlived --test-timeout and was "
+                           "abandoned" if timed_out else harness.abort_reason())
+            if timed_out or harness.calls_aborted():
+                still_running_in = aborted_after
+
     final_status, status_error = _fixture_status(harness)
     final_clean = (final_status == "")
     # A mutating request that died on the wire and was never accounted for is the same class of

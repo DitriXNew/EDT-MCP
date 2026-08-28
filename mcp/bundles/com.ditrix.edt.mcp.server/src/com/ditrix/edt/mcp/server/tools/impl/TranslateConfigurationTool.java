@@ -103,6 +103,8 @@ public class TranslateConfigurationTool implements IMcpTool
             return ToolResult.error("targetLanguages is required (e.g. [\"en\"])").toJson(); //$NON-NLS-1$
         }
 
+        boolean mutationApiEntered = false;
+        boolean mutationApiReturned = false;
         try
         {
             // Resolve the IProject first so AI clients get the most specific
@@ -146,7 +148,9 @@ public class TranslateConfigurationTool implements IMcpTool
             // ISynchronizeProjectApi.synchronizeProject(IDtProject, List<String> languages)
             Method method = api.getClass().getMethod("synchronizeProject", //$NON-NLS-1$
                 IDtProject.class, List.class);
+            mutationApiEntered = true;
             method.invoke(api, dtProject, targetLanguages);
+            mutationApiReturned = true;
 
             BuildUtils.waitForDerivedData(project);
 
@@ -159,7 +163,13 @@ public class TranslateConfigurationTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return CliReflectionErrors.toErrorJson(e, "Translate configuration", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+            String error = CliReflectionErrors.toErrorJson(e,
+                "Translate configuration", "LanguageTool"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (mutationApiReturned)
+            {
+                return ToolResult.markErrorAfterMutation(error);
+            }
+            return mutationApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
         }
     }
 }

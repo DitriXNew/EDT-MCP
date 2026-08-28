@@ -52,6 +52,69 @@ public class ToolResultTest
     }
 
     @Test
+    public void testErrorAfterMutationCarriesStructuralMarkerIndependentOfMessage()
+    {
+        JsonElement first = JsonParser.parseString(
+            ToolResult.errorAfterMutation("force export failed").toJson()); //$NON-NLS-1$
+        JsonElement renamed = JsonParser.parseString(
+            ToolResult.errorAfterMutation("post-commit verification disagreed").toJson()); //$NON-NLS-1$
+
+        assertTrue(first.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(renamed.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(first.getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(renamed.getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExistingPlainErrorCanBeMarkedAtTheReturnChokePoint()
+    {
+        String plain = ToolResult.error("generic catch").toJson(); //$NON-NLS-1$
+
+        JsonElement marked = JsonParser.parseString(ToolResult.markErrorAfterMutation(plain));
+
+        assertFalse(marked.getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(marked.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("generic catch", marked.getAsJsonObject().get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testReturnChokePointLeavesNonErrorsByteIdentical()
+    {
+        String success = ToolResult.success().put("value", "same").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        String markdown = "# not JSON"; //$NON-NLS-1$
+
+        assertSame(success, ToolResult.markErrorAfterMutation(success));
+        assertSame(markdown, ToolResult.markErrorAfterMutation(markdown));
+    }
+
+    @Test
+    public void testOpaqueMutationFailureHasItsOwnStructuralMarker()
+    {
+        JsonElement error = JsonParser.parseString(
+            ToolResult.errorWithUnknownMutationOutcome("opaque extension threw").toJson()); //$NON-NLS-1$
+
+        assertFalse(error.getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(error.getAsJsonObject().get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("unknown must not be overclaimed as committed", //$NON-NLS-1$
+            error.getAsJsonObject().has("mutationCommitted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testKnownCommitOutranksAnEarlierOrLaterUnknownOutcome()
+    {
+        String unknown = ToolResult.errorWithUnknownMutationOutcome("second project failed").toJson(); //$NON-NLS-1$
+        JsonElement upgraded = JsonParser.parseString(ToolResult.markErrorAfterMutation(unknown));
+        assertTrue(upgraded.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(upgraded.getAsJsonObject().has("mutationOutcomeUnknown")); //$NON-NLS-1$
+
+        String committed = ToolResult.errorAfterMutation("first project committed").toJson(); //$NON-NLS-1$
+        JsonElement notWeakened = JsonParser.parseString(
+            ToolResult.markErrorWithUnknownMutationOutcome(committed));
+        assertTrue(notWeakened.getAsJsonObject().get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(notWeakened.getAsJsonObject().has("mutationOutcomeUnknown")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testPutString()
     {
         String json = ToolResult.success()

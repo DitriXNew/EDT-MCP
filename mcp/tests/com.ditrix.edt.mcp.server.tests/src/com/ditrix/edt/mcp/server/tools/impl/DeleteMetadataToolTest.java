@@ -21,10 +21,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EAttribute;
@@ -36,6 +40,7 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
+import org.w3c.dom.Element;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -46,6 +51,8 @@ import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
+import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
+import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
@@ -185,6 +192,16 @@ public class DeleteMetadataToolTest
             schema.contains("\"blockingReferences\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare the forced flag", //$NON-NLS-1$
             schema.contains("\"forced\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare platformProhibitions", //$NON-NLS-1$
+            schema.contains("\"platformProhibitions\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare platformProhibitionsCount", //$NON-NLS-1$
+            schema.contains("\"platformProhibitionsCount\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the partial-result persisted flag", //$NON-NLS-1$
+            schema.contains("\"persisted\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the registering file", //$NON-NLS-1$
+            schema.contains("\"registeringFile\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the registering container", //$NON-NLS-1$
+            schema.contains("\"registeringContainer\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -1621,6 +1638,15 @@ public class DeleteMetadataToolTest
     private static GenericDeleteFixture genericDelete(ExportOrderRecorder recorder,
         DestructiveConsentGate.ConsentDecision decision, RuntimeException performFailure)
     {
+        return genericDelete(recorder, decision, performFailure,
+            (projectName, file, container, target) -> DeleteMetadataTool.RegistrationState.ABSENT);
+    }
+
+    /** Generic-delete fixture with an explicit post-export registration verdict. */
+    private static GenericDeleteFixture genericDelete(ExportOrderRecorder recorder,
+        DestructiveConsentGate.ConsentDecision decision, RuntimeException performFailure,
+        DeleteMetadataTool.RegistrationVerifier registrationVerifier)
+    {
         IProject project = mock(IProject.class);
         when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
         IBmModelManager modelManager = mock(IBmModelManager.class);
@@ -1643,9 +1669,10 @@ public class DeleteMetadataToolTest
         fixture.project = project;
         fixture.refactoringService = refactoringService;
         fixture.resolution = BmModelResolver.resolve(project, modelManager);
+        fixture.refactoring = refactoring;
         fixture.tool = new DeleteMetadataTool((name, preview) -> decision,
             (projectName, timeoutMs) -> null, recorder.submitter(),
-            base -> fixture.participants);
+            base -> fixture.participants, registrationVerifier);
         return fixture;
     }
 
@@ -1656,13 +1683,191 @@ public class DeleteMetadataToolTest
         IProject project;
         IMdRefactoringService refactoringService;
         BmModelResolver.Resolution resolution;
+        IRefactoring refactoring;
         List<IProject> participants = new ArrayList<>();
 
         String run(String containerFqn, boolean confirm)
         {
-            return tool.prepareMdClassDelete(project, "CommonModule.Calc", mock(MdObject.class), //$NON-NLS-1$
-                containerFqn, confirm, false, refactoringService, resolution);
+            return run(containerFqn, confirm, false);
         }
+
+        String run(String containerFqn, boolean confirm, boolean force)
+        {
+            return tool.prepareMdClassDelete(project, "CommonModule.Calc", mock(MdObject.class), //$NON-NLS-1$
+                containerFqn, confirm, force, refactoringService, resolution);
+        }
+    }
+
+    /** A refactoring problem that deliberately is not a CleanReferenceProblem. */
+    private static final class TestPlatformProblem implements IRefactoringProblem
+    {
+        private final EObject object;
+
+        TestPlatformProblem(EObject object)
+        {
+            this.object = object;
+        }
+
+        @Override
+        public EObject getObject()
+        {
+            return object;
+        }
+    }
+
+    @Test
+    public void testNonCleanProblemIsAPlatformProhibitionNotAReference()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+        RefactoringStatus status = new RefactoringStatus();
+        status.addProblem(new TestPlatformProblem(mock(EObject.class)));
+        when(fixture.refactoring.getStatus()).thenReturn(status);
+        when(fixture.refactoring.getTitle()).thenReturn("Delete metadata node"); //$NON-NLS-1$
+
+        JsonObject result = JsonParser.parseString(fixture.run("Configuration", false)) //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("preview", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.get("blocking").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(0, result.get("blockingReferencesCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(0, result.get("affectedReferencesCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(1, result.get("platformProhibitionsCount").getAsInt()); //$NON-NLS-1$
+        assertEquals("TestPlatformProblem", result.get("platformProhibitions").getAsJsonArray() //$NON-NLS-1$ //$NON-NLS-2$
+            .get(0).getAsJsonObject().get("problemType").getAsString()); //$NON-NLS-1$
+        String message = result.get("message").getAsString(); //$NON-NLS-1$
+        assertFalse("a prohibition-only preview must not call the problem an incoming reference: " //$NON-NLS-1$
+            + message, message.contains("incoming reference")); //$NON-NLS-1$
+        assertFalse("a prohibition-only preview must not say the node is referenced: " + message, //$NON-NLS-1$
+            message.contains("referenced by")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testForcedDeleteWithStaleRegisteringFileReportsStructuredPartialResult()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture = genericDelete(recorder,
+            DestructiveConsentGate.ConsentDecision.ALLOW, null,
+            (projectName, file, container, target) -> DeleteMetadataTool.RegistrationState.PRESENT);
+        String raw = fixture.run("Configuration", true, true); //$NON-NLS-1$
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject result = JsonParser.parseString(
+            fixture.tool.refreshAfterExportAwait(params, raw, true)).getAsJsonObject();
+
+        assertTrue("the model delete completed", result.get("success").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("executed", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.get("forced").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("the stale on-disk half is a structured partial result", //$NON-NLS-1$
+            result.get("persisted").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("src/Configuration/Configuration.mdo", //$NON-NLS-1$
+            result.get("registeringFile").getAsString()); //$NON-NLS-1$
+        assertEquals("Configuration", result.get("registeringContainer").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testConfigurationRegistrationCheckReadsTheRegistrationElementOnly() throws Exception
+    {
+        Element stale = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'>" //$NON-NLS-1$
+            + "<reports>Report.X</reports></mdclass:Configuration>"); //$NON-NLS-1$
+        assertTrue(DeleteMetadataTool.containsRegistration(stale, "Configuration", "Report.X")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The FQN appearing in another property is not a registration. This prevents a cleaned
+        // collection from being reported stale merely because a separate broken pointer survived.
+        Element current = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'>" //$NON-NLS-1$
+            + "<defaultReport>Report.X</defaultReport><reports>Report.Y</reports>" //$NON-NLS-1$
+            + "</mdclass:Configuration>"); //$NON-NLS-1$
+        assertFalse(DeleteMetadataTool.containsRegistration(current, "Configuration", "Report.X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMemberRegistrationCheckWalksTheOwnerMdoChildren() throws Exception
+    {
+        // The member half of the check reads the OWNER's .mdo, where the member is a child element
+        // named after its kind's feature - not a reference line as on Configuration.
+        Element stale = xmlRoot("<mdclass:Catalog xmlns:mdclass='urn:test'><name>X</name>" //$NON-NLS-1$
+            + "<attributes><name>A</name></attributes></mdclass:Catalog>"); //$NON-NLS-1$
+        assertTrue("an attribute still present in the owner .mdo must read as stale", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(stale, "Catalog.X", "Catalog.X.Attribute.A")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A sibling of the same kind must not stand in for the deleted one: reporting a clean
+        // delete as partial is exactly as wrong as the reverse.
+        Element current = xmlRoot("<mdclass:Catalog xmlns:mdclass='urn:test'><name>X</name>" //$NON-NLS-1$
+            + "<attributes><name>B</name></attributes></mdclass:Catalog>"); //$NON-NLS-1$
+        assertFalse("only the deleted member's own entry counts", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(current, "Catalog.X", "Catalog.X.Attribute.A")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A nested member is walked one level at a time, so a same-named attribute of ANOTHER
+        // tabular section must not answer for it.
+        Element nested = xmlRoot("<mdclass:Catalog xmlns:mdclass='urn:test'><name>X</name>" //$NON-NLS-1$
+            + "<tabularSections><name>T</name><attributes><name>A</name></attributes>" //$NON-NLS-1$
+            + "</tabularSections></mdclass:Catalog>"); //$NON-NLS-1$
+        assertTrue("the nested attribute is found through its tabular section", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(nested, "Catalog.X", //$NON-NLS-1$
+                "Catalog.X.TabularSection.T.Attribute.A")); //$NON-NLS-1$
+        assertFalse("a nested attribute must not answer for a top-level one of the same name", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(nested, "Catalog.X", "Catalog.X.Attribute.A")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // An unknown kind token resolves to no feature: refuse rather than guess a shape.
+        assertFalse("an unknown kind token must not be treated as present", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(stale, "Catalog.X", "Catalog.X.Fielld.A")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRegistrationCheckIgnoresForeignNamespaceElements() throws Exception
+    {
+        // Measured across the whole ERP tree: EDT qualifies only the ROOT element and writes every
+        // child unqualified. The check states that instead of assuming it, because a foreign
+        // element sharing a local name would otherwise read as a surviving registration and report
+        // a COMPLETED delete as partial - a false alarm is as wrong here as a missed one.
+        Element foreignConfig = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'" //$NON-NLS-1$
+            + " xmlns:ext='urn:foreign'><ext:reports>Report.X</ext:reports></mdclass:Configuration>"); //$NON-NLS-1$
+        assertFalse("a foreign-namespace element is not a registration", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(foreignConfig, "Configuration", "Report.X")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Element foreignMember = xmlRoot("<mdclass:Catalog xmlns:mdclass='urn:test'" //$NON-NLS-1$
+            + " xmlns:ext='urn:foreign'><name>X</name>" //$NON-NLS-1$
+            + "<ext:attributes><ext:name>A</ext:name></ext:attributes></mdclass:Catalog>"); //$NON-NLS-1$
+        assertFalse("a foreign-namespace member is not a registration", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(foreignMember, "Catalog.X", //$NON-NLS-1$
+                "Catalog.X.Attribute.A")); //$NON-NLS-1$
+
+        // The document's OWN namespace still counts: rejecting it would silently stop detecting a
+        // stale registration if the serializer ever qualified its children.
+        Element qualified = xmlRoot("<mdclass:Configuration xmlns:mdclass='urn:test'>" //$NON-NLS-1$
+            + "<mdclass:reports>Report.X</mdclass:reports></mdclass:Configuration>"); //$NON-NLS-1$
+        assertTrue("an element in the document's own namespace is a registration", //$NON-NLS-1$
+            DeleteMetadataTool.containsRegistration(qualified, "Configuration", "Report.X")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static Element xmlRoot(String xml) throws Exception
+    {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        return factory.newDocumentBuilder().parse(new ByteArrayInputStream(
+            xml.getBytes(StandardCharsets.UTF_8))).getDocumentElement();
+    }
+
+    @Test
+    public void testVerifiedForcedDeleteKeepsTheExistingHappyPathShape()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+        String raw = fixture.run("Configuration", true, true); //$NON-NLS-1$
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject result = JsonParser.parseString(
+            fixture.tool.refreshAfterExportAwait(params, raw, true)).getAsJsonObject();
+
+        JsonObject expected = JsonParser.parseString("{\"success\":true,\"action\":\"executed\"," //$NON-NLS-1$
+            + "\"fqn\":\"CommonModule.Calc\",\"forced\":true," //$NON-NLS-1$
+            + "\"message\":\"Delete refactoring completed successfully.\"}").getAsJsonObject(); //$NON-NLS-1$
+        assertEquals(expected, result);
     }
 
     @Test

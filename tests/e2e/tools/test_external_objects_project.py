@@ -27,7 +27,8 @@ touch the base project, so assert_no_diff() (which is scoped to it) holds throug
 from harness import (
     call, assert_ok, assert_error, assert_error_quality, assert_contains,
     assert_not_contains, assert_no_diff, assert_no_diff_rel, poll_diff_contains_rel,
-    reset_fixture_rel, e2e_test, PROJECT, EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL,
+    read_fixture_file, reset_fixture_rel, wait_for_project_ready, e2e_test, PROJECT,
+    EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL,
 )
 
 # The Russian TYPE tokens for the two external-objects types. The bilingual token catalogue
@@ -289,6 +290,112 @@ def test_extobj_modify_a_form_member_title():
         call("clean_project", {"projectName": EXT_OBJECTS_PROJECT})
     assert_no_diff_rel(EXT_OBJECTS_REL, "the fixture must be back at its baseline")
     assert_no_diff("the base project must never be touched by this test")
+
+
+@e2e_test(tool="dcs", kind="write")
+def test_extobj_external_report_owned_dcs_round_trip_uses_inherited_language():
+    """An ExternalReport-owned DCS template resolves without any owner-type special case.
+
+    The plain field title is intentionally written without ``language``. ExternalObjects inherits
+    TestConfiguration through Base-Project, whose language code is ``en``; the exported DCS must
+    therefore carry ``en`` and never a fabricated ``ru`` fallback.
+    """
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    root = "ExternalReport.ExtReport.Template.E2EDcsOwned"
+    dcs_rel = "src/ExternalReports/ExtReport/Templates/E2EDcsOwned/Template.dcs"
+    created = call("create_metadata",
+                   {"projectName": EXT_OBJECTS_PROJECT, "fqn": root,
+                    "expectedNotExists": True})
+    try:
+        assert_ok(created, "create an owned template on the existing external report")
+        wait_for_project_ready()
+        declared = call("modify_metadata", {
+            "projectName": EXT_OBJECTS_PROJECT,
+            "fqn": root,
+            "properties": [{"name": "templateType", "value": "DataCompositionSchema"}],
+        })
+        assert_ok(declared, "declare the external-report-owned template as a DCS")
+        wait_for_project_ready()
+
+        summary = call("dcs", {
+            "projectName": EXT_OBJECTS_PROJECT,
+            "fqn": root,
+            "action": "get",
+            "type": "schema",
+        })
+        assert_ok(summary, "read the external-report-owned DCS template")
+        assert_contains(summary.text, root + "#/dataSets",
+                        "the owned template must expose schema addresses")
+
+        title = "Inherited English field title"
+        field = "InheritedLanguageField"
+        written = call("dcs", {
+            "projectName": EXT_OBJECTS_PROJECT,
+            "fqn": root,
+            "action": "upsert",
+            "type": "schema",
+            "body": {"dataSets": [{
+                "name": "ExternalData",
+                "type": "query",
+                "query": "SELECT 1 AS " + field,
+                "autoFillFields": False,
+                "fields": [{"dataPath": field, "field": field, "title": title}],
+            }]},
+        })
+        assert_ok(written, "write a typed schema body through the owned DCS root")
+        poll_diff_contains_rel(EXT_OBJECTS_REL, title,
+                               ctx="the DCS field title must reach Template.dcs")
+        on_disk = read_fixture_file(EXT_OBJECTS_REL, dcs_rel)
+        assert title in on_disk and field in on_disk, \
+            "the authored field and title must be read back from %s" % dcs_rel
+        assert ">en<" in on_disk, \
+            "a plain title must use the inherited base-project language code 'en'"
+        assert ">ru<" not in on_disk, \
+            "the external project must not fabricate a Russian language fallback"
+    finally:
+        removed = call("delete_metadata",
+                       {"projectName": EXT_OBJECTS_PROJECT, "fqn": root, "confirm": True})
+        assert_ok(removed, "delete the external-report-owned DCS template again")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "the owned-DCS round trip must leave no diff")
+    assert_no_diff("the owned-DCS round trip must never touch the base project")
+
+
+@e2e_test(tool="dcs", kind="read")
+def test_extobj_external_report_main_dcs_root_resolves():
+    """The existing ExtReport is a supported main-DCS root even before one is materialized."""
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    root = "ExternalReport.ExtReport"
+    result = call("dcs", {
+        "projectName": EXT_OBJECTS_PROJECT,
+        "fqn": root,
+        "action": "get",
+        "type": "schema",
+    })
+    assert_ok(result, "read the existing external report's main DCS root")
+    assert_contains(result.text, "**Hash:** `", "an empty main-DCS root still returns a hash")
+    assert_contains(result.text, root + "#/dataSets",
+                    "the external report root must expose schema addresses")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a main-DCS read must not touch the external fixture")
+    assert_no_diff("a main-DCS read must not fall through to or touch the base project")
+
+
+@e2e_test(tool="dcs", kind="error")
+def test_extobj_external_data_processor_has_owned_templates_but_no_main_dcs_root():
+    """ExtProc is refused as a main root and points to its supported owned-template shape."""
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    root = "ExternalDataProcessor.ExtProc"
+    result = call("dcs", {
+        "projectName": EXT_OBJECTS_PROJECT,
+        "fqn": root,
+        "action": "get",
+        "type": "schema",
+    })
+    error = assert_error(result, "an external data processor addressed as a main DCS root")
+    assert_error_quality(error, names=[root, "no main DCS"],
+                         suggests=["ExternalDataProcessor.<Name>.Template.<Name>"],
+                         ctx="the refusal must name the owned-template alternative")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a refused DCS root must not touch the external fixture")
+    assert_no_diff("a refused DCS root must not touch the base project")
 
 
 @e2e_test(tool="go_to_definition", kind="read")

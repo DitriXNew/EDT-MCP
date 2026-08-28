@@ -15,10 +15,16 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.AutoColor;
 import com._1c.g5.v8.dt.mcore.ColorDef;
+import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.PaletteColor;
+import com._1c.g5.v8.dt.mcore.StyleColor;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder.Result;
 import com.google.gson.JsonObject;
@@ -87,6 +93,63 @@ public class StyleValueBuilderTest
     {
         Result r = StyleValueBuilder.build(json("{\"color\":{\"red\":10,\"green\":20}}")); //$NON-NLS-1$
         assertNotNull("a missing component must error", r.error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBuildNamedStyleColorAsColorRef()
+    {
+        Configuration configuration = MdClassFactory.eINSTANCE.createConfiguration();
+        StyleItem item = MdClassFactory.eINSTANCE.createStyleItem();
+        item.setName("FieldErrorBackground"); //$NON-NLS-1$
+        StyleColor appearance = McoreFactory.eINSTANCE.createStyleColor();
+        appearance.setName(item.getName());
+        item.setAppearanceItem(appearance);
+        configuration.getStyleItems().add(item);
+
+        Result r = StyleValueBuilder.build(
+            json("{\"color\":{\"style\":\"FieldErrorBackground\"}}"), //$NON-NLS-1$
+            StyleValueBuilder.forConfiguration(configuration));
+
+        assertNull(r.error);
+        assertTrue(r.value instanceof ColorValue);
+        assertTrue(((ColorValue)r.value).getValue() instanceof ColorRef);
+        assertTrue("the ref must target the style item's actual appearance object", //$NON-NLS-1$
+            ((ColorRef)((ColorValue)r.value).getValue()).getColor() == appearance);
+        assertEquals("Color=Style.FieldErrorBackground", r.summary); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBuildNamedPaletteColorAsColorRef()
+    {
+        Configuration configuration = MdClassFactory.eINSTANCE.createConfiguration();
+        com._1c.g5.v8.dt.metadata.mdclass.PaletteColor item =
+            MdClassFactory.eINSTANCE.createPaletteColor();
+        item.setName("Accent"); //$NON-NLS-1$
+        PaletteColor appearance = McoreFactory.eINSTANCE.createPaletteColor();
+        appearance.setName(item.getName());
+        item.setAppearanceItem(appearance);
+        configuration.getPaletteColors().add(item);
+
+        Result r = StyleValueBuilder.build(json("{\"color\":{\"palette\":\"Accent\"}}"), //$NON-NLS-1$
+            StyleValueBuilder.forConfiguration(configuration));
+
+        assertNull(r.error);
+        assertTrue(((ColorValue)r.value).getValue() instanceof ColorRef);
+        assertTrue(((ColorRef)((ColorValue)r.value).getValue()).getColor() == appearance);
+        assertEquals("Color=Palette.Accent", r.summary); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownNamedColorNamesTheDefinitionLocation()
+    {
+        Configuration configuration = MdClassFactory.eINSTANCE.createConfiguration();
+        Result r = StyleValueBuilder.build(json("{\"color\":{\"style\":\"MissingStyle\"}}"), //$NON-NLS-1$
+            StyleValueBuilder.forConfiguration(configuration));
+
+        assertNotNull(r.error);
+        assertTrue(r.error, r.error.contains("MissingStyle")); //$NON-NLS-1$
+        assertTrue(r.error, r.error.contains("Configuration > Style items")); //$NON-NLS-1$
+        assertTrue(r.error, r.error.contains("Common/StyleItems")); //$NON-NLS-1$
     }
 
     // ==================== building a Font ====================

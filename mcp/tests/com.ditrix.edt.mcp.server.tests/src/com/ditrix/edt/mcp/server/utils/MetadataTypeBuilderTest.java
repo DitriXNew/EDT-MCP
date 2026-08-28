@@ -15,7 +15,10 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -23,8 +26,12 @@ import com._1c.g5.v8.dt.mcore.DateFractions;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -32,8 +39,8 @@ import com.google.gson.JsonParser;
 
 /**
  * Tests the platform-independent parts of {@link MetadataTypeBuilder}: spec shape validation and the
- * kind / fractions parsing. The {@code build()} happy path needs the platform type provider and is
- * covered by the e2e suite.
+ * kind / fractions parsing. Primitive/platform {@code build()} happy paths need the platform type
+ * provider and are covered by e2e; the model-owned DefinedType path is reachable headlessly.
  */
 public class MetadataTypeBuilderTest
 {
@@ -47,7 +54,12 @@ public class MetadataTypeBuilderTest
     {
         assertNull(MetadataTypeBuilder.validateShape(json("{\"types\":[{\"kind\":\"String\"}]}"))); //$NON-NLS-1$
         assertNull(MetadataTypeBuilder.validateShape(
-            json("{\"types\":[{\"kind\":\"Number\",\"precision\":10},{\"kind\":\"Ref\",\"ref\":\"Catalog.X\"}]}"))); //$NON-NLS-1$
+            json("{\"types\":[{\"kind\":\"String\",\"length\":50,\"fixed\":true}," //$NON-NLS-1$
+                + "{\"kind\":\"Number\",\"precision\":10,\"scale\":2,\"nonNegative\":true}," //$NON-NLS-1$
+                + "{\"kind\":\"Date\",\"fractions\":\"DateTime\"},{\"kind\":\"Boolean\"}," //$NON-NLS-1$
+                + "{\"kind\":\"Ref\",\"ref\":\"Catalog.X\"}," //$NON-NLS-1$
+                + "{\"kind\":\"DefinedType\",\"ref\":\"MoneyAmount\"}," //$NON-NLS-1$
+                + "{\"kind\":\"DefinedType.MoneyAmount\"}]}"))); //$NON-NLS-1$
     }
 
     @Test
@@ -72,6 +84,167 @@ public class MetadataTypeBuilderTest
         assertNotNull(MetadataTypeBuilder.validateShape(json("{\"types\":[\"String\"]}"))); //$NON-NLS-1$
         assertNotNull(MetadataTypeBuilder.validateShape(json("{\"types\":[{}]}"))); //$NON-NLS-1$
         assertNotNull(MetadataTypeBuilder.validateShape(json("{\"types\":[{\"kind\":\"\"}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStringItemRejectsNumberMember()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"String\",\"precision\":10}]}", //$NON-NLS-1$
+            "precision", 0, "kind, length, fixed"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNumberItemRejectsStringMember()
+    {
+        // A real member of ANOTHER kind is just as invalid as an invented member.
+        assertUnknownMember("{\"types\":[{\"kind\":\"Number\",\"length\":10}]}", //$NON-NLS-1$
+            "length", 0, "kind, precision, scale, nonNegative"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNumberItemRejectsXmlSpellingsNestedShapeAndBogusMember()
+    {
+        for (String member : new String[] {
+            "Digits", "FractionDigits", "AllowedSign", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "digits", "fractionDigits", "allowedSign", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "numberQualifiers", "zzz_bogus_member"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertUnknownMember("{\"types\":[{\"kind\":\"Number\",\"" + member + "\":{}}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                member, 0, "kind, precision, scale, nonNegative"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testDateItemRejectsNumberMember()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"Date\",\"scale\":2}]}", //$NON-NLS-1$
+            "scale", 0, "kind, fractions"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testBooleanItemRejectsQualifierAtItsCompositeIndex()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"String\"},{\"kind\":\"Boolean\",\"fixed\":true}]}", //$NON-NLS-1$
+            "fixed", 1, "kind"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testReferenceItemRejectsPrimitiveMember()
+    {
+        assertUnknownMember("{\"types\":[{\"kind\":\"CatalogRef\",\"ref\":\"Catalog\",\"length\":10}]}", //$NON-NLS-1$
+            "length", 0, "kind, ref"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testKindMustBeANonEmptyString()
+    {
+        for (String value : new String[] { "1", "true", "{}", "[]", "null", "\"   \"" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "kind", "a non-empty string"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testStringQualifierValuesAndCombinationsAreValidated()
+    {
+        for (String value : new String[] { "\"50\"", "1.5", "-1", "1025", "{}", "true" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"length\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "length", "integer from 0 to 1024"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        for (String value : new String[] { "\"true\"", "1", "{}", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"length\":10,\"fixed\":" //$NON-NLS-1$
+                + value + "}]}", "fixed", "true or false"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"fixed\":true}]}", //$NON-NLS-1$
+            "fixed", "together with a 'length' member"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertInvalidMember("{\"types\":[{\"kind\":\"String\",\"length\":0,\"fixed\":true}]}", //$NON-NLS-1$
+            "fixed", "true only with a positive 'length'"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"String\",\"length\":0,\"fixed\":false}," //$NON-NLS-1$
+                + "{\"kind\":\"String\",\"length\":1024,\"fixed\":true}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNumberQualifierValuesRangesAndCombinationsAreValidated()
+    {
+        for (String value : new String[] { "\"10\"", "1.5", "0", "39", "{}", "true" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"precision\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "precision", "integer from 1 to 38"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        for (String value : new String[] { "\"2\"", "1.5", "-1", "11", "{}", "true" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"precision\":10,\"scale\":" //$NON-NLS-1$
+                + value + "}]}", "scale", "integer from 0"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"scale\":2}]}", //$NON-NLS-1$
+            "scale", "together with a 'precision' member"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String value : new String[] { "\"true\"", "1", "{}", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"precision\":10," //$NON-NLS-1$
+                + "\"nonNegative\":" + value + "}]}", "nonNegative", "true or false"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        assertInvalidMember("{\"types\":[{\"kind\":\"Number\",\"nonNegative\":true}]}", //$NON-NLS-1$
+            "nonNegative", "together with a 'precision' member"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"Number\",\"precision\":1,\"scale\":0," //$NON-NLS-1$
+                + "\"nonNegative\":false},{\"kind\":\"Number\",\"precision\":38," //$NON-NLS-1$
+                + "\"scale\":38,\"nonNegative\":true}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDateFractionsValueIsValidatedForTypeAndEnumMembership()
+    {
+        for (String value : new String[] { "\"bogus\"", "\"\"", "1", "true", "{}", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"Date\",\"fractions\":" + value + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "fractions", "DateTime, Date, or Time"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"Date\",\"fractions\":\"datetime\"}," //$NON-NLS-1$
+                + "{\"kind\":\"Date\",\"fractions\":\" Date \"}," //$NON-NLS-1$
+                + "{\"kind\":\"Date\",\"fractions\":\"TIME\"}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReferenceTargetMustBeANonEmptyString()
+    {
+        for (String suffix : new String[] { "", ",\"ref\":\"\"", ",\"ref\":\"   \"", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ",\"ref\":1", ",\"ref\":true", ",\"ref\":{}", ",\"ref\":null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertInvalidMember("{\"types\":[{\"kind\":\"CatalogRef\"" + suffix + "}]}", //$NON-NLS-1$ //$NON-NLS-2$
+                "ref", "non-empty reference target string"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testDefinedTypeKindRequiresANonEmptyReferenceTarget()
+    {
+        String error = MetadataTypeBuilder.validateShape(
+            json("{\"types\":[{\"kind\":\"DefinedType\"}]}")); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("Invalid member 'ref'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("MoneyAmount")); //$NON-NLS-1$
+        assertTrue(error, error.contains("DefinedType")); //$NON-NLS-1$
+    }
+
+    private static void assertUnknownMember(String spec, String member, int index, String accepted)
+    {
+        assertEquals("Unknown member '" + member + "' in type.types[" + index //$NON-NLS-1$ //$NON-NLS-2$
+            + "]. Accepted members: " + accepted + ". Remove '" + member + "' or use one of them.", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            MetadataTypeBuilder.validateShape(json(spec)));
+    }
+
+    private static void assertInvalidMember(String spec, String member, String expected)
+    {
+        String error = MetadataTypeBuilder.validateShape(json(spec));
+        assertNotNull(spec, error);
+        assertTrue(error, error.contains("Invalid member '" + member + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error, error.contains(expected));
     }
 
     @Test
@@ -198,23 +371,13 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
-    public void testAddTypeValueStorageIgnoresStrayQualifierFields()
+    public void testValueStorageItemRefusesStrayQualifierFields()
     {
-        // ValueStorage/UUID take NO qualifiers - a stray 'length' alongside the kind must not silently
-        // attach a StringQualifiers (applyQualifiers keys on the primitive name and is never called for
-        // these kinds at all).
-        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
-        Mockito.doReturn(McoreFactory.eINSTANCE.createType()).when(provider).createProxy("ValueStorage"); //$NON-NLS-1$
-
-        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
-        JsonObject item = json("{\"kind\":\"ValueStorage\",\"length\":50}").getAsJsonObject(); //$NON-NLS-1$
-        String err = MetadataTypeBuilder.addType(td, item, "ValueStorage", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false,
-            MetadataTypeBuilder.TypeTarget.METADATA);
-
-        assertNull(err);
-        assertNull("a stray 'length' must not attach a StringQualifiers to a no-qualifier kind", //$NON-NLS-1$
-            td.getStringQualifiers());
+        // This test used to require SUCCESS and merely assert that no StringQualifiers attached. That
+        // encoded the silent-accept defect: ValueStorage consumes no qualifier, so the member is now
+        // refused before any platform type is built.
+        assertUnknownMember("{\"types\":[{\"kind\":\"ValueStorage\",\"length\":50}]}", //$NON-NLS-1$
+            "length", 0, "kind"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -347,6 +510,7 @@ public class MetadataTypeBuilderTest
         assertNotNull(err);
         assertTrue(err.contains("ValueTable")); //$NON-NLS-1$
         assertTrue(err.contains("ValueTree")); //$NON-NLS-1$
+        assertTrue(err.contains("DefinedType")); //$NON-NLS-1$
     }
 
     @Test
@@ -366,6 +530,9 @@ public class MetadataTypeBuilderTest
         assertTrue(MetadataTypeBuilder.isRefKind("ref")); //$NON-NLS-1$
         assertTrue(MetadataTypeBuilder.isRefKind("CatalogRef")); //$NON-NLS-1$
         assertTrue(MetadataTypeBuilder.isRefKind("documentref")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isRefKind("DefinedType")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isRefKind(russianDefinedTypeToken()));
+        assertFalse(MetadataTypeBuilder.isRefKind("DefinedType.MoneyAmount")); //$NON-NLS-1$
         assertFalse(MetadataTypeBuilder.isRefKind("String")); //$NON-NLS-1$
         assertFalse(MetadataTypeBuilder.isRefKind("Reference")); //$NON-NLS-1$
         assertFalse(MetadataTypeBuilder.isRefKind(null));
@@ -410,6 +577,132 @@ public class MetadataTypeBuilderTest
         assertNull(MetadataTypeBuilder.objectType(null));
         EObject notAnMdObject = EcoreFactory.eINSTANCE.createEObject();
         assertNull(MetadataTypeBuilder.objectType(notAnMdObject));
+    }
+
+    // ---- DefinedType model-owned TypeSet (issue #498) -------------------------------------------
+
+    @Test
+    public void testAddTypeDefinedTypeKindSharesProducedTypeSetForEveryTarget()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeItem expected = seedDefinedType(config, "MoneyAmount", true); //$NON-NLS-1$
+        JsonObject item = json(
+            "{\"kind\":\"DefinedType\",\"ref\":\"MoneyAmount\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        for (MetadataTypeBuilder.TypeTarget target : MetadataTypeBuilder.TypeTarget.values())
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = MetadataTypeBuilder.addType(td, item, "DefinedType", null, config, false, //$NON-NLS-1$
+                target);
+
+            assertNull("DefinedType must be accepted for " + target, error); //$NON-NLS-1$
+            assertEquals(1, td.getTypes().size());
+            assertSame("the model-owned TypeSet must be shared", expected, td.getTypes().get(0)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAddTypeRefToDefinedTypeSharesTheSameProducedTypeSetInBothLanguages()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeItem expected = seedDefinedType(config, "MoneyAmount", true); //$NON-NLS-1$
+        String ruKind = russianDefinedTypeToken();
+
+        for (String ref : new String[] {"DefinedType.MoneyAmount", ruKind + ".MoneyAmount"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = new JsonObject();
+            item.addProperty("kind", "Ref"); //$NON-NLS-1$ //$NON-NLS-2$
+            item.addProperty("ref", ref); //$NON-NLS-1$
+            String error = MetadataTypeBuilder.addType(td, item, "Ref", null, config, false, //$NON-NLS-1$
+                MetadataTypeBuilder.TypeTarget.METADATA);
+
+            assertNull(ref, error);
+            assertSame(ref, expected, td.getTypes().get(0));
+        }
+    }
+
+    @Test
+    public void testAddTypeRussianDefinedTypeKindResolvesThroughSharedTypeCatalog()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeItem expected = seedDefinedType(config, "MoneyAmount", true); //$NON-NLS-1$
+        String ruKind = russianDefinedTypeToken();
+        JsonObject item = new JsonObject();
+        item.addProperty("kind", ruKind); //$NON-NLS-1$
+        item.addProperty("ref", "MoneyAmount"); //$NON-NLS-1$ //$NON-NLS-2$
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String error = MetadataTypeBuilder.addType(td, item, ruKind, null, config, false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNull(error);
+        assertSame(expected, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testInlineDefinedTypeKindRoundTripsRenderedTypeNameInBothLanguages()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeItem expected = seedDefinedType(config, "MoneyAmount", true); //$NON-NLS-1$
+        String ruKind = russianDefinedTypeToken();
+
+        for (String kind : new String[] {
+            "DefinedType.MoneyAmount", ruKind + ".MoneyAmount"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = new JsonObject();
+            item.addProperty("kind", kind); //$NON-NLS-1$
+            String error = MetadataTypeBuilder.addType(td, item, kind, null, config, false,
+                MetadataTypeBuilder.TypeTarget.METADATA);
+
+            assertNull(kind, error);
+            assertSame(kind, expected, td.getTypes().get(0));
+        }
+
+        TypeDescription current = McoreFactory.eINSTANCE.createTypeDescription();
+        current.getTypes().add(expected);
+        CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        attribute.eSet(attribute.eClass().getEStructuralFeature("type"), current); //$NON-NLS-1$
+        assertEquals("DefinedType.MoneyAmount", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(attribute, "type").currentValue); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownDefinedTypeNameReturnsActionableReferenceError()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json(
+            "{\"kind\":\"DefinedType\",\"ref\":\"NoSuchDefinedType\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String error = MetadataTypeBuilder.addType(td, item, "DefinedType", null, config, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("Cannot resolve the reference target")); //$NON-NLS-1$
+        assertTrue(error, error.contains("DefinedType.NoSuchDefinedType")); //$NON-NLS-1$
+        assertTrue(error, error.contains("check the object exists")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testDefinedTypeWithoutProducedTypeSetReportsUnavailableChain()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        seedDefinedType(config, "NotReady", false); //$NON-NLS-1$
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json(
+            "{\"kind\":\"DefinedType\",\"ref\":\"NotReady\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String error = MetadataTypeBuilder.addType(td, item, "DefinedType", null, config, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("DefinedType.NotReady")); //$NON-NLS-1$
+        assertTrue(error, error.contains("producedTypes/containerType/typeSet")); //$NON-NLS-1$
+        assertTrue(error, error.contains("revalidate_objects")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
     }
 
     // ---- extension-adopt hint on an unresolved reference target (issue #262 "Мелочь (UX)") ------
@@ -612,5 +905,45 @@ public class MetadataTypeBuilderTest
         assertTrue("the collection wording must survive the platform probe", //$NON-NLS-1$
             err.contains("IN-MEMORY collection")); //$NON-NLS-1$
         Mockito.verify(provider, Mockito.never()).createProxy(Mockito.anyString());
+    }
+
+    private static String russianDefinedTypeToken()
+    {
+        return MetadataLanguageUtils.cp(0x041E, 0x043F, 0x0440, 0x0435, 0x0434, 0x0435, 0x043B,
+            0x044F, 0x0435, 0x043C, 0x044B, 0x0439, 0x0422, 0x0438, 0x043F);
+    }
+
+    /** Seeds a generated DefinedType and, optionally, its full produced TypeSet chain. */
+    @SuppressWarnings("unchecked")
+    private static TypeItem seedDefinedType(Configuration config, String name, boolean withProducedTypeSet)
+    {
+        MdObject definedType = (MdObject)EcoreUtil.create(MdClassPackage.Literals.DEFINED_TYPE);
+        definedType.setName(name);
+        EStructuralFeature collection = config.eClass().getEStructuralFeature("definedTypes"); //$NON-NLS-1$
+        assertNotNull(collection);
+        ((java.util.List<MdObject>)config.eGet(collection)).add(definedType);
+        if (!withProducedTypeSet)
+        {
+            return null;
+        }
+
+        EObject producedTypes = newContainedValue(definedType, "producedTypes"); //$NON-NLS-1$
+        EObject containerType = newContainedValue(producedTypes, "containerType"); //$NON-NLS-1$
+        TypeItem typeSet = (TypeItem)newContainedValue(containerType, "typeSet"); //$NON-NLS-1$
+        EStructuralFeature typeSetName = typeSet.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+        assertNotNull(typeSetName);
+        typeSet.eSet(typeSetName, "DefinedType." + name); //$NON-NLS-1$
+        return typeSet;
+    }
+
+    private static EObject newContainedValue(EObject owner, String featureName)
+    {
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        assertTrue(featureName, feature instanceof EReference);
+        EReference reference = (EReference)feature;
+        assertTrue(featureName, reference.isContainment());
+        EObject value = EcoreUtil.create(reference.getEReferenceType());
+        owner.eSet(reference, value);
+        return value;
     }
 }

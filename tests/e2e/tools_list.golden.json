@@ -848,6 +848,93 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "enum": [
+            "get",
+            "options",
+            "upsert",
+            "update",
+            "replace",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "description": "Mutation body; forbidden for get/options/remove and required by the other mutations.",
+          "type": "object"
+        },
+        "expectedHash": {
+          "type": "string"
+        },
+        "format": {
+          "description": "Read output; defaults to md. xml is only for a bare schema get.",
+          "enum": [
+            "md",
+            "xml"
+          ],
+          "type": "string"
+        },
+        "fqn": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "schema",
+            "dynamicList",
+            "dataSource",
+            "dataSet",
+            "field",
+            "fieldFolder",
+            "parameter",
+            "calculatedField",
+            "totalField",
+            "variant",
+            "grouping",
+            "selection",
+            "filter",
+            "dataParameter",
+            "order",
+            "conditionalAppearance",
+            "table",
+            "userField",
+            "outputParameter",
+            "userSettings"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn",
+        "action",
+        "type"
+      ],
+      "type": "object"
+    },
+    "name": "dcs",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
@@ -1198,7 +1285,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; force=true overrides that block and leaves those references dangling. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: NOTHING blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a field's dataPath, a command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Parameters and examples: get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms and metadata - the referring objects themselves are NOT deleted. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring objects; an EDT platform prohibition is listed separately and also blocks. force=true overrides either block and leaves only genuine incoming references dangling. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: NOTHING blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a field's dataPath, a command, an XDTO type) are left broken - re-check with get_metadata_details (find_references takes TOP-level FQNs only, not these members). Parameters and examples: get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -1262,7 +1349,25 @@
         "message": {
           "type": "string"
         },
+        "persisted": {
+          "type": "boolean"
+        },
+        "platformProhibitions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "platformProhibitionsCount": {
+          "type": "integer"
+        },
         "refactoringTitle": {
+          "type": "string"
+        },
+        "registeringContainer": {
+          "type": "string"
+        },
+        "registeringFile": {
           "type": "string"
         },
         "success": {
@@ -3276,10 +3381,6 @@
           },
           "type": "array"
         },
-        "dcs": {
-          "description": "REPORT FQN only ('Report.<Name>'): the Data Composition Schema (СКД) content to author, instead of 'properties'. Authors the report's main DCS (creating it if the report has none yet). An object with: 'dataSources' [{name, type?}] (a data source, default type a local query source); 'dataSets' [{name, type:'query', query (the 1C query text, bilingual keywords), dataSource?, autoFillFields? (default true - EDT derives the fields from the query), fields? [{name?, dataPath, title?, role?}]}] a query data set; 'parameters' [{name, valueType?, title?, use?}] schema parameters. Valid only for a Report FQN; cannot be combined with 'properties' / 'content' / 'template' / a Role payload.",
-          "type": "object"
-        },
         "fqn": {
           "type": "string"
         },
@@ -3339,9 +3440,6 @@
           "type": "array"
         },
         "content": {
-          "type": "object"
-        },
-        "dcs": {
           "type": "object"
         },
         "destination": {

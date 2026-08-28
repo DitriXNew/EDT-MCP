@@ -16,6 +16,7 @@ import static org.junit.Assert.assertTrue;
 import java.util.Collections;
 import java.util.List;
 
+import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnum;
@@ -28,12 +29,19 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.QName;
+import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.ValueKind;
 
@@ -427,6 +435,94 @@ public class MetadataPropertyIntrospectorTest
             names.contains("suppressObject")); //$NON-NLS-1$
     }
 
+    // ---- contained mcore value classes (issues #497 / #450) -----------------------------------
+
+    @Test
+    public void testAContainedPictureIsThePictureKind()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.PICTURE, true, false);
+        PropertyInfo picture = MetadataPropertyIntrospector.findFeature(holder, "flag"); //$NON-NLS-1$
+
+        assertNotNull("a single contained Picture must be assignable", picture); //$NON-NLS-1$
+        assertEquals(ValueKind.PICTURE, picture.valueKind);
+    }
+
+    @Test
+    public void testAContainedQNameIsTheQNameKind()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.QNAME, true, false);
+        PropertyInfo qname = MetadataPropertyIntrospector.findFeature(holder, "flag"); //$NON-NLS-1$
+
+        assertNotNull("a single contained QName must be assignable", qname); //$NON-NLS-1$
+        assertEquals(ValueKind.QNAME, qname.valueKind);
+    }
+
+    @Test
+    public void testQNameCurrentValueRendersCompactForm()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.QNAME, true, false);
+        QName value = McoreFactory.eINSTANCE.createQName();
+        value.setName("string"); //$NON-NLS-1$
+        value.setNsUri("http://www.w3.org/2001/XMLSchema"); //$NON-NLS-1$
+        holder.eSet(holder.eClass().getEStructuralFeature("flag"), value); //$NON-NLS-1$
+
+        assertEquals("{http://www.w3.org/2001/XMLSchema}string", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(holder, "flag").currentValue); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAManyContainedPictureStaysExcludedAsAChildCollection()
+    {
+        assertNull("a child-collection containment reference must stay unassignable", //$NON-NLS-1$
+            MetadataPropertyIntrospector.findFeature(
+                newFlagHolder(McorePackage.Literals.PICTURE, true, true), "flag")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASubtypeOfPictureIsStillClassified()
+    {
+        EClass subtype = EcoreFactory.eINSTANCE.createEClass();
+        subtype.setName("SpecializedPicture"); //$NON-NLS-1$
+        subtype.getESuperTypes().add(McorePackage.Literals.PICTURE);
+
+        PropertyInfo picture = MetadataPropertyIntrospector.findFeature(
+            newFlagHolder(subtype, true, false), "flag"); //$NON-NLS-1$
+        assertNotNull("a subtype of Picture must still be assignable", picture); //$NON-NLS-1$
+        assertEquals(ValueKind.PICTURE, picture.valueKind);
+    }
+
+    @Test
+    public void testAManyContainedMcoreValueIsTheMcoreValueListKind()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+        PropertyInfo values = MetadataPropertyIntrospector.findFeature(holder, "flag"); //$NON-NLS-1$
+
+        assertNotNull("a many containment declared against mcore Value must be assignable", values); //$NON-NLS-1$
+        assertEquals(ValueKind.MCORE_VALUE_LIST, values.valueKind);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testMcoreValueListCurrentValueRendersAsRoundTrippableJsonArray()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+        EList<Value> values = (EList<Value>)holder.eGet(
+            holder.eClass().getEStructuralFeature("flag")); //$NON-NLS-1$
+
+        XDTOPackage xdtoPackage = MdClassFactory.eINSTANCE.createXDTOPackage();
+        xdtoPackage.setName("Orders"); //$NON-NLS-1$
+        ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+        reference.setValue(xdtoPackage);
+        values.add(reference);
+
+        StringValue namespace = McoreFactory.eINSTANCE.createStringValue();
+        namespace.setValue("http://v8.1c.ru/8.1/data/core"); //$NON-NLS-1$
+        values.add(namespace);
+
+        assertEquals("[\"XDTOPackage.Orders\",\"http://v8.1c.ru/8.1/data/core\"]", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(holder, "flag").currentValue); //$NON-NLS-1$
+    }
+
     // ---- contained AdjustableBoolean flags (issue #382) -----------------------------------------
     //
     // A form attribute's view / edit, a form item's userVisible and a form command's use are NOT
@@ -600,6 +696,30 @@ public class MetadataPropertyIntrospectorTest
         assertNotNull(id);
         assertTrue("id is a direct INTEGER", id.valueKind == ValueKind.INTEGER); //$NON-NLS-1$
         assertFalse("a direct feature is never onExtInfo", id.onExtInfo); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLongAttributeIsClassifiedAsLong()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("longlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("longlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/longlike"); //$NON-NLS-1$
+
+        EClass service = f.createEClass();
+        service.setName("WebService"); //$NON-NLS-1$
+        EAttribute sessionMaxAge = f.createEAttribute();
+        sessionMaxAge.setName("sessionMaxAge"); //$NON-NLS-1$
+        sessionMaxAge.setEType(EcorePackage.Literals.ELONG);
+        service.getEStructuralFeatures().add(sessionMaxAge);
+        pkg.getEClassifiers().add(service);
+
+        PropertyInfo info = MetadataPropertyIntrospector.findFeature(
+            pkg.getEFactoryInstance().create(service), "sessionMaxAge"); //$NON-NLS-1$
+        assertNotNull(info);
+        assertEquals("an ELong attribute must advertise its 64-bit kind", //$NON-NLS-1$
+            "LONG", info.valueKind.name()); //$NON-NLS-1$
     }
 
     @Test

@@ -7,39 +7,22 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.model.Module;
-import com._1c.g5.v8.dt.metadata.mdclass.AccumulationRegister;
-import com._1c.g5.v8.dt.metadata.mdclass.BusinessProcess;
-import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
-import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
-import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
-import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
-import com._1c.g5.v8.dt.metadata.mdclass.Constant;
-import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
-import com._1c.g5.v8.dt.metadata.mdclass.Document;
-import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
-import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
-import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
-import com._1c.g5.v8.dt.metadata.mdclass.Report;
-import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
-import com._1c.g5.v8.dt.metadata.mdclass.Task;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -53,6 +36,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -63,25 +47,8 @@ public class GetMetadataObjectsTool implements IMcpTool
 {
     public static final String NAME = "get_metadata_objects"; //$NON-NLS-1$
     
-    /** Metadata type constants (all lowercase for case-insensitive matching) */
+    /** Special metadata type that lists every configuration collection. */
     private static final String TYPE_ALL = "all"; //$NON-NLS-1$
-    private static final String TYPE_DOCUMENTS = "documents"; //$NON-NLS-1$
-    private static final String TYPE_CATALOGS = "catalogs"; //$NON-NLS-1$
-    private static final String TYPE_INFORMATION_REGISTERS = "informationregisters"; //$NON-NLS-1$
-    private static final String TYPE_ACCUMULATION_REGISTERS = "accumulationregisters"; //$NON-NLS-1$
-    private static final String TYPE_COMMON_MODULES = "commonmodules"; //$NON-NLS-1$
-    private static final String TYPE_ENUMS = "enums"; //$NON-NLS-1$
-    private static final String TYPE_CONSTANTS = "constants"; //$NON-NLS-1$
-    private static final String TYPE_REPORTS = "reports"; //$NON-NLS-1$
-    private static final String TYPE_DATA_PROCESSORS = "dataprocessors"; //$NON-NLS-1$
-    private static final String TYPE_EXCHANGE_PLANS = "exchangeplans"; //$NON-NLS-1$
-    private static final String TYPE_BUSINESS_PROCESSES = "businessprocesses"; //$NON-NLS-1$
-    private static final String TYPE_TASKS = "tasks"; //$NON-NLS-1$
-    private static final String TYPE_COMMON_ATTRIBUTES = "commonattributes"; //$NON-NLS-1$
-    private static final String TYPE_EVENT_SUBSCRIPTIONS = "eventsubscriptions"; //$NON-NLS-1$
-    private static final String TYPE_SCHEDULED_JOBS = "scheduledjobs"; //$NON-NLS-1$
-
-    private static final String TYPE_XDTO_PACKAGES = "xdtopackages"; //$NON-NLS-1$
 
     /** The two categories only an EXTERNAL-OBJECTS project can answer (issue #309). */
     private static final String TYPE_EXTERNAL_DATA_PROCESSORS = "externaldataprocessors"; //$NON-NLS-1$
@@ -92,19 +59,12 @@ public class GetMetadataObjectsTool implements IMcpTool
     /** The English singular type token behind {@link #TYPE_EXTERNAL_REPORTS}. */
     private static final String TOKEN_EXTERNAL_REPORT = "ExternalReport"; //$NON-NLS-1$
 
-    /**
-     * The category tokens this tool actually collects (lowercase). Used both as the
-     * legacy vocabulary of {@code metadataType} and as the target of the type-name-token
-     * normalization in {@link #normalizeMetadataType(String)}: {@code MetadataTypeUtils}
-     * recognizes far more type names (e.g. Role, Subsystem) than this tool has collectors
-     * for, so a resolved type name is only accepted when its category is a member of this
-     * set.
-     */
-    private static final Set<String> SUPPORTED_CATEGORIES = new HashSet<>(Arrays.asList(
-        TYPE_DOCUMENTS, TYPE_CATALOGS, TYPE_INFORMATION_REGISTERS, TYPE_ACCUMULATION_REGISTERS,
-        TYPE_COMMON_MODULES, TYPE_ENUMS, TYPE_CONSTANTS, TYPE_REPORTS, TYPE_DATA_PROCESSORS,
-        TYPE_EXCHANGE_PLANS, TYPE_BUSINESS_PROCESSES, TYPE_TASKS, TYPE_COMMON_ATTRIBUTES,
-        TYPE_EVENT_SUBSCRIPTIONS, TYPE_SCHEDULED_JOBS, TYPE_XDTO_PACKAGES));
+    private static final String FEATURE_MANAGER_MODULE = "managerModule"; //$NON-NLS-1$
+    private static final String FEATURE_OBJECT_MODULE = "objectModule"; //$NON-NLS-1$
+    private static final String FEATURE_RECORD_SET_MODULE = "recordSetModule"; //$NON-NLS-1$
+    private static final String FEATURE_VALUE_MANAGER_MODULE = "valueManagerModule"; //$NON-NLS-1$
+    private static final String FEATURE_MODULE = "module"; //$NON-NLS-1$
+    private static final String FEATURE_COMMAND_MODULE = "commandModule"; //$NON-NLS-1$
 
     private static final String LIMIT = "limit"; //$NON-NLS-1$
 
@@ -128,14 +88,12 @@ public class GetMetadataObjectsTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
-                "Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, " + //$NON-NLS-1$
-                "documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, " + //$NON-NLS-1$
-                "constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, " + //$NON-NLS-1$
-                "commonAttributes, eventSubscriptions, scheduledJobs, xdtoPackages - OR a single " + //$NON-NLS-1$
-                "standard metadata " + //$NON-NLS-1$
-                "type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', " + //$NON-NLS-1$
-                "'Document'). Single value only - not an array. An unrecognized value returns an error " + //$NON-NLS-1$
-                "listing the supported options. In an EXTERNAL-OBJECTS project the vocabulary is " + //$NON-NLS-1$
+                "Type filter (case-insensitive), default 'all'. Accepts 'all' or any standard metadata " + //$NON-NLS-1$
+                "type name (the FQN token). English resolves in singular OR plural ('ScheduledJob', " + //$NON-NLS-1$
+                "'Role', 'httpServices'); Russian resolves in the spelling 1C registers for that type, " + //$NON-NLS-1$
+                "which for most types is the singular alone ('\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A', " + //$NON-NLS-1$
+                "'\u041E\u0431\u0449\u0430\u044F\u0424\u043E\u0440\u043C\u0430'). Single value only - not an array. " + //$NON-NLS-1$
+                "In an EXTERNAL-OBJECTS project the vocabulary is " + //$NON-NLS-1$
                 "all / externalDataProcessors / externalReports instead - that project holds its " + //$NON-NLS-1$
                 "own roots, not a configuration.") //$NON-NLS-1$
             .stringProperty("nameFilter", //$NON-NLS-1$
@@ -208,7 +166,15 @@ public class GetMetadataObjectsTool implements IMcpTool
             catch (Exception e)
             {
                 Activator.logError("Error getting metadata objects", e); //$NON-NLS-1$
-                resultRef.set(ToolResult.error(e.getMessage()).toJson());
+                // NOT e.getMessage(): the failure actually seen here was a NullPointerException,
+                // whose message is null, so the caller was handed "Unknown error" - a dead end for
+                // anyone, and worse for an agent that cannot read the EDT log. PlatformFailures
+                // walks the cause chain and any IStatus children for something that names the
+                // failure, and falls back to the exception's own type when nothing else does.
+                resultRef.set(ToolResult.error(
+                    "Could not list metadata objects: " + PlatformFailures.describe(e) //$NON-NLS-1$
+                    + ". If this followed a clean_project or a project reload, EDT may still be " //$NON-NLS-1$
+                    + "restarting the project context - retry once it reports ready.").toJson()); //$NON-NLS-1$
             }
         });
         
@@ -246,104 +212,37 @@ public class GetMetadataObjectsTool implements IMcpTool
                 effectiveLanguage);
         }
 
-        // Normalize metadataType to the internal category token: either it already IS
-        // one (legacy vocabulary, back-compat), or it is a standard type-name token
-        // (FQN form, English/Russian, singular/plural - e.g. "ScheduledJob") resolved
-        // via the shared MetadataTypeUtils resolver. See normalizeMetadataType javadoc.
-        String category = normalizeMetadataType(metadataType);
-        if (category == null)
+        // Normalize the caller's bilingual type spelling to the canonical English FQN token.
+        String normalizedType = normalizeMetadataType(metadataType);
+        if (normalizedType == null)
         {
             String standalone = standaloneTypeRefusal(scope, metadataType);
             if (standalone != null)
             {
                 return standalone;
             }
-            return ToolResult.error("Unknown metadata type: " + metadataType + ". " + //$NON-NLS-1$ //$NON-NLS-2$
-                   "Supported categories (case-insensitive): all, documents, catalogs, informationRegisters, " + //$NON-NLS-1$
-                   "accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, " + //$NON-NLS-1$
-                   "exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, " + //$NON-NLS-1$
-                   "scheduledJobs, xdtoPackages. Also accepts a standard metadata type name (the FQN " + //$NON-NLS-1$
-                   "token, English " + //$NON-NLS-1$
-                   "or Russian, singular or plural, e.g. 'ScheduledJob', 'Document') for one of these " + //$NON-NLS-1$
-                   "categories.").toJson(); //$NON-NLS-1$
+            return unknownMetadataType(metadataType);
         }
 
-        // Collect metadata objects
+        // Count every match for the Total line, but copy synonym maps only for rows that
+        // can be rendered. Large configurations contain tens of thousands of top objects.
         List<MetadataInfo> objects = new ArrayList<>();
-
-        switch (category)
+        int total = 0;
+        if (TYPE_ALL.equals(normalizedType))
         {
-            case TYPE_ALL:
-                collectDocuments(config, objects, nameFilter);
-                collectCatalogs(config, objects, nameFilter);
-                collectInformationRegisters(config, objects, nameFilter);
-                collectAccumulationRegisters(config, objects, nameFilter);
-                collectCommonModules(config, objects, nameFilter);
-                collectEnums(config, objects, nameFilter);
-                collectConstants(config, objects, nameFilter);
-                collectReports(config, objects, nameFilter);
-                collectDataProcessors(config, objects, nameFilter);
-                collectExchangePlans(config, objects, nameFilter);
-                collectBusinessProcesses(config, objects, nameFilter);
-                collectTasks(config, objects, nameFilter);
-                collectCommonAttributes(config, objects, nameFilter);
-                collectEventSubscriptions(config, objects, nameFilter);
-                collectScheduledJobs(config, objects, nameFilter);
-                collectXdtoPackages(config, objects, nameFilter);
-                break;
-            case TYPE_DOCUMENTS:
-                collectDocuments(config, objects, nameFilter);
-                break;
-            case TYPE_CATALOGS:
-                collectCatalogs(config, objects, nameFilter);
-                break;
-            case TYPE_INFORMATION_REGISTERS:
-                collectInformationRegisters(config, objects, nameFilter);
-                break;
-            case TYPE_ACCUMULATION_REGISTERS:
-                collectAccumulationRegisters(config, objects, nameFilter);
-                break;
-            case TYPE_COMMON_MODULES:
-                collectCommonModules(config, objects, nameFilter);
-                break;
-            case TYPE_ENUMS:
-                collectEnums(config, objects, nameFilter);
-                break;
-            case TYPE_CONSTANTS:
-                collectConstants(config, objects, nameFilter);
-                break;
-            case TYPE_REPORTS:
-                collectReports(config, objects, nameFilter);
-                break;
-            case TYPE_DATA_PROCESSORS:
-                collectDataProcessors(config, objects, nameFilter);
-                break;
-            case TYPE_EXCHANGE_PLANS:
-                collectExchangePlans(config, objects, nameFilter);
-                break;
-            case TYPE_BUSINESS_PROCESSES:
-                collectBusinessProcesses(config, objects, nameFilter);
-                break;
-            case TYPE_TASKS:
-                collectTasks(config, objects, nameFilter);
-                break;
-            case TYPE_COMMON_ATTRIBUTES:
-                collectCommonAttributes(config, objects, nameFilter);
-                break;
-            case TYPE_EVENT_SUBSCRIPTIONS:
-                collectEventSubscriptions(config, objects, nameFilter);
-                break;
-            case TYPE_SCHEDULED_JOBS:
-                collectScheduledJobs(config, objects, nameFilter);
-                break;
-            case TYPE_XDTO_PACKAGES:
-                collectXdtoPackages(config, objects, nameFilter);
-                break;
-            default:
-                // Unreachable: normalizeMetadataType only ever returns TYPE_ALL or a
-                // member of SUPPORTED_CATEGORIES, both fully covered above. Kept as a
-                // defensive net against the two enumerations drifting apart.
-                return ToolResult.error("Unknown metadata type: " + metadataType).toJson(); //$NON-NLS-1$
+            for (MetadataTypeUtils.MetadataTypeInfo info
+                : MetadataTypeUtils.MetadataTypeInfo.values())
+            {
+                if (!info.isStandalone())
+                {
+                    total += collectMetadataObjects(config, info, objects, nameFilter, limit);
+                }
+            }
+        }
+        else
+        {
+            MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(normalizedType);
+            total = collectMetadataObjects(config, info, objects, nameFilter, limit);
         }
 
         // An object's ORIGIN (core vs extension-adopted vs extension-own) is only
@@ -352,10 +251,8 @@ public class GetMetadataObjectsTool implements IMcpTool
         // Origin column only then; a base configuration keeps its original columns.
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
 
-        // Format output. Show the caller's ORIGINAL filter value in the "Filter:" line (what
-        // they typed - a category token, a type name, whatever casing), not the internal
-        // lowercased category token; the TYPE_ALL comparison in formatOutput is case-insensitive.
-        return formatOutput(projectName, objects, limit, effectiveLanguage, metadataType,
+        // Show the caller's original filter spelling in the Filter line.
+        return formatOutput(projectName, objects, total, limit, effectiveLanguage, metadataType,
             isExtensionProject, false);
     }
 
@@ -391,16 +288,19 @@ public class GetMetadataObjectsTool implements IMcpTool
         }
 
         List<MetadataInfo> objects = new ArrayList<>();
+        int total = 0;
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(category))
         {
-            collectExternalObjects(scope, TOKEN_EXTERNAL_DATA_PROCESSOR, objects, nameFilter);
+            total += collectExternalObjects(scope, TOKEN_EXTERNAL_DATA_PROCESSOR, objects,
+                nameFilter, limit);
         }
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_REPORTS.equals(category))
         {
-            collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, objects, nameFilter);
+            total += collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, objects, nameFilter,
+                limit);
         }
         // An external-objects project holds no adopted objects, so it has no Origin column.
-        return formatOutput(projectName, objects, limit, language, metadataType, false, true);
+        return formatOutput(projectName, objects, total, limit, language, metadataType, false, true);
     }
 
     /**
@@ -446,17 +346,24 @@ public class GetMetadataObjectsTool implements IMcpTool
     /**
      * Appends the external objects of one TYPE, honouring the Name substring filter.
      */
-    private void collectExternalObjects(MetadataScope scope, String typeToken,
-        List<MetadataInfo> objects, String filter)
+    private int collectExternalObjects(MetadataScope scope, String typeToken,
+        List<MetadataInfo> objects, String filter, int limit)
     {
         List<? extends MdObject> found = scope.objects(typeToken);
         if (found == null)
         {
-            return;
+            return 0;
         }
+
+        int total = 0;
         for (MdObject object : found)
         {
             if (!matchesFilter(object.getName(), filter))
+            {
+                continue;
+            }
+            total++;
+            if (objects.size() >= limit)
             {
                 continue;
             }
@@ -465,6 +372,7 @@ public class GetMetadataObjectsTool implements IMcpTool
             info.hasObjectModule = hasModule(externalObjectModule(object));
             objects.add(info);
         }
+        return total;
     }
 
     /** The object module of an external data processor / report, or {@code null}. */
@@ -502,73 +410,62 @@ public class GetMetadataObjectsTool implements IMcpTool
     }
 
     /**
-     * Normalizes the {@code metadataType} filter value to the internal category token
-     * used by the collection switch above. Accepted forms, checked in this order:
-     * <ol>
-     *   <li>{@code "all"} (special, always wins);</li>
-     *   <li>an existing category token ({@code documents}, {@code catalogs}, ...,
-     *       {@code scheduledJobs}), case-insensitive - checked BEFORE type-name
-     *       resolution so a category token can never be shadowed by it;</li>
-     *   <li>a standard metadata type name in any form {@code MetadataTypeUtils}
-     *       recognizes (English/Russian, singular/plural, e.g. "ScheduledJob",
-     *       "РегламентноеЗадание"),
-     *       mapped to its category token via {@link MetadataTypeUtils.MetadataTypeInfo#getConfigReferenceName()}
-     *       IF that category is one this tool actually collects
-     *       ({@link #SUPPORTED_CATEGORIES}) - a type MetadataTypeUtils recognizes but
-     *       this tool has no collector for (e.g. Role, Subsystem) falls
-     *       through to "not recognized" here, same as an unknown value.</li>
-     * </ol>
-     * This reuses the shared bilingual resolver (do NOT hand-roll type resolution,
-     * see CLAUDE.md #4) rather than adding a second Russian-token table.
+     * Normalizes a configuration {@code metadataType} filter through the shared bilingual
+     * resolver. {@code all} is handled first as the one special value; every configuration
+     * member resolves to its canonical English singular FQN token. Standalone external objects
+     * deliberately return {@code null} so {@link #standaloneTypeRefusal(MetadataScope, String)}
+     * can explain the project boundary.
      *
-     * Package-private (not {@code private}) so it can be unit-tested directly: unlike
-     * the rest of {@code getMetadataObjectsInternal}, this method touches neither the
-     * workbench nor a live {@code Configuration} - it is pure string/lookup logic
-     * against {@code MetadataTypeUtils}, which {@code MetadataTypeUtilsTest} already
-     * proves runs standalone.
+     * <p>Package-private so the string-only normalization can be unit-tested without a live
+     * workbench or configuration.</p>
      *
      * @param metadataType raw filter value as supplied by the caller
-     * @return the category token to switch on ({@link #TYPE_ALL} or a member of
-     *         {@link #SUPPORTED_CATEGORIES}), or {@code null} if not recognized in any form
+     * @return {@link #TYPE_ALL}, a canonical English singular type token, or {@code null}
      */
     String normalizeMetadataType(String metadataType)
     {
-        if (metadataType == null || metadataType.isEmpty())
+        if (TYPE_ALL.equalsIgnoreCase(metadataType))
+        {
+            return TYPE_ALL;
+        }
+
+        MetadataTypeUtils.MetadataTypeInfo typeInfo = MetadataTypeUtils.resolve(metadataType);
+        if (typeInfo == null || typeInfo.isStandalone())
         {
             return null;
         }
+        return typeInfo.getEnglishSingular();
+    }
 
-        String lower = metadataType.toLowerCase();
-        if (TYPE_ALL.equals(lower) || SUPPORTED_CATEGORIES.contains(lower))
+    /** Builds the complete configuration-type vocabulary only when an invalid value is reported. */
+    private static String unknownMetadataType(String metadataType)
+    {
+        StringBuilder acceptedTypes = new StringBuilder();
+        for (MetadataTypeUtils.MetadataTypeInfo info : MetadataTypeUtils.MetadataTypeInfo.values())
         {
-            return lower;
-        }
-
-        // Not a category token - try resolving it as a standard metadata type name
-        // (FQN token, English or Russian, singular or plural) via the shared resolver.
-        MetadataTypeUtils.MetadataTypeInfo typeInfo = MetadataTypeUtils.resolve(metadataType);
-        if (typeInfo != null)
-        {
-            String configReferenceName = typeInfo.getConfigReferenceName();
-            if (configReferenceName != null)
+            if (!info.isStandalone())
             {
-                String category = configReferenceName.toLowerCase();
-                if (SUPPORTED_CATEGORIES.contains(category))
+                if (acceptedTypes.length() > 0)
                 {
-                    return category;
+                    acceptedTypes.append(", "); //$NON-NLS-1$
                 }
+                acceptedTypes.append(info.getEnglishSingular());
             }
         }
 
-        return null;
+        return ToolResult.error("Unknown metadata type: " + metadataType + ". Accepted values are " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'all' or any standard configuration metadata type name (case-insensitive). Each type " //$NON-NLS-1$
+            + "below is accepted in English singular or plural, and in the Russian spelling 1C " //$NON-NLS-1$
+            + "registers for it - for most types the singular alone. Configuration metadata types: " //$NON-NLS-1$
+            + acceptedTypes
+            + ". See get_tool_guide('get_metadata_objects') for the full parameter list.").toJson(); //$NON-NLS-1$
     }
 
     /**
      * Formats the output as markdown.
      */
-    private String formatOutput(String projectName, List<MetadataInfo> objects, int limit, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-                                 String language, String metadataType, boolean isExtensionProject,
-                                 boolean externalObjects)
+    private String formatOutput(String projectName, List<MetadataInfo> objects, int total, int limit, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        String language, String metadataType, boolean isExtensionProject, boolean externalObjects)
     {
         StringBuilder sb = new StringBuilder();
         
@@ -577,7 +474,6 @@ public class GetMetadataObjectsTool implements IMcpTool
         sb.append(externalObjects ? "## External Objects: " : "## Configuration Metadata: ") //$NON-NLS-1$ //$NON-NLS-2$
             .append(projectName).append("\n\n"); //$NON-NLS-1$
         
-        int total = objects.size();
         int shown = Math.min(total, limit);
         
         if (!TYPE_ALL.equalsIgnoreCase(metadataType))
@@ -588,7 +484,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         sb.append(Pagination.truncationNotice(shown, total));
         sb.append("\n\n"); //$NON-NLS-1$
         
-        if (objects.isEmpty())
+        if (total == 0)
         {
             sb.append("No metadata objects found.\n"); //$NON-NLS-1$
             return sb.toString();
@@ -656,236 +552,46 @@ public class GetMetadataObjectsTool implements IMcpTool
             managerModule);
     }
     
-    // ========== Collection methods ==========
-    
-    private void collectDocuments(Configuration config, List<MetadataInfo> objects, String filter)
+    /** Counts one configuration collection and materializes only rows that can be displayed. */
+    private int collectMetadataObjects(Configuration config, MetadataTypeUtils.MetadataTypeInfo typeInfo,
+        List<MetadataInfo> objects, String filter, int limit)
     {
-        for (Document doc : config.getDocuments())
+        if (typeInfo == null)
         {
-            if (matchesFilter(doc.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(doc, "Document"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(doc.getObjectModule());
-                info.hasManagerModule = hasModule(doc.getManagerModule());
-                objects.add(info);
-            }
+            return 0;
         }
-    }
-    
-    private void collectCatalogs(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (Catalog cat : config.getCatalogs())
-        {
-            if (matchesFilter(cat.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(cat, "Catalog"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(cat.getObjectModule());
-                info.hasManagerModule = hasModule(cat.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectInformationRegisters(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (InformationRegister reg : config.getInformationRegisters())
-        {
-            if (matchesFilter(reg.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(reg, "InformationRegister"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(reg.getRecordSetModule());
-                info.hasManagerModule = hasModule(reg.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectAccumulationRegisters(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (AccumulationRegister reg : config.getAccumulationRegisters())
-        {
-            if (matchesFilter(reg.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(reg, "AccumulationRegister"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(reg.getRecordSetModule());
-                info.hasManagerModule = hasModule(reg.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectCommonModules(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (CommonModule mod : config.getCommonModules())
-        {
-            if (matchesFilter(mod.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(mod, "CommonModule"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(mod.getModule());
-                info.hasManagerModule = false;
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectEnums(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (com._1c.g5.v8.dt.metadata.mdclass.Enum en : config.getEnums())
-        {
-            if (matchesFilter(en.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(en, "Enum"); //$NON-NLS-1$
-                info.hasObjectModule = false;
-                info.hasManagerModule = hasModule(en.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectConstants(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (Constant con : config.getConstants())
-        {
-            if (matchesFilter(con.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(con, "Constant"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(con.getValueManagerModule());
-                info.hasManagerModule = hasModule(con.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectReports(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (Report rep : config.getReports())
-        {
-            if (matchesFilter(rep.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(rep, "Report"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(rep.getObjectModule());
-                info.hasManagerModule = hasModule(rep.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectDataProcessors(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (DataProcessor dp : config.getDataProcessors())
-        {
-            if (matchesFilter(dp.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(dp, "DataProcessor"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(dp.getObjectModule());
-                info.hasManagerModule = hasModule(dp.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectExchangePlans(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (ExchangePlan ep : config.getExchangePlans())
-        {
-            if (matchesFilter(ep.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(ep, "ExchangePlan"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(ep.getObjectModule());
-                info.hasManagerModule = hasModule(ep.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectBusinessProcesses(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (BusinessProcess bp : config.getBusinessProcesses())
-        {
-            if (matchesFilter(bp.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(bp, "BusinessProcess"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(bp.getObjectModule());
-                info.hasManagerModule = hasModule(bp.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectTasks(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (Task task : config.getTasks())
-        {
-            if (matchesFilter(task.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(task, "Task"); //$NON-NLS-1$
-                info.hasObjectModule = hasModule(task.getObjectModule());
-                info.hasManagerModule = hasModule(task.getManagerModule());
-                objects.add(info);
-            }
-        }
-    }
-    
-    private void collectCommonAttributes(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (CommonAttribute attr : config.getCommonAttributes())
-        {
-            if (matchesFilter(attr.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(attr, "CommonAttribute"); //$NON-NLS-1$
-                info.hasObjectModule = false;
-                info.hasManagerModule = false;
-                objects.add(info);
-            }
-        }
-    }
-    
-    /**
-     * XDTO packages. They carry no modules, and their MEMBERS (ObjectType / Property) are addressed
-     * through the package FQN - which is exactly what a caller needs before create_metadata /
-     * modify_metadata / validate_xdto_package on 'XDTOPackage.&lt;Name&gt;...', and had no listing
-     * route at all before.
-     */
-    private void collectXdtoPackages(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (XDTOPackage pkg : config.getXDTOPackages())
-        {
-            if (matchesFilter(pkg.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(pkg, "XDTOPackage"); //$NON-NLS-1$
-                info.hasObjectModule = false;
-                info.hasManagerModule = false;
-                objects.add(info);
-            }
-        }
-    }
 
-    private void collectEventSubscriptions(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (EventSubscription sub : config.getEventSubscriptions())
+        List<? extends MdObject> found = MetadataTypeUtils.getObjects(config,
+            typeInfo.getEnglishSingular());
+        if (found == null)
         {
-            if (matchesFilter(sub.getName(), filter))
-            {
-                MetadataInfo info = createMetadataInfo(sub, "EventSubscription"); //$NON-NLS-1$
-                info.hasObjectModule = false;
-                info.hasManagerModule = false;
-                objects.add(info);
-            }
+            return 0;
         }
-    }
-    
-    private void collectScheduledJobs(Configuration config, List<MetadataInfo> objects, String filter)
-    {
-        for (ScheduledJob job : config.getScheduledJobs())
+
+        int total = 0;
+        for (MdObject object : found)
         {
-            if (matchesFilter(job.getName(), filter))
+            if (!matchesFilter(object.getName(), filter))
             {
-                MetadataInfo info = createMetadataInfo(job, "ScheduledJob"); //$NON-NLS-1$
-                info.hasObjectModule = false;
-                info.hasManagerModule = false;
-                objects.add(info);
+                continue;
             }
+
+            total++;
+            if (objects.size() >= limit)
+            {
+                continue;
+            }
+
+            MetadataInfo info = createMetadataInfo(object, typeInfo.getEnglishSingular());
+            info.hasObjectModule = hasFeatureValue(object, FEATURE_OBJECT_MODULE)
+                || hasFeatureValue(object, FEATURE_RECORD_SET_MODULE)
+                || hasFeatureValue(object, FEATURE_VALUE_MANAGER_MODULE)
+                || hasFeatureValue(object, FEATURE_MODULE)
+                || hasFeatureValue(object, FEATURE_COMMAND_MODULE);
+            info.hasManagerModule = hasFeatureValue(object, FEATURE_MANAGER_MODULE);
+            objects.add(info);
         }
+        return total;
     }
     
     // ========== Helper methods ==========
@@ -929,6 +635,13 @@ public class GetMetadataObjectsTool implements IMcpTool
     private boolean hasModule(Module module)
     {
         return module != null;
+    }
+
+    /** Checks an inherited or directly declared module feature without type-specific casts. */
+    private boolean hasFeatureValue(MdObject object, String featureName)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
+        return feature != null && object.eGet(feature) != null;
     }
     
     /**

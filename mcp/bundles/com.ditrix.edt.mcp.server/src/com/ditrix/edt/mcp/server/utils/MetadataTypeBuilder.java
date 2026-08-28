@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -24,6 +25,7 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.md.resource.MdTypeUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
 import com._1c.g5.v8.dt.metadata.mdtype.BasicDbObjectTypes;
@@ -51,8 +53,11 @@ import com.google.gson.JsonObject;
  * ValueTable / ValueTree are platform types that carry no qualifiers - the last two are in-memory
  * collections the platform accepts on a FORM attribute only (issue #295). A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
- * {@code {"kind":"CatalogRef", "ref":"Name"}}. The {@code types} list may mix several (a composite
- * type). The shape is validated before any platform call, so a malformed spec fails fast.
+ * {@code {"kind":"CatalogRef", "ref":"Name"}}. A DefinedType is accepted as
+ * {@code {"kind":"DefinedType", "ref":"Name"}}, as a Ref to {@code DefinedType.Name}, or as the
+ * inline kind {@code {"kind":"DefinedType.Name"}}; its type set is shared from the metadata model.
+ * The {@code types} list may mix several (a composite type). The shape is validated before any
+ * platform call, so a malformed spec fails fast.
  * <p>
  * On a {@link TypeTarget#FORM_ATTRIBUTE} the vocabulary is not a fixed list: ANY type name the
  * platform version knows is accepted (ValueList, SpreadsheetDocument, Chart, GanttChart, Dendrogram,
@@ -78,6 +83,29 @@ public final class MetadataTypeBuilder
 
     /** The canonical ENGLISH platform names of the primitives, parallel to {@link #RU_PRIMITIVE_NAMES}. */
     private static final String[] EN_PRIMITIVE_NAMES = {"String", "Number", "Boolean", "Date"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+    /** Accepted JSON members for each kind-specific type-item grammar. */
+    private static final String[] STRING_ITEM_MEMBERS = {"kind", "length", "fixed"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    private static final String[] NUMBER_ITEM_MEMBERS = {"kind", "precision", "scale", "nonNegative"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    private static final String[] DATE_ITEM_MEMBERS = {"kind", "fractions"}; //$NON-NLS-1$ //$NON-NLS-2$
+    private static final String[] REF_ITEM_MEMBERS = {"kind", "ref"}; //$NON-NLS-1$ //$NON-NLS-2$
+    private static final String[] MEMBERLESS_ITEM_MEMBERS = {"kind"}; //$NON-NLS-1$
+
+    /** The reusable metadata type-set kind in both supported type-token languages. */
+    private static final String DEFINED_TYPE_KIND = "DefinedType"; //$NON-NLS-1$
+    private static final String RU_DEFINED_TYPE_KIND = MetadataLanguageUtils.cp(0x041E, 0x043F, 0x0440,
+        0x0435, 0x0434, 0x0435, 0x043B, 0x044F, 0x0435, 0x043C, 0x044B, 0x0439, 0x0422, 0x0438,
+        0x043F);
+
+    /**
+     * The WIDEST qualifier the platform accepts anywhere: a variable String of 1024, a Number of 38
+     * digits. EDT narrows both PER CONTEXT (a fixed String to 100, most attribute kinds to a Number
+     * of 32, while a DCS type is capped nowhere), and that context is unknown at shape-validation
+     * time - so validating against the widest limit refuses only what no context can hold, and leaves
+     * the narrower per-context rule to EDT`s own validator, which surfaces it as a project error.
+     */
+    private static final int MAX_STRING_LENGTH = 1024;
+    private static final int MAX_NUMBER_PRECISION = 38;
 
     /** The build outcome: exactly one of {@link #typeDescription} / {@link #error} is non-null. */
     public static final class Result
@@ -122,19 +150,233 @@ public final class MetadataTypeBuilder
         {
             return "type.types must be a non-empty array of {kind, ...} items."; //$NON-NLS-1$
         }
-        for (JsonElement itemEl : typesEl.getAsJsonArray())
+        JsonArray types = typesEl.getAsJsonArray();
+        for (int i = 0; i < types.size(); i++)
         {
+            JsonElement itemEl = types.get(i);
             if (!itemEl.isJsonObject())
             {
                 return "each entry of type.types must be an object like {kind:'String'}."; //$NON-NLS-1$
             }
-            String kind = asString(itemEl.getAsJsonObject().get("kind")); //$NON-NLS-1$
-            if (kind == null || kind.isEmpty())
+            JsonObject item = itemEl.getAsJsonObject();
+            String kind = jsonString(item.get("kind")); //$NON-NLS-1$
+            if (kind == null || kind.trim().isEmpty())
             {
-                return "each type item needs a non-empty 'kind' (String/Number/Boolean/Date or a Ref)."; //$NON-NLS-1$
+                return "Invalid member 'kind' in type.types[" + i + "]. Expected a non-empty " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "string naming String/Number/Boolean/Date, a DefinedType/Ref, or a platform type."; //$NON-NLS-1$
+            }
+            String memberError = validateItemMembers(item, kind, i);
+            if (memberError != null)
+            {
+                return memberError;
             }
         }
         return null;
+    }
+
+    /**
+     * Refuses a member that the item's OWN kind cannot consume. Keeping the sets kind-specific is
+     * important: advertising the union would make a misplaced {@code length} on Number look valid and
+     * preserve the same silent-drop ambiguity this validation removes. Non-primitive platform kinds
+     * (ValueStorage / UUID / form-only values / an as-yet unknown kind) carry no inline qualifiers, so
+     * their only accepted member is {@code kind}; unknown-kind resolution still reports the kind itself
+     * later when the item has no extra member.
+     */
+    private static String validateItemMembers(JsonObject item, String kind, int index)
+    {
+        String primitive = normalizePrimitive(kind);
+        String[] accepted;
+        if ("String".equals(primitive)) //$NON-NLS-1$
+        {
+            accepted = STRING_ITEM_MEMBERS;
+        }
+        else if ("Number".equals(primitive)) //$NON-NLS-1$
+        {
+            accepted = NUMBER_ITEM_MEMBERS;
+        }
+        else if ("Date".equals(primitive)) //$NON-NLS-1$
+        {
+            accepted = DATE_ITEM_MEMBERS;
+        }
+        else if (isRefKind(kind))
+        {
+            accepted = REF_ITEM_MEMBERS;
+        }
+        else
+        {
+            // Boolean and every qualifier-free platform kind accept only `kind`.
+            accepted = MEMBERLESS_ITEM_MEMBERS;
+        }
+
+        Set<String> allowed = new HashSet<>(Arrays.asList(accepted));
+        for (String member : item.keySet())
+        {
+            if (!allowed.contains(member))
+            {
+                return "Unknown member '" + member + "' in type.types[" + index //$NON-NLS-1$ //$NON-NLS-2$
+                    + "]. Accepted members: " + String.join(", ", accepted) + ". Remove '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + member + "' or use one of them."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if ("String".equals(primitive)) //$NON-NLS-1$
+        {
+            return validateStringItem(item, index);
+        }
+        if ("Number".equals(primitive)) //$NON-NLS-1$
+        {
+            return validateNumberItem(item, index);
+        }
+        if ("Date".equals(primitive)) //$NON-NLS-1$
+        {
+            return validateDateItem(item, index);
+        }
+        if (isRefKind(kind))
+        {
+            return validateRefItem(item, index);
+        }
+        // Boolean and platform/memberless kinds have no value-bearing member beyond the already
+        // validated non-empty string `kind`.
+        return null;
+    }
+
+    private static String validateStringItem(JsonObject item, int index)
+    {
+        Integer length = null;
+        if (item.has("length")) //$NON-NLS-1$
+        {
+            length = strictInt(item.get("length")); //$NON-NLS-1$
+            if (length == null || length.intValue() < 0 || length.intValue() > MAX_STRING_LENGTH)
+            {
+                return invalidMember("length", index, //$NON-NLS-1$
+                    "an integer from 0 to " + MAX_STRING_LENGTH + " (0 means unlimited)"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (item.has("fixed")) //$NON-NLS-1$
+        {
+            if (!isBoolean(item.get("fixed"))) //$NON-NLS-1$
+            {
+                return invalidMember("fixed", index, "true or false"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (!item.has("length")) //$NON-NLS-1$
+            {
+                return invalidMember("fixed", index, //$NON-NLS-1$
+                    "true or false together with a 'length' member"); //$NON-NLS-1$
+            }
+            if (item.get("fixed").getAsBoolean() && length.intValue() == 0) //$NON-NLS-1$
+            {
+                return invalidMember("fixed", index, //$NON-NLS-1$
+                    "false when 'length' is 0 (unlimited), or true only with a positive 'length'"); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static String validateNumberItem(JsonObject item, int index)
+    {
+        Integer precision = null;
+        if (item.has("precision")) //$NON-NLS-1$
+        {
+            precision = strictInt(item.get("precision")); //$NON-NLS-1$
+            if (precision == null || precision.intValue() < 1
+                || precision.intValue() > MAX_NUMBER_PRECISION)
+            {
+                return invalidMember("precision", index, //$NON-NLS-1$
+                    "an integer from 1 to " + MAX_NUMBER_PRECISION); //$NON-NLS-1$
+            }
+        }
+        if (item.has("scale")) //$NON-NLS-1$
+        {
+            Integer scale = strictInt(item.get("scale")); //$NON-NLS-1$
+            if (scale == null)
+            {
+                return invalidMember("scale", index, "an integer from 0 to precision"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (precision == null)
+            {
+                return invalidMember("scale", index, //$NON-NLS-1$
+                    "an integer from 0 to precision together with a 'precision' member"); //$NON-NLS-1$
+            }
+            if (scale.intValue() < 0 || scale.intValue() > precision.intValue())
+            {
+                return invalidMember("scale", index, //$NON-NLS-1$
+                    "an integer from 0 to the requested precision (" + precision + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (item.has("nonNegative")) //$NON-NLS-1$
+        {
+            if (!isBoolean(item.get("nonNegative"))) //$NON-NLS-1$
+            {
+                return invalidMember("nonNegative", index, "true or false"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (precision == null)
+            {
+                return invalidMember("nonNegative", index, //$NON-NLS-1$
+                    "true or false together with a 'precision' member"); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static String validateDateItem(JsonObject item, int index)
+    {
+        if (!item.has("fractions")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        String fractions = jsonString(item.get("fractions")); //$NON-NLS-1$
+        if (fractions == null || !("date".equalsIgnoreCase(fractions.trim()) //$NON-NLS-1$
+            || "time".equalsIgnoreCase(fractions.trim()) //$NON-NLS-1$
+            || "datetime".equalsIgnoreCase(fractions.trim()))) //$NON-NLS-1$
+        {
+            return invalidMember("fractions", index, //$NON-NLS-1$
+                "one of the strings DateTime, Date, or Time"); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    private static String validateRefItem(JsonObject item, int index)
+    {
+        String ref = jsonString(item.get("ref")); //$NON-NLS-1$
+        if (ref == null || ref.trim().isEmpty())
+        {
+            return invalidMember("ref", index, //$NON-NLS-1$
+                "a non-empty reference target string such as 'Catalog.Products' or 'MoneyAmount' " //$NON-NLS-1$
+                    + "for kind 'DefinedType'"); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    private static String invalidMember(String member, int index, String expected)
+    {
+        return "Invalid member '" + member + "' in type.types[" + index + "]. Expected " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + expected + "."; //$NON-NLS-1$
+    }
+
+    private static Integer strictInt(JsonElement value)
+    {
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber())
+        {
+            return null;
+        }
+        try
+        {
+            return Integer.valueOf(new BigDecimal(value.getAsString()).intValueExact());
+        }
+        catch (ArithmeticException | NumberFormatException e)
+        {
+            return null;
+        }
+    }
+
+    private static boolean isBoolean(JsonElement value)
+    {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean();
+    }
+
+    private static String jsonString(JsonElement value)
+    {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+            ? value.getAsString() : null;
     }
 
     /**
@@ -387,15 +629,35 @@ public final class MetadataTypeBuilder
     static String addType(TypeDescription td, JsonObject item, String kind,
         IEObjectProvider provider, Configuration config, boolean isExtensionProject, TypeTarget typeTarget)
     {
+        if (isInlineDefinedTypeKind(kind))
+        {
+            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, kind);
+            if (node == null || !isDefinedType(node.object))
+            {
+                return unresolvedDefinedType(kind, kind, isExtensionProject);
+            }
+            return addDefinedTypeSet(td, node.object, kind);
+        }
+
         if (isRefKind(kind))
         {
-            MdObject target = resolveRefTarget(config, kind, asString(item.get("ref"))); //$NON-NLS-1$
+            String ref = asString(item.get("ref")); //$NON-NLS-1$
+            MdObject target = resolveRefTarget(config, kind, ref);
             if (target == null)
             {
+                if (isDefinedTypeKind(kind))
+                {
+                    return unresolvedDefinedType(kind, ref, isExtensionProject);
+                }
                 return "Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + asString(item.get("ref")) + "'. Use {kind:'Ref', ref:'Type.Name'} or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref + "'. Use {kind:'Ref', ref:'Type.Name'} or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "{kind:'CatalogRef', ref:'Name'} and check the object exists." //$NON-NLS-1$
                     + extensionAdoptHint(isExtensionProject);
+            }
+            if (isDefinedType(target))
+            {
+                String requested = isDefinedTypeKind(kind) ? kind + "." + ref : ref; //$NON-NLS-1$
+                return addDefinedTypeSet(td, target, requested);
             }
             Type refType;
             try
@@ -463,11 +725,69 @@ public final class MetadataTypeBuilder
             return null;
         }
 
-        return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$ //$NON-NLS-2$
-            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), or a " //$NON-NLS-1$
+        return "Unknown type kind '" + kind //$NON-NLS-1$
+            + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$
+            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), a " //$NON-NLS-1$
+            + "DefinedType ({kind:'DefinedType', ref:'Name'} or {kind:'DefinedType.Name'}), or a " //$NON-NLS-1$
             + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type name " //$NON-NLS-1$
             + "also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., English or " //$NON-NLS-1$
             + "Russian) - this one names no type this platform version knows."; //$NON-NLS-1$
+    }
+
+    /** Adds the model-owned TypeSet produced by a DefinedType to the non-containment type list. */
+    private static String addDefinedTypeSet(TypeDescription td, MdObject definedType, String requested)
+    {
+        TypeItem typeSet = null;
+        try
+        {
+            MdTypes producedTypes = MdClassUtil.getProducedTypes(definedType);
+            EObject containerType = featureValue(producedTypes, "containerType", EObject.class); //$NON-NLS-1$
+            typeSet = featureValue(containerType, "typeSet", TypeItem.class); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            return unavailableDefinedTypeChain(requested);
+        }
+        if (typeSet == null)
+        {
+            return unavailableDefinedTypeChain(requested);
+        }
+        // TypeDescription.types is NON-containment: share the model-owned TypeSet, do not copy it.
+        td.getTypes().add(typeSet);
+        return null;
+    }
+
+    private static String unavailableDefinedTypeChain(String requested)
+    {
+        return "DefinedType '" + requested //$NON-NLS-1$
+            + "' resolved, but its producedTypes/containerType/typeSet chain is not available yet. " //$NON-NLS-1$
+            + "Wait for project indexing to finish, run revalidate_objects for the DefinedType if " //$NON-NLS-1$
+            + "needed, and retry."; //$NON-NLS-1$
+    }
+
+    /** Reads one named EMF feature without depending on a per-kind generated holder interface. */
+    private static <T> T featureValue(EObject owner, String featureName, Class<T> valueClass)
+    {
+        if (owner == null || owner.eClass() == null)
+        {
+            return null;
+        }
+        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
+        if (feature == null)
+        {
+            return null;
+        }
+        Object value = owner.eGet(feature);
+        return valueClass.isInstance(value) ? valueClass.cast(value) : null;
+    }
+
+    private static String unresolvedDefinedType(String kind, String ref, boolean isExtensionProject)
+    {
+        String requested = isInlineDefinedTypeKind(kind) ? kind : kind + "." + ref; //$NON-NLS-1$
+        return "Cannot resolve the reference target for DefinedType '" + requested + "'. Use " //$NON-NLS-1$ //$NON-NLS-2$
+            + "{kind:'DefinedType', ref:'Name'}, {kind:'Ref', ref:'DefinedType.Name'}, or " //$NON-NLS-1$
+            + "{kind:'DefinedType.Name'}, and check the object exists." //$NON-NLS-1$
+            + extensionAdoptHint(isExtensionProject);
     }
 
     /** The platform pseudo-type name a form list attribute carries, in both languages. */
@@ -643,7 +963,7 @@ public final class MetadataTypeBuilder
         }
     }
 
-    /** A reference kind is the literal {@code "Ref"} or any {@code "...Ref"} token (CatalogRef, ...). */
+    /** A reference-shaped kind is DefinedType, literal Ref, or an {@code "...Ref"} token. */
     static boolean isRefKind(String kind)
     {
         if (kind == null)
@@ -651,8 +971,38 @@ public final class MetadataTypeBuilder
             return false;
         }
         String k = kind.trim();
-        return k.equalsIgnoreCase("Ref") //$NON-NLS-1$
+        return isDefinedTypeKind(k) || k.equalsIgnoreCase("Ref") //$NON-NLS-1$
             || (k.length() > 3 && k.regionMatches(true, k.length() - 3, "Ref", 0, 3)); //$NON-NLS-1$
+    }
+
+    /** Whether the kind is the explicit bilingual DefinedType token (without an inline object name). */
+    static boolean isDefinedTypeKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String k = kind.trim();
+        return DEFINED_TYPE_KIND.equalsIgnoreCase(k) || RU_DEFINED_TYPE_KIND.equalsIgnoreCase(k);
+    }
+
+    /** Whether the whole kind is a bilingual DefinedType FQN such as DefinedType.MoneyAmount. */
+    static boolean isInlineDefinedTypeKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String normalized = MetadataTypeUtils.normalizeFqn(kind.trim());
+        String prefix = DEFINED_TYPE_KIND + "."; //$NON-NLS-1$
+        return normalized != null && normalized.length() > prefix.length()
+            && normalized.regionMatches(true, 0, prefix, 0, prefix.length());
+    }
+
+    private static boolean isDefinedType(MdObject object)
+    {
+        return object != null && object.eClass() != null
+            && MdClassPackage.Literals.DEFINED_TYPE.isSuperTypeOf(object.eClass());
     }
 
     /**
@@ -677,6 +1027,10 @@ public final class MetadataTypeBuilder
         if (ref == null || ref.isEmpty())
         {
             return null;
+        }
+        if (isDefinedTypeKind(kind))
+        {
+            return MetadataTypeUtils.findObject(config, kind, ref);
         }
         if (kind.equalsIgnoreCase("Ref")) //$NON-NLS-1$
         {

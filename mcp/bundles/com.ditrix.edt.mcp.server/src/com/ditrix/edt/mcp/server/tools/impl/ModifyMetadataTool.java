@@ -6,13 +6,13 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -27,20 +27,22 @@ import org.eclipse.emf.ecore.util.EcoreUtil;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
-import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.QName;
+import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
@@ -48,12 +50,10 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
-import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
-import com._1c.g5.v8.dt.metadata.mdclass.Template;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
@@ -72,7 +72,6 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
-import com.ditrix.edt.mcp.server.utils.DcsWriter;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
@@ -82,6 +81,7 @@ import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
@@ -89,6 +89,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
+import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
@@ -237,21 +238,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static final String ERR_NO_BM_MANAGER = "IBmModelManager not available"; //$NON-NLS-1$
     private static final String ERR_NO_BM_MODEL = "BM model not available for project: "; //$NON-NLS-1$
 
-    /** Payload / output key: the Report Data Composition Schema (СКД) content spec / applied-counts object. */
-    private static final String KEY_DCS = "dcs"; //$NON-NLS-1$
-
-    /**
-     * The 1C platform's default name for a Report's main Data Composition Schema template (the name the
-     * designer pre-fills when a report gains a DCS), used when the FIRST {@code dcs} write must lazily
-     * materialize a report's missing DCS template so the result matches a designer-created report.
-     */
-    // ОсновнаяСхемаКомпоновкиДанных - a persisted/matched Cyrillic identifier is written with Java Unicode
-    // escapes (below) so a non-UTF-8 Tycho build cannot corrupt it (matches MetadataTypeUtils' /
-    // BslSyntaxChecker's convention).
-    private static final String DEFAULT_DCS_TEMPLATE_NAME =
-        "\u041E\u0441\u043D\u043E\u0432\u043D\u0430\u044F\u0421\u0445\u0435\u043C\u0430\u041A\u043E" //$NON-NLS-1$
-            + "\u043C\u043F\u043E\u043D\u043E\u0432\u043A\u0438\u0414\u0430\u043D\u043D\u044B\u0445"; //$NON-NLS-1$
-
     /** Output count key: members attached. */
     private static final String KEY_ADDED = "added"; //$NON-NLS-1$
 
@@ -353,16 +339,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "Setting a cell overwrites that (row, col); the rest of the content is kept. Valid " //$NON-NLS-1$
                 + "only for a SpreadsheetDocument template FQN; cannot be combined with 'properties' / " //$NON-NLS-1$
                 + "'content' / a Role payload.") //$NON-NLS-1$
-            .objectProperty(KEY_DCS,
-                "REPORT FQN only ('Report.<Name>'): the Data Composition Schema (СКД) content to author, " //$NON-NLS-1$
-                + "instead of 'properties'. Authors the report's main DCS (creating it if the report has " //$NON-NLS-1$
-                + "none yet). An object with: 'dataSources' [{name, type?}] (a data source, default type " //$NON-NLS-1$
-                + "a local query source); 'dataSets' [{name, type:'query', query (the 1C query text, " //$NON-NLS-1$
-                + "bilingual keywords), dataSource?, autoFillFields? (default true - EDT derives the " //$NON-NLS-1$
-                + "fields from the query), fields? [{name?, dataPath, title?, role?}]}] a query data set; " //$NON-NLS-1$
-                + "'parameters' [{name, valueType?, title?, use?}] schema parameters. Valid only for a " //$NON-NLS-1$
-                + "Report FQN; cannot be combined with 'properties' / 'content' / 'template' / a Role " //$NON-NLS-1$
-                + "payload.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
                 + "title) and in the 'comment' property (default true). Matches the 1C standard " //$NON-NLS-1$
@@ -414,8 +390,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
                 + "{cells, merges, areas, columnWidths, rowHeights}") //$NON-NLS-1$
-            .objectProperty(KEY_DCS, "For a DCS (Report Data Composition Schema) content change: the " //$NON-NLS-1$
-                + "applied counts object {dataSources, dataSets, fields, parameters}") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
                 "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
                     + "export queue to drain before answering, so a success normally means the write has "
@@ -486,8 +460,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         // A FQN that addresses an XDTO PACKAGE MEMBER (an ObjectType or a Property - issue #183
         // stream 1) is dispatched EARLY too: an ObjectType/Property lives on the package's lazily
-        // materialized xdto.model content (a cross-model hop, the SAME transient @ExternalProperty
-        // shape a report's DCS uses), not the mdclass tree, so the generic single-segment resolver
+        // materialized xdto.model content (a cross-model hop through a transient @ExternalProperty),
+        // not the mdclass tree, so the generic single-segment resolver
         // below cannot see it (it does not know "ObjectType"/"Property" as mdclass child kinds).
         String xdtoResult = dispatchXdtoMemberPayload(ctx, normFqn, args);
         if (xdtoResult != null)
@@ -506,7 +480,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         normFqn = resolvedTarget.normFqn;
         MdObject target = resolvedTarget.node.object;
 
-        // The payload surfaces (dcs / template / role / membership content) are dispatched by the
+        // The payload surfaces (template / role / membership content) are dispatched by the
         // resolved target's kind; null means none applies and the generic path runs.
         String payloadResult = dispatchPayloads(ctx, normFqn, target, args);
         if (payloadResult != null)
@@ -522,7 +496,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * The parsed + validated arguments of one modify_metadata call (built by
      * {@link #parseModifyArgs}): the addressed project / FQN, the generic 'properties' list, the
-     * payload surfaces (role / membership content / template / dcs) with their presence flags, and
+     * payload surfaces (role / membership content / template) with their presence flags, and
      * the yo-normalization report. When {@link #error} is non-null (a ready JSON error), the other
      * fields must not be used.
      */
@@ -541,16 +515,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean hasContentPayload;
         JsonObject templateSpec;
         boolean hasTemplatePayload;
-        JsonObject dcsSpec;
-        boolean hasDcsPayload;
         MdNameNormalizer.Report normReport;
     }
 
     /**
      * Parses + validates the raw request arguments into a {@link ModifyArgs} bundle: the addressed
      * project / FQN, the generic 'properties' list, the Role payload ('rights' / 'templates' /
-     * 'roleProperties'), the membership 'content' payload, the parsed 'template' / 'dcs' payload
-     * specs with their presence flags, and the yo-normalization report. {@link ModifyArgs#error} is
+     * 'roleProperties'), the membership 'content' payload, the parsed 'template' payload and its
+     * presence flag, and the yo-normalization report. {@link ModifyArgs#error} is
      * non-null (a ready JSON error) when a required argument is missing, a payload argument is
      * malformed, or no payload at all was supplied. Extracted verbatim from
      * {@link #executeOnUiThread}.
@@ -601,28 +573,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         args.templateSpec = templateArg.spec;
         args.hasTemplatePayload = args.templateSpec != null;
 
-        // Report Data Composition Schema payload (dcs={dataSources/dataSets/parameters}): authored on a
-        // Report FQN. When present, 'properties' is optional (the DCS is authored through its own surface,
-        // not the generic property bag) - mirrors the template payload precedent. A present-but-malformed
-        // 'dcs' (not a JSON object) is an actionable error, not a silent drop: 'dcs' is the SOLE surface
-        // for authoring a report's schema.
-        DcsArg dcsArg = parseDcsArg(params);
-        if (dcsArg.error != null)
-        {
-            args.error = dcsArg.error;
-            return args;
-        }
-        args.dcsSpec = dcsArg.spec;
-        args.hasDcsPayload = args.dcsSpec != null;
-
         if (args.properties.isEmpty() && !args.hasRolePayload && !args.hasContentPayload
-            && !args.hasTemplatePayload && !args.hasDcsPayload)
+            && !args.hasTemplatePayload)
         {
             args.error = ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
                 + "'templates' or 'roleProperties' instead; for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
                 + "Catalog / Document / Subsystem FQN, provide 'content' instead; for a template FQN, " //$NON-NLS-1$
-                + "provide 'template' instead; for a Report FQN, provide 'dcs' instead.").toJson(); //$NON-NLS-1$
+                + "provide 'template' instead.").toJson(); //$NON-NLS-1$
             return args;
         }
 
@@ -634,9 +592,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Dispatches a FQN that addresses a FORM member: refuses a 'template' / 'dcs' payload up front
-     * (a form member is neither a spreadsheet template nor a Report, so the sibling payload is never
-     * silently dropped while the form branch reports success), then hands over to
+     * Dispatches a FQN that addresses a FORM member: refuses a 'template' payload up front
+     * (a form member is not a spreadsheet template, so the sibling payload is never silently dropped
+     * while the form branch reports success), then hands over to
      * {@link #dispatchFormMember} (which symmetrically refuses the Role / membership 'content'
      * payloads). Extracted verbatim from {@link #executeOnUiThread}.
      */
@@ -651,13 +609,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return templateOnlyForTemplateFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
         }
-        // Symmetrically, a 'dcs' payload addressed to a FORM member is refused (a form member is not a
-        // Report), so the sibling payload is never silently dropped while the form branch reports
-        // success.
-        if (args.hasDcsPayload)
-        {
-            return dcsOnlyForReportFqnError(normFqn, "addresses a FORM member"); //$NON-NLS-1$
-        }
         return dispatchFormMember(ctx, normFqn, formRef, args.properties, args.normReport,
             args.hasRolePayload, args.hasContentPayload);
     }
@@ -666,7 +617,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Dispatches a FQN addressing a PREDEFINED item on a {@code Catalog},
      * {@code ChartOfCharacteristicTypes}, {@code ChartOfCalculationTypes} or {@code ChartOfAccounts}
      * owner ({@code Type.Owner.Predefined.ItemName}). Refuses the sibling payloads (Role / membership
-     * {@code content} / {@code template} / {@code dcs}) up front so they are never silently dropped,
+     * {@code content} / {@code template}) up front so they are never silently dropped,
      * then validates the owner kind (in lockstep with {@link PredefinedWriter#unsupportedOwnerTypeError}),
      * parses the properties via the SHARED {@link PredefinedWriter#parseProperties} (which also refuses
      * {@code name} and {@code parent} - a move - on modify), resolves the owner (yo-fallback) and
@@ -681,10 +632,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (args.hasTemplatePayload)
         {
             return templateOnlyForTemplateFqnError(normFqn, "addresses a predefined item"); //$NON-NLS-1$
-        }
-        if (args.hasDcsPayload)
-        {
-            return dcsOnlyForReportFqnError(normFqn, "addresses a predefined item"); //$NON-NLS-1$
         }
         if (args.hasRolePayload || args.hasContentPayload)
         {
@@ -882,13 +829,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
         }
-        // Symmetrically, a 'dcs' payload addressed to a Subsystem FQN is refused (a subsystem is not a
-        // Report), so a dcs payload combined with a subsystem content[] payload is never silently
-        // dropped.
-        if (args.hasDcsPayload)
-        {
-            return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
-        }
         return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
             args.hasRolePayload);
     }
@@ -900,11 +840,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     // specific vocabulary applied by XdtoWriter (open/abstract/mixed/ordered/sequenced for an ObjectType;
     // type/ref/lowerBound/upperBound/nillable/fixed/default for a Property) - not the generic
     // MetadataPropertyIntrospector reflection path (an XDTO Property/ObjectType is not an MdObject).
-    // Persistence mirrors the DCS content: the Package is a transient @ExternalProperty, materialized +
-    // attached via XdtoWriter.resolvePackageContent (shared with create_metadata / delete_metadata).
+    // The Package is a transient @ExternalProperty, materialized and attached via
+    // XdtoWriter.resolvePackageContent (shared with create_metadata / delete_metadata).
 
     /**
-     * Dispatches an XDTO PACKAGE MEMBER FQN: refuses a role / content / template / dcs payload (an XDTO
+     * Dispatches an XDTO PACKAGE MEMBER FQN: refuses a role / content / template payload (an XDTO
      * member is none of those - the same no-mixing policy every other cross-model-hop branch enforces,
      * so a sibling payload is never silently dropped while this branch reports success), then requires a
      * non-empty {@code properties} (the XDTO member's own change surface). Returns {@code null} when
@@ -921,10 +861,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return templateOnlyForTemplateFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
         }
-        if (args.hasDcsPayload)
-        {
-            return dcsOnlyForReportFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
-        }
         String payloadError =
             xdtoMemberPayloadError(normFqn, args.hasRolePayload, args.hasContentPayload, args.properties);
         if (payloadError != null)
@@ -938,9 +874,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * The pure guard for an XDTO member FQN's payload: refuses a Role payload ({@code rights} /
      * {@code templates} / {@code roleProperties}) or a membership {@code content} payload (an XDTO
      * member is neither), then requires a non-empty {@code properties} (the XDTO member's own change
-     * surface - there is no dedicated {@code xdto} payload key, unlike {@code dcs}/{@code template}).
+     * surface - there is no dedicated {@code xdto} payload key, unlike {@code template}).
      * Returns the ready JSON error, or {@code null} when the payload is valid. Package-visible for tests
-     * (mirrors {@link #dcsMixError} / {@link #templateMixError}).
+     * (mirrors {@link #templateMixError}).
      */
     static String xdtoMemberPayloadError(String normFqn, boolean hasRolePayload, boolean hasContentPayload,
         List<JsonObject> properties)
@@ -1171,25 +1107,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Dispatches the payload surfaces against the resolved target, in the fixed dcs -> template ->
-     * role -> membership-content order (each guard refuses its payload on a wrong-kind FQN, so a
+     * Dispatches the payload surfaces against the resolved target, in the fixed template -> role ->
+     * membership-content order (each guard refuses its payload on a wrong-kind FQN, so a
      * sibling payload is never silently dropped). Returns the branch result, or {@code null} when no
      * payload surface applies and the generic 'properties' path should run. Extracted verbatim from
      * {@link #executeOnUiThread}.
      */
     private String dispatchPayloads(ProjectContext ctx, String normFqn, MdObject target, ModifyArgs args)
     {
-        // A `dcs` payload on a Report FQN authors the report's Data Composition Schema; the same payload on
-        // a NON-Report FQN is refused. Dispatched BEFORE the template / role / content path so a dcs
-        // payload combined with another payload is refused here (the dcsMixError guard) - never silently
-        // dropped - and a dcs+template mix reports the dcs-centric error rather than the generic
-        // template-not-valid one. Null means there is no dcs payload.
-        String dcsPayloadResult = dispatchDcsPayload(ctx, normFqn, target, args);
-        if (dcsPayloadResult != null)
-        {
-            return dcsPayloadResult;
-        }
-
         // A `template` spreadsheet-content payload on a BasicTemplate FQN is authored through the moxel
         // content surface; the same payload on a NON-template FQN is refused. Dispatched BEFORE the role /
         // content path so a template payload combined with a role / content payload is refused here (on a
@@ -1221,276 +1146,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return dispatchContentPayload(ctx, normFqn, target, args.properties, args.content);
         }
-        return null;
-    }
-
-    /**
-     * Dispatches a {@code dcs} payload: a Report FQN carrying the payload goes to
-     * {@link #modifyDcsContent} (after the no-mixing guard); the same payload on a NON-Report FQN is
-     * refused. Returns {@code null} when there is NO dcs payload. Extracted verbatim from
-     * {@link #executeOnUiThread}.
-     */
-    private String dispatchDcsPayload(ProjectContext ctx, String normFqn, MdObject target,
-        ModifyArgs args)
-    {
-        if (!args.hasDcsPayload)
-        {
-            return null;
-        }
-        if (!(target instanceof Report))
-        {
-            return dcsOnlyForReportFqnError(normFqn, ERR_IS_A + target.eClass().getName());
-        }
-        String mixError = dcsMixError(args.properties, args.content, args.hasRolePayload,
-            args.hasTemplatePayload);
-        if (mixError != null)
-        {
-            return mixError;
-        }
-        // A dcs payload writes localized titles ({code: text}) straight into the DCS model, without
-        // going through the property pipeline where the undeclared-locale guard lives - so without
-        // this the very hole issue #298 closes stayed open on this route. Checked HERE, before any
-        // write, so a bad code fails the call with nothing applied.
-        Set<String> titleLocales = new LinkedHashSet<>();
-        String localeError = dcsTitleLocaleError(ctx.config, args.dcsSpec, titleLocales);
-        if (localeError != null)
-        {
-            return localeError;
-        }
-        // A dcs title is a localized write like any other, so the same question applies: is the
-        // configuration even translated into that language? The report's per-property missing list
-        // has no meaning here (a payload writes many titles at once), but the prompt to ASK does.
-        boolean localeUnused = titleLocales.stream()
-            .anyMatch(code -> MetadataLanguageUtils.isDeclaredButUnused(ctx.config, code));
-        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec, localeUnused);
-    }
-
-
-    /**
-     * Rejects a localized {@code title} in a {@code dcs} payload whose language code the
-     * configuration does not declare - the same rule the property pipeline applies, on the route
-     * that bypasses it. Issue #298.
-     *
-     * <p>Walks the payload for every {@code title} that is an OBJECT (a {@code {code: text}} map); a
-     * plain-string title is language-neutral and needs no check. Returns a ready JSON error naming
-     * the offending code and the declared ones, or {@code null} when every code is fine (or the
-     * configuration declares none, which leaves nothing to validate against).
-     *
-     * @param config the configuration
-     * @param dcsSpec the raw dcs payload
-     * @param used collects the canonical codes the payload's titles write under
-     * @return a JSON error, or {@code null} when the payload's locales are acceptable
-     */
-    private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec,
-        Set<String> used)
-    {
-        if (dcsSpec == null)
-        {
-            return null;
-        }
-        List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
-        if (declared.isEmpty())
-        {
-            // No declared code makes EVERY code undeclared, so a localized title here would be
-            // stored where nothing can display it. The property pipeline refuses this case; the
-            // dcs route must not be the hole it slips through. A payload with no localized title
-            // is untouched - only an actual {code: text} map is refused.
-            String firstLocale = firstDcsTitleLocale(dcsSpec);
-            if (firstLocale == null)
-            {
-                return null;
-            }
-            return ToolResult.error("This configuration declares no language codes, so '" //$NON-NLS-1$ //$NON-NLS-2$
-                + firstLocale + "' in a dcs title cannot be stored where anything would display " //$NON-NLS-1$
-                + "it. Add a Language object with a 'languageCode' first (create_metadata " //$NON-NLS-1$
-                + "'Language.<Name>' + modify_metadata 'languageCode'), then write the title.") //$NON-NLS-1$
-                    .toJson();
-        }
-        return normalizeDcsTitleLocales(config, declared, dcsSpec, used);
-    }
-
-    /**
-     * The first language code any STORED dcs title is keyed by, or {@code null} when the payload
-     * carries no localized title at all. Used only to name a value in the no-declared-language
-     * refusal - the walk itself is {@link #normalizeDcsTitleLocales}.
-     */
-    private static String firstDcsTitleLocale(JsonObject dcsSpec)
-    {
-        for (String member : new String[] {KEY_DCS_PARAMETERS, KEY_DCS_CALCULATED_FIELDS})
-        {
-            String code = firstTitleLocaleOfEntries(dcsSpec.get(member));
-            if (code != null)
-            {
-                return code;
-            }
-        }
-        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
-        if (dataSets == null || !dataSets.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement dataSet : dataSets.getAsJsonArray())
-        {
-            if (dataSet != null && dataSet.isJsonObject())
-            {
-                String code = firstTitleLocaleOfEntries(dataSet.getAsJsonObject().get(KEY_DCS_FIELDS));
-                if (code != null)
-                {
-                    return code;
-                }
-            }
-        }
-        return null;
-    }
-
-    /** The first language key of the first object-valued {@code title} in one array of entries. */
-    private static String firstTitleLocaleOfEntries(JsonElement entries)
-    {
-        if (entries == null || !entries.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement entry : entries.getAsJsonArray())
-        {
-            if (entry == null || !entry.isJsonObject())
-            {
-                continue;
-            }
-            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
-            if (title != null && title.isJsonObject() && !title.getAsJsonObject().keySet().isEmpty())
-            {
-                return title.getAsJsonObject().keySet().iterator().next();
-            }
-        }
-        return null;
-    }
-
-    /** The dcs payload members the writer reads a storable {@code title} from (see DcsWriter). */
-    private static final String DCS_DATA_SETS = "dataSets"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_FIELDS = "fields"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_PARAMETERS = "parameters"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_CALCULATED_FIELDS = "calculatedFields"; //$NON-NLS-1$
-
-    private static final String KEY_DCS_TITLE = "title"; //$NON-NLS-1$
-
-    /**
-     * Validates and CANONICALIZES the language keys of every {@code title} the DCS writer actually
-     * stores, rejecting a code the configuration does not declare.
-     * <p>
-     * The rewrite matters as much as the rejection: the DCS writer stores the payload's key verbatim,
-     * so accepting {@code EN} against a configuration that declares {@code en_CA} - which the
-     * case-insensitive match does - would store a second, never-displayed key. That is the same
-     * canonicalization the property pipeline performs; the two paths must not disagree.
-     * <p>
-     * The walk follows the writer's OWN shape - a dataset's {@code fields}, the schema
-     * {@code parameters} and the {@code calculatedFields}, mirroring DcsWriter's three
-     * {@code parseTitle} call sites - rather than hunting for any member named {@code title}. A title
-     * the writer never reads (on a data SOURCE, or nested in a member it ignores) reaches no model
-     * object: rejecting its code would fail a call over a value that was never going to be stored,
-     * and counting it would raise a question about a translation that never happened.
-     *
-     * @param used collects the canonical codes the stored titles write under
-     * @return a ready JSON error for the first undeclared code, or {@code null} when all are fine
-     */
-    private static String normalizeDcsTitleLocales(Configuration config, List<String> declared,
-        JsonObject dcsSpec, Set<String> used)
-    {
-        String error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_PARAMETERS), used);
-        if (error != null)
-        {
-            return error;
-        }
-        error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_CALCULATED_FIELDS), used);
-        if (error != null)
-        {
-            return error;
-        }
-        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
-        if (dataSets == null || !dataSets.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement dataSet : dataSets.getAsJsonArray())
-        {
-            if (dataSet == null || !dataSet.isJsonObject())
-            {
-                continue;
-            }
-            error = normalizeEntryTitles(config, declared,
-                dataSet.getAsJsonObject().get(KEY_DCS_FIELDS), used);
-            if (error != null)
-            {
-                return error;
-            }
-        }
-        return null;
-    }
-
-    /** Validates the object-valued {@code title} of every entry in one array of writer entries. */
-    private static String normalizeEntryTitles(Configuration config, List<String> declared,
-        JsonElement entries, Set<String> used)
-    {
-        if (entries == null || !entries.isJsonArray())
-        {
-            return null;
-        }
-        for (JsonElement entry : entries.getAsJsonArray())
-        {
-            if (entry == null || !entry.isJsonObject())
-            {
-                continue;
-            }
-            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
-            if (title == null || !title.isJsonObject())
-            {
-                // A plain-string title is language-neutral, and anything else is the writer's own
-                // error to report - this guard only judges LANGUAGE keys.
-                continue;
-            }
-            String error = canonicalizeTitleKeys(config, declared, title.getAsJsonObject(), used);
-            if (error != null)
-            {
-                return error;
-            }
-        }
-        return null;
-    }
-
-    /** Validates and canonicalizes the keys of ONE {@code {code: text}} title object, in place. */
-    private static String canonicalizeTitleKeys(Configuration config, List<String> declared,
-        JsonObject title, Set<String> used)
-    {
-        java.util.Map<String, JsonElement> rewritten = new java.util.LinkedHashMap<>();
-        for (java.util.Map.Entry<String, JsonElement> entry : title.entrySet())
-        {
-            String code = entry.getKey();
-            String canonical = MetadataLanguageUtils.canonicalLanguageCode(config, code);
-            if (canonical == null)
-            {
-                return ToolResult.error("Unknown language '" + code + "' for a dcs title. This " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
-                    + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
-            }
-            if (rewritten.containsKey(canonical))
-            {
-                // Two spellings of one declared code, e.g. {"en": ..., "EN": ...}. Canonicalizing
-                // would silently drop one translation - and which one survived would depend on map
-                // order. Say so instead: only the caller knows which text was meant.
-                return ToolResult.error("A dcs title names the language '" + canonical //$NON-NLS-1$
-                    + "' twice (as '" + code + "' and again in another spelling). Give it once.") //$NON-NLS-1$
-                        .toJson();
-            }
-            rewritten.put(canonical, entry.getValue());
-            used.add(canonical);
-        }
-        for (String key : new ArrayList<>(title.keySet()))
-        {
-            title.remove(key);
-        }
-        rewritten.forEach(title::add);
         return null;
     }
 
@@ -1831,13 +1486,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * A template's external-property content (a moxel {@link SpreadsheetDocument} or a
-     * {@link DataCompositionSchema})'s OWN canonical top-object FQN when EDT models it as a DISTINCT top BM
-     * object (so force-exporting the template's FQN alone would NOT drain the sibling {@code .mxlx} /
-     * {@code .dcs}, the same shape as a Role's separate {@code Rights.rights} sub-resource), else
+     * A template's external-property moxel {@link SpreadsheetDocument}'s OWN canonical top-object FQN
+     * when EDT models it as a DISTINCT top BM object (so force-exporting the template's FQN alone would
+     * NOT drain the sibling {@code .mxlx}, the same shape as a Role's separate
+     * {@code Rights.rights} sub-resource), else
      * {@code null} when the content is a contained child that the template's own export already serializes
-     * (the export list is then unchanged). Generic over the {@code @ExternalProperty} content type so both
-     * the moxel template and the DCS branch reuse it. MUST run inside the write boundary:
+     * (the export list is then unchanged). MUST run inside the write boundary:
      * {@code bmGetFqn()} is legal only on a top object, so the call is guarded by {@code bmIsTop()}.
      */
     private static String contentResourceExportFqn(EObject content)
@@ -2115,464 +1769,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static TemplateArg invalid(String error)
         {
             return new TemplateArg(null, error);
-        }
-    }
-
-    // ===== Report Data Composition Schema (СКД / .dcs) authoring (#241) ==============================
-    //
-    // A `dcs` payload on a Report FQN authors the report's main Data Composition Schema (data sets +
-    // query text + fields + schema parameters). The persistence is a near-clone of the #245 template
-    // machinery: a report's DCS content is a {@link DataCompositionSchema} stored in the report's DCS
-    // BasicTemplate's transient @ExternalProperty (BASIC_TEMPLATE__TEMPLATE) - the SAME slot a
-    // SpreadsheetDocument template uses - so the fresh content is attached via attachTopObject and the
-    // sibling .dcs resource is drained by the same dual force-export. The typed DCS write itself lives in
-    // {@link DcsWriter}; this tool owns the Report -> DCS-template resolution, the BM boundary and the
-    // force-export.
-
-    /**
-     * Authors a Report's Data Composition Schema (the {@code dcs} payload) via {@link DcsWriter}. The
-     * report's DCS content lives in its main DCS {@link BasicTemplate} (templateType
-     * {@link TemplateType#DATA_COMPOSITION_SCHEMA}); designer / older reports may have NO DCS at all, so
-     * the FIRST {@code dcs} write lazily materializes that template
-     * ({@link #findOrCreateDcsTemplate}) and registers it as the report's
-     * {@code mainDataCompositionSchema}. The content {@link DataCompositionSchema} is a transient
-     * {@code @ExternalProperty} (its own {@code .dcs} resource), so a freshly-materialized one is attached
-     * as a BM top object ({@link #resolveDcsContent}, mirroring
-     * {@link #resolveSpreadsheetContent}) - else the commit fails "Failed to persist reference value".
-     *
-     * <p>The write runs inside ONE {@link BmTransactions#write write} transaction on the Report re-fetched
-     * by its BM id (the #174 / #245 BM gotcha: capture {@code bmGetId()} up front, re-fetch inside the tx).
-     * A validation failure throws a {@link TemplateWriteException} carrying a ready JSON error BEFORE the
-     * commit, so the tx rolls back with no partial mutation. After the commit the DCS template's TOP object
-     * (a report DCS template is INLINE in the report's {@code .mdo}, so its top is the Report itself) is
-     * force-exported so the template registration reaches disk, and the DCS content's OWN resource FQN is
-     * force-exported alongside so the sibling {@code .dcs} drains (the #245 dual force-export, guarding the
-     * #239-class silent-false-success). The mixing / non-Report-FQN guards run at the call site (see
-     * {@link #dcsMixError} / {@link #dcsOnlyForReportFqnError}), so this method is entered only for a Report
-     * FQN with a lone {@code dcs} payload.</p>
-     */
-    private String modifyDcsContent(ProjectContext ctx, String normFqn, Report report, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-        JsonObject dcsSpec, boolean localeUnused)
-    {
-        // The Report is a top BM object - capture its bmGetId up front, re-fetch inside the tx (a top
-        // object's eContainer() does not reliably climb).
-        IBmObject reportBm = (IBmObject)report;
-        final long reportBmId = reportBm.bmGetId();
-
-        DcsWriteContext writeCtx = resolveDcsWriteContext(ctx);
-        if (writeCtx.error != null)
-        {
-            return writeCtx.error;
-        }
-
-        // Captured inside the write: the on-disk export targets. exportFqnHolder = the DCS template's TOP
-        // object (the Report), contentFqnHolder = the DCS content's OWN resource FQN (the .dcs).
-        final String[] exportFqnHolder = {null};
-        final String[] contentFqnHolder = {null};
-        DcsWriter.Result result;
-        try
-        {
-            result = BmTransactions.write(writeCtx.bmModel, "ModifyDcsContent", //$NON-NLS-1$
-                (tx, pm) -> applyDcsSpec(tx, reportBmId, writeCtx, normFqn, dcsSpec, exportFqnHolder,
-                    contentFqnHolder));
-        }
-        catch (TemplateWriteException e)
-        {
-            return e.getErrorJson();
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error modifying DCS content", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to modify DCS content: " //$NON-NLS-1$
-                + unwrapCauseMessage(e)).toJson();
-        }
-
-        // Dual force-export: the DCS template's top object (the Report - drains the .mdo + the template
-        // registration) AND the DCS content's own resource (drains the .dcs), guarding the #239-class
-        // silent-false-success (persisted=true while the authored schema never reaches disk).
-        List<String> exportFqns = new ArrayList<>();
-        String exportFqn = exportFqnHolder[0];
-        if (exportFqn != null)
-        {
-            exportFqns.add(exportFqn);
-        }
-        String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(exportFqn))
-        {
-            exportFqns.add(contentFqn);
-        }
-        // The settings were written whether or not an FQN could be collected to export (#408).
-        WriteScope.recordWrite(ctx.project);
-        boolean persisted =
-            !exportFqns.isEmpty() && BmTransactions.forceExportToDisk(ctx.project, exportFqns);
-        return buildDcsResult(normFqn, result, persisted, localeUnused);
-    }
-
-    /**
-     * Everything the DCS write boundary needs (built by {@link #resolveDcsWriteContext}): the BM
-     * model, the external-property FQN generator, the parent-aware model factory + platform version,
-     * and the {@code valueType} resolver bridging {@link DcsWriter} to the shared type builder. When
-     * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
-     */
-    private static final class DcsWriteContext
-    {
-        /** A ready {@link ToolResult#error} JSON when an EDT service is missing, else {@code null}. */
-        String error;
-        IBmModel bmModel;
-        ITopObjectFqnGenerator fqnGenerator;
-        IModelObjectFactory factory;
-        /** The project's platform version; may be {@code null} (the type resolver then fails actionably). */
-        Version version;
-        DcsWriter.TypeResolver typeResolver;
-    }
-
-    /**
-     * Resolves everything the DCS write boundary needs up front (the BM model, the external-property
-     * FQN generator, the model factory + platform version, the {@code valueType} resolver). Returns a
-     * {@link DcsWriteContext} whose non-null {@code error} (a ready JSON error) reports a missing EDT
-     * service. Extracted verbatim from {@link #modifyDcsContent}.
-     */
-    private static DcsWriteContext resolveDcsWriteContext(ProjectContext ctx)
-    {
-        DcsWriteContext writeCtx = new DcsWriteContext();
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
-        {
-            writeCtx.error = ToolResult.error(ERR_NO_BM_MANAGER).toJson();
-            return writeCtx;
-        }
-        writeCtx.bmModel = bmModelManager.getModel(ctx.project);
-        if (writeCtx.bmModel == null)
-        {
-            writeCtx.error = ToolResult.error(ERR_NO_BM_MODEL
-                + ctx.project.getName()).toJson();
-            return writeCtx;
-        }
-
-        // The DCS content is a transient @ExternalProperty of the DCS template (its own .dcs resource); a
-        // freshly-materialized content must be ATTACHED as a BM top object under its generated
-        // external-property FQN, so the generator is needed inside the write.
-        writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (writeCtx.fqnGenerator == null)
-        {
-            writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
-            return writeCtx;
-        }
-
-        // The report may have NO DCS template yet - the first `dcs` write lazily materializes it through
-        // the parent-aware model factory, so the factory + platform version are needed inside the write.
-        writeCtx.factory = Activator.getDefault().getModelObjectFactory();
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager == null ? null : v8ProjectManager.getProject(ctx.project);
-        if (writeCtx.factory == null || v8Project == null)
-        {
-            writeCtx.error = ToolResult.error("EDT services unavailable (model factory / project) for project: " //$NON-NLS-1$
-                + ctx.project.getName()).toJson();
-            return writeCtx;
-        }
-        writeCtx.version = v8Project.getVersion();
-        writeCtx.typeResolver = dcsTypeResolver(ctx.config, writeCtx.version);
-        return writeCtx;
-    }
-
-    /**
-     * Builds the {@link DcsWriter.TypeResolver} the DCS write uses for a parameter's
-     * {@code valueType}. Extracted verbatim from {@link #modifyDcsContent}.
-     */
-    private static DcsWriter.TypeResolver dcsTypeResolver(Configuration dcsConfig, Version version)
-    {
-        // A parameter's `valueType` is built into an mcore TypeDescription through the shared S2 builder
-        // (same path as the generic `type` property, prepareTypeDescription). Supplied to DcsWriter as a
-        // TypeResolver so the pure writer never touches the platform type provider directly.
-        return valueTypeSpec -> {
-            if (version == null)
-            {
-                return DcsWriter.TypeResolution.failed(
-                    "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
-            }
-            // DCS_PARAMETER, not the METADATA default: a parameter's type is not a stored feature, so
-            // an in-memory collection must be refused with wording that is true HERE (issue #295 review).
-            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version,
-                false, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
-            return tr.error != null
-                ? DcsWriter.TypeResolution.failed(tr.error)
-                : DcsWriter.TypeResolution.of(tr.typeDescription);
-        };
-    }
-
-    /**
-     * The DCS write-transaction body: re-fetches the Report by its BM id, finds-or-materializes its
-     * main DCS template, records the export targets into {@code exportFqnHolder} /
-     * {@code contentFqnHolder}, resolves the content {@link DataCompositionSchema} and applies the
-     * payload via {@link DcsWriter}. Throws a {@link TemplateWriteException} carrying a ready JSON
-     * error on a resolution / validation failure, so the surrounding tx rolls back with no partial
-     * mutation. Extracted verbatim from the write lambda of {@link #modifyDcsContent}.
-     */
-    private static DcsWriter.Result applyDcsSpec(IBmTransaction tx, long reportBmId,
-        DcsWriteContext writeCtx, String normFqn, JsonObject dcsSpec, String[] exportFqnHolder,
-        String[] contentFqnHolder)
-    {
-        Object inTx = tx.getObjectById(reportBmId);
-        if (!(inTx instanceof Report))
-        {
-            throw new TemplateWriteException(ToolResult.error("The report could not be resolved " //$NON-NLS-1$
-                + "inside the transaction.").toJson()); //$NON-NLS-1$
-        }
-        Report txReport = (Report)inTx;
-        BasicTemplate dcsTemplate = findOrCreateDcsTemplate(txReport, writeCtx.factory, writeCtx.version);
-        // A report DCS template is inline in the report's .mdo (not a top object), so its export
-        // target is the OWNER top object (the Report), the same top climb as modifyTemplateContent -
-        // a bmGetFqn read is legal only on a top object.
-        IBmObject templateBm = (IBmObject)dcsTemplate;
-        IBmObject topObject = templateBm.bmIsTop() ? templateBm : templateBm.bmGetTopObject();
-        if (topObject == null)
-        {
-            throw new TemplateWriteException(ToolResult.error("Cannot resolve the on-disk file to " //$NON-NLS-1$
-                + "export for the DCS of report '" + normFqn //$NON-NLS-1$
-                + "'; report it with the report FQN.").toJson()); //$NON-NLS-1$
-        }
-        exportFqnHolder[0] = topObject.bmGetFqn();
-        DataCompositionSchema schema = resolveDcsContent(dcsTemplate, tx, writeCtx.fqnGenerator, normFqn);
-        // The content is now an attached BM top object (pre-existing, or freshly attached inside
-        // resolveDcsContent), so its own resource FQN resolves and is force-exported alongside the
-        // template so the sibling .dcs drains.
-        contentFqnHolder[0] = contentResourceExportFqn(schema);
-        DcsWriter.Result applied = DcsWriter.apply(schema, dcsSpec, writeCtx.typeResolver);
-        if (applied.hasError())
-        {
-            // Roll the whole write back so a validation failure leaves nothing on disk.
-            throw new TemplateWriteException(applied.error);
-        }
-        return applied;
-    }
-
-    /**
-     * Resolves the Report's main DCS {@link BasicTemplate}, lazily creating it when the report has none
-     * (designer / older reports have no DCS). A DCS template is a {@link Template} child of the report
-     * (inline in the report's {@code .mdo}, NOT a top object), created through the parent-aware model
-     * factory exactly like {@code create_metadata} makes a template (its factory-initialized-child path),
-     * marked {@link TemplateType#DATA_COMPOSITION_SCHEMA} and registered as the report's
-     * {@code mainDataCompositionSchema} so the report is well-formed. MUST run inside the write boundary.
-     */
-    private static BasicTemplate findOrCreateDcsTemplate(Report txReport, IModelObjectFactory factory,
-        Version version)
-    {
-        BasicTemplate existing = txReport.getMainDataCompositionSchema();
-        if (existing != null)
-        {
-            return existing;
-        }
-        MdObject child = (MdObject)factory.create(MdClassPackage.Literals.TEMPLATE, txReport, version);
-        if (child == null)
-        {
-            child = (MdObject)EcoreUtil.create(MdClassPackage.Literals.TEMPLATE);
-        }
-        Template template = (Template)child;
-        template.setName(DEFAULT_DCS_TEMPLATE_NAME);
-        if (template.getUuid() == null)
-        {
-            template.setUuid(UUID.randomUUID());
-        }
-        template.setTemplateType(TemplateType.DATA_COMPOSITION_SCHEMA);
-        txReport.getTemplates().add(template);
-        // Template IS-A BasicTemplate, so it binds the report's mainDataCompositionSchema cross-reference.
-        txReport.setMainDataCompositionSchema(template);
-        factory.fillDefaultReferences(template);
-        return template;
-    }
-
-    /**
-     * Resolves the {@link DataCompositionSchema} content of an in-transaction DCS template, creating an
-     * empty one when the template has none usable yet. Mirrors {@link #resolveSpreadsheetContent}: a
-     * template's content is a transient {@code @ExternalProperty} whose content lives in the separate,
-     * lazily-loaded {@code .dcs}, so a freshly-materialized DCS template has NO usable content - either
-     * {@code getTemplate() == null} OR a non-{@link DataCompositionSchema} placeholder. Both are treated as
-     * empty and replaced with a fresh {@link DcsFactory}-built schema. The fresh content is a transient
-     * external ref (a separate {@code .dcs} resource, NOT an inline BM ref), so it is ATTACHED as a BM top
-     * object under its canonical external-property FQN ({@code BASIC_TEMPLATE__TEMPLATE}) - else committing
-     * the write fails with "Failed to persist reference value". MUST run inside the write boundary.
-     */
-    private static DataCompositionSchema resolveDcsContent(BasicTemplate txTemplate, IBmTransaction tx,
-        ITopObjectFqnGenerator fqnGenerator, String normFqn)
-    {
-        EObject contentObj = txTemplate.getTemplate();
-        // Reuse the existing content ONLY when it is an ATTACHED BM top object. findOrCreateDcsTemplate calls
-        // factory.fillDefaultReferences(template) after setting templateType=DATA_COMPOSITION_SCHEMA; if that
-        // pre-materializes an UNATTACHED DataCompositionSchema in getTemplate(), returning it here would skip
-        // attachTopObject, so contentResourceExportFqn(schema) yields null (bmIsTop()==false) and the sibling
-        // .dcs would silently never drain (a #239-class false success). When it is not yet a top object, fall
-        // through to setTemplate + generateExternalPropertyFqn + attachTopObject to (re-)attach it.
-        if (contentObj instanceof DataCompositionSchema && contentObj instanceof IBmObject
-            && ((IBmObject)contentObj).bmIsTop())
-        {
-            return (DataCompositionSchema)contentObj;
-        }
-        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
-        txTemplate.setTemplate(schema);
-        String contentFqn = fqnGenerator.generateExternalPropertyFqn(txTemplate,
-            MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
-        if (contentFqn == null || contentFqn.isEmpty())
-        {
-            throw new TemplateWriteException(ToolResult.error("Could not generate the content resource FQN " //$NON-NLS-1$
-                + "for the DCS of report '" + normFqn + "'; report it with the report FQN.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        tx.attachTopObject((IBmObject)schema, contentFqn);
-        return schema;
-    }
-
-    /**
-     * Builds the success JSON for a completed DCS content change: the {@code dcs} counts object
-     * ({@code dataSources} / {@code dataSets} / {@code fields} / {@code parameters}) plus {@code persisted}
-     * and a confirmation message. Pure helper.
-     */
-    private static String buildDcsResult(String normFqn, DcsWriter.Result result, boolean persisted,
-        boolean localeUnused)
-    {
-        JsonObject applied = new JsonObject();
-        applied.addProperty("dataSources", result.dataSources); //$NON-NLS-1$
-        applied.addProperty("dataSets", result.dataSets); //$NON-NLS-1$
-        applied.addProperty("fields", result.fields); //$NON-NLS-1$
-        applied.addProperty("parameters", result.parameters); //$NON-NLS-1$
-        applied.addProperty("calculatedFields", result.calculatedFields); //$NON-NLS-1$
-        ToolResult dcsResult = ToolResult.success()
-            .put(McpKeys.ACTION, VAL_MODIFIED)
-            .put("fqn", normFqn) //$NON-NLS-1$
-            .put(KEY_DCS, applied)
-            .put(KEY_PERSISTED, persisted);
-        if (localeUnused)
-        {
-            dcsResult.put(KEY_LOCALE_UNUSED, true);
-        }
-        return dcsResult
-            .put(McpKeys.MESSAGE, "Modified DCS of report " + normFqn + " (dataSources: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.dataSources + ", dataSets: " + result.dataSets + ", fields: " + result.fields //$NON-NLS-1$ //$NON-NLS-2$
-                + ", parameters: " + result.parameters + ", calculatedFields: " //$NON-NLS-1$ //$NON-NLS-2$
-                + result.calculatedFields + ")") //$NON-NLS-1$
-            .toJson();
-    }
-
-    /**
-     * The actionable error for a {@code dcs} payload addressed to a FQN that is not a Report (a form
-     * member, a subsystem, or any other non-Report object): names the offending FQN + what it is, and
-     * points at the valid Report FQN shape. {@code isClause} describes the resolved target (e.g.
-     * {@code "is a Catalog"} or {@code "addresses a FORM member"}). Package-visible for tests.
-     */
-    static String dcsOnlyForReportFqnError(String normFqn, String isClause)
-    {
-        return ToolResult.error("'dcs' is only valid for a Report FQN ('Report.<Name>'); '" + normFqn //$NON-NLS-1$
-            + "' " + isClause + ". 'dcs' authors a report's Data Composition Schema (data sets / query " //$NON-NLS-1$ //$NON-NLS-2$
-            + "text / fields / parameters); use 'properties' for a generic property change, or address a " //$NON-NLS-1$
-            + "Report.<Name>.").toJson(); //$NON-NLS-1$
-    }
-
-    /**
-     * The refusal for a {@code dcs} payload combined with another payload in the same call: a generic
-     * {@code properties} change, a membership {@code content} payload, a Role payload ({@code rights} /
-     * {@code templates} / {@code roleProperties}) or a {@code template} payload. A report's DCS is authored
-     * through its own dedicated surface, so mixing is rejected up front - the same no-mixing policy the
-     * Role rights / membership content / template branches enforce, so a sibling payload is never silently
-     * dropped while the tool reports success. Returns the ready JSON error, or {@code null} when the
-     * {@code dcs} payload stands alone. Package-visible for tests.
-     */
-    static String dcsMixError(List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload,
-        boolean hasTemplatePayload)
-    {
-        if (!properties.isEmpty())
-        {
-            return ToolResult.error("A DCS content change ('dcs') cannot be combined with a generic " //$NON-NLS-1$
-                + "'properties' change in one call. Set the report's own properties (comment / synonym) " //$NON-NLS-1$
-                + "separately.").toJson(); //$NON-NLS-1$
-        }
-        if (!content.isEmpty() || hasRolePayload || hasTemplatePayload)
-        {
-            return ToolResult.error("A DCS content change ('dcs') cannot be combined with a membership " //$NON-NLS-1$
-                + "'content' payload, a Role payload ('rights' / 'templates' / 'roleProperties') or a " //$NON-NLS-1$
-                + "'template' payload in one call. 'dcs' authors a report's Data Composition Schema " //$NON-NLS-1$
-                + "(data sets / query text / fields / parameters) only.").toJson(); //$NON-NLS-1$
-        }
-        return null;
-    }
-
-    /**
-     * Parses the optional {@code dcs} argument (a single JSON object - the Data Composition Schema spec)
-     * from the raw params into a {@link DcsArg}: {@link DcsArg#absent()} when the argument is absent /
-     * blank / JSON null; a ready {@link DcsArg#invalid} error when it is present but is NOT a JSON object.
-     * Mirrors {@link #parseTemplateArg}: {@code dcs} is the SOLE surface for report-schema authoring, so a
-     * present-but-malformed value must be an actionable error, NOT a silent drop that would apply a stray
-     * {@code properties} - or misreport {@code properties is required} - while the authoring vanished. An
-     * invalid INNER shape of a well-formed object is surfaced later by {@link DcsWriter}'s validation.
-     * Package-visible for tests.
-     */
-    static DcsArg parseDcsArg(Map<String, String> params)
-    {
-        String raw = params.get(KEY_DCS);
-        if (raw == null || raw.trim().isEmpty())
-        {
-            return DcsArg.absent();
-        }
-        JsonElement element;
-        try
-        {
-            element = JsonParser.parseString(raw.trim());
-        }
-        catch (RuntimeException e)
-        {
-            return DcsArg.invalid(malformedDcsError());
-        }
-        if (element.isJsonNull())
-        {
-            return DcsArg.absent();
-        }
-        if (!element.isJsonObject())
-        {
-            return DcsArg.invalid(malformedDcsError());
-        }
-        return DcsArg.of(element.getAsJsonObject());
-    }
-
-    /**
-     * The actionable error for a present-but-malformed {@code dcs} argument (unparseable JSON, or a string
-     * / number / array rather than an object): the {@code dcs} payload authors a report's Data Composition
-     * Schema, so it must be a JSON object.
-     */
-    private static String malformedDcsError()
-    {
-        return ToolResult.error("'dcs' must be a JSON object, e.g. " //$NON-NLS-1$
-            + "{dataSets:[{name:'Main',type:'query',query:'SELECT ...'}]}. It authors a report's Data " //$NON-NLS-1$
-            + "Composition Schema (data sets / query text / fields / parameters) on a Report FQN.").toJson(); //$NON-NLS-1$
-    }
-
-    /**
-     * The parsed {@code dcs} argument: {@link #absent()} (no payload - both fields {@code null}), a valid
-     * parsed {@link #spec}, or a ready {@link #error} JSON for a present-but-malformed value. At most one
-     * of {@code spec} / {@code error} is non-null. Package-visible for tests. Mirrors {@link TemplateArg}.
-     */
-    static final class DcsArg
-    {
-        /** The parsed DCS spec, or {@code null} when the argument is absent or malformed. */
-        final JsonObject spec;
-        /** A ready {@link ToolResult#error} JSON when the argument is present-but-malformed, else {@code null}. */
-        final String error;
-
-        private DcsArg(JsonObject spec, String error)
-        {
-            this.spec = spec;
-            this.error = error;
-        }
-
-        static DcsArg absent()
-        {
-            return new DcsArg(null, null);
-        }
-
-        static DcsArg of(JsonObject spec)
-        {
-            return new DcsArg(spec, null);
-        }
-
-        static DcsArg invalid(String error)
-        {
-            return new DcsArg(null, error);
         }
     }
 
@@ -5462,14 +4658,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareBoolean(name, value, info, out);
             case INTEGER:
                 return prepareInteger(name, value, info, out);
+            case LONG:
+                return prepareLong(name, value, info, out);
             case TYPE_DESCRIPTION:
                 return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
             case REFERENCE:
                 return prepareReference(ctx.scope, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
+            case MCORE_VALUE_LIST:
+                return prepareMcoreValueList(ctx.scope, name, prop, info, out);
             case STYLE_VALUE:
-                return prepareStyleValue(name, prop, target, info, out);
+                return prepareStyleValue(ctx.config, name, prop, target, info, out);
+            case PICTURE:
+                return preparePicture(ctx, name, prop, info, out);
+            case QNAME:
+                return prepareQName(name, prop, info, out);
             case ADJUSTABLE_BOOLEAN:
                 return prepareAdjustableBoolean(name, value, info, out);
             case STRING:
@@ -5613,6 +4817,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Validates a {@code LONG} property value and, on success, appends the prepared scalar change as
+     * a {@link Long}. Returns an actionable JSON error when the value is fractional or outside the
+     * signed 64-bit range, or {@code null} on success.
+     */
+    private static String prepareLong(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        Long l = parseLong(value);
+        if (l == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid 64-bit integer for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use a whole number from " + Long.MIN_VALUE + " to " + Long.MAX_VALUE + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        out.add(PreparedChange.scalar(info.feature, l));
+        return null;
+    }
+
+    /**
      * Validates a plain {@code STRING} property (the default value kind) and, on success, appends
      * the prepared scalar change (with the yo-normalization applied) to {@code out}. Returns a
      * JSON error on a missing value, or {@code null} on success. Extracted verbatim from
@@ -5749,15 +4971,69 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Validates a {@code MCORE_VALUE_LIST} property and queues an ordered replacement. Configuration
+     * XDTO-package targets are reduced to BM ids here; only ids and namespace strings cross into the
+     * write phase, where the actual ReferenceValue/StringValue objects are created.
+     */
+    private static String prepareMcoreValueList(MetadataScope scope, String name, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        McoreValueListPreparation prepared = buildMcoreValueListValue(name, prop.get(KEY_VALUE), scope);
+        if (prepared.error != null)
+        {
+            return prepared.error;
+        }
+        out.add(PreparedChange.mcoreValueList(info.feature, prepared.values));
+        return null;
+    }
+
+    /**
+     * Parses and reduces an mcore Value list to its transaction-safe shape. Package-visible so
+     * headless tests can pin refusal wording and the no-live-reference boundary.
+     */
+    static McoreValueListPreparation buildMcoreValueListValue(String propertyName, JsonElement raw,
+        MetadataScope scope)
+    {
+        McoreValueListBuilder.Result built = McoreValueListBuilder.build(raw, scope);
+        if (built.error != null)
+        {
+            return McoreValueListPreparation.error(ToolResult.error("Invalid mcore Value list for " //$NON-NLS-1$
+                + "property '" + propertyName + "': " + built.error).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return prepareResolvedMcoreValueList(built.items);
+    }
+
+    /** Converts resolved entries to strings/BM ids without retaining any live XDTO-package object. */
+    static McoreValueListPreparation prepareResolvedMcoreValueList(
+        List<McoreValueListBuilder.Item> items)
+    {
+        List<McoreValuePreparation> reduced = new ArrayList<>();
+        for (McoreValueListBuilder.Item item : items)
+        {
+            if (item.referenceTarget != null)
+            {
+                reduced.add(McoreValuePreparation.reference(
+                    ((IBmObject)item.referenceTarget).bmGetId()));
+            }
+            else
+            {
+                reduced.add(McoreValuePreparation.namespace(item.namespaceUri));
+            }
+        }
+        return McoreValueListPreparation.ok(reduced);
+    }
+
+    /**
      * Validates a {@code STYLE_VALUE} property (building the StyleItem Color / Font value) and, on
      * success, appends the prepared style-value change to {@code out} (which also keeps the sibling
      * {@code type} feature consistent with the value). Returns a JSON error on failure, or {@code null}
      * on success. Read-only: it only builds and queues the change (no model mutation).
      */
-    private String prepareStyleValue(String name, JsonObject prop, EObject target, PropertyInfo info,
-        List<PreparedChange> out)
+    private String prepareStyleValue(Configuration configuration, String name, JsonObject prop,
+        EObject target, PropertyInfo info, List<PreparedChange> out)
     {
-        StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE));
+        StyleValueBuilder.Result sv = StyleValueBuilder.build(prop.get(KEY_VALUE),
+            StyleValueBuilder.forConfiguration(configuration));
         if (sv.error != null)
         {
             return ToolResult.error("Invalid StyleItem '" + name + "': " + sv.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -5767,6 +5043,159 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         EStructuralFeature typeFeature = target.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
         out.add(PreparedChange.styleValue(info.feature, typeFeature, sv.value, sv.type));
         return null;
+    }
+
+    /**
+     * Validates and resolves a contained mcore Picture value. A standard-picture proxy is safe to
+     * queue directly; a live CommonPicture crosses the prepare/write boundary only by BM id. The
+     * PictureRef itself is created and attached inside the caller's existing write transaction.
+     */
+    private static String preparePicture(PrepareContext ctx, String name, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        JsonElement raw = prop.get(KEY_VALUE);
+        if (isMissingOrEmptyString(raw))
+        {
+            return requireValueError(name);
+        }
+        PicturePreparation prepared = buildPictureValue(name, raw, ctx.scope, ctx.version);
+        if (prepared.error != null)
+        {
+            return prepared.error;
+        }
+        out.add(PreparedChange.picture(info.feature, prepared.platformPictureProxy,
+            prepared.commonPictureBmId));
+        return null;
+    }
+
+    /**
+     * Builds and wraps a PictureValueBuilder result in the tool's ToolResult error contract. Kept
+     * package-visible so the headless unit test can pin the exact refusal wording without a BM model.
+     */
+    static PicturePreparation buildPictureValue(String name, JsonElement raw,
+        MetadataScope scope, Version version)
+    {
+        PictureValueBuilder.Result built = PictureValueBuilder.build(raw, scope, version);
+        if (built.error != null)
+        {
+            return PicturePreparation.error(ToolResult.error(
+                "Invalid picture for property '" + name + "': " + built.error).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return prepareResolvedPicture(built.picture);
+    }
+
+    /**
+     * Converts a resolved picture target to the transaction-safe prepared shape. Package-visible so
+     * a headless test can prove that a CommonPicture is reduced to its BM id, never retained live.
+     */
+    static PicturePreparation prepareResolvedPicture(EObject picture)
+    {
+        if (picture instanceof CommonPicture)
+        {
+            return PicturePreparation.common(((IBmObject)picture).bmGetId());
+        }
+        return PicturePreparation.standard(picture);
+    }
+
+    /**
+     * Validates either supported QName wire form and queues a detached mcore QName for attachment in
+     * the existing write transaction. Both members/sides are required and must be non-empty.
+     */
+    private static String prepareQName(String name, JsonObject prop, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        JsonElement raw = prop.get(KEY_VALUE);
+        if (isMissingOrEmptyString(raw))
+        {
+            return requireValueError(name);
+        }
+        ContainedValuePreparation prepared = buildQNameValue(name, raw);
+        if (prepared.error != null)
+        {
+            return prepared.error;
+        }
+        out.add(PreparedChange.scalar(info.feature, prepared.value));
+        return null;
+    }
+
+    /**
+     * Parses a QName without touching the model. Package-visible for exact refusal-path unit tests.
+     */
+    static ContainedValuePreparation buildQNameValue(String propertyName, JsonElement raw)
+    {
+        String name;
+        String nsUri;
+        if (raw != null && !raw.isJsonNull() && raw.isJsonObject())
+        {
+            JsonObject object = raw.getAsJsonObject();
+            if (object.size() != 2 || !object.has("name") || !object.has("nsUri")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return invalidQName(propertyName, raw,
+                    "the object form requires exactly the 'name' and 'nsUri' members"); //$NON-NLS-1$
+            }
+            name = strictString(object.get("name")); //$NON-NLS-1$
+            nsUri = strictString(object.get("nsUri")); //$NON-NLS-1$
+            if (isBlank(name) || isBlank(nsUri))
+            {
+                return invalidQName(propertyName, raw,
+                    "the object form requires non-empty string members 'name' and 'nsUri'"); //$NON-NLS-1$
+            }
+        }
+        else if (raw != null && !raw.isJsonNull() && raw.isJsonPrimitive()
+            && raw.getAsJsonPrimitive().isString())
+        {
+            String compact = raw.getAsString();
+            int close = compact.indexOf('}');
+            if (!compact.startsWith("{") || close <= 1 || close == compact.length() - 1) //$NON-NLS-1$
+            {
+                return invalidQName(propertyName, raw,
+                    "the compact form must be '{nsUri}name' with a non-empty namespace URI and name"); //$NON-NLS-1$
+            }
+            nsUri = compact.substring(1, close);
+            name = compact.substring(close + 1);
+            if (isBlank(name) || isBlank(nsUri))
+            {
+                return invalidQName(propertyName, raw,
+                    "the compact form must be '{nsUri}name' with a non-empty namespace URI and name"); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            return invalidQName(propertyName, raw,
+                "the value is neither a QName object nor a compact string"); //$NON-NLS-1$
+        }
+
+        QName qname = McoreFactory.eINSTANCE.createQName();
+        qname.setName(name);
+        qname.setNsUri(nsUri);
+        return ContainedValuePreparation.ok(qname);
+    }
+
+    private static ContainedValuePreparation invalidQName(String propertyName, JsonElement raw,
+        String reason)
+    {
+        String value = raw == null || raw.isJsonNull() ? "null" : raw.toString(); //$NON-NLS-1$
+        return ContainedValuePreparation.error(ToolResult.error("Invalid QName value for property '" //$NON-NLS-1$
+            + propertyName + "': " + value + "; " + reason + ". Use either " //$NON-NLS-1$ //$NON-NLS-2$
+            + "{\"name\":\"string\",\"nsUri\":\"http://www.w3.org/2001/XMLSchema\"} or " //$NON-NLS-1$
+            + "\"{http://www.w3.org/2001/XMLSchema}string\".").toJson()); //$NON-NLS-1$
+    }
+
+    private static boolean isMissingOrEmptyString(JsonElement raw)
+    {
+        return raw == null || raw.isJsonNull() || raw.isJsonPrimitive()
+            && raw.getAsJsonPrimitive().isString() && raw.getAsString().isEmpty();
+    }
+
+    private static String strictString(JsonElement raw)
+    {
+        return raw != null && !raw.isJsonNull() && raw.isJsonPrimitive()
+            && raw.getAsJsonPrimitive().isString() ? raw.getAsString() : null;
+    }
+
+    private static boolean isBlank(String value)
+    {
+        return value == null || value.trim().isEmpty();
     }
 
     /**
@@ -5853,10 +5282,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Validates a reference target: it must resolve, be re-fetchable (a top object, OR a FORM member -
-     * {@code defaultForm} / {@code auxiliaryForm} legitimately reference a form owned by another object,
-     * issue #262 - both re-fetch fine by {@code bmGetId()} inside the write tx), and have a type
-     * assignable to the reference feature's target type. Returns a JSON error or {@code null} on OK.
+     * Validates a reference target: it must resolve, be re-fetchable (a top object, a FORM member, or a
+     * {@link BasicTemplate} member). Forms ({@code defaultForm} / {@code auxiliaryForm}) and templates
+     * ({@code mainDataCompositionSchema}) legitimately cross-reference members owned by another object;
+     * both are BM objects with stable {@code bmGetId()} values and are re-fetched with
+     * {@link IBmTransaction#getObjectById(long)} inside the write transaction. The target must also be
+     * assignable to the reference feature's declared type. Returns a JSON error or {@code null} on OK.
      */
     // Package-visible (not private) so ModifyMetadataToolTest can exercise the not-found hint headlessly
     // (target==null never touches IBmObject, so no live BM model is needed for that branch).
@@ -5874,11 +5305,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "top-level object; references to members are not supported.").toJson(); //$NON-NLS-1$
         }
         boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
-        if (!((IBmObject)target).bmIsTop() && !isForm)
+        boolean isTemplate = target instanceof BasicTemplate;
+        if (!isForm && !isTemplate && !((IBmObject)target).bmIsTop())
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
-                + "top-level object; references to members are not supported (forms are the one " //$NON-NLS-1$
-                + "supported member reference).").toJson(); //$NON-NLS-1$
+                + "top-level object; references to members are not supported (forms and templates " //$NON-NLS-1$
+                + "are the supported member references because BM can re-fetch both by id).").toJson(); //$NON-NLS-1$
         }
         EClass targetType = ((EReference)feature).getEReferenceType();
         if (targetType != null && !targetType.isSuperTypeOf(target.eClass()))
@@ -5980,17 +5412,137 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
     }
 
+    /**
+     * Transaction-safe prepared Picture target. A successful result carries EITHER a platform proxy
+     * or a CommonPicture BM id; it never retains a live CommonPicture across the write boundary.
+     * Package-visible so the headless tests can pin that invariant and the exact refusal wording.
+     */
+    static final class PicturePreparation
+    {
+        final EObject platformPictureProxy;
+
+        final Long commonPictureBmId;
+
+        final String error;
+
+        private PicturePreparation(EObject platformPictureProxy, Long commonPictureBmId,
+            String error)
+        {
+            this.platformPictureProxy = platformPictureProxy;
+            this.commonPictureBmId = commonPictureBmId;
+            this.error = error;
+        }
+
+        static PicturePreparation standard(EObject platformPictureProxy)
+        {
+            return new PicturePreparation(platformPictureProxy, null, null);
+        }
+
+        static PicturePreparation common(long commonPictureBmId)
+        {
+            return new PicturePreparation(null, Long.valueOf(commonPictureBmId), null);
+        }
+
+        static PicturePreparation error(String error)
+        {
+            return new PicturePreparation(null, null, error);
+        }
+    }
+
+    /**
+     * A detached QName produced during validation, or a ready ToolResult error JSON. Exactly one field
+     * is non-null. Package-visible so headless tests can pin QName refusal wording without constructing
+     * the private PreparedChange or entering a BM transaction.
+     */
+    static final class ContainedValuePreparation
+    {
+        final EObject value;
+
+        final String error;
+
+        private ContainedValuePreparation(EObject value, String error)
+        {
+            this.value = value;
+            this.error = error;
+        }
+
+        static ContainedValuePreparation ok(EObject value)
+        {
+            return new ContainedValuePreparation(value, null);
+        }
+
+        static ContainedValuePreparation error(String error)
+        {
+            return new ContainedValuePreparation(null, error);
+        }
+    }
+
+    /** One transaction-safe mcore Value-list entry: either a namespace string or a reference BM id. */
+    static final class McoreValuePreparation
+    {
+        final String namespaceUri;
+
+        final Long referenceBmId;
+
+        private McoreValuePreparation(String namespaceUri, Long referenceBmId)
+        {
+            this.namespaceUri = namespaceUri;
+            this.referenceBmId = referenceBmId;
+        }
+
+        static McoreValuePreparation namespace(String namespaceUri)
+        {
+            return new McoreValuePreparation(namespaceUri, null);
+        }
+
+        static McoreValuePreparation reference(long bmId)
+        {
+            return new McoreValuePreparation(null, Long.valueOf(bmId));
+        }
+    }
+
+    /** An ordered, transaction-safe mcore Value list, or a ready ToolResult error JSON. */
+    static final class McoreValueListPreparation
+    {
+        final List<McoreValuePreparation> values;
+
+        final String error;
+
+        private McoreValueListPreparation(List<McoreValuePreparation> values, String error)
+        {
+            this.values = values;
+            this.error = error;
+        }
+
+        static McoreValueListPreparation ok(List<McoreValuePreparation> values)
+        {
+            return new McoreValueListPreparation(
+                java.util.Collections.unmodifiableList(new ArrayList<>(values)), null);
+        }
+
+        static McoreValueListPreparation error(String error)
+        {
+            return new McoreValueListPreparation(null, error);
+        }
+    }
+
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
-        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE, ADJUSTABLE_BOOLEAN }
+        private enum Kind
+        {
+            SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MCORE_VALUE_LIST, STYLE_VALUE, PICTURE,
+            ADJUSTABLE_BOOLEAN
+        }
 
         private final EStructuralFeature feature;
         private final Kind kind;
         private final Object scalarValue;
         private final String localizedLanguage;
         private final String localizedValue;
-        /** For a REFERENCE: the target's bmId. For a MANY_REFERENCE: the targets' bmIds in order. */
+        /**
+         * For REFERENCE/MANY_REFERENCE: target bmIds. For a CommonPicture: its one target bmId.
+         */
         private final List<Long> referenceBmIds;
         /** For a STYLE_VALUE: the sibling `type` feature + StyleElementType; {@code null} otherwise. */
         private final StyleBinding styleBinding;
@@ -6071,6 +5623,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 new StyleBinding(typeFeature, type), false);
         }
 
+        /**
+         * A picture change carries either a safe platform proxy in {@code scalarValue}, or one
+         * CommonPicture BM id in {@code referenceBmIds}. The PictureRef is built only in applyTo.
+         */
+        static PreparedChange picture(EStructuralFeature feature, EObject platformPictureProxy,
+            Long commonPictureBmId)
+        {
+            List<Long> ids = commonPictureBmId == null ? null
+                : java.util.Collections.singletonList(commonPictureBmId);
+            return new PreparedChange(feature, Kind.PICTURE, platformPictureProxy, null, null, ids,
+                null, false);
+        }
+
+        /** An ordered replacement list carrying only namespace strings and reference BM ids. */
+        static PreparedChange mcoreValueList(EStructuralFeature feature,
+            List<McoreValuePreparation> values)
+        {
+            return new PreparedChange(feature, Kind.MCORE_VALUE_LIST, values, null, null, null,
+                null, false);
+        }
+
         String featureName()
         {
             return feature.getName();
@@ -6132,6 +5705,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                     return;
                 }
+                case MCORE_VALUE_LIST:
+                {
+                    // Replace the whole containment list. ReferenceValue wrappers are created only
+                    // here, after re-fetching their XDTO-package target in this transaction.
+                    EList<Value> list = (EList<Value>)target.eGet(feature);
+                    list.clear();
+                    for (McoreValuePreparation prepared :
+                        (List<McoreValuePreparation>)scalarValue)
+                    {
+                        if (prepared.referenceBmId != null)
+                        {
+                            ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+                            reference.setValue(requireInTx(tx, prepared.referenceBmId.longValue()));
+                            list.add(reference);
+                        }
+                        else
+                        {
+                            StringValue string = McoreFactory.eINSTANCE.createStringValue();
+                            string.setValue(prepared.namespaceUri);
+                            list.add(string);
+                        }
+                    }
+                    return;
+                }
                 case STYLE_VALUE:
                 {
                     // Keep the style item's `type` consistent with the value it now holds (Color / Font),
@@ -6142,6 +5739,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         target.eSet(styleBinding.typeFeature, styleBinding.type);
                     }
                     target.eSet(feature, scalarValue);
+                    return;
+                }
+                case PICTURE:
+                {
+                    // A platform picture stays a provider proxy. A CommonPicture is re-fetched by
+                    // bmId so no live object from the prepare transaction crosses this boundary.
+                    EObject picture = referenceBmIds == null ? (EObject)scalarValue
+                        : requireInTx(tx, referenceBmIds.get(0));
+                    EObject pictureRef = EcoreUtil.create(McorePackage.Literals.PICTURE_REF);
+                    pictureRef.eSet(McorePackage.Literals.PICTURE_REF__PICTURE, picture);
+                    target.eSet(feature, pictureRef);
                     return;
                 }
                 case ADJUSTABLE_BOOLEAN:
@@ -6213,6 +5821,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return Integer.valueOf((int)d);
         }
         catch (NumberFormatException e)
+        {
+            return null;
+        }
+    }
+
+    private static Long parseLong(String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            return Long.valueOf(new BigDecimal(value.trim()).longValueExact());
+        }
+        catch (NumberFormatException | ArithmeticException e)
         {
             return null;
         }

@@ -7,7 +7,8 @@ Bundle-Vendor: DitriX
 Fragment-Host: com.ditrix.edt.mcp.server;bundle-version="1.0.0"
 Bundle-RequiredExecutionEnvironment: JavaSE-17
 Automatic-Module-Name: com.ditrix.edt.mcp.server.tests
-Import-Package: org.junit;version="4.13.0",
+Import-Package: com._1c.g5.v8.dt.dcs.typedvalue,
+ org.junit;version="4.13.0",
  org.junit.runner;version="4.13.0",
  org.junit.runners;version="4.13.0",
  org.mockito,

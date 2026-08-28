@@ -380,6 +380,8 @@ public class RenameMetadataObjectToolTest
                 + error, error.contains("PARTIALLY renamed")); //$NON-NLS-1$
             assertTrue("it must name the way back to a consistent model: " + error, //$NON-NLS-1$
                 error.contains("clean_project")); //$NON-NLS-1$
+            assertTrue("APPLYING is not proof of commit, but it must forfeit isolation: " + error, //$NON-NLS-1$
+                error.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
         }
         finally
         {
@@ -477,6 +479,8 @@ public class RenameMetadataObjectToolTest
                 + error, error.contains("PARTIALLY renamed")); //$NON-NLS-1$
             assertTrue("it must still say the rename is not cancelled and may apply: " + error, //$NON-NLS-1$
                 error.contains("may still apply")); //$NON-NLS-1$
+            assertTrue("a still-running PREPARING job can advance after the sampled phase: " + error, //$NON-NLS-1$
+                error.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
         }
         finally
         {
@@ -495,6 +499,21 @@ public class RenameMetadataObjectToolTest
             });
 
         assertEquals("a completed rename must return the service's own report", payload, result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFailureAfterAppliedPhaseCarriesTheStructuralCommitMarker()
+    {
+        String error = RenameMetadataObjectTool.runRenameBounded("Catalog.Products", "Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            true, WEDGE_CEILING_MS, progress -> {
+                progress.enter(RenameProgress.Phase.APPLIED);
+                throw new IllegalStateException("report rendering failed"); //$NON-NLS-1$
+            });
+
+        assertTrue("the original failure must survive: " + error, //$NON-NLS-1$
+            error.contains("report rendering failed")); //$NON-NLS-1$
+        assertTrue("APPLIED proves the model moved regardless of the error wording: " + error, //$NON-NLS-1$
+            error.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
     }
 
     @Test

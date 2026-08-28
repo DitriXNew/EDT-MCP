@@ -1,8 +1,10 @@
 # Карта инструментов MCP-сервера EDT-MCP
 
-> Источник истины — раздел «Available Tools» в `README.md` репозитория EDT-MCP. Если расходится с этим файлом — верь README.
+> Источник истины — актуальная MCP-справка/схема и сгенерированный каталог
+> `docs/tools/`. Эта скопированная карта задач вторична.
 >
-> Всего инструментов: **57**, разбиты на 9 групп.
+> Этот файл — выборочная карта задач, а не полный индекс возможностей; в нём
+> намеренно нет поддерживаемого вручную общего числа, которое снова устареет.
 
 ## Префиксы имён в разных клиентах
 
@@ -36,7 +38,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | «Что в этой форме?» | `get_form_layout_snapshot` с `mode: compact` (YAML); `get_form_screenshot` если нужен визуал | YAML дешевле PNG |
 | «Что показывает платформа для типа X?» | `get_platform_documentation` | Не угадывай сигнатуры |
 | «Запусти / отладь / обнови ИБ» | `list_configurations` → `debug_launch` / `update_database` | Сперва узнай имя launch-конфигурации |
-| «Прогон тестов» | `run_yaxunit_tests`; для отладки падающих — `debug_yaxunit_tests` + `set_breakpoint` | |
+| «Прогон тестов» | `run_yaxunit_tests`; для отладки падающих — `set_breakpoint`, затем `run_yaxunit_tests(debug=true)` | |
 | «Что значит ошибка с checkId Z?» | `get_check_description` | |
 
 Если инструмент возвращает `tool is disabled` — текущий пресет (см. ниже) его скрывает. **Не пытайся обходить**, сообщи пользователю и предложи переключить пресет.
@@ -47,10 +49,10 @@ MCP-клиенты именуют инструменты по-разному. Р
 
 | Пресет | Что выключено |
 |---|---|
-| **All Tools** | Ничего (все 57 инструментов) |
+| **All Tools** | Ничего (все включённые на данный момент инструменты) |
 | **Analysis Only** | Группы Applications & Testing, Debugging, BSL Code, Refactoring, Translation + `export_configuration_to_xml` + `import_configuration_from_xml`. Доступны: Core/Project (кроме export/import), Errors & Problems, Code Intelligence, Tags |
 | **Code Review** | То же, что Analysis Only, **минус** добавляются доступными все инструменты BSL Code **кроме** `write_module_source`. То есть доступны `read_method_source`, `read_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `validate_query` |
-| **Development** | Только группа Debugging (включая `debug_yaxunit_tests`, `start_profiling`, `get_profiling_results`). Refactoring, Translation, BSL Code, Applications — доступны |
+| **Development** | Группа Debugging и инструменты, выключенные по умолчанию (сейчас raw `git` и `ask_workmate`). `run_yaxunit_tests` остаётся доступен через Applications для обычных прогонов; `debug=true` может запуститься, но инструменты исследования и очистки выключены, поэтому не начинай debug-прогон, пока Debugging не включён. Refactoring, Translation, BSL Code и остальные инструменты Applications — доступны |
 
 ## Настраиваемые дефолты параметров
 
@@ -117,7 +119,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `debug_launch` | Запуск в режиме отладки. Аналогично: `launchConfigurationName` (включая Attach to 1C:Enterprise Debug Server) **или** `projectName + applicationId` | По запросу |
 | `run_yaxunit_tests` | Запуск тестов YAxUnit, парсинг JUnit XML, Markdown-отчёт | После правок, если в проекте есть тесты |
 
-### 6. Debugging — отладчик (12)
+### 6. Debugging — отладчик (13 неустаревших инструментов)
 
 | Инструмент | Назначение |
 |---|---|
@@ -126,12 +128,13 @@ MCP-клиенты именуют инструменты по-разному. Р
 | `list_breakpoints` | Список активных, опционально с фильтром по проекту |
 | `wait_for_break` | Блокирующее ожидание suspend (например, попадание в брейкпойнт) |
 | `get_variables` | Прочитать переменные стек-фрейма (lazy expand для вложенных) |
+| `set_variable` | Изменить переменную в приостановленном stack frame при явном разрешении |
 | `step` | Step over/into/out, возвращает новый снимок |
 | `resume` | Снять с паузы поток или все потоки таргета |
 | `evaluate_expression` | Выполнить BSL-выражение в контексте кадра |
-| `debug_yaxunit_tests` | Запуск YAxUnit-тестов в DEBUG-режиме, чтобы срабатывали брейкпойнты |
 | `debug_status` | Статус активных отладочных запусков: mode, suspend, потоки, top frame |
-| `start_profiling` | Toggle замера производительности на активном debug target |
+| `start_profiling` | Начало замера производительности на активном debug target; завершать через `stop_profiling` |
+| `stop_profiling` | Завершить профилирование выбранного активного debug target |
 | `get_profiling_results` | Результаты замера: per-module / per-line, счётчики вызовов, тайминги, покрытие |
 
 Типовой цикл — см. `edt-mcp-workflows.md`, раздел «Отладка».

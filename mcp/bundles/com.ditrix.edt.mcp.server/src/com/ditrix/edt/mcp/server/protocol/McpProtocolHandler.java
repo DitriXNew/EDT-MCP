@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolsListResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.DcsXmlCodec;
 import com.ditrix.edt.mcp.server.utils.GuideRenderer;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.Log;
@@ -55,6 +56,29 @@ public class McpProtocolHandler
 
     /** JSON key flagging a structured success/failure outcome. */
     private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
+
+    /** Maximum user-authored signal text retained in a tool result, including the ellipsis. */
+    public static final int MAX_USER_SIGNAL_MESSAGE_CHARS = 512;
+
+    /**
+     * Maximum serialized growth when {@code userSignal} is added to a non-empty JSON object.
+     * The fixed member {@code ,"userSignal":{"type":"BACKGROUND","message":""}} is 48
+     * characters (BACKGROUND is the longest enum token), and any one of the 512 retained UTF-16
+     * characters may require a six-character JSON Unicode escape: {@code 48 + 512 * 6 = 3120}.
+     * XML paging reserves exactly this amount before the protocol can append the member.
+     */
+    public static final int MAX_USER_SIGNAL_JSON_AUGMENTATION_CHARS =
+        48 + MAX_USER_SIGNAL_MESSAGE_CHARS * 6;
+
+    /**
+     * Maximum Markdown growth after tool execution: the fixed
+     * {@code \n\n---\n**USER SIGNAL:** } banner is 23 characters and the retained message is at
+     * most 512, so {@code 23 + 512 = 535}. DCS Markdown paging reserves this exact headroom.
+     */
+    public static final int MAX_MARKDOWN_USER_SIGNAL_AUGMENTATION_CHARS =
+        23 + MAX_USER_SIGNAL_MESSAGE_CHARS;
+
+    private static final String USER_SIGNAL_ELLIPSIS = "\u2026"; //$NON-NLS-1$
 
     private final McpToolRegistry toolRegistry;
 
@@ -546,7 +570,7 @@ public class McpProtocolHandler
         // Append user signal as markdown
         if (signal != null)
         {
-            result = result + "\n\n---\n**USER SIGNAL:** " + signal.getMessage();
+            result = addUserSignalToMarkdown(result, signal);
         }
         // In plain text mode, return markdown as plain text instead of embedded resource
         if (plainTextMode)
@@ -821,7 +845,7 @@ public class McpProtocolHandler
     /**
      * Adds user signal to a JSON result string using Gson for proper JSON handling.
      */
-    private String addUserSignalToJson(String jsonResult, UserSignal signal)
+    String addUserSignalToJson(String jsonResult, UserSignal signal)
     {
         try
         {
@@ -834,12 +858,12 @@ public class McpProtocolHandler
                 // Create userSignal object
                 com.google.gson.JsonObject signalObject = new com.google.gson.JsonObject();
                 signalObject.addProperty("type", signal.getType().name());
-                signalObject.addProperty("message", signal.getMessage());
+                signalObject.addProperty("message", boundedUserSignalMessage(signal.getMessage()));
                 
                 // Add to result
                 jsonObject.add("userSignal", signalObject);
                 
-                return new com.google.gson.Gson().toJson(jsonObject);
+                return GsonProvider.toJson(jsonObject);
             }
         }
         catch (Exception e)
@@ -847,6 +871,24 @@ public class McpProtocolHandler
             Activator.logError("Failed to add user signal to JSON", e);
         }
         return jsonResult;
+    }
+
+    static String addUserSignalToMarkdown(String markdown, UserSignal signal)
+    {
+        return markdown + "\n\n---\n**USER SIGNAL:** " //$NON-NLS-1$
+            + boundedUserSignalMessage(signal.getMessage());
+    }
+
+    private static String boundedUserSignalMessage(String message)
+    {
+        if (message == null || message.length() <= MAX_USER_SIGNAL_MESSAGE_CHARS)
+        {
+            return message;
+        }
+        int end = DcsXmlCodec.safeEndAtOrBefore(message, 0,
+            MAX_USER_SIGNAL_MESSAGE_CHARS - USER_SIGNAL_ELLIPSIS.length());
+        return message.substring(0, end)
+            + USER_SIGNAL_ELLIPSIS;
     }
     
     /**

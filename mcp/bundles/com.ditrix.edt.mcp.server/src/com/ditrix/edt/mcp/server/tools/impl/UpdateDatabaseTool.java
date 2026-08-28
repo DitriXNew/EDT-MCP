@@ -633,6 +633,8 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         boolean terminatedClient = false;
         boolean portsReassigned = false;
+        boolean updateApiEntered = false;
+        boolean updateApiReturned = false;
         try
         {
             ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -763,8 +765,10 @@ public class UpdateDatabaseTool implements IMcpTool
                         infobaseName, armedPortPolicy, armedServerName);
                     try
                     {
+                        updateApiEntered = true;
                         stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
                             project, application, applicationId, updateType, context, monitor);
+                        updateApiReturned = true;
                     }
                     catch (ApplicationException ex)
                     {
@@ -824,13 +828,23 @@ public class UpdateDatabaseTool implements IMcpTool
         catch (ApplicationException e)
         {
             Activator.logError("Error updating database for application: " + applicationId, e); //$NON-NLS-1$
-            return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient,
-                portsReassigned);
+            String error = buildApplicationErrorResult(e, projectName, applicationId,
+                terminatedClient, portsReassigned);
+            if (updateApiReturned || portsReassigned)
+            {
+                return ToolResult.markErrorAfterMutation(error);
+            }
+            return updateApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
         }
         catch (Exception e)
         {
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
-            return buildUnexpectedErrorResult(e, terminatedClient, portsReassigned);
+            String error = buildUnexpectedErrorResult(e, terminatedClient, portsReassigned);
+            if (updateApiReturned || portsReassigned)
+            {
+                return ToolResult.markErrorAfterMutation(error);
+            }
+            return updateApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
         }
     }
 
@@ -916,12 +930,21 @@ public class UpdateDatabaseTool implements IMcpTool
     private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
         String projectName, String applicationId, boolean terminatedClient)
     {
-        ToolResult result = ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
-                watch.portConflictReason())
-            + " The infobase was NOT changed.") //$NON-NLS-1$
-            .put(McpKeys.PROJECT, projectName)
+        ToolResult result = watch.portsReassigned()
+            ? ToolResult.errorAfterMutation("Database update failed: " //$NON-NLS-1$
+                + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
+                    watch.portConflictReason())
+                + " The infobase was NOT changed, but the standalone-server configuration was.") //$NON-NLS-1$
+            : ToolResult.error("Database update failed: " //$NON-NLS-1$
+                + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
+                    watch.portConflictReason())
+                + " The infobase was NOT changed."); //$NON-NLS-1$
+        result.put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId);
+        if (watch.portsReassigned())
+        {
+            result.put(KEY_PORTS_REASSIGNED, true);
+        }
         if (terminatedClient)
         {
             // The sweep runs BEFORE the server start, so a client can already be gone when the
@@ -948,13 +971,13 @@ public class UpdateDatabaseTool implements IMcpTool
         ExternalInfobaseChangesPolicy externalChanges)
     {
         boolean reassigned = watch.portsReassigned();
-        ToolResult result = ToolResult.error(
-            ExternalInfobaseChangesPolicy.declinedUpdateError(externalChanges, watch.reason())
+        String message = ExternalInfobaseChangesPolicy.declinedUpdateError(externalChanges, watch.reason())
                 + (reassigned
                     ? " NOTE: EDT had already moved the standalone server to free ports and " //$NON-NLS-1$
                         + "rewritten its configuration " //$NON-NLS-1$
                         + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
-                    : "")); //$NON-NLS-1$
+                    : ""); //$NON-NLS-1$
+        ToolResult result = reassigned ? ToolResult.errorAfterMutation(message) : ToolResult.error(message);
         if (reassigned)
         {
             result.put(KEY_PORTS_REASSIGNED, true);

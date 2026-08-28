@@ -646,8 +646,8 @@ public class CreateProjectTool implements IMcpTool
         if (errorHolder[0] != null)
         {
             Activator.logError("create_project (extension) failed", errorHolder[0]); //$NON-NLS-1$
-            return ToolResult.error("Failed to create extension project: " //$NON-NLS-1$
-                + errorHolder[0].getMessage()).toJson();
+            return creationFailure(finalEffectiveProjectName,
+                "Failed to create extension project: " + errorHolder[0].getMessage()); //$NON-NLS-1$
         }
 
         Activator.logInfo(LOG_PREFIX + "created extension '" + finalEffectiveProjectName //$NON-NLS-1$
@@ -758,8 +758,8 @@ public class CreateProjectTool implements IMcpTool
         if (errorHolder[0] != null)
         {
             Activator.logError("create_project (configuration) failed", errorHolder[0]); //$NON-NLS-1$
-            return ToolResult.error("Failed to create configuration project: " //$NON-NLS-1$
-                + errorHolder[0].getMessage()).toJson();
+            return creationFailure(finalEffectiveProjectName,
+                "Failed to create configuration project: " + errorHolder[0].getMessage()); //$NON-NLS-1$
         }
 
         Activator.logInfo(LOG_PREFIX + "created configuration '" + finalEffectiveProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -988,8 +988,8 @@ public class CreateProjectTool implements IMcpTool
         if (errorHolder[0] != null)
         {
             Activator.logError("create_project (externalObjects) failed", errorHolder[0]); //$NON-NLS-1$
-            return ToolResult.error("Failed to create external objects project: " //$NON-NLS-1$
-                + errorHolder[0].getMessage()).toJson();
+            return creationFailure(finalEffectiveProjectName,
+                "Failed to create external objects project: " + errorHolder[0].getMessage()); //$NON-NLS-1$
         }
 
         Activator.logInfo(LOG_PREFIX + "created externalObjects '" + finalEffectiveProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1891,7 +1891,8 @@ public class CreateProjectTool implements IMcpTool
         {
             Thread.currentThread().interrupt();
             return new CreateJobResult(CreateStatus.INTERRUPTED,
-                ToolResult.error(kindLabel + " project creation was interrupted.").toJson()); //$NON-NLS-1$
+                ToolResult.errorWithUnknownMutationOutcome(
+                    kindLabel + " project creation was interrupted.").toJson()); //$NON-NLS-1$
         }
 
         // Check job state: if still running, it timed out
@@ -1904,11 +1905,20 @@ public class CreateProjectTool implements IMcpTool
                 return new CreateJobResult(CreateStatus.SLOW_EXISTS, null);
             }
             return new CreateJobResult(CreateStatus.TIMED_OUT,
-                ToolResult.error(kindLabel + " project creation timed out after " //$NON-NLS-1$
+                ToolResult.errorWithUnknownMutationOutcome(
+                    kindLabel + " project creation timed out after " //$NON-NLS-1$
                     + (CREATE_TIMEOUT_MS / 1000) + " seconds. The project may still appear shortly; " //$NON-NLS-1$
                     + "if it does and is unwanted, remove it with delete_project.").toJson()); //$NON-NLS-1$
         }
         return new CreateJobResult(CreateStatus.OK, null);
+    }
+
+    /** Derives a failed create's strongest honest marker from the workspace after the Job. */
+    private static String creationFailure(String projectName, String message)
+    {
+        return ProjectContext.of(projectName).exists()
+            ? ToolResult.errorAfterMutation(message).toJson()
+            : ToolResult.errorWithUnknownMutationOutcome(message).toJson();
     }
 
     /**

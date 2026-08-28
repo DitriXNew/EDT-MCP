@@ -20,6 +20,13 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 > [!TIP]
 > **Contributing / making changes?** Read [CLAUDE.md](CLAUDE.md) first — it's the code-conduct "minefield map": hard don'ts and the stop-and-think-twice zones for this codebase (BM transactions, the bilingual ru/en model, cascading rename, etc.). Detailed how-to lives in the skills under `.claude/skills/`.
 
+> [!TIP]
+> **Using EDT-MCP on a 1C business project?** The client-neutral
+> [business-project skills pack](agent/README.md) routes common project tasks to
+> compact workflows. The [rules pack](rules/README.md) provides standing,
+> detailed project policy; the two business-project layers are complementary.
+> Both are separate from the plugin-contributor skills above.
+
 > [!IMPORTANT]
 > **EDT version compatibility:**
 > Supports 1C:EDT **2026.1 and 2026.2** (Ruby) from a single build. The plugin is
@@ -39,7 +46,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🧪 **Query Validation** - Validate 1C query text in project context (syntax + semantic errors, optional DCS mode)
 - 🧩 **BSL Code Analysis** - Browse modules, inspect structure, read/write methods, search code, and analyze call hierarchy
 - 🖼️ **Form Inspection** - Get PNG screenshots and YAML layout snapshots from the form WYSIWYG editor
-- 🚀 **Application Management** - Get applications, update database, launch in debug mode, terminate EDT-launched 1С clients
+- 🚀 **Application Management** - Get applications, update database, launch in debug mode, terminate EDT-launched 1C clients
 - 🎯 **Status Bar** - Real-time server status with tool name, execution time, and interactive controls
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
@@ -129,6 +136,7 @@ Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
 - **Check descriptions folder**: Path to check description markdown files
 - **Auto-start**: Start server on EDT launch
 - **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
+- **Enhance Navigator**: Controls this plugin’s contributions to the Navigator tree (groups and their filter). Turn it off to resolve conflicts with another plugin that patches the same panel
 - **Show tags in Navigator**: Display tags as decorations in the Navigator tree
 - **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
 - **Server control**: Start, stop, and restart the MCP server directly from preferences
@@ -209,7 +217,7 @@ All tools are organized into 11 semantic groups:
 | **Applications & Testing** | Application and infobase management, external-object builds, launch, testing, background jobs, and Workmate | `get_applications`, `list_configurations`, `create_launch_config`, `delete_launch_config`, `create_infobase`, `delete_infobase`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests`, `ask_workmate`, `get_job_status`, `cancel_job`, `build_external_objects`, `set_infobase_credentials` |
 | **Debugging** | Breakpoints, stepping, variables, expression evaluation, and profiling | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `set_variable`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
 | **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create, rename, adopt, delete, and property management | `rename_metadata_object`, `delete_metadata`, `create_metadata`, `modify_metadata`, `adopt_metadata_object` |
+| **Refactoring** | Metadata and DCS create, inspect, rename, adopt, delete, and property management | `rename_metadata_object`, `delete_metadata`, `create_metadata`, `modify_metadata`, `adopt_metadata_object`, `dcs` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
 | **Comparison** | Three-way configuration comparison: start one against two git revisions, expand a node, and read or author the merge-rules file | `compare_configurations`, `get_comparison_node`, `merge_rules` |
 | **Git** | Git operations: the `git` command tool (disabled by default), branch listing/switching, and the branch-to-infobase binding | `git`, `list_git_branches`, `switch_git_branch`, `create_git_branch`, `set_branch_infobase` |
@@ -470,7 +478,7 @@ with `python docs/generate_tool_docs.py`.
 <!-- TOOLS-INDEX:START -->
 <!-- generated by docs/generate_tool_docs.py — do not edit by hand -->
 
-**92 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
+**93 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
 
 ### Core
 
@@ -500,6 +508,7 @@ with `python docs/generate_tool_docs.py`.
 | [`adopt_metadata_object`](docs/tools/adopt_metadata_object.md) | Adopt a base-configuration metadata object or member (object / form / attribute / tabular section / ...) into a configuration EXTENSION so the extension can… |
 | [`create_launch_config`](docs/tools/create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](docs/tools/create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
+| [`dcs`](docs/tools/dcs.md) | Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, and form dynamic lists. Call action='get' first; replace, remove… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
 | [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a… |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |
@@ -508,7 +517,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_common_pictures`](docs/tools/list_common_pictures.md) | List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, p… |
 | [`list_configurations`](docs/tools/list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
 | [`list_subsystems`](docs/tools/list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
-| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of a metadata node - an object, a member, or a FORM member (item / attribute / command / handler) - addressed by a 1C full-name FQN, as proper… |
+| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata'). |
 | [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ### Code
@@ -771,9 +780,22 @@ Errors are reported the same way regardless of a tool's normal format — see th
 
 - **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects` (which switches to JSON when called with `format='json'`), `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `validate_xdto_package`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `debug_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
-- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, `git`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
+- **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, `git`, `dcs` when called with `format="xml"`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.
 - **Image tools**: `get_form_screenshot` — returns the rendered form as an EmbeddedResource with an `image/*` `mimeType`.
+
+#### DCS XML transfers
+
+`dcs` with `action="get"`, `type="schema"`, and `format="xml"` returns
+`{success,totalChars,offset,hasMore,nextOffset?,hash,xml}`. Begin at `offset=0`, append
+`xml`, and while `hasMore` is true repeat with the numeric `nextOffset`; require the
+20-character `hash` to stay the same on every page so a mid-transfer schema change is
+detected. The server measures each escaped JSON envelope and shrinks its XML chunk before
+returning if necessary, so the 100000-character content guard never truncates XML. Each
+page request re-serializes the whole schema, making transfer cost O(pages × schema size);
+raise `limit` when the client tolerates larger results to reduce the page count. Concatenate
+all chunks, then send the WHOLE document in ONE `replace` as `body.xml`; writes are not chunked. See
+[`dcs`](docs/tools/dcs.md) for the paging loop and replacement example.
 
 #### Error contract
 

@@ -167,18 +167,19 @@ public class DestructiveConsentGateTest
     {
         assertEquals("GATED_TOOLS must be exactly the frozen set", //$NON-NLS-1$
             Set.of("delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "delete_infobase", "update_database", "modify_metadata", "git"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "delete_infobase", "update_database", "modify_metadata", "dcs", "git"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
     @Test
-    public void everyGatedToolExceptModifyMetadataIsClassifiedDestructive()
+    public void everyUnconditionallyGatedToolIsClassifiedDestructive()
     {
         // Every gated tool is a destructive MCP write EXCEPT the CONDITIONALLY destructive ones:
-        // modify_metadata (only a type/composite-type change) and git (only the commands that
-        // destroy work - see GitTool.destructiveForm). Those two carry their own annotations and are
+        // modify_metadata (only a type/composite-type change), dcs (only a plain-attribute dynamic-list
+        // conversion), and git (only the commands that destroy work - see GitTool.destructiveForm).
+        // Those three carry their own annotations and are
         // deliberately NOT in the always-destructive classifier list.
-        Set<String> conditionallyDestructive = Set.of("modify_metadata", "git"); //$NON-NLS-1$ //$NON-NLS-2$
+        Set<String> conditionallyDestructive = Set.of("modify_metadata", "dcs", "git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
         {
             boolean classifiedDestructive =

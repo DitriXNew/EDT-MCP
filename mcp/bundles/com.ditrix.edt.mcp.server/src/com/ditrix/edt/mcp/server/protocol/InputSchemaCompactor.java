@@ -152,6 +152,10 @@ public final class InputSchemaCompactor
         // them. Same conditional shape as mode->oldSource, one step further out.
         keep.put("write_module_source", asSet("expectedHash", "mode", "oldSource", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "formName", "commandName")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The enum cannot express either fact: md is the default, and xml is legal only for
+        // action=get + type=schema + a bare root. Without this one clause a schema-valid
+        // format=xml call can select a fragment, dynamic-list type, or mutation and be refused.
+        keep.put("dcs", asSet("format")); //$NON-NLS-1$ //$NON-NLS-2$
         // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
         // the caller never asked for - the build stamps every object's Comment and flushes
         // the .mdo; the launch tools silently run a configuration->DB update; update_database

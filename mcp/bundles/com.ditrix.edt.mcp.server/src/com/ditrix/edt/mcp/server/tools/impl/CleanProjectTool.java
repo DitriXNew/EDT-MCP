@@ -180,6 +180,7 @@ public class CleanProjectTool implements IMcpTool
      */
     public static String cleanProject(String projectName, long cleanTimeoutMs)
     {
+        boolean cleanCommitted = false;
         try
         {
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
@@ -209,6 +210,7 @@ public class CleanProjectTool implements IMcpTool
                 {
                     return cleanError;
                 }
+                cleanCommitted = !projectsToClean.isEmpty();
 
                 // Phase 3: Wait for lifecycle restarts (STOPPED -> STARTED)
                 for (ProjectRestartWaiter waiter : waiters)
@@ -242,7 +244,8 @@ public class CleanProjectTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Error during project clean", e); //$NON-NLS-1$
-            return ToolResult.error(e.getMessage()).toJson();
+            return (cleanCommitted ? ToolResult.errorAfterMutation(e.getMessage())
+                : ToolResult.error(e.getMessage())).toJson();
         }
     }
     
@@ -379,13 +382,15 @@ public class CleanProjectTool implements IMcpTool
         // projects would otherwise be refused once their COMBINED time crossed the limit, with
         // nothing actually wedged. A single wedged project still fails on its own deadline, and the
         // error returns immediately - so the projects behind it are never started.
+        boolean completedAny = false;
         for (ProjectCleanInfo info : projectsToClean)
         {
             String error = cleanOneBounded(info, timeoutMs, action);
             if (error != null)
             {
-                return error;
+                return completedAny ? ToolResult.markErrorAfterMutation(error) : error;
             }
+            completedAny = true;
         }
         return null;
     }
@@ -411,7 +416,8 @@ public class CleanProjectTool implements IMcpTool
         case TIMED_OUT_BEFORE_START:
             return notStartedError(info.name, timeoutMs);
         case INTERRUPTED:
-            return ToolResult.error("Project clean was interrupted while waiting for the clean build" //$NON-NLS-1$
+            return ToolResult.errorWithUnknownMutationOutcome(
+                "Project clean was interrupted while waiting for the clean build" //$NON-NLS-1$
                 + onProject(info.name) + ". The clean may still be running in EDT — check the " //$NON-NLS-1$
                 + "project state with list_projects before retrying.").toJson(); //$NON-NLS-1$
         case NOT_RUN:
@@ -424,7 +430,9 @@ public class CleanProjectTool implements IMcpTool
             // Fail CLOSED on an outcome added to BoundedJob later. The old 'default: break' fell
             // through to the no-error path below, which would report a clean that never happened
             // as a success — the exact failure mode this switch exists to prevent.
-            return ToolResult.error("The clean build" + onProject(info.name) + " ended in an " //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.errorWithUnknownMutationOutcome(
+                "The clean build" + onProject(info.name) //$NON-NLS-1$
+                + " ended in an " //$NON-NLS-1$
                 + "unrecognised state (" + result.getOutcome() + "), so whether it ran is unknown. " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Check the project with list_projects before relying on the model.").toJson(); //$NON-NLS-1$
         }
@@ -434,7 +442,7 @@ public class CleanProjectTool implements IMcpTool
         {
             // Same shape as the surrounding catch: the clean build failed for a real reason.
             Activator.logError("Error during project clean", failure); //$NON-NLS-1$
-            return ToolResult.error(failure.getMessage()).toJson();
+            return ToolResult.errorWithUnknownMutationOutcome(failure.getMessage()).toJson();
         }
         return null;
     }
@@ -480,7 +488,8 @@ public class CleanProjectTool implements IMcpTool
                 + "' (seconds, up to " + MAX_CLEAN_TIMEOUT_SECONDS + ") or raise the default in " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Preferences > MCP Server > Tools > " + NAME + "."; //$NON-NLS-1$ //$NON-NLS-2$
 
-        return ToolResult.error("Clean build did not finish within " + seconds //$NON-NLS-1$
+        return ToolResult.errorWithUnknownMutationOutcome(
+            "Clean build did not finish within " + seconds //$NON-NLS-1$
             + (seconds == 1 ? " second" : " seconds") + onProject(projectName) //$NON-NLS-1$ //$NON-NLS-2$
             + ". Cancellation was requested, but EDT may still be working on it, so the model can be " //$NON-NLS-1$
             + "mid-rebuild: check list_projects until the project reports 'ready' before relying on " //$NON-NLS-1$

@@ -1,0 +1,2908 @@
+/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.utils;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
+
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetFieldFolder;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestriction;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
+import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.platform.version.Version;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
+/**
+ * Adapts node-addressed {@code dcs} mutations to the shared bulk {@link DcsWriter}. The adapter is
+ * read-only until {@link DcsWriter#apply}: it resolves natural keys, enforces update/upsert semantics,
+ * and fills only the legacy writer's required members from the current model. Thus the complete
+ * request is validated before the first schema mutation.
+ */
+public final class DcsSchemaWriter
+{
+    private static final String ACTION_UPSERT = "upsert"; //$NON-NLS-1$
+    private static final String ACTION_UPDATE = "update"; //$NON-NLS-1$
+    private static final String ACTION_REPLACE = "replace"; //$NON-NLS-1$
+    private static final String ACTION_REMOVE = "remove"; //$NON-NLS-1$
+
+    private static final String TYPE_SCHEMA = "schema"; //$NON-NLS-1$
+    private static final String TYPE_DATA_SOURCE = "dataSource"; //$NON-NLS-1$
+    private static final String TYPE_DATA_SET = "dataSet"; //$NON-NLS-1$
+    private static final String TYPE_FIELD = "field"; //$NON-NLS-1$
+    private static final String TYPE_FIELD_FOLDER = "fieldFolder"; //$NON-NLS-1$
+    private static final String TYPE_PARAMETER = "parameter"; //$NON-NLS-1$
+    private static final String TYPE_CALCULATED_FIELD = "calculatedField"; //$NON-NLS-1$
+    private static final String TYPE_TOTAL_FIELD = "totalField"; //$NON-NLS-1$
+
+    private static final String KEY_NAME = "name"; //$NON-NLS-1$
+    private static final String KEY_DATA_PATH = "dataPath"; //$NON-NLS-1$
+    private static final String KEY_QUERY = "query"; //$NON-NLS-1$
+    private static final String KEY_DATA_SOURCE = "dataSource"; //$NON-NLS-1$
+    private static final String KEY_AUTO_FILL = "autoFillFields"; //$NON-NLS-1$
+    private static final String KEY_FIELDS = "fields"; //$NON-NLS-1$
+    private static final String KEY_FIELD = "field"; //$NON-NLS-1$
+    private static final String KEY_EXPRESSION = "expression"; //$NON-NLS-1$
+    private static final String KEY_TYPE = "type"; //$NON-NLS-1$
+    private static final String KEY_OBJECT_NAME = "objectName"; //$NON-NLS-1$
+    private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
+    private static final String KEY_KIND = "kind"; //$NON-NLS-1$
+    private static final String KEY_USE_RESTRICTION = "useRestriction"; //$NON-NLS-1$
+    private static final String KIND_FIELD = "field"; //$NON-NLS-1$
+    private static final String KIND_FOLDER = "folder"; //$NON-NLS-1$
+    private static final String KEY_DATA_SET_LINKS = "dataSetLinks"; //$NON-NLS-1$
+    private static final String KEY_LINK_CONDITION_EXPRESSION = "linkConditionExpression"; //$NON-NLS-1$
+    private static final String KEY_LEGACY_LINK_CONDITION = "linkCondition"; //$NON-NLS-1$
+
+    private DcsSchemaWriter()
+    {
+        // Utility class
+    }
+
+    /** Pure request preparation, including recursive presentation validation. */
+    public static PrepareResult prepare(String action, String type, DcsAddress address, JsonObject body,
+        DcsPresentationParser.LanguageContext languages)
+    {
+        if (!ACTION_UPSERT.equals(action) && !ACTION_UPDATE.equals(action)
+            && !ACTION_REPLACE.equals(action) && !ACTION_REMOVE.equals(action))
+        {
+            return PrepareResult.failure("Schema authoring supports action='upsert' or 'update'; got '" //$NON-NLS-1$ //$NON-NLS-2$
+                + action + "'. Use upsert, update, replace, or remove."); //$NON-NLS-1$
+        }
+        if (address == null || body == null && !ACTION_REMOVE.equals(action))
+        {
+            return PrepareResult.failure("A parsed DCS address and one body object are required. " //$NON-NLS-1$
+                + "Pass the target fqn and a body matching type='" + type + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!schemaType(type))
+        {
+            return PrepareResult.failure("Type '" + type + "' is not authorable in the schema layer. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Use one of: schema, dataSource, dataSet, field, fieldFolder, parameter, calculatedField, " //$NON-NLS-1$
+                + "totalField. Use the shared settings writer or dynamic-list writer for their " //$NON-NLS-1$
+                + "respective target roots."); //$NON-NLS-1$
+        }
+        if (ACTION_UPDATE.equals(action) && !isExactNode(type, address.segments()))
+        {
+            return PrepareResult.failure("action='update' requires one existing " + type + " node; '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + address + "' is a root or collection target. Copy an exact '#/...' node address " //$NON-NLS-1$
+                + "from dcs action='get', or use action='upsert' with its natural key."); //$NON-NLS-1$
+        }
+        return PrepareResult.success(new Request(action, type, address,
+            body == null ? null : body.deepCopy(), languages));
+    }
+
+    /**
+     * Performs all model-aware validation and then delegates the only mutation to {@link DcsWriter}.
+     * The caller must invoke this inside its single BM write transaction.
+     */
+    public static Result apply(DataCompositionSchema schema, Request request, DcsWriter.TypeResolver resolver)
+    {
+        return apply(schema, request, resolver, Version.LATEST, null);
+    }
+
+    public static Result apply(DataCompositionSchema schema, Request request,
+        DcsWriter.TypeResolver resolver, Version version,
+        StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        if (schema == null)
+        {
+            return Result.failure("The DCS schema content is unavailable. Re-open the template and retry."); //$NON-NLS-1$
+        }
+        String stringError = requestStringMembersError(request);
+        if (stringError != null) return Result.failure(stringError);
+        if (ACTION_REPLACE.equals(request.action))
+        {
+            String refusal = DcsMutationGuard.replaceError(schema, request.address);
+            if (refusal != null) return Result.failure(refusal);
+        }
+        String selectorError = selectorAmbiguityError(schema, request);
+        if (selectorError != null) return Result.failure(selectorError);
+        String referenceError = identityReferenceError(schema, request);
+        if (referenceError != null) return Result.failure(referenceError);
+
+        DataCompositionSchema working = EcoreUtil.copy(schema);
+        String renameError = renameForUpdate(working, request);
+        if (renameError != null) return Result.failure(renameError);
+        if ((ACTION_UPDATE.equals(request.action) || ACTION_REPLACE.equals(request.action))
+            && isDataSetLinkPath(request.type, request.address.segments()))
+        {
+            return applyDataSetLinkMutation(schema, working, request, resolver, version, namedColors);
+        }
+        if (ACTION_REMOVE.equals(request.action))
+        {
+            String error = remove(working, request);
+            if (error != null) return Result.failure(error);
+            error = assembledReferenceError(working, request.address.rootFqn());
+            if (error != null) return Result.failure(error);
+            commitSchemaLayer(schema, working);
+            return Result.success(null);
+        }
+        if (ACTION_REPLACE.equals(request.action))
+        {
+            String error = clearReplaceTarget(working, request);
+            if (error != null) return Result.failure(error);
+            if (TYPE_SCHEMA.equals(request.type) && request.body.entrySet().isEmpty())
+            {
+                error = assembledReferenceError(working, request.address.rootFqn());
+                if (error != null) return Result.failure(error);
+                commitSchemaLayer(schema, working);
+                return Result.success(null);
+            }
+        }
+        DcsWriter.DataSetValidationContext dataSetValidation =
+            new DcsWriter.DataSetValidationContext();
+        PayloadResult payload = payload(working, request, dataSetValidation);
+        if (payload.error != null)
+        {
+            return Result.failure(payload.error);
+        }
+        FolderPlanResult folders = extractFieldFolders(working, payload.payload, request);
+        if (folders.error != null) return Result.failure(folders.error);
+        DcsWriter.Result applied = DcsWriter.apply(working, folders.payload, resolver,
+            request.languages, version, namedColors, dataSetValidation);
+        if (applied.hasError()) return Result.failureJson(applied.error);
+        String folderError = applyFieldFolders(working, folders.folders);
+        if (folderError != null) return Result.failure(folderError);
+        String assembledError = assembledReferenceError(working, request.address.rootFqn());
+        if (assembledError != null) return Result.failure(assembledError);
+        commitSchemaLayer(schema, working);
+        return Result.success(applied);
+    }
+
+    private static Result applyDataSetLinkMutation(DataCompositionSchema schema,
+        DataCompositionSchema working, Request request, DcsWriter.TypeResolver resolver,
+        Version version, StyleValueBuilder.NamedColorResolver namedColors)
+    {
+        String selector = request.address.segments().get(1);
+        if (!DcsAddress.isZeroBasedIndex(selector))
+        {
+            return Result.failure("Data-set link selector '" + selector //$NON-NLS-1$
+                + "' must be a zero-based index copied from get."); //$NON-NLS-1$
+        }
+        int index = Integer.parseInt(selector);
+        if (index >= working.getDataSetLinks().size())
+        {
+            return Result.failure("Data-set link index '" + selector //$NON-NLS-1$
+                + "' is out of range. Re-run get."); //$NON-NLS-1$
+        }
+        JsonObject entry = request.body.deepCopy();
+        DataCompositionSchemaDataSetLink existing = working.getDataSetLinks().get(index);
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            mergeDataSetLinkDefaults(entry, existing);
+        }
+        int previousSize = working.getDataSetLinks().size();
+        DcsWriter.Result applied = DcsWriter.apply(working, wrap(KEY_DATA_SET_LINKS, entry),
+            resolver, request.languages, version, namedColors);
+        if (applied.hasError()) return Result.failureJson(applied.error);
+        DataCompositionSchemaDataSetLink replacement = working.getDataSetLinks()
+            .remove(previousSize);
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            restoreUnsetDataSetLinkFeatures(request.body, existing, replacement);
+        }
+        working.getDataSetLinks().set(index, replacement);
+        String assembledError = assembledReferenceError(working, request.address.rootFqn());
+        if (assembledError != null) return Result.failure(assembledError);
+        commitSchemaLayer(schema, working);
+        return Result.success(applied);
+    }
+
+    private static void mergeDataSetLinkDefaults(JsonObject body,
+        DataCompositionSchemaDataSetLink link)
+    {
+        addMissingFeature(body, "sourceDataSet", link, "sourceDataSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "destinationDataSet", link, "destinationDataSet"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "sourceExpression", link, "sourceExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "destinationExpression", link, "destinationExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "parameter", link, "parameter"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "parameterListAllowed", link, "parameterListAllowed"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!body.has(KEY_LEGACY_LINK_CONDITION))
+            addMissingFeature(body, KEY_LINK_CONDITION_EXPRESSION, link,
+                KEY_LINK_CONDITION_EXPRESSION);
+        addMissingFeature(body, "startExpression", link, "startExpression"); //$NON-NLS-1$ //$NON-NLS-2$
+        addMissingFeature(body, "required", link, "required"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void restoreUnsetDataSetLinkFeatures(JsonObject requested,
+        DataCompositionSchemaDataSetLink existing, DataCompositionSchemaDataSetLink replacement)
+    {
+        restoreUnsetFeature(requested, "parameter", existing, replacement, "parameter"); //$NON-NLS-1$ //$NON-NLS-2$
+        restoreUnsetFeature(requested, "parameterListAllowed", existing, replacement, //$NON-NLS-1$
+            "parameterListAllowed"); //$NON-NLS-1$
+        if (!requested.has(KEY_LEGACY_LINK_CONDITION))
+            restoreUnsetFeature(requested, KEY_LINK_CONDITION_EXPRESSION, existing, replacement,
+                KEY_LINK_CONDITION_EXPRESSION);
+        restoreUnsetFeature(requested, "startExpression", existing, replacement, //$NON-NLS-1$
+            "startExpression"); //$NON-NLS-1$
+        restoreUnsetFeature(requested, "required", existing, replacement, "required"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void restoreUnsetFeature(JsonObject requested, String member, EObject existing,
+        EObject replacement, String featureName)
+    {
+        org.eclipse.emf.ecore.EStructuralFeature existingFeature = existing.eClass()
+            .getEStructuralFeature(featureName);
+        org.eclipse.emf.ecore.EStructuralFeature replacementFeature = replacement.eClass()
+            .getEStructuralFeature(featureName);
+        if (!requested.has(member) && existingFeature != null && replacementFeature != null
+            && !existing.eIsSet(existingFeature))
+        {
+            replacement.eUnset(replacementFeature);
+        }
+    }
+
+    private static void addMissingFeature(JsonObject body, String member, EObject object,
+        String featureName)
+    {
+        if (body.has(member)) return;
+        org.eclipse.emf.ecore.EStructuralFeature feature = object.eClass()
+            .getEStructuralFeature(featureName);
+        Object value = feature == null ? null : object.eGet(feature);
+        if (value instanceof Boolean)
+        {
+            body.addProperty(member, (Boolean)value);
+        }
+        else if (value instanceof String)
+        {
+            body.addProperty(member, (String)value);
+        }
+    }
+
+    private static String identityReferenceError(DataCompositionSchema schema, Request request)
+    {
+        if (!ACTION_REMOVE.equals(request.action) && !ACTION_UPDATE.equals(request.action)) return null;
+        List<String> segments = request.address.segments();
+        String identity = null;
+        if ((TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type))
+            && isFieldPath(segments, true))
+            identity = segments.get(segments.size() - 1);
+        else if (TYPE_DATA_SET.equals(request.type) && isDataSetPath(segments))
+            identity = segments.get(segments.size() - 1);
+        else if ((TYPE_DATA_SOURCE.equals(request.type) || TYPE_PARAMETER.equals(request.type)
+            || TYPE_CALCULATED_FIELD.equals(request.type) || TYPE_TOTAL_FIELD.equals(request.type))
+            && segments.size() == 2) identity = segments.get(1);
+        if (identity == null) return null;
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            String member = keyMember(request.type);
+            String replacement = DcsWriter.stringMember(request.body, member);
+            if (replacement == null || identity.equals(replacement)) return null;
+        }
+        if (TYPE_FIELD_FOLDER.equals(request.type))
+        {
+            FieldTarget target = resolveFieldTarget(schema, segments);
+            if (target.error != null) return target.error;
+            List<DataSetField> matches = dataSetFields(target.fields(), identity);
+            if (matches.size() != 1
+                || !(matches.get(0) instanceof DataCompositionSchemaDataSetFieldFolder))
+            {
+                return null;
+            }
+            DataCompositionSchemaDataSetFieldFolder folder =
+                (DataCompositionSchemaDataSetFieldFolder)matches.get(0);
+            List<DataSetField> removed = new ArrayList<>();
+            removed.add(folder);
+            removed.addAll(DcsFieldFolders.descendants(target.dataSet, folder));
+            for (DataSetField field : removed)
+            {
+                String kind = field instanceof DataCompositionSchemaDataSetFieldFolder
+                    ? TYPE_FIELD_FOLDER : TYPE_FIELD;
+                String error = DcsMutationGuard.referenceError(schema, request.address, kind,
+                    DcsFieldFolders.key(field));
+                if (error != null) return error;
+            }
+            return null;
+        }
+        return DcsMutationGuard.referenceError(schema, request.address, request.type, identity);
+    }
+
+    /**
+     * Applies an identity-changing {@code action='update'} to the working copy BEFORE the body is
+     * planned, so the writer's natural-key lookup finds the same node instead of creating a second
+     * one. Only the exact identity address of a renameable type qualifies; every other update is a
+     * no-op here. The reference guard has already refused a rename of anything still referred to,
+     * so no cascade is needed.
+     */
+    private static String renameForUpdate(DataCompositionSchema schema, Request request)
+    {
+        if (!ACTION_UPDATE.equals(request.action)) return null;
+        List<String> path = request.address.segments();
+        String member = keyMember(request.type);
+        boolean field = TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type);
+        boolean dataSet = TYPE_DATA_SET.equals(request.type);
+        if (field)
+        {
+            if (!isFieldPath(path, true)) return null;
+        }
+        else if (dataSet)
+        {
+            if (!isDataSetPath(path)) return null;
+        }
+        else
+        {
+            String own = collection(request.type);
+            if (own == null || path.size() != 2 || !own.equals(path.get(0))) return null;
+        }
+        String oldKey = field || dataSet ? path.get(path.size() - 1) : path.get(1);
+        String newKey = DcsWriter.stringMember(request.body, member);
+        if (newKey == null || oldKey.equals(newKey)) return null;
+        if (newKey.isEmpty())
+        {
+            return "Body for type='" + request.type + "' needs a non-empty '" + member //$NON-NLS-1$ //$NON-NLS-2$
+                + "' natural key. Add it and retry."; //$NON-NLS-1$
+        }
+        FieldTarget fieldTarget = field ? resolveFieldTarget(schema, path) : null;
+        if (fieldTarget != null && fieldTarget.error != null) return fieldTarget.error;
+        DataSetTarget dataSetTarget = dataSet ? resolveDataSetTarget(schema, path, true) : null;
+        if (dataSetTarget != null && dataSetTarget.error != null) return dataSetTarget.error;
+        String targetCollection = field ? "fields" : collection(request.type); //$NON-NLS-1$
+        List<String> existing = field ? fieldKeys(fieldTarget.fields())
+            : dataSet ? dataSetKeys(dataSetTarget.owner) : keys(schema, targetCollection, null);
+        if (!existing.contains(oldKey))
+        {
+            return missing(request, oldKey, existing);
+        }
+        EObject target;
+        if (field)
+        {
+            List<DataSetField> matches = dataSetFields(fieldTarget.fields(), oldKey);
+            if (matches.size() != 1)
+            {
+                return ambiguousIdentity(request, "rename", oldKey, matches.size()); //$NON-NLS-1$
+            }
+            DataSetField addressed = matches.get(0);
+            if (!fieldSubtypeMatches(request.type, addressed))
+            {
+                return unsupportedField(request, oldKey, addressed);
+            }
+            target = addressed;
+        }
+        else if (dataSet)
+        {
+            List<DataSet> matches = matchingDataSets(dataSetTarget.owner, oldKey);
+            if (matches.size() != 1)
+            {
+                return ambiguousIdentity(request, "rename", oldKey, matches.size()); //$NON-NLS-1$
+            }
+            target = matches.get(0);
+        }
+        else
+        {
+            List<EObject> matches = identityMatches(schema, request.type, oldKey);
+            if (matches.size() != 1)
+            {
+                return ambiguousIdentity(request, "rename", oldKey, matches.size()); //$NON-NLS-1$
+            }
+            target = matches.get(0);
+        }
+        if (TYPE_DATA_SET.equals(request.type) && !existing.contains(newKey))
+        {
+            String collisionAddress = dataSetAddress(schema.getDataSets(), request.address.rootFqn(),
+                Arrays.asList("dataSets"), newKey); //$NON-NLS-1$
+            if (collisionAddress != null)
+            {
+                return "Cannot rename dataSet '" + oldKey + "' to '" + newKey //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' at '" + request.address + "' because data set '" + newKey //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' already exists at '" + collisionAddress //$NON-NLS-1$
+                    + "'. Choose an unused 'name' and retry."; //$NON-NLS-1$
+            }
+        }
+        if (existing.contains(newKey))
+        {
+            return "Cannot rename " + request.type + " '" + oldKey + "' to '" + newKey //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "' at '" + request.address + "' because sibling '" + newKey //$NON-NLS-1$ //$NON-NLS-2$
+                + "' already exists. Choose an unused '" + member + "' and retry."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (field && fieldTarget.parent != null
+            && !newKey.startsWith(fieldTarget.parent.getDataPath() + ".")) //$NON-NLS-1$
+        {
+            return "Cannot rename " + request.type + " '" + oldKey + "' to '" + newKey //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "' because it would move the node outside parent folder '" //$NON-NLS-1$
+                + fieldTarget.parent.getDataPath() + "'. Keep that dataPath prefix."; //$NON-NLS-1$
+        }
+        if (TYPE_DATA_SOURCE.equals(request.type))
+        {
+            ((DataCompositionSchemaDataSource)target).setName(newKey);
+        }
+        else if (TYPE_DATA_SET.equals(request.type))
+        {
+            ((DataSet)target).setName(newKey);
+        }
+        else if (TYPE_PARAMETER.equals(request.type))
+        {
+            ((DataCompositionSchemaParameter)target).setName(newKey);
+        }
+        else if (TYPE_CALCULATED_FIELD.equals(request.type))
+        {
+            ((DataCompositionSchemaCalculatedField)target).setDataPath(newKey);
+        }
+        else if (TYPE_TOTAL_FIELD.equals(request.type))
+        {
+            ((DataCompositionSchemaTotalField)target).setDataPath(newKey);
+        }
+        else if (TYPE_FIELD.equals(request.type))
+        {
+            ((DataCompositionSchemaDataSetField)target).setDataPath(newKey);
+        }
+        else if (TYPE_FIELD_FOLDER.equals(request.type))
+        {
+            DcsFieldFolders.renameSubtree(fieldTarget.dataSet,
+                (DataCompositionSchemaDataSetFieldFolder)target, newKey);
+        }
+        request.renamedTo = newKey;
+        return null;
+    }
+
+    private static String keyMember(String type)
+    {
+        return TYPE_DATA_SOURCE.equals(type) || TYPE_DATA_SET.equals(type)
+            || TYPE_PARAMETER.equals(type) ? KEY_NAME : KEY_DATA_PATH;
+    }
+
+    private static String ambiguousIdentity(Request request, String operation, String key,
+        int count)
+    {
+        return "Cannot " + operation + " " + request.type + " '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + request.address
+            + "' because natural key '" + key + "' matches " + count //$NON-NLS-1$ //$NON-NLS-2$
+            + " existing nodes. The address is ambiguous; disambiguate the duplicates in the DCS " //$NON-NLS-1$
+            + "designer first, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static String ambiguousSelector(Request request, String operation, String selector,
+        int count)
+    {
+        return "Cannot " + operation + " " + request.type + " '" + selector + "' at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + request.address + "' because selector '" + selector + "' identifies " + count //$NON-NLS-1$ //$NON-NLS-2$
+            + " existing nodes. The address is ambiguous; disambiguate the conflicting natural " //$NON-NLS-1$
+            + "key and index fallback in the DCS designer first, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static String selectorAmbiguityError(DataCompositionSchema schema, Request request)
+    {
+        List<String> path = request.address.segments();
+        if (TYPE_DATA_SET.equals(request.type) && isDataSetPath(path))
+        {
+            return dataSetSelectorAmbiguityError(schema, request, path);
+        }
+        if ((TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type))
+            && isFieldPath(path, true))
+        {
+            FieldTarget parent = resolveFieldTarget(schema, path);
+            if (parent.error != null) return parent.error.contains("address is ambiguous") //$NON-NLS-1$
+                ? parent.error : null;
+            NodeSelector selected = resolveSelector(parent.fields(),
+                path.get(path.size() - 1), KEY_DATA_PATH);
+            return selected.ambiguous()
+                ? selectorAmbiguity(request, path.get(path.size() - 1), selected)
+                : null;
+        }
+        String collection = collection(request.type);
+        if (collection == null || path.size() != 2 || !collection.equals(path.get(0))) return null;
+        NodeSelector selected = resolveSelector(identityItems(schema, request.type), path.get(1),
+            keyMember(request.type));
+        return selected.ambiguous()
+            ? selectorAmbiguity(request, path.get(1), selected) : null;
+    }
+
+    private static String dataSetSelectorAmbiguityError(DataCompositionSchema schema,
+        Request request, List<String> path)
+    {
+        List<DataSet> level = schema.getDataSets();
+        for (int selectorIndex = 1; selectorIndex < path.size(); selectorIndex += 2)
+        {
+            String selector = path.get(selectorIndex);
+            NodeSelector selected = resolveSelector(level, selector, KEY_NAME);
+            if (selected.ambiguous()) return selectorAmbiguity(request, selector, selected);
+            if (!(selected.target instanceof DataSet)) return null;
+            if (selectorIndex + 2 < path.size())
+            {
+                if (!(selected.target instanceof DataCompositionSchemaDataSetUnion)) return null;
+                level = ((DataCompositionSchemaDataSetUnion)selected.target).getItems();
+            }
+        }
+        return null;
+    }
+
+    private static String selectorAmbiguity(Request request, String selector,
+        NodeSelector selected)
+    {
+        String operation = request.action;
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            String replacement = DcsWriter.stringMember(request.body, keyMember(request.type));
+            if (replacement != null && !selector.equals(replacement)) operation = "rename"; //$NON-NLS-1$
+        }
+        return selected.naturalCount > 1
+            ? ambiguousIdentity(request, operation, selector, selected.naturalCount)
+            : ambiguousSelector(request, operation, selector, selected.count);
+    }
+
+    private static String unsupportedField(Request request, String key, DataSetField field)
+    {
+        String deliberate = DcsUnsupportedAuthoring.refusal(field, request.address.toString());
+        if (deliberate != null) return deliberate;
+        return "Field '" + key + "' at '" + request.address //$NON-NLS-1$ //$NON-NLS-2$
+            + "' has unsupported subtype '" + field.eClass().getName() //$NON-NLS-1$
+            + "' for type='" + request.type + "'. Re-run get and pass the public type shown " //$NON-NLS-1$ //$NON-NLS-2$
+            + "for that node."; //$NON-NLS-1$
+    }
+
+    private static boolean fieldSubtypeMatches(String type, DataSetField field)
+    {
+        return TYPE_FIELD.equals(type) && field instanceof DataCompositionSchemaDataSetField
+            || TYPE_FIELD_FOLDER.equals(type)
+                && field instanceof DataCompositionSchemaDataSetFieldFolder;
+    }
+
+    private static String dataSetAddress(List<DataSet> dataSets, String rootFqn,
+        List<String> prefix, String key)
+    {
+        for (int i = 0; i < dataSets.size(); i++)
+        {
+            DataSet dataSet = dataSets.get(i);
+            List<String> address = new ArrayList<>(prefix);
+            String name = dataSet.getName();
+            address.add(name == null || name.isEmpty() ? Integer.toString(i) : name);
+            if (key.equals(dataSet.getName()))
+            {
+                return DcsAddress.render(rootFqn, address);
+            }
+            if (dataSet instanceof DataCompositionSchemaDataSetUnion)
+            {
+                address.add(KEY_ITEMS);
+                String nested = dataSetAddress(
+                    ((DataCompositionSchemaDataSetUnion)dataSet).getItems(), rootFqn, address, key);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
+    }
+
+    private static List<EObject> identityMatches(DataCompositionSchema schema, String type,
+        String key)
+    {
+        List<EObject> result = new ArrayList<>();
+        for (EObject item : identityItems(schema, type))
+        {
+            org.eclipse.emf.ecore.EStructuralFeature feature = item.eClass()
+                .getEStructuralFeature(keyMember(type));
+            Object value = feature == null ? null : item.eGet(feature);
+            if (key.equals(value)) result.add(item);
+        }
+        return result;
+    }
+
+    private static List<EObject> identityItems(DataCompositionSchema schema, String type)
+    {
+        List<EObject> result = new ArrayList<>();
+        if (TYPE_DATA_SOURCE.equals(type))
+        {
+            result.addAll(schema.getDataSources());
+        }
+        else if (TYPE_DATA_SET.equals(type))
+        {
+            result.addAll(schema.getDataSets());
+        }
+        else if (TYPE_PARAMETER.equals(type))
+        {
+            result.addAll(schema.getParameters());
+        }
+        else if (TYPE_CALCULATED_FIELD.equals(type))
+        {
+            result.addAll(schema.getCalculatedFields());
+        }
+        else if (TYPE_TOTAL_FIELD.equals(type)) result.addAll(schema.getTotalFields());
+        return result;
+    }
+
+    /** Returns an actionable error when a complete assembled or imported schema has dangling references. */
+    public static String validateAssembledReferences(DataCompositionSchema schema, String rootFqn)
+    {
+        return assembledReferenceError(schema, rootFqn);
+    }
+
+    private static String assembledReferenceError(DataCompositionSchema schema, String rootFqn)
+    {
+        Set<String> dataSetNames = new LinkedHashSet<>();
+        List<DataSet> dataSets = new ArrayList<>();
+        collectDataSets(schema.getDataSets(), dataSetNames, dataSets);
+        Set<String> parameterNames = new LinkedHashSet<>();
+        for (DataCompositionSchemaParameter parameter : schema.getParameters())
+        {
+            if (parameter.getName() != null && !parameter.getName().isEmpty())
+            {
+                parameterNames.add(guardIdentity(parameter.getName()));
+            }
+        }
+        for (int i = 0; i < schema.getDataSetLinks().size(); i++)
+        {
+            DataCompositionSchemaDataSetLink link = schema.getDataSetLinks().get(i);
+            String address = DcsAddress.render(rootFqn,
+                Arrays.asList("dataSetLinks", Integer.toString(i))); //$NON-NLS-1$
+            String error = dataSetLinkReferenceError(link.getSourceDataSet(), "sourceDataSet", //$NON-NLS-1$
+                address, dataSetNames);
+            if (error != null) return error;
+            error = dataSetLinkReferenceError(link.getDestinationDataSet(), "destinationDataSet", //$NON-NLS-1$
+                address, dataSetNames);
+            if (error != null) return error;
+            error = dataSetLinkParameterReferenceError(link.getParameter(), address, parameterNames);
+            if (error != null) return error;
+        }
+
+        Set<String> dataSourceNames = new LinkedHashSet<>();
+        for (DataCompositionSchemaDataSource dataSource : schema.getDataSources())
+        {
+            if (dataSource.getName() != null && !dataSource.getName().isEmpty())
+            {
+                dataSourceNames.add(guardIdentity(dataSource.getName()));
+            }
+        }
+        for (DataSet dataSet : dataSets)
+        {
+            String dataSource = dataSet instanceof DataCompositionSchemaDataSetQuery
+                ? ((DataCompositionSchemaDataSetQuery)dataSet).getDataSource()
+                : dataSet instanceof DataCompositionSchemaDataSetObject
+                    ? ((DataCompositionSchemaDataSetObject)dataSet).getDataSource() : null;
+            if (dataSource == null || dataSource.isEmpty()
+                || dataSourceNames.contains(guardIdentity(dataSource)))
+            {
+                continue;
+            }
+            List<String> addresses = DcsReadProjection.referenceAddresses(schema, rootFqn,
+                TYPE_DATA_SOURCE, dataSource);
+            String address = addresses.isEmpty() ? rootFqn : String.join(", ", addresses); //$NON-NLS-1$
+            return "Data set at '" + address //$NON-NLS-1$
+                + "' has dangling dataSource '" + dataSource //$NON-NLS-1$
+                + "' after assembling the schema. Add or keep a data source named '" + dataSource //$NON-NLS-1$
+                + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
+                + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
+        }
+        for (DataSet dataSet : dataSets)
+        {
+            for (DataSetField raw : dataSet.getFields())
+            {
+                if (!(raw instanceof DataCompositionSchemaDataSetField)) continue;
+                DataCompositionSchemaDataSetField field =
+                    (DataCompositionSchemaDataSetField)raw;
+                String error = hierarchyReferenceError(schema, rootFqn,
+                    field.getInHierarchyDataSet(), "inHierarchyDataSet", TYPE_DATA_SET, //$NON-NLS-1$
+                    "data set", dataSetNames); //$NON-NLS-1$
+                if (error != null) return error;
+                error = hierarchyReferenceError(schema, rootFqn,
+                    field.getInHierarchyDataSetParameter(), "inHierarchyDataSetParameter", //$NON-NLS-1$
+                    TYPE_PARAMETER, "parameter", parameterNames); //$NON-NLS-1$
+                if (error != null) return error;
+            }
+        }
+        return null;
+    }
+
+    private static String hierarchyReferenceError(DataCompositionSchema schema, String rootFqn,
+        String identity, String member, String targetKind, String targetLabel,
+        Set<String> targets)
+    {
+        if (identity == null || identity.isEmpty()
+            || targets.contains(guardIdentity(identity)))
+        {
+            return null;
+        }
+        List<String> addresses = DcsReadProjection.referenceAddresses(schema, rootFqn,
+            targetKind, identity);
+        String address = addresses.isEmpty() ? rootFqn : String.join(", ", addresses); //$NON-NLS-1$
+        return "Field at '" + address + "' has dangling " + member + " '" + identity //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' after assembling the schema. Add or keep a " + targetLabel + " named '" //$NON-NLS-1$ //$NON-NLS-2$
+            + identity + "' in the assembled schema (include it in the replacement body when " //$NON-NLS-1$
+            + "replacing), or update/remove the referring field first and retry."; //$NON-NLS-1$
+    }
+
+    private static void collectDataSets(List<DataSet> candidates, Set<String> names,
+        List<DataSet> dataSets)
+    {
+        for (DataSet dataSet : candidates)
+        {
+            dataSets.add(dataSet);
+            if (dataSet.getName() != null && !dataSet.getName().isEmpty())
+            {
+                names.add(guardIdentity(dataSet.getName()));
+            }
+            if (dataSet instanceof DataCompositionSchemaDataSetUnion)
+            {
+                collectDataSets(((DataCompositionSchemaDataSetUnion)dataSet).getItems(), names,
+                    dataSets);
+            }
+        }
+    }
+
+    private static String dataSetLinkReferenceError(String identity, String member, String address,
+        Set<String> dataSetNames)
+    {
+        if (identity == null || identity.isEmpty()
+            || dataSetNames.contains(guardIdentity(identity)))
+        {
+            return null;
+        }
+        return "Data-set link at '" + address + "' has dangling " + member + " '" //$NON-NLS-1$ //$NON-NLS-2$
+            + identity
+            + "' after assembling the schema. Add or keep a data set named '" + identity //$NON-NLS-1$
+            + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
+            + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
+    }
+
+    private static String dataSetLinkParameterReferenceError(String identity, String address,
+        Set<String> parameterNames)
+    {
+        if (identity == null || identity.isEmpty()
+            || parameterNames.contains(guardIdentity(identity)))
+        {
+            return null;
+        }
+        return "Data-set link at '" + address + "' has dangling parameter '" + identity //$NON-NLS-1$ //$NON-NLS-2$
+            + "' after assembling the schema. Add or keep a parameter named '" + identity //$NON-NLS-1$
+            + "' in the assembled schema (include it in the replacement body when replacing), " //$NON-NLS-1$
+            + "or update/remove the referring nodes first and retry."; //$NON-NLS-1$
+    }
+
+    /**
+     * Normalizes identities only for conservative reference guards. Natural-key lookup, pointer
+     * resolution, duplicate detection and collision checks deliberately remain exact; changing
+     * those would alter which node an address selects rather than merely refusing a risky write.
+     */
+    private static String guardIdentity(String identity)
+    {
+        return identity.toLowerCase(Locale.ROOT);
+    }
+
+    private static String clearReplaceTarget(DataCompositionSchema schema, Request request)
+    {
+        List<String> path = request.address.segments();
+        if (TYPE_SCHEMA.equals(request.type))
+        {
+            if (!path.isEmpty())
+                return "type='schema' replace targets the bare root. Remove the '#/...' fragment."; //$NON-NLS-1$
+            schema.getDataSources().clear();
+            schema.getDataSets().clear();
+            schema.getDataSetLinks().clear();
+            schema.getParameters().clear();
+            schema.getCalculatedFields().clear();
+            schema.getTotalFields().clear();
+            return null;
+        }
+        if ((TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type))
+            && isFieldPath(path, false))
+        {
+            FieldTarget target = resolveFieldTarget(schema, path);
+            if (target.error != null) return target.error;
+            String referenceError = omittedIdentityReferenceError(schema, request,
+                target.fields());
+            if (referenceError != null) return referenceError;
+            target.dataSet.getFields().removeAll(target.descendants());
+            return null;
+        }
+        // An exact field address has no collection of its own: it falls through to remove(),
+        // which deletes the addressed field so the authoritative body recreates it.
+        String collection = collection(request.type);
+        if (collection == null && !TYPE_FIELD.equals(request.type)
+            && !TYPE_FIELD_FOLDER.equals(request.type))
+            return "Type '" + request.type + "' has no replaceable schema collection."; //$NON-NLS-1$ //$NON-NLS-2$
+        if (collection != null && path.size() == 1 && collection.equals(path.get(0)))
+        {
+            if (TYPE_PARAMETER.equals(request.type) || TYPE_CALCULATED_FIELD.equals(request.type)
+                || TYPE_TOTAL_FIELD.equals(request.type))
+            {
+                String referenceError = omittedIdentityReferenceError(schema, request,
+                    identityItems(schema, request.type));
+                if (referenceError != null) return referenceError;
+            }
+            clearCollection(schema, collection);
+            return null;
+        }
+        if (TYPE_DATA_SET.equals(request.type) && isDataSetPath(path))
+        {
+            DataSetTarget target = resolveDataSetTarget(schema, path, false);
+            if (target.error != null) return target.error;
+            DataSet existing = target.dataSet;
+            String kind = DcsWriter.stringMember(request.body, KEY_TYPE);
+            if (kind == null)
+            {
+                kind = dataSetKind(existing);
+            }
+            kind = kind.toLowerCase(Locale.ROOT);
+            DataSet replacement;
+            if ("query".equals(kind)) //$NON-NLS-1$
+            {
+                replacement = DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetQuery();
+                if (!request.body.has(KEY_QUERY)) request.body.addProperty(KEY_QUERY, ""); //$NON-NLS-1$
+            }
+            else if ("object".equals(kind)) //$NON-NLS-1$
+            {
+                replacement = DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetObject();
+                // Exact replace rebuilds the data set from this body. Omitting objectName therefore
+                // resets it to null; the blank replacement is recorded by normalizeDataSet so the
+                // shared shape validator accepts that omission without inventing an empty element.
+            }
+            else if ("union".equals(kind)) //$NON-NLS-1$
+            {
+                replacement = DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetUnion();
+            }
+            else
+            {
+                return "Data set type '" + kind //$NON-NLS-1$
+                    + "' is unsupported. Use query, object, or union."; //$NON-NLS-1$
+            }
+            request.body.addProperty(KEY_TYPE, kind);
+            replacement.setName(existing.getName());
+            target.owner.set(target.owner.indexOf(existing), replacement);
+            return null;
+        }
+        if (TYPE_CALCULATED_FIELD.equals(request.type) && collection != null && path.size() == 2
+            && collection.equals(path.get(0)) && !request.body.has(KEY_EXPRESSION))
+        {
+            return "An authoritative action='replace' of " + request.type + " at '" //$NON-NLS-1$ //$NON-NLS-2$
+                + request.address + "' must carry 'expression'. Pass an empty string only when " //$NON-NLS-1$
+                + "intentionally resetting it."; //$NON-NLS-1$
+        }
+        if (TYPE_TOTAL_FIELD.equals(request.type) && collection != null && path.size() == 2
+            && collection.equals(path.get(0)) && !request.body.has(KEY_EXPRESSION))
+        {
+            return "An authoritative action='replace' of " + request.type + " at '" //$NON-NLS-1$ //$NON-NLS-2$
+                + request.address + "' must carry 'expression', and it must be non-empty."; //$NON-NLS-1$
+        }
+        String removed = remove(schema, request);
+        if (removed != null && ACTION_REPLACE.equals(request.action))
+            return removed.replace("action='remove'", "action='replace'"); //$NON-NLS-1$ //$NON-NLS-2$
+        return removed;
+    }
+
+    private static String omittedIdentityReferenceError(DataCompositionSchema schema,
+        Request request, List<? extends EObject> existing)
+    {
+        String member = keyMember(request.type);
+        String retained = DcsWriter.stringMember(request.body, member);
+        if (retained == null || retained.isEmpty()) return null;
+        Set<String> identities = new LinkedHashSet<>();
+        for (EObject item : existing)
+        {
+            if ((TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type))
+                && !fieldSubtypeMatches(request.type, (DataSetField)item))
+            {
+                continue;
+            }
+            org.eclipse.emf.ecore.EStructuralFeature feature = item.eClass()
+                .getEStructuralFeature(member);
+            Object value = feature == null ? null : item.eGet(feature);
+            if (value instanceof String && !((String)value).isEmpty() && !retained.equals(value))
+            {
+                identities.add((String)value);
+            }
+        }
+        DataCompositionSchema retainedSchema = EcoreUtil.copy(schema);
+        retainReplacementIdentity(retainedSchema, request, retained);
+        for (String identity : identities)
+        {
+            List<String> segments = new ArrayList<>(request.address.segments());
+            segments.add(identity);
+            DcsAddress target = DcsAddress.parse(DcsAddress.render(request.address.rootFqn(),
+                segments)).address();
+            String error = DcsMutationGuard.referenceError(retainedSchema, target, request.type,
+                identity);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static void retainReplacementIdentity(DataCompositionSchema schema, Request request,
+        String retained)
+    {
+        if (TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type))
+        {
+            FieldTarget target = resolveFieldTarget(schema, request.address.segments());
+            if (target.error == null)
+            {
+                List<DataSetField> scoped = target.descendants();
+                target.dataSet.getFields().removeIf(item -> scoped.contains(item)
+                    && fieldSubtypeMatches(request.type, item)
+                    && !retained.equals(DcsFieldFolders.key(item)));
+            }
+        }
+        else if (TYPE_PARAMETER.equals(request.type))
+        {
+            schema.getParameters().removeIf(item -> !retained.equals(item.getName()));
+        }
+        else if (TYPE_CALCULATED_FIELD.equals(request.type))
+        {
+            schema.getCalculatedFields().removeIf(item -> !retained.equals(item.getDataPath()));
+        }
+        else if (TYPE_TOTAL_FIELD.equals(request.type))
+        {
+            schema.getTotalFields().removeIf(item -> !retained.equals(item.getDataPath()));
+        }
+    }
+
+    private static String remove(DataCompositionSchema schema, Request request)
+    {
+        List<String> path = request.address.segments();
+        if (path.isEmpty())
+            return "action='remove' refuses the bare DCS root. Address exactly one '#/...' node."; //$NON-NLS-1$
+        if (isDataSetLinkPath(request.type, path))
+        {
+            if (!DcsAddress.isZeroBasedIndex(path.get(1))) return "Data-set link selector '" //$NON-NLS-1$
+                + path.get(1) + "' must be a zero-based index copied from get."; //$NON-NLS-1$
+            int index = Integer.parseInt(path.get(1));
+            if (index >= schema.getDataSetLinks().size()) return "Data-set link index '" //$NON-NLS-1$
+                + path.get(1) + "' is out of range. Re-run get."; //$NON-NLS-1$
+            schema.getDataSetLinks().remove(index);
+            return null;
+        }
+        if ((TYPE_FIELD.equals(request.type) || TYPE_FIELD_FOLDER.equals(request.type))
+            && isFieldPath(path, true))
+        {
+            FieldTarget target = resolveFieldTarget(schema, path);
+            if (target.error != null) return target.error;
+            String fieldKey = path.get(path.size() - 1);
+            NodeSelector selected = resolveSelector(target.fields(), fieldKey,
+                KEY_DATA_PATH);
+            if (selected.ambiguous())
+            {
+                return ambiguousSelector(request, removeOperation(request), fieldKey,
+                    selected.count);
+            }
+            if (selected.target == null) return "Field '" + fieldKey + "' was not found in data set '" //$NON-NLS-1$ //$NON-NLS-2$
+                + target.dataSet.getName() + "'. Re-run get."; //$NON-NLS-1$
+            DataSetField field = (DataSetField)selected.target;
+            if (!fieldSubtypeMatches(request.type, field))
+            {
+                return unsupportedField(request, fieldKey, field);
+            }
+            target.dataSet.getFields().remove(field);
+            if (field instanceof DataCompositionSchemaDataSetFieldFolder)
+            {
+                target.dataSet.getFields().removeAll(DcsFieldFolders.descendants(target.dataSet,
+                    (DataCompositionSchemaDataSetFieldFolder)field));
+            }
+            return null;
+        }
+        if (TYPE_DATA_SET.equals(request.type) && isDataSetPath(path))
+        {
+            DataSetTarget target = resolveDataSetTarget(schema, path, false);
+            if (target.error != null) return target.error;
+            target.owner.remove(target.dataSet);
+            return null;
+        }
+        String collection = collection(request.type);
+        if (collection == null || path.size() != 2 || !collection.equals(path.get(0)))
+            return "action='remove' for type='" + request.type //$NON-NLS-1$
+                + "' needs one exact canonical node address; got '" + request.address + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        String key = path.get(1);
+        NodeSelector selected = resolveSelector(identityItems(schema, request.type), key,
+            keyMember(request.type));
+        if (selected.ambiguous())
+        {
+            return ambiguousSelector(request, removeOperation(request), key, selected.count);
+        }
+        if (selected.target == null)
+        {
+            return "No " + request.type + " named '" + key //$NON-NLS-1$ //$NON-NLS-2$
+                + "' exists at '" + request.address //$NON-NLS-1$
+                + "'. Re-run get and copy an existing address."; //$NON-NLS-1$
+        }
+        EObject target = selected.target;
+        if (target instanceof DataCompositionSchemaDataSource)
+            schema.getDataSources().remove(target);
+        else if (target instanceof DataSet) schema.getDataSets().remove(target);
+        else if (target instanceof DataCompositionSchemaParameter)
+            schema.getParameters().remove(target);
+        else if (target instanceof DataCompositionSchemaCalculatedField)
+            schema.getCalculatedFields().remove(target);
+        else if (target instanceof DataCompositionSchemaTotalField)
+            schema.getTotalFields().remove(target);
+        return null;
+    }
+
+    private static String removeOperation(Request request)
+    {
+        return ACTION_REPLACE.equals(request.action) ? "replace" : "remove"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static void clearCollection(DataCompositionSchema schema, String collection)
+    {
+        switch (collection)
+        {
+            case "dataSources": schema.getDataSources().clear(); break; //$NON-NLS-1$
+            case "dataSets": schema.getDataSets().clear(); break; //$NON-NLS-1$
+            case "parameters": schema.getParameters().clear(); break; //$NON-NLS-1$
+            case "calculatedFields": schema.getCalculatedFields().clear(); break; //$NON-NLS-1$
+            case "totalFields": schema.getTotalFields().clear(); break; //$NON-NLS-1$
+            default: break;
+        }
+    }
+
+    private static void commitSchemaLayer(DataCompositionSchema target, DataCompositionSchema source)
+    {
+        target.getDataSources().clear();
+        target.getDataSources().addAll(EcoreUtil.copyAll(source.getDataSources()));
+        target.getDataSets().clear();
+        target.getDataSets().addAll(EcoreUtil.copyAll(source.getDataSets()));
+        target.getDataSetLinks().clear();
+        target.getDataSetLinks().addAll(EcoreUtil.copyAll(source.getDataSetLinks()));
+        target.getParameters().clear();
+        target.getParameters().addAll(EcoreUtil.copyAll(source.getParameters()));
+        target.getCalculatedFields().clear();
+        target.getCalculatedFields().addAll(EcoreUtil.copyAll(source.getCalculatedFields()));
+        target.getTotalFields().clear();
+        target.getTotalFields().addAll(EcoreUtil.copyAll(source.getTotalFields()));
+    }
+
+    private static String requestStringMembersError(Request request)
+    {
+        JsonObject body = request.body;
+        if (body == null) return null;
+        switch (request.type)
+        {
+            case TYPE_SCHEMA:
+                return schemaStringMembersError(body);
+            case TYPE_DATA_SOURCE:
+                return DcsWriter.stringMembersError(body, "A data source", "body", KEY_NAME); //$NON-NLS-1$ //$NON-NLS-2$
+            case TYPE_DATA_SET:
+                return dataSetStringMembersError(body, "body"); //$NON-NLS-1$
+            case TYPE_FIELD:
+                return DcsWriter.stringMembersError(body, "A field", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH, KEY_KIND);
+            case TYPE_FIELD_FOLDER:
+                String folderError = DcsWriter.stringMembersError(body, "A field folder", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH, KEY_KIND);
+                return folderError != null ? folderError : fieldStringMembersError(body, "body"); //$NON-NLS-1$
+            case TYPE_PARAMETER:
+                return DcsWriter.stringMembersError(body, "A parameter", "body", KEY_NAME); //$NON-NLS-1$ //$NON-NLS-2$
+            case TYPE_CALCULATED_FIELD:
+                return DcsWriter.stringMembersError(body, "A calculated field", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH);
+            case TYPE_TOTAL_FIELD:
+                return DcsWriter.stringMembersError(body, "A total field", "body", //$NON-NLS-1$ //$NON-NLS-2$
+                    KEY_DATA_PATH);
+            default:
+                return null;
+        }
+    }
+
+    private static String schemaStringMembersError(JsonObject body)
+    {
+        String error = collectionStringMembersError(body, "dataSources", "A data source", //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_NAME);
+        if (error != null) return error;
+        error = dataSetCollectionStringMembersError(body, "dataSets"); //$NON-NLS-1$
+        if (error != null) return error;
+        error = collectionStringMembersError(body, "calculatedFields", "A calculated field", //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_DATA_PATH);
+        if (error != null) return error;
+        return collectionStringMembersError(body, "totalFields", "A total field", //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_DATA_PATH);
+    }
+
+    private static String collectionStringMembersError(JsonObject body, String collection,
+        String subject, String... members)
+    {
+        if (!body.has(collection) || !body.get(collection).isJsonArray()) return null;
+        JsonArray entries = body.getAsJsonArray(collection);
+        for (int i = 0; i < entries.size(); i++)
+        {
+            JsonElement element = entries.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            String error = DcsWriter.stringMembersError(element.getAsJsonObject(), subject,
+                collection + "[" + i + "]", members); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String dataSetCollectionStringMembersError(JsonObject body, String collection)
+    {
+        if (!body.has(collection) || !body.get(collection).isJsonArray()) return null;
+        JsonArray entries = body.getAsJsonArray(collection);
+        for (int i = 0; i < entries.size(); i++)
+        {
+            JsonElement element = entries.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            String error = dataSetStringMembersError(element.getAsJsonObject(),
+                collection + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String dataSetStringMembersError(JsonObject dataSet, String where)
+    {
+        String error = DcsWriter.stringMembersError(dataSet, "A data set", where, //$NON-NLS-1$
+            KEY_NAME, KEY_TYPE);
+        if (error != null) return error;
+        error = fieldStringMembersError(dataSet, where);
+        if (error != null) return error;
+        if (!dataSet.has(KEY_ITEMS) || !dataSet.get(KEY_ITEMS).isJsonArray()) return null;
+        JsonArray items = dataSet.getAsJsonArray(KEY_ITEMS);
+        for (int i = 0; i < items.size(); i++)
+        {
+            JsonElement element = items.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            error = dataSetStringMembersError(element.getAsJsonObject(),
+                where + ".items[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String fieldStringMembersError(JsonObject owner, String where)
+    {
+        if (!owner.has(KEY_FIELDS) || !owner.get(KEY_FIELDS).isJsonArray()) return null;
+        JsonArray fields = owner.getAsJsonArray(KEY_FIELDS);
+        for (int i = 0; i < fields.size(); i++)
+        {
+            JsonElement element = fields.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            JsonObject field = element.getAsJsonObject();
+            String fieldWhere = where + ".fields[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            String error = DcsWriter.stringMembersError(field, "A field", fieldWhere, //$NON-NLS-1$
+                KEY_DATA_PATH, KEY_KIND);
+            if (error != null) return error;
+            error = fieldStringMembersError(field, fieldWhere);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static PayloadResult payload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        switch (request.type)
+        {
+            case TYPE_SCHEMA:
+                if (!request.address.segments().isEmpty())
+                {
+                    return PayloadResult.failure("type='schema' targets the bare root, not '" //$NON-NLS-1$
+                        + request.address + "'. Remove the '#/...' fragment."); //$NON-NLS-1$
+                }
+                return normalizeSchemaBody(schema, request, dataSetValidation);
+            case TYPE_DATA_SOURCE:
+                return namedPayload(schema, request, "dataSources", KEY_NAME); //$NON-NLS-1$
+            case TYPE_DATA_SET:
+                return dataSetPayload(schema, request, dataSetValidation);
+            case TYPE_FIELD:
+                return fieldPayload(schema, request, dataSetValidation);
+            case TYPE_FIELD_FOLDER:
+                return fieldFolderPayload(schema, request, dataSetValidation);
+            case TYPE_PARAMETER:
+                return namedPayload(schema, request, "parameters", KEY_NAME); //$NON-NLS-1$
+            case TYPE_CALCULATED_FIELD:
+                return expressionPayload(schema, request, "calculatedFields", dataSetValidation); //$NON-NLS-1$
+            case TYPE_TOTAL_FIELD:
+                return expressionPayload(schema, request, "totalFields", dataSetValidation); //$NON-NLS-1$
+            default:
+                return PayloadResult.failure("Type '" + request.type + "' is not authorable here."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    private static PayloadResult normalizeSchemaBody(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        JsonObject body = request.body.deepCopy();
+        if (body.has("dataSources") && body.get("dataSources").isJsonArray()) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            for (JsonObject entry : objects(body.getAsJsonArray("dataSources"))) //$NON-NLS-1$
+            {
+                mergeDataSourceType(schema, entry, DcsWriter.stringMember(entry, KEY_NAME));
+            }
+        }
+        if (body.has("dataSets") && body.get("dataSets").isJsonArray()) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            for (JsonObject entry : objects(body.getAsJsonArray("dataSets"))) //$NON-NLS-1$
+            {
+                String name = DcsWriter.stringMember(entry, KEY_NAME);
+                DataSet existing = findDataSet(schema, name);
+                String error = normalizeDataSet(entry, existing, name, dataSetValidation);
+                if (error != null)
+                {
+                    return PayloadResult.failure(error);
+                }
+            }
+        }
+        PayloadResult calculated = normalizeExpressions(schema, body, "calculatedFields", //$NON-NLS-1$
+            dataSetValidation);
+        if (calculated.error != null)
+        {
+            return calculated;
+        }
+        PayloadResult totals = normalizeExpressions(schema, body, "totalFields", dataSetValidation); //$NON-NLS-1$
+        return totals.error == null ? PayloadResult.success(body) : totals;
+    }
+
+    private static PayloadResult namedPayload(DataCompositionSchema schema, Request request,
+        String collection, String keyMember)
+    {
+        KeyResult keyed = naturalKey(request, collection, keyMember);
+        if (keyed.error != null)
+        {
+            return PayloadResult.failure(keyed.error);
+        }
+        List<String> existing = keys(schema, collection, null);
+        if (ACTION_UPDATE.equals(request.action) && !existing.contains(keyed.key))
+        {
+            return PayloadResult.failure(missing(request, keyed.key, existing));
+        }
+        JsonObject entry = request.body.deepCopy();
+        entry.addProperty(keyMember, keyed.key);
+        if ("dataSources".equals(collection)) //$NON-NLS-1$
+        {
+            mergeDataSourceType(schema, entry, keyed.key);
+        }
+        return PayloadResult.success(wrap(collection, entry));
+    }
+
+    private static PayloadResult dataSetPayload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        List<String> path = request.address.segments();
+        if (isDataSetPath(path))
+        {
+            List<String> effectivePath = new ArrayList<>(path);
+            if (request.renamedTo != null)
+            {
+                effectivePath.set(effectivePath.size() - 1, request.renamedTo);
+            }
+            DataSetTarget target = resolveDataSetTarget(schema, effectivePath,
+                ACTION_UPSERT.equals(request.action) || ACTION_UPDATE.equals(request.action));
+            if (target.error != null) return PayloadResult.failure(target.error);
+            String pointerKey = path.get(path.size() - 1);
+            KeyResult keyed = key(request, KEY_NAME, pointerKey);
+            if (keyed.error != null) return PayloadResult.failure(keyed.error);
+            DataSet existing = target.dataSet;
+            if (ACTION_UPDATE.equals(request.action) && existing == null)
+            {
+                return PayloadResult.failure(missing(request, keyed.key,
+                    dataSetKeys(target.owner)));
+            }
+            if (ACTION_UPDATE.equals(request.action))
+            {
+                String error = nestedDataSetUpdateError(request, existing, request.body,
+                    request.address.toString());
+                if (error != null) return PayloadResult.failure(error);
+            }
+            JsonObject entry = request.body.deepCopy();
+            entry.addProperty(KEY_NAME, keyed.key);
+            List<DataSet> parents = existing == null ? target.dataSets
+                : target.dataSets.subList(0, target.dataSets.size() - 1);
+            String error = normalizeDataSet(entry, existing, keyed.key,
+                parents.isEmpty() ? dataSetValidation : null);
+            if (error != null) return PayloadResult.failure(error);
+            JsonObject dataSet = nestedDataSetPayload(parents, entry);
+            if (!parents.isEmpty())
+            {
+                DataSet root = parents.get(0);
+                error = normalizeDataSet(dataSet, root, root.getName(), dataSetValidation);
+                if (error != null) return PayloadResult.failure(error);
+            }
+            return PayloadResult.success(wrap("dataSets", dataSet)); //$NON-NLS-1$
+        }
+        KeyResult keyed = naturalKey(request, "dataSets", KEY_NAME); //$NON-NLS-1$
+        if (keyed.error != null)
+        {
+            return PayloadResult.failure(keyed.error);
+        }
+        DataSet existing = findDataSet(schema, keyed.key);
+        if (ACTION_UPDATE.equals(request.action) && existing == null)
+        {
+            return PayloadResult.failure(missing(request, keyed.key, keys(schema, "dataSets", null))); //$NON-NLS-1$
+        }
+        if (ACTION_UPDATE.equals(request.action))
+        {
+            String nested = nestedDataSetUpdateError(request, existing, request.body,
+                request.address.toString());
+            if (nested != null) return PayloadResult.failure(nested);
+        }
+        JsonObject entry = request.body.deepCopy();
+        entry.addProperty(KEY_NAME, keyed.key);
+        String error = normalizeDataSet(entry, existing, keyed.key, dataSetValidation);
+        return error == null ? PayloadResult.success(wrap("dataSets", entry)) //$NON-NLS-1$
+            : PayloadResult.failure(error);
+    }
+
+    private static String normalizeDataSet(JsonObject entry, DataSet existing, String name,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        return normalizeDataSet(entry, existing, name, dataSetValidation,
+            Collections.<String>emptyList());
+    }
+
+    private static String normalizeDataSet(JsonObject entry, DataSet existing, String name,
+        DcsWriter.DataSetValidationContext dataSetValidation, List<String> parentPath)
+    {
+        if (name == null)
+        {
+            return null; // DcsWriter reports the malformed natural key with its exact body location.
+        }
+        List<String> dataSetPath = new ArrayList<>(parentPath);
+        dataSetPath.add(name);
+        if (existing instanceof DataCompositionSchemaDataSetObject)
+        {
+            entry.addProperty(KEY_TYPE, "object"); //$NON-NLS-1$
+            DataCompositionSchemaDataSetObject object = (DataCompositionSchemaDataSetObject)existing;
+            if (!entry.has(KEY_OBJECT_NAME))
+            {
+                if (object.getObjectName() != null)
+                {
+                    entry.addProperty(KEY_OBJECT_NAME, object.getObjectName());
+                }
+                else if (dataSetValidation != null)
+                {
+                    dataSetValidation.allowMissingObjectName(dataSetPath);
+                }
+            }
+            if (!entry.has(KEY_DATA_SOURCE) && object.getDataSource() != null)
+                entry.addProperty(KEY_DATA_SOURCE, object.getDataSource());
+            mergeDataSetFields(entry, existing);
+            return null;
+        }
+        if (existing instanceof DataCompositionSchemaDataSetUnion)
+        {
+            return normalizeUnionDataSet(entry, (DataCompositionSchemaDataSetUnion)existing, name,
+                dataSetValidation, dataSetPath);
+        }
+        if (existing != null && !(existing instanceof DataCompositionSchemaDataSetQuery))
+        {
+            return null;
+        }
+        String declaredType = DcsWriter.stringMember(entry, KEY_TYPE);
+        if (existing == null && "object".equalsIgnoreCase(declaredType)) //$NON-NLS-1$
+        {
+            entry.addProperty(KEY_TYPE, "object"); //$NON-NLS-1$
+            return null;
+        }
+        if (existing == null && "union".equalsIgnoreCase(declaredType)) //$NON-NLS-1$
+        {
+            return normalizeUnionDataSet(entry, null, name, dataSetValidation, dataSetPath);
+        }
+        DataCompositionSchemaDataSetQuery query = (DataCompositionSchemaDataSetQuery)existing;
+        entry.addProperty(KEY_TYPE, "query"); //$NON-NLS-1$
+        if (!entry.has(KEY_QUERY))
+        {
+            if (query == null || query.getQuery() == null || query.getQuery().isEmpty())
+            {
+                return "Creating query data set '" + name + "' requires a non-empty 'query'. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Pass the exact 1C query text; existing data sets may omit it on partial update."; //$NON-NLS-1$
+            }
+            entry.addProperty(KEY_QUERY, query.getQuery());
+        }
+        if (query != null)
+        {
+            if (!entry.has(KEY_DATA_SOURCE) && query.getDataSource() != null)
+            {
+                entry.addProperty(KEY_DATA_SOURCE, query.getDataSource());
+            }
+            if (!entry.has(KEY_AUTO_FILL))
+            {
+                entry.addProperty(KEY_AUTO_FILL, query.isAutoFillAvailableFields());
+            }
+            mergeDataSetFields(entry, query);
+        }
+        return null;
+    }
+
+    private static String normalizeUnionDataSet(JsonObject entry,
+        DataCompositionSchemaDataSetUnion existing, String name,
+        DcsWriter.DataSetValidationContext dataSetValidation, List<String> dataSetPath)
+    {
+        if (entry.has(KEY_QUERY))
+        {
+            return "Union data set '" + name + "' cannot declare 'query'. Remove 'query'; " //$NON-NLS-1$ //$NON-NLS-2$
+                + "put each query in a nested data set under 'items'."; //$NON-NLS-1$
+        }
+        entry.addProperty(KEY_TYPE, "union"); //$NON-NLS-1$
+        if (existing != null)
+        {
+            mergeDataSetFields(entry, existing);
+        }
+        if (!entry.has(KEY_ITEMS) || !entry.get(KEY_ITEMS).isJsonArray())
+        {
+            return null;
+        }
+        for (JsonObject child : objects(entry.getAsJsonArray(KEY_ITEMS)))
+        {
+            String childName = DcsWriter.stringMember(child, KEY_NAME);
+            DataSet current = existing == null ? null : findDataSet(existing.getItems(), childName);
+            String error = normalizeDataSet(child, current, childName, dataSetValidation, dataSetPath);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String nestedDataSetUpdateError(Request request, DataSet existing,
+        JsonObject body, String address)
+    {
+        String declaredType = DcsWriter.stringMember(body, KEY_TYPE);
+        if (declaredType != null)
+        {
+            String existingType = dataSetKind(existing);
+            if (!existingType.equals(declaredType.toLowerCase(Locale.ROOT)))
+            {
+                return "action='update' cannot change data set '" + existing.getName() //$NON-NLS-1$
+                    + "' at '" + address + "' from subtype '" + existingType //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' to subtype '" + declaredType + "'. Use action='replace' at the exact " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "data-set address to change its subtype."; //$NON-NLS-1$
+            }
+        }
+        if (body.has(KEY_FIELDS) && body.get(KEY_FIELDS).isJsonArray())
+        {
+            for (JsonObject field : objects(body.getAsJsonArray(KEY_FIELDS)))
+            {
+                String key = DcsWriter.stringMember(field, KEY_DATA_PATH);
+                if (key == null) continue;
+                String requestedKind = DcsWriter.stringMember(field, KEY_KIND);
+                if (DcsUnsupportedAuthoring.isNestedDataSetKind(requestedKind))
+                {
+                    return DcsUnsupportedAuthoring.refusal(
+                        DcsUnsupportedAuthoring.NESTED_DATA_SET_CLASS,
+                        address + "/fields/" + key); //$NON-NLS-1$
+                }
+                List<DataSetField> matches = dataSetFields(existing, key);
+                if (matches.isEmpty())
+                {
+                    return nestedUpdateMissing(request, "field", key, address, fieldKeys(existing)); //$NON-NLS-1$
+                }
+                if (matches.size() > 1)
+                {
+                    return nestedUpdateAmbiguous(request, "field", key, address, matches.size()); //$NON-NLS-1$
+                }
+                DataSetField matching = matches.get(0);
+                String deliberate = DcsUnsupportedAuthoring.refusal(matching,
+                    address + "/fields/" + key); //$NON-NLS-1$
+                if (deliberate != null) return deliberate;
+                String kind = requestedKind;
+                boolean folderBody = KIND_FOLDER.equalsIgnoreCase(kind)
+                    || kind == null
+                        && matching instanceof DataCompositionSchemaDataSetFieldFolder;
+                if (folderBody
+                    && matching instanceof DataCompositionSchemaDataSetFieldFolder)
+                {
+                    continue;
+                }
+                if (!(matching instanceof DataCompositionSchemaDataSetField))
+                {
+                    return "Field '" + key + "' below '" + address + "' has unsupported subtype '" //$NON-NLS-1$ //$NON-NLS-2$
+                        + matching.eClass().getName() + "' for requested kind '" + kind + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        if (!body.has(KEY_ITEMS) || !body.get(KEY_ITEMS).isJsonArray()) return null;
+        if (!(existing instanceof DataCompositionSchemaDataSetUnion))
+        {
+            return "Data set '" + existing.getName() + "' at '" + address + "' is kind '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + dataSetKind(existing) + "', not union. Only union data sets have nested 'items'."; //$NON-NLS-1$
+        }
+        List<DataSet> existingItems = ((DataCompositionSchemaDataSetUnion)existing).getItems();
+        for (JsonObject child : objects(body.getAsJsonArray(KEY_ITEMS)))
+        {
+            String key = DcsWriter.stringMember(child, KEY_NAME);
+            if (key == null) continue;
+            List<DataSet> matches = matchingDataSets(existingItems, key);
+            String childAddress = address + "/items/" + key; //$NON-NLS-1$
+            if (matches.isEmpty())
+            {
+                return nestedUpdateMissing(request, "dataSet", key, address, dataSetKeys(existingItems)); //$NON-NLS-1$
+            }
+            if (matches.size() > 1)
+            {
+                return nestedUpdateAmbiguous(request, "dataSet", key, address, matches.size()); //$NON-NLS-1$
+            }
+            String error = nestedDataSetUpdateError(request, matches.get(0), child, childAddress);
+            if (error != null) return error;
+        }
+        return null;
+    }
+
+    private static String nestedUpdateMissing(Request request, String type, String key,
+        String address, List<String> existing)
+    {
+        return "action='update' cannot create nested " + type + " '" + key + "' below '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + address + "' while updating '" + request.address + "'. Existing keys at that level: " //$NON-NLS-1$ //$NON-NLS-2$
+            + display(existing) + ". Copy an exact existing address from dcs action='get', or use " //$NON-NLS-1$
+            + "action='upsert' to create '" + key + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String nestedUpdateAmbiguous(Request request, String type, String key,
+        String address, int count)
+    {
+        return "Cannot update nested " + type + " '" + key + "' below '" + address //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' while updating '" + request.address + "' because natural key '" + key //$NON-NLS-1$ //$NON-NLS-2$
+            + "' matches " + count + " existing nodes. The address is ambiguous; disambiguate the " //$NON-NLS-1$
+            + "duplicates in the DCS designer first, re-run get, and retry."; //$NON-NLS-1$
+    }
+
+    private static void mergeDataSetFields(JsonObject entry, DataSet dataSet)
+    {
+        if (!entry.has(KEY_FIELDS) || !entry.get(KEY_FIELDS).isJsonArray()) return;
+        for (JsonObject field : objects(entry.getAsJsonArray(KEY_FIELDS)))
+        {
+            String path = DcsWriter.stringMember(field, KEY_DATA_PATH);
+            DataCompositionSchemaDataSetField current = findField(dataSet, path);
+            if (current != null) mergeFieldDefaults(field, current);
+        }
+    }
+
+    private static PayloadResult fieldPayload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        List<String> segments = request.address.segments();
+        if (!isFieldPath(segments, false) && !isFieldPath(segments, true))
+        {
+            return PayloadResult.failure("type='field' needs " //$NON-NLS-1$
+                + "'#/dataSets/<dataSet>(/items/<dataSet>)*/fields' or an exact address with " //$NON-NLS-1$
+                + "a trailing '/<dataPath>'; got '" //$NON-NLS-1$
+                + request.address + "'. Copy the parent or node address from dcs action='get'."); //$NON-NLS-1$
+        }
+        FieldTarget target = resolveFieldTarget(schema, segments);
+        if (target.error != null)
+        {
+            return PayloadResult.failure(target.error);
+        }
+        DataSet set = target.dataSet;
+        String pointerKey = target.exact ? segments.get(segments.size() - 1) : null;
+        KeyResult keyed = key(request, KEY_DATA_PATH, pointerKey);
+        if (keyed.error != null)
+        {
+            return PayloadResult.failure(keyed.error);
+        }
+        DataCompositionSchemaDataSetField existing = null;
+        List<DataSetField> matches = dataSetFields(target.fields(), keyed.key);
+        if (matches.size() > 1)
+        {
+            return PayloadResult.failure(ambiguousIdentity(request, request.action, keyed.key,
+                matches.size()));
+        }
+        if (!matches.isEmpty())
+        {
+            if (!(matches.get(0) instanceof DataCompositionSchemaDataSetField))
+            {
+                return PayloadResult.failure(unsupportedField(request, keyed.key, matches.get(0)));
+            }
+            existing = (DataCompositionSchemaDataSetField)matches.get(0);
+        }
+        if (ACTION_UPDATE.equals(request.action) && existing == null)
+        {
+            return PayloadResult.failure(missing(request, keyed.key,
+                fieldKeys(target.fields())));
+        }
+        String parentError = fieldParentError(false, keyed.key,
+            target.parent == null ? null : target.parent.getDataPath(), request.address.toString());
+        if (parentError != null) return PayloadResult.failure(parentError);
+        JsonObject field = request.body.deepCopy();
+        field.addProperty(KEY_DATA_PATH, keyed.key);
+        if (existing != null)
+        {
+            mergeFieldDefaults(field, existing);
+        }
+        JsonArray fields = new JsonArray();
+        fields.add(field);
+        JsonObject leaf = new JsonObject();
+        leaf.addProperty(KEY_NAME, target.dataSet.getName());
+        leaf.add(KEY_FIELDS, fields);
+        JsonObject dataSet = nestedDataSetPayload(
+            target.dataSets.subList(0, target.dataSets.size() - 1), leaf);
+        DataSet root = target.dataSets.get(0);
+        String normalizeError = normalizeDataSet(dataSet, root, root.getName(), dataSetValidation);
+        if (normalizeError != null) return PayloadResult.failure(normalizeError);
+        return PayloadResult.success(wrap("dataSets", dataSet)); //$NON-NLS-1$
+    }
+
+    private static PayloadResult fieldFolderPayload(DataCompositionSchema schema, Request request,
+        DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        List<String> segments = request.address.segments();
+        if (!isFieldPath(segments, false) && !isFieldPath(segments, true))
+        {
+            return PayloadResult.failure("type='fieldFolder' needs " //$NON-NLS-1$
+                + "'#/dataSets/<dataSet>(/items/<dataSet>)*/fields' (optionally below another " //$NON-NLS-1$
+                + "folder) or an exact address with a trailing '/<dataPath>'; got '" //$NON-NLS-1$
+                + request.address + "'. Copy the parent or folder address from dcs action='get'."); //$NON-NLS-1$
+        }
+        FieldTarget target = resolveFieldTarget(schema, segments);
+        if (target.error != null) return PayloadResult.failure(target.error);
+        String pointerKey = target.exact ? segments.get(segments.size() - 1) : null;
+        KeyResult keyed = key(request, KEY_DATA_PATH, pointerKey);
+        if (keyed.error != null) return PayloadResult.failure(keyed.error);
+        List<DataSetField> matches = dataSetFields(target.fields(), keyed.key);
+        if (matches.size() > 1)
+        {
+            return PayloadResult.failure(ambiguousIdentity(request, request.action, keyed.key,
+                matches.size()));
+        }
+        if (!matches.isEmpty() && !(matches.get(0) instanceof DataCompositionSchemaDataSetFieldFolder))
+        {
+            return PayloadResult.failure(unsupportedField(request, keyed.key, matches.get(0)));
+        }
+        if (ACTION_UPDATE.equals(request.action) && matches.isEmpty())
+        {
+            return PayloadResult.failure(missing(request, keyed.key, fieldKeys(target.fields())));
+        }
+        String parentError = fieldParentError(true, keyed.key,
+            target.parent == null ? null : target.parent.getDataPath(), request.address.toString());
+        if (parentError != null) return PayloadResult.failure(parentError);
+        JsonObject folder = request.body.deepCopy();
+        folder.addProperty(KEY_KIND, KIND_FOLDER);
+        folder.addProperty(KEY_DATA_PATH, keyed.key);
+        JsonArray fields = new JsonArray();
+        fields.add(folder);
+        JsonObject leaf = new JsonObject();
+        leaf.addProperty(KEY_NAME, target.dataSet.getName());
+        leaf.add(KEY_FIELDS, fields);
+        JsonObject dataSet = nestedDataSetPayload(
+            target.dataSets.subList(0, target.dataSets.size() - 1), leaf);
+        DataSet root = target.dataSets.get(0);
+        String normalizeError = normalizeDataSet(dataSet, root, root.getName(), dataSetValidation);
+        return normalizeError == null ? PayloadResult.success(wrap("dataSets", dataSet)) //$NON-NLS-1$
+            : PayloadResult.failure(normalizeError);
+    }
+
+    private static FolderPlanResult extractFieldFolders(DataCompositionSchema schema,
+        JsonObject payload, Request request)
+    {
+        JsonObject transformed = payload.deepCopy();
+        List<FolderSpec> folders = new ArrayList<>();
+        JsonElement raw = transformed.get("dataSets"); //$NON-NLS-1$
+        if (raw == null || !raw.isJsonArray())
+        {
+            return FolderPlanResult.success(transformed, folders);
+        }
+        String error = extractDataSetFolders(schema.getDataSets(), raw.getAsJsonArray(),
+            new ArrayList<String>(), folders, request, "dataSets"); //$NON-NLS-1$
+        return error == null ? FolderPlanResult.success(transformed, folders)
+            : FolderPlanResult.failure(error);
+    }
+
+    private static String extractDataSetFolders(List<DataSet> existingSets, JsonArray dataSets,
+        List<String> parentPath, List<FolderSpec> folders, Request request, String where)
+    {
+        for (int i = 0; i < dataSets.size(); i++)
+        {
+            JsonElement element = dataSets.get(i);
+            if (element == null || !element.isJsonObject()) continue;
+            JsonObject entry = element.getAsJsonObject();
+            String name = DcsWriter.stringMember(entry, KEY_NAME);
+            DataSet existing = findDataSet(existingSets, name);
+            List<String> dataSetPath = new ArrayList<>(parentPath);
+            dataSetPath.add(name);
+            String entryWhere = where + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (entry.has(KEY_FIELDS) && entry.get(KEY_FIELDS).isJsonArray())
+            {
+                JsonArray flattened = new JsonArray();
+                Set<String> bodyKeys = new LinkedHashSet<>();
+                String error = extractFolderEntries(existing, null,
+                    entry.getAsJsonArray(KEY_FIELDS), flattened, dataSetPath, folders, request,
+                    entryWhere + ".fields", bodyKeys); //$NON-NLS-1$
+                if (error != null) return error;
+                if (!entry.getAsJsonArray(KEY_FIELDS).isEmpty() && !entry.has(KEY_AUTO_FILL))
+                {
+                    entry.addProperty(KEY_AUTO_FILL, false);
+                }
+                entry.add(KEY_FIELDS, flattened);
+            }
+            if (entry.has(KEY_ITEMS) && entry.get(KEY_ITEMS).isJsonArray())
+            {
+                List<DataSet> existingItems = existing instanceof DataCompositionSchemaDataSetUnion
+                    ? ((DataCompositionSchemaDataSetUnion)existing).getItems()
+                    : Collections.<DataSet>emptyList();
+                String error = extractDataSetFolders(existingItems,
+                    entry.getAsJsonArray(KEY_ITEMS), dataSetPath, folders, request,
+                    entryWhere + ".items"); //$NON-NLS-1$
+                if (error != null) return error;
+            }
+        }
+        return null;
+    }
+
+    private static String extractFolderEntries(DataSet dataSet, String parentPath, JsonArray input,
+        JsonArray flattened,
+        List<String> dataSetPath, List<FolderSpec> folders, Request request, String where,
+        Set<String> bodyKeys)
+    {
+        for (int i = 0; i < input.size(); i++)
+        {
+            JsonElement element = input.get(i);
+            String itemWhere = where + "[" + i + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (element == null || !element.isJsonObject())
+            {
+                return "Field entry at '" + itemWhere //$NON-NLS-1$
+                    + "' must be an object. Replace it with a field or folder object."; //$NON-NLS-1$
+            }
+            JsonObject field = element.getAsJsonObject();
+            String key = DcsWriter.stringMember(field, KEY_DATA_PATH);
+            String kind = DcsWriter.stringMember(field, KEY_KIND);
+            if (DcsUnsupportedAuthoring.isNestedDataSetKind(kind))
+            {
+                return DcsUnsupportedAuthoring.refusal(
+                    DcsUnsupportedAuthoring.NESTED_DATA_SET_CLASS, itemWhere);
+            }
+            List<DataSetField> matches = dataSet == null || key == null
+                ? Collections.<DataSetField>emptyList() : dataSetFields(dataSet, key);
+            if (matches.size() > 1)
+            {
+                return "Field natural key '" + key + "' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' matches " + matches.size() //$NON-NLS-1$
+                    + " existing nodes. Disambiguate the duplicate dataPath values first."; //$NON-NLS-1$
+            }
+            DataSetField existing = matches.isEmpty() ? null : matches.get(0);
+            String deliberate = DcsUnsupportedAuthoring.refusal(existing, itemWhere);
+            if (deliberate != null) return deliberate;
+            boolean folder = KIND_FOLDER.equalsIgnoreCase(kind)
+                || kind == null && existing instanceof DataCompositionSchemaDataSetFieldFolder;
+            if (kind != null && !folder && !KIND_FIELD.equalsIgnoreCase(kind))
+            {
+                return "Field kind '" + kind + "' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' is invalid. Use kind='field' or kind='folder'."; //$NON-NLS-1$
+            }
+            String parentError = fieldParentError(folder, key, parentPath, itemWhere);
+            if (parentError != null) return parentError;
+            if (ACTION_UPDATE.equals(request.action) && existing == null)
+            {
+                return "action='update' cannot create field '" + key + "' below '" + where //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'. Copy its exact address from get, or use action='upsert'."; //$NON-NLS-1$
+            }
+            if (key != null && !bodyKeys.add(key))
+            {
+                return "The body names field natural key '" + key + "' more than once below '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + where + "'. Keep exactly one entry for that dataPath."; //$NON-NLS-1$
+            }
+            if (!folder)
+            {
+                if (existing instanceof DataCompositionSchemaDataSetFieldFolder)
+                {
+                    return "Field '" + key + "' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' is an existing field folder. Keep kind='folder' or address it with " //$NON-NLS-1$
+                        + "type='fieldFolder'."; //$NON-NLS-1$
+                }
+                JsonObject regular = field.deepCopy();
+                regular.remove(KEY_KIND);
+                flattened.add(regular);
+                continue;
+            }
+            String members = folderMembersError(field, itemWhere);
+            if (members != null) return members;
+            if (key == null || key.isEmpty())
+            {
+                return "A field folder (" + itemWhere //$NON-NLS-1$
+                    + ") needs a non-empty 'dataPath'."; //$NON-NLS-1$
+            }
+            DcsPresentationParser.Plan title = null;
+            if (field.has("title")) //$NON-NLS-1$
+            {
+                DcsPresentationParser.ParseResult parsed = DcsPresentationParser.parse(
+                    field.get("title"), request.languages, itemWhere + ".title"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (!parsed.isSuccess()) return parsed.error();
+                title = parsed.plan();
+            }
+            if (existing instanceof DataCompositionSchemaDataSetFieldFolder)
+            {
+                mergeFolderRestrictionDefaults(field,
+                    (DataCompositionSchemaDataSetFieldFolder)existing);
+            }
+            RestrictionResult restriction = parseFolderRestriction(field, itemWhere);
+            if (restriction.error != null) return restriction.error;
+            folders.add(new FolderSpec(dataSetPath, key, field.has("title"), title, //$NON-NLS-1$
+                field.has(KEY_USE_RESTRICTION), restriction.restriction));
+            if (field.has(KEY_FIELDS))
+            {
+                if (!field.get(KEY_FIELDS).isJsonArray())
+                {
+                    return "Field folder member 'fields' at '" + itemWhere //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' must be an array of field or folder objects."; //$NON-NLS-1$
+                }
+                String error = extractFolderEntries(dataSet, key,
+                    field.getAsJsonArray(KEY_FIELDS), flattened, dataSetPath, folders, request,
+                    itemWhere + ".fields", bodyKeys); //$NON-NLS-1$
+                if (error != null) return error;
+            }
+        }
+        return null;
+    }
+
+    private static String fieldParentError(boolean folder, String dataPath, String parentPath,
+        String address)
+    {
+        if (dataPath == null || parentPath == null || dataPath.startsWith(parentPath + ".")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        return (folder ? "Field-folder" : "Field") + " dataPath '" + dataPath //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "' is not below parent folder '" + parentPath + "' at '" + address //$NON-NLS-1$ //$NON-NLS-2$
+            + "'. Prefix it with the parent dataPath and a dot."; //$NON-NLS-1$
+    }
+
+    private static void mergeFolderRestrictionDefaults(JsonObject body,
+        DataCompositionSchemaDataSetFieldFolder folder)
+    {
+        if (!body.has(KEY_USE_RESTRICTION)
+            || !body.get(KEY_USE_RESTRICTION).isJsonObject()
+            || folder.getUseRestriction() == null)
+        {
+            return;
+        }
+        JsonObject value = body.getAsJsonObject(KEY_USE_RESTRICTION);
+        if (!value.has("field")) value.addProperty("field", folder.getUseRestriction().isField()); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!value.has("condition")) value.addProperty("condition", //$NON-NLS-1$ //$NON-NLS-2$
+            folder.getUseRestriction().isCondition());
+        if (!value.has("group")) value.addProperty("group", folder.getUseRestriction().isGroup()); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!value.has("order")) value.addProperty("order", folder.getUseRestriction().isOrder()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String folderMembersError(JsonObject body, String where)
+    {
+        Set<String> allowed = new LinkedHashSet<>(Arrays.asList(KEY_KIND, KEY_DATA_PATH,
+            "title", KEY_USE_RESTRICTION, KEY_FIELDS)); //$NON-NLS-1$
+        for (String member : body.keySet())
+        {
+            if (!allowed.contains(member))
+            {
+                return "Unknown member '" + member + "' in field folder at '" + where //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'. Accepted members: " + String.join(", ", allowed) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null;
+    }
+
+    private static RestrictionResult parseFolderRestriction(JsonObject body, String where)
+    {
+        if (!body.has(KEY_USE_RESTRICTION)) return RestrictionResult.success(null);
+        JsonElement raw = body.get(KEY_USE_RESTRICTION);
+        if (raw == null || raw.isJsonNull()) return RestrictionResult.success(null);
+        if (!raw.isJsonObject())
+        {
+            return RestrictionResult.failure("Field-folder useRestriction at '" + where //$NON-NLS-1$
+                + "' must be an object with boolean field, condition, group, and order flags."); //$NON-NLS-1$
+        }
+        JsonObject value = raw.getAsJsonObject();
+        Set<String> allowed = new LinkedHashSet<>(Arrays.asList("field", "condition", "group", "order")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String member : value.keySet())
+        {
+            if (!allowed.contains(member) || !value.get(member).isJsonPrimitive()
+                || !value.get(member).getAsJsonPrimitive().isBoolean())
+            {
+                return RestrictionResult.failure("Field-folder useRestriction member '" + member //$NON-NLS-1$
+                    + "' at '" + where + "' must be one of " + String.join(", ", allowed) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " with a boolean value."); //$NON-NLS-1$
+            }
+        }
+        DataCompositionSchemaFieldUseRestriction restriction = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaFieldUseRestriction();
+        if (value.has("field")) restriction.setField(value.get("field").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        if (value.has("condition")) restriction.setCondition(value.get("condition").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        if (value.has("group")) restriction.setGroup(value.get("group").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        if (value.has("order")) restriction.setOrder(value.get("order").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        return RestrictionResult.success(restriction);
+    }
+
+    private static String applyFieldFolders(DataCompositionSchema schema, List<FolderSpec> folders)
+    {
+        for (FolderSpec spec : folders)
+        {
+            DataSet set = resolveDataSetPath(schema.getDataSets(), spec.dataSetPath);
+            if (set == null)
+            {
+                return "Could not resolve data set path '" + String.join("/", spec.dataSetPath) //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' while applying field folder '" + spec.dataPath + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            List<DataSetField> matches = dataSetFields(set, spec.dataPath);
+            if (matches.size() > 1)
+            {
+                return "Field-folder natural key '" + spec.dataPath //$NON-NLS-1$
+                    + "' is ambiguous after assembling the data set."; //$NON-NLS-1$
+            }
+            if (!matches.isEmpty()
+                && !(matches.get(0) instanceof DataCompositionSchemaDataSetFieldFolder))
+            {
+                return "Field-folder natural key '" + spec.dataPath //$NON-NLS-1$
+                    + "' collides with existing subtype '" + matches.get(0).eClass().getName() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            DataCompositionSchemaDataSetFieldFolder folder = matches.isEmpty()
+                ? DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetFieldFolder()
+                : (DataCompositionSchemaDataSetFieldFolder)matches.get(0);
+            if (matches.isEmpty())
+            {
+                folder.setDataPath(spec.dataPath);
+                set.getFields().add(folder);
+            }
+            if (spec.titlePresent)
+            {
+                folder.setTitle(DcsPresentationParser.build(spec.title));
+            }
+            if (spec.restrictionPresent)
+            {
+                folder.setUseRestriction(spec.restriction == null ? null
+                    : EcoreUtil.copy(spec.restriction));
+            }
+        }
+        return null;
+    }
+
+    private static DataSet resolveDataSetPath(List<DataSet> level, List<String> path)
+    {
+        DataSet current = null;
+        for (int i = 0; i < path.size(); i++)
+        {
+            current = findDataSet(level, path.get(i));
+            if (current == null) return null;
+            if (i + 1 < path.size())
+            {
+                if (!(current instanceof DataCompositionSchemaDataSetUnion)) return null;
+                level = ((DataCompositionSchemaDataSetUnion)current).getItems();
+            }
+        }
+        return current;
+    }
+
+    private static PayloadResult expressionPayload(DataCompositionSchema schema, Request request,
+        String collection, DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        KeyResult keyed = naturalKey(request, collection, KEY_DATA_PATH);
+        if (keyed.error != null)
+        {
+            return PayloadResult.failure(keyed.error);
+        }
+        boolean exists = keys(schema, collection, null).contains(keyed.key);
+        String current = expression(schema, collection, keyed.key);
+        if (ACTION_UPDATE.equals(request.action) && !exists)
+        {
+            return PayloadResult.failure(missing(request, keyed.key, keys(schema, collection, null)));
+        }
+        JsonObject entry = request.body.deepCopy();
+        entry.addProperty(KEY_DATA_PATH, keyed.key);
+        if (!entry.has(KEY_EXPRESSION))
+        {
+            if (!exists)
+            {
+                return PayloadResult.failure("Creating " + request.type + " '" + keyed.key //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' requires an 'expression' member. Pass an empty string only when " //$NON-NLS-1$
+                    + "intentionally resetting it."); //$NON-NLS-1$
+            }
+            if (current != null)
+            {
+                entry.addProperty(KEY_EXPRESSION, current);
+            }
+            else
+            {
+                dataSetValidation.allowMissingExpression(collection, keyed.key);
+            }
+        }
+        return PayloadResult.success(wrap(collection, entry));
+    }
+
+    private static PayloadResult normalizeExpressions(DataCompositionSchema schema, JsonObject body,
+        String collection, DcsWriter.DataSetValidationContext dataSetValidation)
+    {
+        if (!body.has(collection) || !body.get(collection).isJsonArray())
+        {
+            return PayloadResult.success(body);
+        }
+        for (JsonObject entry : objects(body.getAsJsonArray(collection)))
+        {
+            if (entry.has(KEY_EXPRESSION))
+            {
+                continue;
+            }
+            String key = DcsWriter.stringMember(entry, KEY_DATA_PATH);
+            String current = expression(schema, collection, key);
+            if (!keys(schema, collection, null).contains(key))
+            {
+                return PayloadResult.failure("Creating " + collection + " entry '" + key //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' requires an 'expression' member. Pass an empty string only when " //$NON-NLS-1$
+                    + "intentionally resetting it."); //$NON-NLS-1$
+            }
+            if (current != null)
+            {
+                entry.addProperty(KEY_EXPRESSION, current);
+            }
+            else
+            {
+                dataSetValidation.allowMissingExpression(collection, key);
+            }
+        }
+        return PayloadResult.success(body);
+    }
+
+    private static KeyResult naturalKey(Request request, String collection, String member)
+    {
+        List<String> segments = request.address.segments();
+        if (segments.isEmpty())
+        {
+            return key(request, member, null);
+        }
+        if (segments.size() == 1 && collection.equals(segments.get(0)))
+        {
+            return key(request, member, null);
+        }
+        if (segments.size() == 2 && collection.equals(segments.get(0)))
+        {
+            return key(request, member, segments.get(1));
+        }
+        return KeyResult.failure("type='" + request.type + "' needs the bare root, '#/" //$NON-NLS-1$ //$NON-NLS-2$
+            + collection + "', or '#/" + collection + "/<naturalKey>'; got '" //$NON-NLS-1$ //$NON-NLS-2$
+            + request.address + "'. Copy a matching address from dcs action='get'."); //$NON-NLS-1$
+    }
+
+    private static KeyResult key(Request request, String member, String pointerKey)
+    {
+        String bodyKey = DcsWriter.stringMember(request.body, member);
+        if (pointerKey != null && bodyKey != null && !pointerKey.equals(bodyKey))
+        {
+            if (ACTION_UPDATE.equals(request.action) && bodyKey.equals(request.renamedTo))
+            {
+                return KeyResult.success(bodyKey);
+            }
+            return KeyResult.failure("Body natural key '" + bodyKey + "' does not match address key '" //$NON-NLS-1$ //$NON-NLS-2$
+                + pointerKey + "' at '" + request.address + "'. Make '" + member //$NON-NLS-1$ //$NON-NLS-2$
+                + "' match the pointer, or omit it from the partial body."); //$NON-NLS-1$
+        }
+        String effective = pointerKey != null ? pointerKey : bodyKey;
+        if (effective == null || effective.isEmpty())
+        {
+            return KeyResult.failure("Body for type='" + request.type + "' needs a non-empty '" //$NON-NLS-1$ //$NON-NLS-2$
+                + member + "' natural key when the fqn does not name one. Add it and retry."); //$NON-NLS-1$
+        }
+        return KeyResult.success(effective);
+    }
+
+    private static String dataSetKind(DataSet dataSet)
+    {
+        if (dataSet instanceof DataCompositionSchemaDataSetObject) return "object"; //$NON-NLS-1$
+        if (dataSet instanceof DataCompositionSchemaDataSetUnion) return "union"; //$NON-NLS-1$
+        return "query"; //$NON-NLS-1$
+    }
+
+    private static boolean schemaType(String type)
+    {
+        return TYPE_SCHEMA.equals(type) || TYPE_DATA_SOURCE.equals(type) || TYPE_DATA_SET.equals(type)
+            || TYPE_FIELD.equals(type) || TYPE_FIELD_FOLDER.equals(type) || TYPE_PARAMETER.equals(type)
+            || TYPE_CALCULATED_FIELD.equals(type) || TYPE_TOTAL_FIELD.equals(type);
+    }
+
+    private static boolean isExactNode(String type, List<String> segments)
+    {
+        if (isDataSetLinkPath(type, segments)) return true;
+        if (TYPE_FIELD.equals(type) || TYPE_FIELD_FOLDER.equals(type))
+        {
+            return isFieldPath(segments, true);
+        }
+        if (TYPE_DATA_SET.equals(type))
+        {
+            return isDataSetPath(segments);
+        }
+        String collection = collection(type);
+        return collection != null && segments.size() == 2 && collection.equals(segments.get(0));
+    }
+
+    private static boolean isDataSetLinkPath(String type, List<String> segments)
+    {
+        return TYPE_SCHEMA.equals(type) && segments.size() == 2
+            && KEY_DATA_SET_LINKS.equals(segments.get(0));
+    }
+
+    private static String collection(String type)
+    {
+        switch (type)
+        {
+            case TYPE_DATA_SOURCE:
+                return "dataSources"; //$NON-NLS-1$
+            case TYPE_DATA_SET:
+                return "dataSets"; //$NON-NLS-1$
+            case TYPE_PARAMETER:
+                return "parameters"; //$NON-NLS-1$
+            case TYPE_CALCULATED_FIELD:
+                return "calculatedFields"; //$NON-NLS-1$
+            case TYPE_TOTAL_FIELD:
+                return "totalFields"; //$NON-NLS-1$
+            default:
+                return null;
+        }
+    }
+
+    private static JsonObject wrap(String collection, JsonObject entry)
+    {
+        JsonArray array = new JsonArray();
+        array.add(entry);
+        JsonObject payload = new JsonObject();
+        payload.add(collection, array);
+        return payload;
+    }
+
+    private static List<JsonObject> objects(JsonArray array)
+    {
+        if (array == null)
+        {
+            return Collections.emptyList();
+        }
+        List<JsonObject> result = new ArrayList<>();
+        array.forEach(item -> {
+            if (item != null && item.isJsonObject())
+            {
+                result.add(item.getAsJsonObject());
+            }
+        });
+        return result;
+    }
+
+    private static DataSet findDataSet(DataCompositionSchema schema, String name)
+    {
+        return findDataSet(schema.getDataSets(), name);
+    }
+
+    private static DataSet findDataSet(List<DataSet> dataSets, String name)
+    {
+        for (DataSet dataSet : dataSets)
+        {
+            if (name != null && name.equals(dataSet.getName()))
+            {
+                return dataSet;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isFieldPath(List<String> path, boolean exact)
+    {
+        int fieldsIndex = path.indexOf(KEY_FIELDS);
+        if (fieldsIndex < 2 || !isDataSetPath(path.subList(0, fieldsIndex)))
+        {
+            return false;
+        }
+        int remainder = path.size() - fieldsIndex - 1;
+        if ((remainder % 2 == 1) != exact)
+        {
+            return false;
+        }
+        for (int i = fieldsIndex + 2; i < path.size(); i += 2)
+        {
+            if (!KEY_FIELDS.equals(path.get(i))) return false;
+        }
+        return true;
+    }
+
+    private static boolean isDataSetPath(List<String> path)
+    {
+        if (path.size() < 2 || path.size() % 2 != 0
+            || !"dataSets".equals(path.get(0))) //$NON-NLS-1$
+        {
+            return false;
+        }
+        for (int i = 2; i < path.size(); i += 2)
+        {
+            if (!KEY_ITEMS.equals(path.get(i))) return false;
+        }
+        return true;
+    }
+
+    private static FieldTarget resolveFieldTarget(DataCompositionSchema schema, List<String> path)
+    {
+        boolean exact = isFieldPath(path, true);
+        int fieldsIndex = path.indexOf(KEY_FIELDS);
+        DataSetTarget target = resolveDataSetTarget(schema, path.subList(0, fieldsIndex), false);
+        if (target.error != null) return FieldTarget.failure(target.error);
+        DataCompositionSchemaDataSetFieldFolder parent = null;
+        int end = path.size() - (exact ? 1 : 0);
+        for (int selectorIndex = fieldsIndex + 1; selectorIndex < end; selectorIndex += 2)
+        {
+            String selector = path.get(selectorIndex);
+            List<DataSetField> siblings = DcsFieldFolders.children(target.dataSet, parent);
+            NodeSelector selected = resolveSelector(siblings, selector, KEY_DATA_PATH);
+            if (selected.ambiguous())
+            {
+                return FieldTarget.failure("Field-folder selector '" + selector //$NON-NLS-1$
+                    + "' identifies " + selected.count + " existing nodes at one address level. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "The address is ambiguous; disambiguate the duplicate dataPath values in " //$NON-NLS-1$
+                    + "the DCS designer, re-run get, and retry."); //$NON-NLS-1$
+            }
+            if (selected.target == null)
+            {
+                return FieldTarget.failure("Field folder '" + selector //$NON-NLS-1$
+                    + "' was not found while resolving the address. Existing keys at that level: " //$NON-NLS-1$
+                    + display(fieldKeys(siblings)) + ". Re-run get and copy the current address."); //$NON-NLS-1$
+            }
+            if (!(selected.target instanceof DataCompositionSchemaDataSetFieldFolder))
+            {
+                String deliberate = DcsUnsupportedAuthoring.refusal(selected.target,
+                    requestAddress(path, selectorIndex));
+                if (deliberate != null) return FieldTarget.failure(deliberate);
+                return FieldTarget.failure("Field path segment '" + selector //$NON-NLS-1$
+                    + "' is not a field folder. Re-run get and copy a folder's /fields address."); //$NON-NLS-1$
+            }
+            parent = (DataCompositionSchemaDataSetFieldFolder)selected.target;
+        }
+        return FieldTarget.success(target.dataSets, parent, exact);
+    }
+
+    private static String requestAddress(List<String> path, int through)
+    {
+        return String.join("/", path.subList(0, through + 1)); //$NON-NLS-1$
+    }
+
+    private static DataSetTarget resolveDataSetTarget(DataCompositionSchema schema,
+        List<String> path, boolean allowMissingLeaf)
+    {
+        List<DataSet> level = schema.getDataSets();
+        List<DataSet> resolved = new ArrayList<>();
+        for (int selectorIndex = 1; selectorIndex < path.size(); selectorIndex += 2)
+        {
+            String selector = path.get(selectorIndex);
+            NodeSelector selected = resolveSelector(level, selector, KEY_NAME);
+            if (selected.ambiguous())
+            {
+                return DataSetTarget.failure("Data set selector '" + selector //$NON-NLS-1$
+                    + "' identifies " + selected.count + " existing nodes at one address level. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "The address is ambiguous; disambiguate the conflicting natural key and " //$NON-NLS-1$
+                    + "index fallback in the DCS designer first, re-run get, and retry."); //$NON-NLS-1$
+            }
+            DataSet dataSet = (DataSet)selected.target;
+            if (dataSet == null)
+            {
+                if (allowMissingLeaf && selectorIndex == path.size() - 1)
+                {
+                    return DataSetTarget.success(resolved, level, null);
+                }
+                return DataSetTarget.failure("Data set selector '" + selector //$NON-NLS-1$
+                    + "' was not found while resolving the address. Existing data sets at that " //$NON-NLS-1$
+                    + "level: " + display(dataSetKeys(level)) //$NON-NLS-1$
+                    + ". Re-run dcs action='get' and copy the current data-set address."); //$NON-NLS-1$
+            }
+            resolved.add(dataSet);
+            if (selectorIndex + 2 < path.size())
+            {
+                if (!(dataSet instanceof DataCompositionSchemaDataSetUnion))
+                {
+                    return DataSetTarget.failure("Data set '" + dataSet.getName() + "' in the address " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "is kind '" + dataSetKind(dataSet) + "', not union. Only union data sets " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "have nested 'items'. Re-run dcs action='get' and copy the current address."); //$NON-NLS-1$
+                }
+                level = ((DataCompositionSchemaDataSetUnion)dataSet).getItems();
+            }
+        }
+        return DataSetTarget.success(resolved, level,
+            resolved.isEmpty() ? null : resolved.get(resolved.size() - 1));
+    }
+
+    private static NodeSelector resolveSelector(List<? extends EObject> items, String selector,
+        String featureName)
+    {
+        List<EObject> named = new ArrayList<>();
+        for (EObject item : items)
+        {
+            org.eclipse.emf.ecore.EStructuralFeature feature = item.eClass()
+                .getEStructuralFeature(featureName);
+            Object value = feature == null ? null : item.eGet(feature);
+            if (selector.equals(value)) named.add(item);
+        }
+        EObject indexed = null;
+        if (DcsAddress.isZeroBasedIndex(selector))
+        {
+            int index = Integer.parseInt(selector);
+            if (index < items.size()) indexed = items.get(index);
+        }
+        Set<EObject> candidates = new LinkedHashSet<>(named);
+        if (indexed != null) candidates.add(indexed);
+        if (candidates.size() > 1)
+            return NodeSelector.ambiguous(candidates.size(), named.size());
+        if (!named.isEmpty()) return NodeSelector.success(named.get(0), named.size());
+        return NodeSelector.success(indexed, 0);
+    }
+
+    private static List<String> dataSetKeys(List<DataSet> dataSets)
+    {
+        List<String> result = new ArrayList<>();
+        for (DataSet dataSet : dataSets) result.add(dataSet.getName());
+        return result;
+    }
+
+    private static List<DataSet> matchingDataSets(List<DataSet> dataSets, String key)
+    {
+        List<DataSet> result = new ArrayList<>();
+        for (DataSet dataSet : dataSets)
+        {
+            if (key.equals(dataSet.getName())) result.add(dataSet);
+        }
+        return result;
+    }
+
+    private static List<String> fieldKeys(DataSet dataSet)
+    {
+        return fieldKeys(dataSet.getFields());
+    }
+
+    private static List<String> fieldKeys(List<? extends DataSetField> fields)
+    {
+        List<String> result = new ArrayList<>();
+        for (DataSetField field : fields)
+        {
+            String value = fieldKey(field);
+            if (value != null)
+            {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private static List<DataSetField> dataSetFields(DataSet dataSet, String path)
+    {
+        return dataSetFields(dataSet.getFields(), path);
+    }
+
+    private static List<DataSetField> dataSetFields(List<? extends DataSetField> fields,
+        String path)
+    {
+        List<DataSetField> result = new ArrayList<>();
+        for (DataSetField field : fields)
+        {
+            if (path.equals(fieldKey(field)))
+            {
+                result.add(field);
+            }
+        }
+        return result;
+    }
+
+    private static String fieldKey(DataSetField field)
+    {
+        org.eclipse.emf.ecore.EStructuralFeature feature =
+            field.eClass().getEStructuralFeature(KEY_DATA_PATH);
+        Object value = feature == null ? null : field.eGet(feature);
+        return value instanceof String ? (String)value : null;
+    }
+
+    private static JsonObject nestedDataSetPayload(List<DataSet> parents, JsonObject leaf)
+    {
+        JsonObject root = leaf;
+        for (int i = parents.size() - 1; i >= 0; i--)
+        {
+            JsonObject parent = new JsonObject();
+            parent.addProperty(KEY_NAME, parents.get(i).getName());
+            JsonArray items = new JsonArray();
+            items.add(root);
+            parent.add(KEY_ITEMS, items);
+            root = parent;
+        }
+        return root;
+    }
+
+    private static DataCompositionSchemaDataSetField findField(DataSet dataSet,
+        String path)
+    {
+        for (DataSetField field : dataSet.getFields())
+        {
+            if (field instanceof DataCompositionSchemaDataSetField
+                && path != null && path.equals(((DataCompositionSchemaDataSetField)field).getDataPath()))
+            {
+                return (DataCompositionSchemaDataSetField)field;
+            }
+        }
+        return null;
+    }
+
+    private static void mergeDataSourceType(DataCompositionSchema schema, JsonObject entry, String name)
+    {
+        if (entry.has("type") || name == null) //$NON-NLS-1$
+        {
+            return;
+        }
+        for (DataCompositionSchemaDataSource source : schema.getDataSources())
+        {
+            if (name.equals(source.getName()) && source.getDataSourceType() != null)
+            {
+                entry.addProperty("type", source.getDataSourceType()); //$NON-NLS-1$
+                return;
+            }
+        }
+    }
+
+    private static void mergeFieldDefaults(JsonObject body, DataCompositionSchemaDataSetField current)
+    {
+        if (!body.has(KEY_FIELD) && current.getField() != null)
+        {
+            body.addProperty(KEY_FIELD, current.getField());
+        }
+        if (body.has("role") && body.get("role").isJsonObject() && current.getRole() != null) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonObject role = body.getAsJsonObject("role"); //$NON-NLS-1$
+            addMissing(role, "dimension", current.getRole().isDimension()); //$NON-NLS-1$
+            addMissing(role, "main", current.getRole().isMain()); //$NON-NLS-1$
+            addMissing(role, "required", current.getRole().isRequired()); //$NON-NLS-1$
+            addMissing(role, "ignoreNullValues", current.getRole().isIgnoreNullValues()); //$NON-NLS-1$
+            addMissing(role, "dimensionAttribute", current.getRole().isDimensionAttribute()); //$NON-NLS-1$
+            addMissing(role, "account", current.getRole().isAccount()); //$NON-NLS-1$
+            addMissing(role, "balance", current.getRole().isBalance()); //$NON-NLS-1$
+            if (!role.has("periodType") && current.getRole().getPeriodType() != null) //$NON-NLS-1$
+            {
+                role.addProperty("periodType", current.getRole().getPeriodType().getLiteral()); //$NON-NLS-1$
+            }
+            if (!role.has("periodNumber")) //$NON-NLS-1$
+            {
+                role.addProperty("periodNumber", current.getRole().getPeriodNumber()); //$NON-NLS-1$
+            }
+        }
+        if (body.has("useRestriction") && body.get("useRestriction").isJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            && current.getUseRestriction() != null)
+        {
+            JsonObject restriction = body.getAsJsonObject("useRestriction"); //$NON-NLS-1$
+            addMissing(restriction, "field", current.getUseRestriction().isField()); //$NON-NLS-1$
+            addMissing(restriction, "condition", current.getUseRestriction().isCondition()); //$NON-NLS-1$
+            addMissing(restriction, "group", current.getUseRestriction().isGroup()); //$NON-NLS-1$
+            addMissing(restriction, "order", current.getUseRestriction().isOrder()); //$NON-NLS-1$
+        }
+    }
+
+    private static void addMissing(JsonObject object, String member, boolean value)
+    {
+        if (!object.has(member))
+        {
+            object.addProperty(member, value);
+        }
+    }
+
+    private static String expression(DataCompositionSchema schema, String collection, String key)
+    {
+        if (key == null)
+        {
+            return null;
+        }
+        if ("calculatedFields".equals(collection)) //$NON-NLS-1$
+        {
+            for (DataCompositionSchemaCalculatedField field : schema.getCalculatedFields())
+            {
+                if (key.equals(field.getDataPath()))
+                {
+                    return field.getExpression();
+                }
+            }
+        }
+        else
+        {
+            for (DataCompositionSchemaTotalField field : schema.getTotalFields())
+            {
+                if (key.equals(field.getDataPath()))
+                {
+                    return field.getExpression();
+                }
+            }
+        }
+        return null;
+    }
+
+    private static List<String> keys(DataCompositionSchema schema, String collection, String parent)
+    {
+        List<String> result = new ArrayList<>();
+        switch (collection)
+        {
+            case "dataSources": //$NON-NLS-1$
+                for (DataCompositionSchemaDataSource item : schema.getDataSources())
+                {
+                    result.add(item.getName());
+                }
+                break;
+            case "dataSets": //$NON-NLS-1$
+                for (DataSet item : schema.getDataSets())
+                {
+                    result.add(item.getName());
+                }
+                break;
+            case "parameters": //$NON-NLS-1$
+                for (DataCompositionSchemaParameter item : schema.getParameters())
+                {
+                    result.add(item.getName());
+                }
+                break;
+            case "calculatedFields": //$NON-NLS-1$
+                for (DataCompositionSchemaCalculatedField item : schema.getCalculatedFields())
+                {
+                    result.add(item.getDataPath());
+                }
+                break;
+            case "totalFields": //$NON-NLS-1$
+                for (DataCompositionSchemaTotalField item : schema.getTotalFields())
+                {
+                    result.add(item.getDataPath());
+                }
+                break;
+            case "fields": //$NON-NLS-1$
+                DataSet dataSet = findDataSet(schema, parent);
+                if (dataSet != null)
+                {
+                    for (DataSetField item : dataSet.getFields())
+                    {
+                        org.eclipse.emf.ecore.EStructuralFeature feature =
+                            item.eClass().getEStructuralFeature(KEY_DATA_PATH);
+                        Object value = feature == null ? null : item.eGet(feature);
+                        if (value instanceof String)
+                        {
+                            result.add((String)value);
+                        }
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+        return result;
+    }
+
+    private static String missing(Request request, String key, List<String> existing)
+    {
+        return "action='update' could not find " + request.type + " '" + key + "' at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + request.address + "'. Existing keys at that level: " + display(existing) //$NON-NLS-1$
+            + ". Copy one of those addresses from dcs action='get', or use action='upsert' to create '" //$NON-NLS-1$
+            + key + "'."; //$NON-NLS-1$
+    }
+
+    private static final class NodeSelector
+    {
+        final EObject target;
+        final int count;
+        final int naturalCount;
+
+        private NodeSelector(EObject target, int count, int naturalCount)
+        {
+            this.target = target;
+            this.count = count;
+            this.naturalCount = naturalCount;
+        }
+
+        static NodeSelector success(EObject target, int naturalCount)
+        {
+            return new NodeSelector(target, target == null ? 0 : 1, naturalCount);
+        }
+
+        static NodeSelector ambiguous(int count, int naturalCount)
+        {
+            return new NodeSelector(null, count, naturalCount);
+        }
+
+        boolean ambiguous()
+        {
+            return count > 1;
+        }
+    }
+
+    private static final class FieldTarget
+    {
+        final List<DataSet> dataSets;
+        final DataSet dataSet;
+        final DataCompositionSchemaDataSetFieldFolder parent;
+        final boolean exact;
+        final String error;
+
+        private FieldTarget(List<DataSet> dataSets,
+            DataCompositionSchemaDataSetFieldFolder parent, boolean exact, String error)
+        {
+            this.dataSets = dataSets;
+            this.dataSet = dataSets.isEmpty() ? null : dataSets.get(dataSets.size() - 1);
+            this.parent = parent;
+            this.exact = exact;
+            this.error = error;
+        }
+
+        static FieldTarget success(List<DataSet> dataSets,
+            DataCompositionSchemaDataSetFieldFolder parent, boolean exact)
+        {
+            return new FieldTarget(dataSets, parent, exact, null);
+        }
+
+        static FieldTarget failure(String error)
+        {
+            return new FieldTarget(Collections.<DataSet> emptyList(), null, false, error);
+        }
+
+        List<DataSetField> fields()
+        {
+            return DcsFieldFolders.children(dataSet, parent);
+        }
+
+        List<DataSetField> descendants()
+        {
+            return parent == null ? new ArrayList<>(dataSet.getFields())
+                : DcsFieldFolders.descendants(dataSet, parent);
+        }
+    }
+
+    private static final class DataSetTarget
+    {
+        final List<DataSet> dataSets;
+        final List<DataSet> owner;
+        final DataSet dataSet;
+        final String error;
+
+        private DataSetTarget(List<DataSet> dataSets, List<DataSet> owner, DataSet dataSet,
+            String error)
+        {
+            this.dataSets = dataSets;
+            this.owner = owner;
+            this.dataSet = dataSet;
+            this.error = error;
+        }
+
+        static DataSetTarget success(List<DataSet> dataSets, List<DataSet> owner, DataSet dataSet)
+        {
+            return new DataSetTarget(dataSets, owner, dataSet, null);
+        }
+
+        static DataSetTarget failure(String error)
+        {
+            return new DataSetTarget(Collections.<DataSet> emptyList(),
+                Collections.<DataSet> emptyList(), null, error);
+        }
+    }
+
+    private static String display(List<String> values)
+    {
+        return values.isEmpty() ? "(none)" : String.join(", ", values); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Immutable request plan. */
+    public static final class Request
+    {
+        private final String action;
+        private final String type;
+        private final DcsAddress address;
+        private final JsonObject body;
+        private final DcsPresentationParser.LanguageContext languages;
+        /** Set by renameForUpdate when it actually renamed the addressed node, else null. */
+        private String renamedTo;
+
+        private Request(String action, String type, DcsAddress address, JsonObject body,
+            DcsPresentationParser.LanguageContext languages)
+        {
+            this.action = action;
+            this.type = type;
+            this.address = address;
+            this.body = body;
+            this.languages = languages;
+        }
+    }
+
+    /** Pure preparation result. */
+    public static final class PrepareResult
+    {
+        private final Request request;
+        private final String error;
+
+        private PrepareResult(Request request, String error)
+        {
+            this.request = request;
+            this.error = error;
+        }
+
+        private static PrepareResult success(Request request)
+        {
+            return new PrepareResult(request, null);
+        }
+
+        private static PrepareResult failure(String error)
+        {
+            return new PrepareResult(null, error);
+        }
+
+        public boolean isSuccess()
+        {
+            return error == null;
+        }
+
+        public Request request()
+        {
+            return request;
+        }
+
+        public String error()
+        {
+            return error;
+        }
+    }
+
+    /** Mutation result; an error may already be a serialized ToolResult from the shared writer. */
+    public static final class Result
+    {
+        private final DcsWriter.Result applied;
+        private final String error;
+        private final boolean errorJson;
+
+        private Result(DcsWriter.Result applied, String error, boolean errorJson)
+        {
+            this.applied = applied;
+            this.error = error;
+            this.errorJson = errorJson;
+        }
+
+        private static Result success(DcsWriter.Result applied)
+        {
+            return new Result(applied, null, false);
+        }
+
+        private static Result failure(String error)
+        {
+            return new Result(null, error, false);
+        }
+
+        private static Result failureJson(String error)
+        {
+            return new Result(null, error, true);
+        }
+
+        public boolean isSuccess()
+        {
+            return error == null;
+        }
+
+        public DcsWriter.Result applied()
+        {
+            return applied;
+        }
+
+        public String error()
+        {
+            return error;
+        }
+
+        public boolean isErrorJson()
+        {
+            return errorJson;
+        }
+    }
+
+    private static final class PayloadResult
+    {
+        final JsonObject payload;
+        final String error;
+
+        private PayloadResult(JsonObject payload, String error)
+        {
+            this.payload = payload;
+            this.error = error;
+        }
+
+        static PayloadResult success(JsonObject payload)
+        {
+            return new PayloadResult(payload, null);
+        }
+
+        static PayloadResult failure(String error)
+        {
+            return new PayloadResult(null, error);
+        }
+    }
+
+    private static final class FolderPlanResult
+    {
+        final JsonObject payload;
+        final List<FolderSpec> folders;
+        final String error;
+
+        private FolderPlanResult(JsonObject payload, List<FolderSpec> folders, String error)
+        {
+            this.payload = payload;
+            this.folders = folders;
+            this.error = error;
+        }
+
+        static FolderPlanResult success(JsonObject payload, List<FolderSpec> folders)
+        {
+            return new FolderPlanResult(payload, folders, null);
+        }
+
+        static FolderPlanResult failure(String error)
+        {
+            return new FolderPlanResult(null, Collections.<FolderSpec>emptyList(), error);
+        }
+    }
+
+    private static final class FolderSpec
+    {
+        final List<String> dataSetPath;
+        final String dataPath;
+        final boolean titlePresent;
+        final DcsPresentationParser.Plan title;
+        final boolean restrictionPresent;
+        final DataCompositionSchemaFieldUseRestriction restriction;
+
+        FolderSpec(List<String> dataSetPath, String dataPath, boolean titlePresent,
+            DcsPresentationParser.Plan title, boolean restrictionPresent,
+            DataCompositionSchemaFieldUseRestriction restriction)
+        {
+            this.dataSetPath = new ArrayList<>(dataSetPath);
+            this.dataPath = dataPath;
+            this.titlePresent = titlePresent;
+            this.title = title;
+            this.restrictionPresent = restrictionPresent;
+            this.restriction = restriction;
+        }
+    }
+
+    private static final class RestrictionResult
+    {
+        final DataCompositionSchemaFieldUseRestriction restriction;
+        final String error;
+
+        private RestrictionResult(DataCompositionSchemaFieldUseRestriction restriction,
+            String error)
+        {
+            this.restriction = restriction;
+            this.error = error;
+        }
+
+        static RestrictionResult success(DataCompositionSchemaFieldUseRestriction restriction)
+        {
+            return new RestrictionResult(restriction, null);
+        }
+
+        static RestrictionResult failure(String error)
+        {
+            return new RestrictionResult(null, error);
+        }
+    }
+
+    private static final class KeyResult
+    {
+        final String key;
+        final String error;
+
+        private KeyResult(String key, String error)
+        {
+            this.key = key;
+            this.error = error;
+        }
+
+        static KeyResult success(String key)
+        {
+            return new KeyResult(key, null);
+        }
+
+        static KeyResult failure(String error)
+        {
+            return new KeyResult(null, error);
+        }
+    }
+}

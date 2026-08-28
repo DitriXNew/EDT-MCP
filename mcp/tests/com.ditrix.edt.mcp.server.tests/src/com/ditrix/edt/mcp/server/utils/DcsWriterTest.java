@@ -18,12 +18,17 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterUse;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetLink;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.StringQualifiers;
+import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com.ditrix.edt.mcp.server.utils.DcsWriter.Result;
 import com.ditrix.edt.mcp.server.utils.DcsWriter.TypeResolution;
@@ -115,6 +120,29 @@ public class DcsWriterTest
         assertEquals(1, schema.getDataSources().size());
     }
 
+    @Test
+    public void testFirstNestedMemberSourceBecomesDefaultForFollowingSiblings()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{" //$NON-NLS-1$
+            + "\"name\":\"AllSales\",\"type\":\"union\",\"items\":[" //$NON-NLS-1$
+            + "{\"name\":\"A\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+            + "\"dataSource\":\"MySource\"}," //$NON-NLS-1$
+            + "{\"name\":\"B\",\"type\":\"query\",\"query\":\"SELECT 2\"}]}]}"), null); //$NON-NLS-1$
+        assertFalse(result.error, result.hasError());
+
+        DataCompositionSchemaDataSetUnion union = (DataCompositionSchemaDataSetUnion)
+            schema.getDataSets().get(0);
+        DataCompositionSchemaDataSetQuery first = (DataCompositionSchemaDataSetQuery)
+            union.getItems().get(0);
+        DataCompositionSchemaDataSetQuery second = (DataCompositionSchemaDataSetQuery)
+            union.getItems().get(1);
+        assertEquals("MySource", first.getDataSource()); //$NON-NLS-1$
+        assertEquals("MySource", second.getDataSource()); //$NON-NLS-1$
+        assertEquals(1, schema.getDataSources().size());
+        assertEquals("MySource", schema.getDataSources().get(0).getName()); //$NON-NLS-1$
+    }
+
     // ==================== explicit fields ====================
 
     @Test
@@ -138,7 +166,7 @@ public class DcsWriterTest
         assertEquals("Goods", goods.getDataPath()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Goods", goods.getField()); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a titled field must carry a Presentation", goods.getTitle()); //$NON-NLS-1$
-        assertEquals("Goods", goods.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Goods", presentationText(goods.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a role must be created", goods.getRole()); //$NON-NLS-1$
         assertTrue("the dimension role flag must be set", goods.getRole().isDimension()); //$NON-NLS-1$
 
@@ -167,7 +195,7 @@ public class DcsWriterTest
             param.getValueType().getStringQualifiers());
         assertEquals(10, param.getValueType().getStringQualifiers().getLength());
         assertNotNull("a titled parameter must carry a Presentation", param.getTitle()); //$NON-NLS-1$
-        assertEquals("Period", param.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Period", presentationText(param.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(DataCompositionParameterUse.AUTO, param.getUse());
     }
 
@@ -216,7 +244,7 @@ public class DcsWriterTest
         assertEquals("Margin", field.getDataPath()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Revenue - Cost", field.getExpression()); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a titled calculated field must carry a Presentation", field.getTitle()); //$NON-NLS-1$
-        assertEquals("Margin", field.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Margin", presentationText(field.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -229,6 +257,19 @@ public class DcsWriterTest
         assertFalse(r.error, r.hasError());
         assertNull("an untitled calculated field carries no Presentation", //$NON-NLS-1$
             schema.getCalculatedFields().get(0).getTitle());
+    }
+
+    @Test
+    public void testCalculatedFieldAcceptsDeliberatelyEmptyExpression()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema,
+            json("{\"calculatedFields\":[{\"dataPath\":\"RuntimeValue\",\"expression\":\"\"}]}"), //$NON-NLS-1$
+            null);
+
+        assertFalse(result.error, result.hasError());
+        assertEquals(1, schema.getCalculatedFields().size());
+        assertEquals("", schema.getCalculatedFields().get(0).getExpression()); //$NON-NLS-1$
     }
 
     @Test
@@ -249,7 +290,7 @@ public class DcsWriterTest
         // data set field's find-or-update discipline: only supplied members are overwritten.
         assertNotNull("a title set by an earlier apply must survive an update that omits it", //$NON-NLS-1$
             field.getTitle());
-        assertEquals("Margin", field.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Margin", presentationText(field.getTitle())); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -268,6 +309,8 @@ public class DcsWriterTest
             json("{\"calculatedFields\":[{\"dataPath\":\"Margin\"}]}"), null); //$NON-NLS-1$
         assertTrue("a calculated field without an expression must error", r.hasError()); //$NON-NLS-1$
         assertTrue("the error must mention 'expression'", r.error.contains("expression")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(r.error, r.error.contains(
+            "Pass an empty string only when intentionally resetting it")); //$NON-NLS-1$
     }
 
     @Test
@@ -275,6 +318,179 @@ public class DcsWriterTest
     {
         Result r = DcsWriter.apply(newSchema(), json("{\"calculatedFields\":\"nope\"}"), null); //$NON-NLS-1$
         assertTrue("calculatedFields that is not an array must error", r.hasError()); //$NON-NLS-1$
+    }
+
+    // ==================== total fields / restrictions ====================
+
+    @Test
+    public void testTotalFieldLandsWithExpressionAndGroups()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"totalFields\":[{\"dataPath\":\"Amount\"," //$NON-NLS-1$
+            + "\"expression\":\"Sum(Amount)\",\"groups\":[\"Goods\",\"Warehouse\"]}]}"), null); //$NON-NLS-1$
+
+        assertFalse(result.error, result.hasError());
+        assertEquals(1, result.totalFields);
+        DataCompositionSchemaTotalField total = schema.getTotalFields().get(0);
+        assertEquals("Amount", total.getDataPath()); //$NON-NLS-1$
+        assertEquals("Sum(Amount)", total.getExpression()); //$NON-NLS-1$
+        assertEquals(2, total.getGroups().size());
+        assertEquals("Warehouse", total.getGroups().get(1)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFieldUseRestrictionLandsWithAllFlags()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT 1\",\"fields\":[{\"dataPath\":\"Amount\"," //$NON-NLS-1$
+            + "\"useRestriction\":{\"field\":true,\"condition\":true,\"group\":false," //$NON-NLS-1$
+            + "\"order\":true}}]}]}"), null); //$NON-NLS-1$
+
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaDataSetField field =
+            (DataCompositionSchemaDataSetField)firstQuery(schema).getFields().get(0);
+        assertNotNull(field.getUseRestriction());
+        assertTrue(field.getUseRestriction().isField());
+        assertTrue(field.getUseRestriction().isCondition());
+        assertFalse(field.getUseRestriction().isGroup());
+        assertTrue(field.getUseRestriction().isOrder());
+    }
+
+    @Test
+    public void testDataSetFieldExtendedMembersLandTogether()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT Code\",\"fields\":[{" //$NON-NLS-1$
+            + "\"dataPath\":\"Code\",\"valueType\":{\"types\":[{\"kind\":\"String\"}]}," //$NON-NLS-1$
+            + "\"attributeUseRestriction\":{\"field\":true}," //$NON-NLS-1$
+            + "\"presentationExpression\":\"CodePresentation\"," //$NON-NLS-1$
+            + "\"orderExpressions\":[{\"expression\":\"Code\",\"orderType\":\"Asc\",\"autoOrder\":true}]," //$NON-NLS-1$
+            + "\"inHierarchyDataSet\":\"Hierarchy\",\"inHierarchyDataSetParameter\":\"Parent\"," //$NON-NLS-1$
+            + "\"availableValues\":[{\"value\":{\"kind\":\"string\",\"value\":\"A\"}," //$NON-NLS-1$
+            + "\"presentation\":\"Alpha\"}],\"inputParameters\":{\"items\":[{" //$NON-NLS-1$
+            + "\"parameter\":{\"kind\":\"parameter\",\"value\":\"P\"}," //$NON-NLS-1$
+            + "\"values\":[{\"kind\":\"number\",\"value\":1}],\"use\":true}]}}]}]}"), //$NON-NLS-1$
+            STRING10_RESOLVER);
+
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaDataSetField field =
+            (DataCompositionSchemaDataSetField)firstQuery(schema).getFields().get(0);
+        assertNotNull(field.getValueType());
+        assertTrue(field.getAttributeUseRestriction().isField());
+        assertEquals("CodePresentation", field.getPresentationExpression()); //$NON-NLS-1$
+        assertEquals(1, field.getOrderExpressions().size());
+        assertTrue(field.getOrderExpressions().get(0).isAutoOrder());
+        assertEquals("Hierarchy", field.getInHierarchyDataSet()); //$NON-NLS-1$
+        assertEquals("Parent", field.getInHierarchyDataSetParameter()); //$NON-NLS-1$
+        assertEquals("Alpha", presentationText(field.getAvailableValues().get(0).getPresentation())); //$NON-NLS-1$
+        assertTrue(field.getAvailableValues().get(0).getValue() instanceof StringValue);
+        assertEquals("P", field.getInputParameters().getItems().get(0).getParameter().getValue()); //$NON-NLS-1$
+
+        Result invalidAppearance = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{" //$NON-NLS-1$
+            + "\"name\":\"DS\",\"type\":\"query\",\"query\":\"SELECT 1\",\"fields\":[{" //$NON-NLS-1$
+            + "\"dataPath\":\"Code\",\"appearance\":[]}]}]}"), null); //$NON-NLS-1$
+        assertTrue(invalidAppearance.hasError());
+        assertTrue(invalidAppearance.error, invalidAppearance.error.contains("appearance")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAvailableValuesAcceptEmptyPresentationsAsAbsent()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT Code\",\"fields\":[{" //$NON-NLS-1$
+            + "\"dataPath\":\"Code\",\"valueType\":{\"types\":[{\"kind\":\"String\"}]}," //$NON-NLS-1$
+            + "\"availableValues\":[{\"value\":{\"kind\":\"string\",\"value\":\"A\"}," //$NON-NLS-1$
+            + "\"presentation\":\"\"},{\"value\":{\"kind\":\"string\",\"value\":\"B\"}," //$NON-NLS-1$
+            + "\"presentation\":{}}]}]}]}"), STRING10_RESOLVER); //$NON-NLS-1$
+
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaDataSetField field =
+            (DataCompositionSchemaDataSetField)firstQuery(schema).getFields().get(0);
+        assertEquals(2, field.getAvailableValues().size());
+        assertNull(field.getAvailableValues().get(0).getPresentation());
+        assertNull(field.getAvailableValues().get(1).getPresentation());
+    }
+
+    @Test
+    public void testCalculatedFieldExtendedMembersAndInvalidOrderAreExplicit()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"calculatedFields\":[{" //$NON-NLS-1$
+            + "\"dataPath\":\"C\",\"expression\":\"1\",\"valueType\":{\"types\":[{\"kind\":\"String\"}]}," //$NON-NLS-1$
+            + "\"useRestriction\":{\"condition\":true},\"presentationExpression\":\"Present(C)\"," //$NON-NLS-1$
+            + "\"orderExpression\":[{\"expression\":\"C\",\"orderType\":\"Desc\"}]," //$NON-NLS-1$
+            + "\"availableValues\":[{\"value\":{\"kind\":\"string\",\"value\":\"X\"}," //$NON-NLS-1$
+            + "\"presentation\":{\"en\":\"Ex\"}}]}]}"), STRING10_RESOLVER); //$NON-NLS-1$
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaCalculatedField field = schema.getCalculatedFields().get(0);
+        assertTrue(field.getUseRestriction().isCondition());
+        assertEquals("Present(C)", field.getPresentationExpression()); //$NON-NLS-1$
+        assertEquals(1, field.getOrderExpression().size());
+        assertEquals("Ex", field.getAvailableValues().get(0).getPresentation() //$NON-NLS-1$
+            .getLocalValue().getContent().get("en")); //$NON-NLS-1$
+
+        Result invalid = DcsWriter.apply(newSchema(), json("{\"calculatedFields\":[{" //$NON-NLS-1$
+            + "\"dataPath\":\"C\",\"expression\":\"1\",\"orderExpression\":[{" //$NON-NLS-1$
+            + "\"expression\":\"C\",\"orderType\":\"Sideways\"}]}]}"), null); //$NON-NLS-1$
+        assertTrue(invalid.hasError());
+        assertTrue(invalid.error, invalid.error.contains("orderType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParameterDefaultsUseDeclaredTypeAndAllScalarMembersValidate()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"parameters\":[{" //$NON-NLS-1$
+            + "\"name\":\"P\",\"valueType\":{\"types\":[{\"kind\":\"String\"}]}," //$NON-NLS-1$
+            + "\"values\":[{\"kind\":\"string\",\"value\":\"Default\"}]," //$NON-NLS-1$
+            + "\"availableValues\":[{\"value\":{\"kind\":\"string\",\"value\":\"A\"}," //$NON-NLS-1$
+            + "\"presentation\":\"Alpha\"}],\"expression\":\"Expression\"," //$NON-NLS-1$
+            + "\"useRestriction\":true,\"valueListAllowed\":true,\"availableAsField\":true," //$NON-NLS-1$
+            + "\"denyIncompleteValues\":true,\"functionalOptionsParameter\":\"Option\"}]}"), //$NON-NLS-1$
+            STRING10_RESOLVER);
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaParameter parameter = schema.getParameters().get(0);
+        assertTrue(parameter.getValues().get(0) instanceof StringValue);
+        assertEquals("Default", ((StringValue)parameter.getValues().get(0)).getValue()); //$NON-NLS-1$
+        assertTrue(parameter.isUseRestriction());
+        assertTrue(parameter.isValueListAllowed());
+        assertTrue(parameter.isAvailableAsField());
+        assertTrue(parameter.isDenyIncompleteValues());
+        assertEquals("Option", parameter.getFunctionalOptionsParameter()); //$NON-NLS-1$
+
+        DataCompositionSchema invalidSchema = newSchema();
+        Result invalid = DcsWriter.apply(invalidSchema, json("{\"parameters\":[{" //$NON-NLS-1$
+            + "\"name\":\"P\",\"valueType\":{\"types\":[{\"kind\":\"String\"}]}," //$NON-NLS-1$
+            + "\"values\":[{\"kind\":\"number\",\"value\":1}]}]}"), STRING10_RESOLVER); //$NON-NLS-1$
+        assertTrue(invalid.hasError());
+        assertTrue(invalid.error, invalid.error.contains("declared valueType")); //$NON-NLS-1$
+        assertTrue(invalidSchema.getParameters().isEmpty());
+    }
+
+    @Test
+    public void testLocalizedTitleUsesCanonicalLanguageCodeSpellings()
+    {
+        DataCompositionSchema schema = newSchema();
+        String russianTitle = MetadataLanguageUtils.cp(0x0418, 0x043c, 0x044f);
+        JsonObject spec = json("{\"parameters\":[{\"name\":\"Name\",\"title\":{\"EN\":\"Name\"}}]}"); //$NON-NLS-1$
+        spec.getAsJsonArray("parameters").get(0).getAsJsonObject() //$NON-NLS-1$
+            .getAsJsonObject("title").addProperty("RU", russianTitle); //$NON-NLS-1$ //$NON-NLS-2$
+        DcsPresentationParser.LanguageContext languages =
+            new DcsPresentationParser.LanguageContext(java.util.Arrays.asList("en", "ru")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Result result = DcsWriter.apply(schema, spec, null, languages);
+
+        assertFalse(result.error, result.hasError());
+        java.util.Map<String, String> content = schema.getParameters().get(0).getTitle()
+            .getLocalValue().getContent().map();
+        assertEquals("Name", content.get("en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(russianTitle, content.get("ru")); //$NON-NLS-1$
+        assertFalse(content.containsKey("EN")); //$NON-NLS-1$
+        assertEquals(new java.util.LinkedHashSet<>(java.util.Arrays.asList("en", "ru")), //$NON-NLS-1$ //$NON-NLS-2$
+            languages.usedCodes());
     }
 
     // ==================== idempotency ====================
@@ -310,7 +526,7 @@ public class DcsWriterTest
     public void testEmptyPayloadIsError()
     {
         Result r = DcsWriter.apply(newSchema(), json("{}"), null); //$NON-NLS-1$
-        assertTrue("an empty dcs payload must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("an empty dcs schema body must error", r.hasError()); //$NON-NLS-1$
     }
 
     @Test
@@ -332,15 +548,120 @@ public class DcsWriterTest
     }
 
     @Test
-    public void testNonQueryDataSetTypeIsError()
+    public void testPresentQueryMustBeAStringAndCannotBecomeANoOpUpdate()
     {
-        Result r = DcsWriter.apply(newSchema(),
-            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"object\"}]}"), null); //$NON-NLS-1$
-        assertTrue("a non-query data set type must error in v1", r.hasError()); //$NON-NLS-1$
-        assertTrue("the error must name the offending token", r.error.contains("object")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("the error must point at 'query'", r.error.contains("query")); //$NON-NLS-1$ //$NON-NLS-2$
-        // A rejected spec must not have mutated the model.
-        // (nothing to assert on the schema beyond it staying empty)
+        for (String malformed : new String[] { "{}", "[]", "123", "true", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            DataCompositionSchema schema = newSchema();
+            Result seeded = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+                + "\"type\":\"query\",\"query\":\"SELECT Original\"}]}"), null); //$NON-NLS-1$
+            assertFalse(seeded.error, seeded.hasError());
+
+            Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+                + "\"type\":\"query\",\"query\":" + malformed + "}]}"), null); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue(malformed, result.hasError());
+            assertTrue(result.error, result.error.contains("query")); //$NON-NLS-1$
+            assertTrue(result.error, result.error.contains("string")); //$NON-NLS-1$
+            assertEquals("SELECT Original", firstQuery(schema).getQuery()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testPresentConnectionStringMustBeAStringAndCannotClearAnExistingValue()
+    {
+        for (String malformed : new String[] { "{}", "[]", "123", "true", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            DataCompositionSchema schema = newSchema();
+            Result seeded = DcsWriter.apply(schema, json("{\"dataSources\":[{\"name\":\"Source\"," //$NON-NLS-1$
+                + "\"connectionString\":\"Connection=Original\"}]}"), null); //$NON-NLS-1$
+            assertFalse(seeded.error, seeded.hasError());
+
+            Result result = DcsWriter.apply(schema, json("{\"dataSources\":[{\"name\":\"Source\"," //$NON-NLS-1$
+                + "\"connectionString\":" + malformed + "}]}"), null); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue(malformed, result.hasError());
+            assertTrue(result.error, result.error.contains("connectionString")); //$NON-NLS-1$
+            assertTrue(result.error, result.error.contains("string")); //$NON-NLS-1$
+            assertEquals("Connection=Original", //$NON-NLS-1$
+                schema.getDataSources().get(0).getConnectionString());
+        }
+    }
+
+    @Test
+    public void testStringMembersNeverCoerceOtherJsonPrimitives()
+    {
+        String[][] cases = {
+            {"{\"dataSources\":[{\"name\":123}]}", "name"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"dataSets\":[{\"name\":\"DS\",\"type\":true}]}", "type"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"dataSets\":[{\"name\":\"DS\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"dataSource\":123}]}", "dataSource"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"dataSets\":[{\"name\":\"DS\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
+                + "\"fields\":[{\"dataPath\":\"Code\",\"field\":false}]}]}", "field"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"parameters\":[{\"name\":\"P\",\"use\":1}]}", "use"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"{\"totalFields\":[{\"dataPath\":\"T\",\"expression\":true}]}", "expression"} //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (String[] item : cases)
+        {
+            Result result = DcsWriter.apply(newSchema(), json(item[0]), null);
+            assertTrue(item[0], result.hasError());
+            assertTrue(result.error, result.error.contains(item[1]));
+            assertTrue(result.error, result.error.contains("string")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testObjectDataSetIsAuthoredWithItsObjectName()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result r = DcsWriter.apply(schema,
+            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"object\",\"objectName\":\"Catalog.Products\"}]}"), //$NON-NLS-1$
+            null);
+        assertFalse(r.hasError());
+        assertEquals(1, schema.getDataSets().size());
+        DataSet authored = schema.getDataSets().get(0);
+        assertTrue("an 'object' data set must land as DataSetObject, not a query set", //$NON-NLS-1$
+            authored instanceof DataCompositionSchemaDataSetObject);
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            ((DataCompositionSchemaDataSetObject)authored).getObjectName());
+    }
+
+    @Test
+    public void testPresentObjectNameMustBeAStringAndCannotClearAnExistingValue()
+    {
+        for (String malformed : new String[] { "{}", "[]", "123", "true", "null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            DataCompositionSchema schema = newSchema();
+            Result seeded = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+                + "\"type\":\"object\",\"objectName\":\"Catalog.Products\"}]}"), null); //$NON-NLS-1$
+            assertFalse(seeded.error, seeded.hasError());
+
+            Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+                + "\"type\":\"object\",\"objectName\":" + malformed + "}]}"), null); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue(malformed, result.hasError());
+            assertTrue(result.error, result.error.contains("objectName")); //$NON-NLS-1$
+            assertTrue(result.error, result.error.contains("string")); //$NON-NLS-1$
+            DataCompositionSchemaDataSetObject object =
+                (DataCompositionSchemaDataSetObject)schema.getDataSets().get(0);
+            assertEquals("Catalog.Products", object.getObjectName()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testUnknownDataSetTypeErrorsAndListsEveryAcceptedKind()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result r = DcsWriter.apply(schema,
+            json("{\"dataSets\":[{\"name\":\"DS\",\"type\":\"spreadsheet\"}]}"), null); //$NON-NLS-1$
+        assertTrue("an unknown data set type must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the offending token", r.error.contains("spreadsheet")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String accepted : new String[] { "query", "object", "union" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("the error must list the accepted kind '" + accepted + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                r.error.contains(accepted));
+        }
+        assertTrue("a rejected spec must not mutate the schema", schema.getDataSets().isEmpty()); //$NON-NLS-1$
     }
 
     @Test
@@ -372,6 +693,53 @@ public class DcsWriterTest
             null);
         assertTrue("a bad periodType token must error", r.hasError()); //$NON-NLS-1$
         assertTrue("the error must name the offending token", r.error.contains("Weekly")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMalformedDataSetAutoFillBooleanIsError()
+    {
+        Result result = DcsWriter.apply(newSchema(), json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT 1\",\"autoFillFields\":{}}]}"), null); //$NON-NLS-1$
+
+        assertTrue(result.hasError());
+        assertTrue(result.error, result.error.contains("autoFillFields")); //$NON-NLS-1$
+        assertTrue(result.error, result.error.contains("true or false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMalformedDataSetLinkBooleansAreErrors()
+    {
+        String prefix = "{\"dataSetLinks\":[{\"sourceDataSet\":\"A\"," //$NON-NLS-1$
+            + "\"destinationDataSet\":\"B\",\"sourceExpression\":\"Key\"," //$NON-NLS-1$
+            + "\"destinationExpression\":\"Key\","; //$NON-NLS-1$
+
+        Result parameterList = DcsWriter.apply(newSchema(),
+            json(prefix + "\"parameterListAllowed\":{}}]}"), null); //$NON-NLS-1$
+        assertTrue(parameterList.hasError());
+        assertTrue(parameterList.error, parameterList.error.contains("parameterListAllowed")); //$NON-NLS-1$
+
+        Result required = DcsWriter.apply(newSchema(),
+            json(prefix + "\"required\":\"sometimes\"}]}"), null); //$NON-NLS-1$
+        assertTrue(required.hasError());
+        assertTrue(required.error, required.error.contains("required")); //$NON-NLS-1$
+        assertTrue(required.error, required.error.contains("true or false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDataSetLinkCanonicalConditionAndSetParameterListAllowedLand()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSetLinks\":[{" //$NON-NLS-1$
+            + "\"sourceDataSet\":\"A\",\"destinationDataSet\":\"B\"," //$NON-NLS-1$
+            + "\"sourceExpression\":\"Id\",\"destinationExpression\":\"Id\"," //$NON-NLS-1$
+            + "\"linkConditionExpression\":\"A.Active\",\"parameterListAllowed\":false}]}"), null); //$NON-NLS-1$
+
+        assertFalse(result.error, result.hasError());
+        DataCompositionSchemaDataSetLink link = schema.getDataSetLinks().get(0);
+        assertEquals("A.Active", link.getLinkConditionExpression()); //$NON-NLS-1$
+        assertTrue("supplying the boolean must set the EMF unsettable feature", //$NON-NLS-1$
+            link.isSetParameterListAllowed());
+        assertFalse(link.isParameterListAllowed());
     }
 
     @Test
@@ -415,6 +783,53 @@ public class DcsWriterTest
         assertTrue("dataSets that is not an array must error", r.hasError()); //$NON-NLS-1$
     }
 
+    @Test
+    public void testUnknownMemberRejectsWholePayloadBeforeMutation()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT 1\"}],\"typo\":true}"), null); //$NON-NLS-1$
+
+        assertTrue(result.hasError());
+        assertTrue(result.error, result.error.contains("typo")); //$NON-NLS-1$
+        assertTrue(result.error, result.error.contains("Accepted members")); //$NON-NLS-1$
+        assertTrue("the valid first section must not be applied", schema.getDataSets().isEmpty()); //$NON-NLS-1$
+        assertTrue("its auto-created source must not leak either", schema.getDataSources().isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNonQueryNaturalKeyCollisionIsRefusedWithoutDuplicate()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetObject objectSet =
+            DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetObject();
+        objectSet.setName("DS"); //$NON-NLS-1$
+        schema.getDataSets().add(objectSet);
+
+        Result result = DcsWriter.apply(schema, json("{\"dataSets\":[{\"name\":\"DS\"," //$NON-NLS-1$
+            + "\"type\":\"query\",\"query\":\"SELECT 1\"}]}"), null); //$NON-NLS-1$
+
+        assertTrue(result.hasError());
+        assertTrue(result.error, result.error.contains("DS")); //$NON-NLS-1$
+        assertTrue(result.error, result.error.contains("object")); //$NON-NLS-1$
+        assertTrue(result.error, result.error.contains("Rename")); //$NON-NLS-1$
+        assertEquals("the clashing subtype must remain the only data set", 1, //$NON-NLS-1$
+            schema.getDataSets().size());
+        assertTrue(schema.getDataSets().get(0) instanceof DataCompositionSchemaDataSetObject);
+        assertTrue(schema.getDataSources().isEmpty());
+    }
+
+    @Test
+    public void testSharedTypeResolverReportsMissingVersionBeforeBuilding()
+    {
+        TypeResolution result = DcsWriter.typeResolver(null, null)
+            .resolve(json("{\"types\":[{\"kind\":\"String\"}]}")); //$NON-NLS-1$
+
+        assertNotNull(result.error);
+        assertTrue(result.error, result.error.contains("platform version")); //$NON-NLS-1$
+        assertNull(result.typeDescription);
+    }
+
     // ==================== pure parse (no model) ====================
 
     @Test
@@ -436,4 +851,18 @@ public class DcsWriterTest
         assertNotNull("a bad use token must fail the pure parse", parsed.error); //$NON-NLS-1$
         assertNull(parsed.plan);
     }
+
+    /**
+     * A presentation's text now always lives in its LocalString, keyed by the project's default
+     * language: EDT never writes the neutral Presentation.value form, and shipped consumers
+     * dereference getLocalValue() without a guard.
+     */
+    private static String presentationText(com._1c.g5.v8.dt.dcs.model.core.Presentation presentation)
+    {
+        if (presentation == null || presentation.getLocalValue() == null) return null;
+        java.util.Iterator<String> values =
+            presentation.getLocalValue().getContent().values().iterator();
+        return values.hasNext() ? values.next() : null;
+    }
+
 }
