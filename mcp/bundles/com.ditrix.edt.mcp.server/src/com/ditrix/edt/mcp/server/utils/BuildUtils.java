@@ -150,9 +150,15 @@ public final class BuildUtils
                 return;
             }
 
-            // Wait for all derived data computations
+            // Wait for the derived data the MODEL needs, not for validation.
+            // waitAllComputations() also waits for the check segments, which EDT registers in the
+            // post-build stage and which run for HOURS on a large configuration - so every caller
+            // that merely wants to edit metadata sat out its whole timeout while a background
+            // validation it does not depend on kept the pipeline busy (issue #495).
+            // waitImportantDataComputations() waits on the platform's OWN set of segments to wait
+            // for during the incremental phase, so the distinction stays EDT's to maintain.
             Activator.logInfo("Waiting for derived data computations for: " + project.getName()); //$NON-NLS-1$
-            boolean completed = ddManager.waitAllComputations(timeoutMs);
+            boolean completed = ddManager.waitImportantDataComputations(timeoutMs);
             
             if (completed)
             {

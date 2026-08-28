@@ -35,6 +35,7 @@ import org.junit.Test;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils.DeclaredBaseProject;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
@@ -819,5 +820,49 @@ public class ProjectStateCheckerTest
         assertNull(result);
         verify(env).waitBeforeModelRetry(anyLong());
         verify(env, times(2)).resolveModelsForRefactoring(base);
+    }
+
+    /**
+     * Issue #495: a large configuration spends HOURS in the validation checks, and while they ran
+     * the project reported "building", which switched metadata editing off for that whole time. The
+     * discriminator is the pipeline STAGE, not a list of check segment ids - EDT registers the five
+     * long-running check segments plus the marker cleaner in AFTER_BUILD, so reaching that stage
+     * proves SYNC, BEFORE_BUILD and NORMAL are done.
+     */
+    @Test
+    public void postBuildValidationDoesNotCountAsBuilding()
+    {
+        assertTrue(ProjectStateChecker.onlyPostBuildStage("AFTER_BUILD", false)); //$NON-NLS-1$
+        assertTrue(ProjectStateChecker.onlyPostBuildStage("FINISHING", false)); //$NON-NLS-1$
+    }
+
+    /**
+     * The stages up to and including the build still gate. This is the case EDT's own check-segment
+     * grouping gets wrong for this question: CDI_CHECKS_SEGMENT IS a check, but it is registered in
+     * BEFORE_BUILD and the model is not usable until it has run.
+     */
+    @Test
+    public void stagesUpToTheBuildStillCountAsBuilding()
+    {
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("BEFORE_BUILD", false)); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("NORMAL", false)); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("SYNC", false)); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("AFTER_SYNC", false)); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("STARTING", false)); //$NON-NLS-1$
+    }
+
+    /**
+     * An active model synchronisation, no stage at all, or a stage name this build does not know
+     * prove nothing - and the reflective read that feeds this returns null on any failure, so an
+     * unexported-API change degrades to the previous "stay building" behaviour rather than to a
+     * silent relaxation.
+     */
+    @Test
+    public void anythingUnprovenKeepsTheProjectBuilding()
+    {
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("AFTER_BUILD", true)); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.onlyPostBuildStage(null, false));
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("", false)); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.onlyPostBuildStage("SOME_NEW_STAGE", false)); //$NON-NLS-1$
     }
 }

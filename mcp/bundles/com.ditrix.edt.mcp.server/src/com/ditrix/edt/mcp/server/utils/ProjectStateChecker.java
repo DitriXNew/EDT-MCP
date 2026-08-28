@@ -212,23 +212,109 @@ public final class ProjectStateChecker
             return new ProjectStateResult(ProjectState.UNKNOWN, "Cannot determine build state");
         }
         
-        // Check if computation pipeline is idle
-        if (!ddManager.isIdle())
+        boolean idle = ddManager.isIdle();
+        boolean allComputed = ddManager.isAllComputed();
+        if (idle && allComputed)
         {
-            DerivedDataStatus status = ddManager.getDerivedDataStatus();
-            String statusStr = status != null ? status.toString() : "computing";
-            return new ProjectStateResult(ProjectState.BUILDING, 
-                "Project is building: " + statusStr);
+            return new ProjectStateResult(ProjectState.READY, "Project is ready");
         }
-        
-        // Check if all derived data is computed
-        if (!ddManager.isAllComputed())
+
+        // Issue #495: a large configuration spends HOURS in the post-build validation checks. That
+        // work keeps the pipeline busy and keeps isAllComputed() false, which used to report the
+        // project as "building" and switch metadata editing off for the whole run - even though
+        // everything the model and the index need has already been computed by then.
+        if (!onlyPostBuildChecksRemain(ddManager))
         {
-            return new ProjectStateResult(ProjectState.BUILDING, 
+            if (!idle)
+            {
+                DerivedDataStatus status = ddManager.getDerivedDataStatus();
+                String statusStr = status != null ? status.toString() : "computing";
+                return new ProjectStateResult(ProjectState.BUILDING,
+                    "Project is building: " + statusStr);
+            }
+            return new ProjectStateResult(ProjectState.BUILDING,
                 "Project build in progress (derived data not complete)");
         }
-        
-        return new ProjectStateResult(ProjectState.READY, "Project is ready");
+
+        // Logged because this is the ONE place the relaxation changes an answer: without it,
+        // "ready while checks run" is indistinguishable from "ready because everything finished",
+        // in the field and in a live verification alike.
+        Activator.logInfo("Project '" + dtProject.getName() //$NON-NLS-1$
+            + "' is READY for model work while post-build validation is still running."); //$NON-NLS-1$
+        return new ProjectStateResult(ProjectState.READY,
+            "Project is ready (validation checks are still running)"); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether the only derived-data work left is the POST-BUILD stage, which is where EDT registers
+     * the validation checks - and nothing the model or the index needs.
+     * <p>
+     * This deliberately does NOT test a hand-written list of check segment ids. EDT's own
+     * {@code ProjectBuilder} groups six of them as "check segments", but that grouping is wrong for
+     * this question: {@code CDI_CHECKS_SEGMENT} (data-integrity) is registered in
+     * {@code BEFORE_BUILD} and must complete before the model is usable, while the five that make a
+     * large configuration wait for hours - {@code M_CHECKS_SEGMENT}, {@code CM_CHECKS_SEGMENT},
+     * {@code L_CHECKS_SEGMENT}, {@code CL_CHECKS_SEGMENT} and {@code M_CLEANER_SEGMENT} - are all in
+     * {@code AFTER_BUILD}. Asking the platform which STAGE is active therefore answers the question
+     * without a list that silently rots when a segment is added.
+     * <p>
+     * Anything else - a null status, an unknown stage, or an active model synchronisation - is not
+     * proof that the model has settled and keeps the project BUILDING.
+     *
+     * @param ddManager the project's derived-data manager (never {@code null} here)
+     * @return {@code true} when only post-build validation remains
+     */
+    static boolean onlyPostBuildChecksRemain(IDerivedDataManager ddManager)
+    {
+        try
+        {
+            DerivedDataStatus status = ddManager.getDerivedDataStatus();
+            if (status == null)
+            {
+                return false;
+            }
+            // getActiveStage() returns DerivedDataSegmentBucket, which lives in a package the
+            // platform does NOT export, so it cannot be named here. Read it reflectively and compare
+            // the enum's name: the decision itself stays in onlyPostBuildStage, where it is testable
+            // without the restricted type.
+            Object stage = DerivedDataStatus.class.getMethod("getActiveStage").invoke(status); //$NON-NLS-1$
+            return onlyPostBuildStage(stage == null ? null : String.valueOf(stage),
+                status.isModelSyncActive());
+        }
+        catch (ReflectiveOperationException | RuntimeException e)
+        {
+            // Not being able to ASK is never proof that only checks remain, so this degrades to the
+            // previous behaviour (the project stays BUILDING while anything is computing). Logged
+            // because a platform change here would otherwise silently switch the relaxation off.
+            Activator.logError("Cannot read the derived-data pipeline stage; " //$NON-NLS-1$
+                + "treating the project as building", e); //$NON-NLS-1$
+            return false;
+        }
+    }
+
+    /**
+     * The pure decision behind {@link #onlyPostBuildChecksRemain(IDerivedDataManager)}: is the named
+     * pipeline stage one that runs AFTER everything the model and the index need?
+     * <p>
+     * This deliberately does not test a list of check segment ids. EDT's own {@code ProjectBuilder}
+     * groups six ids as "check segments", but that grouping is wrong for this question:
+     * {@code CDI_CHECKS_SEGMENT} (data integrity) is registered in {@code BEFORE_BUILD} and must
+     * complete before the model is usable, while the five that make a large configuration wait for
+     * hours - {@code M_CHECKS_SEGMENT}, {@code CM_CHECKS_SEGMENT}, {@code L_CHECKS_SEGMENT},
+     * {@code CL_CHECKS_SEGMENT} and {@code M_CLEANER_SEGMENT} - are all registered in
+     * {@code AFTER_BUILD}. Asking which STAGE is active answers it without a list that rots.
+     *
+     * @param stageName the active stage's enum name, or {@code null} when there is none
+     * @param modelSyncActive whether the model is being synchronised
+     * @return {@code true} only when the remaining work is post-build validation
+     */
+    static boolean onlyPostBuildStage(String stageName, boolean modelSyncActive)
+    {
+        if (modelSyncActive)
+        {
+            return false;
+        }
+        return "AFTER_BUILD".equals(stageName) || "FINISHING".equals(stageName); //$NON-NLS-1$ //$NON-NLS-2$
     }
     
     /**
