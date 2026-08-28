@@ -35,6 +35,7 @@ import org.junit.Test;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils.DeclaredBaseProject;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
@@ -237,6 +238,8 @@ public class ProjectStateCheckerTest
         when(environment.resolveBaseProject(unlinkedExternalObjects)).thenReturn(null);
         when(environment.isExtensionProject(extension)).thenReturn(true);
         when(environment.isExtensionProject(unlinkedExternalObjects)).thenReturn(false);
+        when(environment.readDeclaredBaseProject(unlinkedExternalObjects))
+            .thenReturn(DeclaredBaseProject.NONE);
         when(environment.getProjectState(any(IProject.class)))
             .thenReturn(new ProjectStateResult(ProjectState.READY, "ready")); //$NON-NLS-1$
 
@@ -269,6 +272,55 @@ public class ProjectStateCheckerTest
         when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
         when(environment.resolveBaseProject(unlinkedDependent)).thenReturn(null);
         when(environment.isExtensionProject(unlinkedDependent)).thenReturn(true);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    /**
+     * A null runtime parent is NOT proof of unlinkedness: EDT's {@code AbstractDependentProject}
+     * returns null when the parent is not wired yet AND when the parent project is merely not
+     * accessible. A project whose manifest still declares a base therefore has an unusable
+     * registration - skipping it would drop its indexed references while reporting the scan complete.
+     */
+    @Test
+    public void dependentDeclaringABaseItCannotResolveIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject externalObjects = mockOpenProject("ExternalObjects"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, externalObjects));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(externalObjects));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        when(environment.resolveBaseProject(externalObjects)).thenReturn(null);
+        when(environment.isExtensionProject(externalObjects)).thenReturn(false);
+        when(environment.readDeclaredBaseProject(externalObjects))
+            .thenReturn(DeclaredBaseProject.DECLARED);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    /** An unreadable manifest proves nothing, so it must not earn the unrelated shortcut either. */
+    @Test
+    public void dependentWithUnreadableManifestIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject externalObjects = mockOpenProject("ExternalObjects"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, externalObjects));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(externalObjects));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        when(environment.resolveBaseProject(externalObjects)).thenReturn(null);
+        when(environment.isExtensionProject(externalObjects)).thenReturn(false);
+        when(environment.readDeclaredBaseProject(externalObjects))
+            .thenReturn(DeclaredBaseProject.UNREADABLE);
 
         SearchDependenciesResult result =
             ProjectStateChecker.determineSearchDependencies(base, environment);

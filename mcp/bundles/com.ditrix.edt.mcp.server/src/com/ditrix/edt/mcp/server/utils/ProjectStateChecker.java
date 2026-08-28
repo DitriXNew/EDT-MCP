@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.core.platform.IDerivedDataManagerProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils.DeclaredBaseProject;
 
 /**
  * Utility class for checking project state and readiness.
@@ -658,9 +659,10 @@ public final class ProjectStateChecker
      * ({@code V8ExtensionNature} and {@code V8ExternalObjectsNature}). A dependent project missing
      * from the registry, or an EXTENSION whose parent cannot be resolved, leaves the snapshot
      * undetermined and therefore workspace-wide: without that registration the nature cannot tell
-     * us which base the project depends on. An external-objects project with no parent is NOT that
-     * case - it is legitimately unlinked, has no base-configuration scope to reference, and is
-     * classified as unrelated. The result records each member's current {@link ProjectState} and derives
+     * us which base the project depends on. A non-extension dependent project is skipped as unrelated
+     * only when its DT-INF/PROJECT.PMF manifest PROVES it declares no base - a null runtime parent
+     * alone does not, since EDT also returns null while the parent is unwired or inaccessible.
+     * The result records each member's current {@link ProjectState} and derives
      * its extension subset from those SAME members. By construction, every extension used for adopted
      * TARGET augmentation therefore belongs to the SOURCE scope represented by this snapshot; a target
      * can never be searched in a scope that excludes the project it lives in. Extension kind is filtered
@@ -743,6 +745,15 @@ public final class ProjectStateChecker
                     // no reference to a base-configuration object, which makes it genuinely
                     // unrelated. Failing closed here instead would hand every workspace that merely
                     // has one open the workspace-wide scan this scoping exists to avoid.
+                    if (env.readDeclaredBaseProject(registeredProject) != DeclaredBaseProject.NONE)
+                    {
+                        // DECLARED: the manifest says this project HAS a base that the runtime could
+                        // not give us, so the registration is unusable - not an unrelated project.
+                        // UNREADABLE: nothing is proven either way. Only a manifest that provably
+                        // declares no base earns the unrelated shortcut below, because a null runtime
+                        // parent ALSO means "parent not wired yet" or "parent not accessible".
+                        return SearchDependenciesResult.undetermined();
+                    }
                     unlinkedDependentNames.add(name);
                     continue;
                 }
@@ -1049,6 +1060,13 @@ public final class ProjectStateChecker
         IProject resolveBaseProject(IProject project);
 
         /**
+         * Whether {@code project} PERMANENTLY declares a base project in its {@code DT-INF/PROJECT.PMF}.
+         * The runtime parent cannot answer this - see
+         * {@link ExtensionOriginUtils#readDeclaredBaseProject(IProject)}.
+         */
+        DeclaredBaseProject readDeclaredBaseProject(IProject project);
+
+        /**
          * Whether {@code project} is a configuration EXTENSION (not merely dependent).
          * <p>
          * The cascade builds one refactoring per EXTENSION of the renamed object's configuration.
@@ -1131,6 +1149,12 @@ public final class ProjectStateChecker
             public IProject resolveBaseProject(IProject project)
             {
                 return ExtensionOriginUtils.resolveBaseProject(project);
+            }
+
+            @Override
+            public DeclaredBaseProject readDeclaredBaseProject(IProject project)
+            {
+                return ExtensionOriginUtils.readDeclaredBaseProject(project);
             }
 
             @Override
