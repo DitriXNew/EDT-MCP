@@ -128,13 +128,16 @@ public final class FormStructureReader
      * element can stand this many frames deep before the budget declines anything - and the failure
      * that follows is not a truncated table: {@code StackOverflowError} is an {@link Error}, it
      * escapes every {@code catch (Exception)} and every {@code catch (RuntimeException)} on the way
-     * out, and the caller gets no result at all rather than a short one. {@link #collectHandlers}
-     * therefore walks with an explicit stack and takes this only for the node cap it is.</p>
+     * out, and the caller gets no result at all rather than a short one.</p>
      *
-     * <p>The boundary, stated rather than left to be discovered: {@link #appendItem} still recurses.
-     * Its depth is bounded by the {@code rowLimit} its caller hands down - which is this ceiling
-     * only when nobody narrows it, and the comparison report narrows it to the caller's row
-     * limit.</p>
+     * <p><b>Both walks that descend a form therefore use an explicit stack</b> and take this only
+     * for the node cap it is: {@link #collectHandlers} for the Event-handlers section and
+     * {@link #appendItem} for the item outline. Neither leans on the caller's {@code rowLimit} to
+     * keep it shallow, and that was never a bound to lean on: {@code get_metadata_details} renders
+     * a form through the three-argument {@link #render}, which hands down exactly this ceiling, so
+     * the shallow limit the comparison report happens to pass is one caller's choice and not a
+     * property of this reader. What is left is a cap on how many elements are LOOKED AT, honoured
+     * identically by both walks, on a form of any depth.</p>
      */
     public static final int MAX_NODES = 5000;
 
@@ -590,23 +593,77 @@ public final class FormStructureReader
     }
 
     /**
-     * Appends one item (and recursively its child items) as a nested outline line: beyond name / type /
-     * id / title it appends visibility (only when {@code false}), the bound dataPath, and per-kind
+     * Appends {@code item} and its whole subtree as nested outline lines: beyond name / type / id /
+     * title each line carries visibility (only when {@code false}), the bound dataPath, and per-kind
      * extras (group layout, field type+editMode, button command). The item NAME is the stable
      * programmatic id; the integer id and item type are shown alongside, and the title (by language
      * code) is appended when present. A shared {@code budget} caps the total node count for a
      * pathological form; when it is hit the shared {@code truncated} flag is raised so the caller can
      * record that nodes were actually dropped.
+     *
+     * <h2>The descent uses an explicit stack, for the reason {@link #collectHandlers} does</h2>
+     * This walk used to re-enter itself once per element, and {@code budget} does not bound the DEPTH
+     * it can reach - it bounds the number of elements VISITED. The bound that was offered instead was
+     * the caller's {@code rowLimit}, which the comparison report keeps small; but the ordinary read
+     * does not go through the comparison report. {@code get_metadata_details} calls the
+     * three-argument {@link #render}, which passes {@link #MAX_NODES}, so a form nested that deep ran
+     * the rendering thread out of stack - and a {@code StackOverflowError} is not a truncated
+     * outline: it is an {@link Error}, it escapes the {@code catch (Exception)} between here and the
+     * caller, and the request came back with no result at all. Widening a catch to {@code Error} is
+     * not the answer; not needing one is.
+     * <p>
+     * <b>The ORDER and the INDENTATION are the recursion's own, and they are what the outline
+     * prints.</b> An element's line comes first, then the whole subtree under each {@code items}
+     * child in list order, then the subtree under each singular containment in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - plain depth-first pre-order, each child one
+     * level deeper than its parent. A stack that pushed siblings forward would reverse every one of
+     * those orderings, and a stack that recomputed depth from anything but its own entry would flatten
+     * the outline; {@link #pushOutlineChildren} therefore pushes children in REVERSE and each entry
+     * carries the depth its own line is indented to.
+     * <p>
+     * <b>{@code budget} and {@code truncated} keep their exact meaning</b>, including WHICH element
+     * trips the cut: an element is charged when it is VISITED, and the stack visits elements in the
+     * very order the recursion did. Once the budget is gone the elements already pushed are still
+     * popped and still raise {@code truncated}, exactly as the recursion's remaining calls returned
+     * through the same branch - and, exactly as before, they push no children of their own, so the
+     * stack cannot grow past what the charged elements put on it.
+     *
+     * @param sb the output buffer
+     * @param item the item to render, together with everything below it
+     * @param depth the indentation level of {@code item}'s own line
+     * @param language the title language CODE
+     * @param budget the shared per-visited-element node budget
+     * @param truncated raised when the budget actually DECLINED an element
      */
     private static void appendItem(StringBuilder sb, EObject item, int depth, String language,
         int[] budget, boolean[] truncated)
     {
-        if (budget[0] <= 0)
+        Deque<PendingItem> pending = new ArrayDeque<>();
+        pending.push(new PendingItem(item, depth));
+        while (!pending.isEmpty())
         {
-            truncated[0] = true;
-            return;
+            PendingItem current = pending.pop();
+            if (budget[0] <= 0)
+            {
+                truncated[0] = true;
+                continue;
+            }
+            budget[0]--;
+            appendItemLine(sb, current.item, current.depth, language);
+            pushOutlineChildren(current.item, current.depth, language, pending);
         }
-        budget[0]--;
+    }
+
+    /**
+     * Writes the ONE outline line an element gets, indented to its own depth.
+     *
+     * @param sb the output buffer
+     * @param item the item whose line this is
+     * @param depth the indentation level
+     * @param language the title language CODE
+     */
+    private static void appendItemLine(StringBuilder sb, EObject item, int depth, String language)
+    {
         for (int i = 0; i < depth; i++)
         {
             sb.append("  "); //$NON-NLS-1$
@@ -638,25 +695,66 @@ public final class FormStructureReader
             sb.append(", ").append(escapeOutline(extras)); //$NON-NLS-1$
         }
         sb.append(")\n"); //$NON-NLS-1$
+    }
 
-        // Recurse into containers (groups / tables expose the same 'items' feature).
-        for (EObject child : getReferenceList(item, FEATURE_ITEMS))
+    /**
+     * Puts one element's children on the outline walk's stack in the order that reproduces the
+     * descent the recursion made: REVERSED, and the singular containments BEFORE the {@code items}
+     * children, so that the first {@code items} child is the next one popped and the singular ones
+     * come out last. Every child is pushed one level deeper than its parent, which is the depth its
+     * own line will be indented to.
+     *
+     * <p>The singular item-bearing containments live OUTSIDE {@code items} (a table's command bar, an
+     * item's context menu / extended tooltip). Their names occupy the form-wide namespace, so they
+     * must be discoverable - but a designer-default child (no nested items, no title) is noise and is
+     * skipped to keep the outline lean. That test is applied HERE, at push time, exactly where the
+     * recursion applied it before calling itself: a child that fails it is never visited, so it is
+     * never charged to the budget either.</p>
+     *
+     * @param element the element whose children are to be walked
+     * @param depth the indentation level of {@code element}'s own line
+     * @param language the title language CODE, for the designer-default test
+     * @param pending the walk's stack
+     */
+    private static void pushOutlineChildren(EObject element, int depth, String language,
+        Deque<PendingItem> pending)
+    {
+        int childDepth = depth + 1;
+        for (int i = SINGULAR_ITEM_CONTAINMENTS.length - 1; i >= 0; i--)
         {
-            appendItem(sb, child, depth + 1, language, budget, truncated);
-        }
-        // Singular item-bearing containments OUTSIDE 'items' (a table's command bar, an item's
-        // context menu / extended tooltip). Their names occupy the form-wide namespace, so they must
-        // be discoverable - but a designer-default child (no nested items, no title) is noise and is
-        // skipped to keep the outline lean.
-        for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
-        {
-            EObject child = getSingleReference(item, featureName);
+            EObject child = getSingleReference(element, SINGULAR_ITEM_CONTAINMENTS[i]);
             if (child != null
                 && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
                     || !titleOf(child, language).isEmpty()))
             {
-                appendItem(sb, child, depth + 1, language, budget, truncated);
+                pending.push(new PendingItem(child, childDepth));
             }
+        }
+        List<EObject> items = getReferenceList(element, FEATURE_ITEMS);
+        for (int i = items.size() - 1; i >= 0; i--)
+        {
+            pending.push(new PendingItem(items.get(i), childDepth));
+        }
+    }
+
+    /**
+     * One item waiting on the outline walk's stack, with the indentation level its own line is
+     * written at.
+     *
+     * <p>The depth is carried rather than derived at pop time because a stack holds elements from
+     * several levels at once: the next pop is not one level below the previous one, it is one level
+     * below whichever element pushed it.</p>
+     */
+    private static final class PendingItem
+    {
+        final EObject item;
+
+        final int depth;
+
+        PendingItem(EObject item, int depth)
+        {
+            this.item = item;
+            this.depth = depth;
         }
     }
 

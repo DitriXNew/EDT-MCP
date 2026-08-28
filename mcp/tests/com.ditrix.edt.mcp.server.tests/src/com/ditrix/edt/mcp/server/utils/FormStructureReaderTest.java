@@ -13,6 +13,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -521,13 +522,19 @@ public class FormStructureReaderTest
     }
 
 
-    // ==================== the handler walk is bounded by VISITS, so it may not recurse ====================
+    // ============= both form walks are bounded by VISITS, so neither may recurse =============
     //
-    // MAX_NODES caps how many elements the walk LOOKS AT, and that is not a cap on how DEEP it goes:
+    // MAX_NODES caps how many elements a walk LOOKS AT, and that is not a cap on how DEEP it goes:
     // on a chain of nested elements the two are the same number. A walk that re-entered itself once
     // per element therefore stood thousands of frames deep before the budget could decline anything,
     // and the failure was not a truncated table - StackOverflowError is an Error, GetComparisonNodeTool
     // catches RuntimeException, and the MCP request came back with no result at all.
+    //
+    // There are TWO such walks over a form, and the item outline is the one whose depth looked
+    // bounded from the outside: the caller's rowLimit caps it, and the comparison report hands down
+    // a small one. get_metadata_details does not go through the comparison report - it calls the
+    // three-argument render, which passes MAX_NODES - so the outline had the same 5000-frame reach
+    // the handler walk had, on a tool that does not catch Error either.
 
     /**
      * One less than the walk's own budget, so the traversal reaches the BOTTOM of the chain instead
@@ -544,29 +551,56 @@ public class FormStructureReaderTest
     private static final int WALK_STACK_BYTES = 256 * 1024;
 
     /**
-     * Renders on a thread with a deliberately small stack, and reports what the walk did with it.
+     * Renders through the THREE-argument entry point - the one {@code get_metadata_details} calls,
+     * which hands down MAX_NODES as the row limit - on a thread with a deliberately small stack.
+     *
+     * @param form the form model
+     * @return the rendered document
+     * @throws Throwable whatever the render threw
+     */
+    private static String renderOnASmallStack(EObject form) throws Throwable
+    {
+        return onASmallStack(() -> FormStructureReader.render("CommonForm.F", form, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Renders with an explicit row limit on a thread with a deliberately small stack.
      *
      * @param form the form model
      * @param rowLimit the caller's row limit
+     * @return the rendered document
+     * @throws Throwable whatever the render threw
+     */
+    private static String renderOnASmallStack(EObject form, int rowLimit) throws Throwable
+    {
+        return onASmallStack(
+            () -> FormStructureReader.render("CommonForm.F", form, "en", rowLimit)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Runs one render on a thread with a deliberately small stack, and reports what the walk did
+     * with it.
+     *
+     * @param render the render to run
      * @return the rendered document
      * @throws Throwable whatever the render threw - a StackOverflowError included, which is the
      *             whole point: it is an Error, so a test that let it be swallowed would pass over
      *             the defect
      */
-    private static String renderOnASmallStack(EObject form, int rowLimit) throws Throwable
+    private static String onASmallStack(Supplier<String> render) throws Throwable
     {
         Object[] outcome = new Object[2];
-        Runnable render = () -> {
+        Runnable walk = () -> {
             try
             {
-                outcome[0] = FormStructureReader.render("CommonForm.F", form, "en", rowLimit); //$NON-NLS-1$ //$NON-NLS-2$
+                outcome[0] = render.get();
             }
             catch (Throwable t) // NOSONAR an Error is exactly what this test is about
             {
                 outcome[1] = t;
             }
         };
-        Thread walker = new Thread(null, render, "form-structure-deep-walk", WALK_STACK_BYTES); //$NON-NLS-1$
+        Thread walker = new Thread(null, walk, "form-structure-deep-walk", WALK_STACK_BYTES); //$NON-NLS-1$
         walker.start();
         walker.join();
         if (outcome[1] != null)
@@ -574,6 +608,25 @@ public class FormStructureReaderTest
             throw (Throwable)outcome[1];
         }
         return (String)outcome[0];
+    }
+
+    /**
+     * Nests {@link #CHAIN_DEPTH} groups {@code G0..G(CHAIN_DEPTH-1)} one inside the next under a new
+     * form, each one level deeper than the last.
+     *
+     * @param form the form to nest the chain under
+     * @return the DEEPEST group, so a caller can hang something at the bottom of the chain
+     */
+    private static EObject deepChainUnder(EObject form)
+    {
+        EObject parent = form;
+        for (int i = 0; i < CHAIN_DEPTH; i++)
+        {
+            EObject group = newItem(MODEL.formGroup, "G" + i, i); //$NON-NLS-1$
+            addItem(parent, group);
+            parent = group;
+        }
+        return parent;
     }
 
     /**
@@ -585,20 +638,30 @@ public class FormStructureReaderTest
     private static EObject formWhoseOnlyHandlerIsAtTheBottomOfADeepChain()
     {
         EObject form = newForm();
-        EObject parent = form;
-        for (int i = 0; i < CHAIN_DEPTH; i++)
-        {
-            EObject group = newItem(MODEL.formGroup, "G" + i, i); //$NON-NLS-1$
-            addItem(parent, group);
-            parent = group;
-        }
-        addHandler(parent, "OnChange", null, "DeepestOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addHandler(deepChainUnder(form), "OnChange", null, "DeepestOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
         return form;
     }
 
     /**
-     * The depth pin. The row limit is 1 on purpose: the ITEM outline still recurses, and its depth is
-     * bounded by exactly that limit, so what this measures is the handler walk and nothing else.
+     * The same chain with no handler on it: what this one is read for is the OUTLINE it renders,
+     * whose deepest line is one the walk only reaches by getting all the way down.
+     *
+     * @return the form
+     */
+    private static EObject formNestedAsDeepAsTheBudgetAllows()
+    {
+        EObject form = newForm();
+        deepChainUnder(form);
+        return form;
+    }
+
+    /**
+     * The handler walk's depth pin. The row limit of 1 no longer has the meaning it was given when
+     * it was written - the item outline does not recurse any more, so it no longer has to be held
+     * out of the way - but it is kept, for the reason it is now: a limit of 1 stops the outline walk
+     * after a single node, so what this measures is the handler walk and nothing else, and a failure
+     * here names ONE of the two walks. The outline's own depth is pinned separately, at the budget
+     * that the tool actually hands it.
      *
      * @throws Throwable when the walk ran the thread out of stack
      */
@@ -733,6 +796,198 @@ public class FormStructureReaderTest
         assertTrue("depth-first: everything under A comes before B: " + md, //$NON-NLS-1$
             md.indexOf("| A2 | OnChange | A2OnChange |") //$NON-NLS-1$
                 < md.indexOf("| B | OnChange | BOnChange |")); //$NON-NLS-1$
+    }
+
+    // ==================== the ITEM outline, at the depth the tool actually allows ====================
+
+    /**
+     * The deepest line the chain produces, indented to its own level - {@code G0} is a top-level item
+     * at depth 0, so {@code G(n)} sits at depth {@code n}.
+     *
+     * @return the expected outline line for the deepest group
+     */
+    private static String deepestOutlineLine()
+    {
+        return "  ".repeat(CHAIN_DEPTH - 1) + "- G" + (CHAIN_DEPTH - 1) //$NON-NLS-1$ //$NON-NLS-2$
+            + " (type: FormGroup, id: " + (CHAIN_DEPTH - 1) + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The outline's depth pin, taken on the path that actually allows the depth: the three-argument
+     * render, which is what {@code get_metadata_details} calls and which hands the outline the whole
+     * MAX_NODES budget. A walk that re-entered itself once per element runs the thread out of stack
+     * here and never returns a document at all.
+     *
+     * @throws Throwable when the walk ran the thread out of stack
+     */
+    @Test
+    public void testTheItemOutlineCrossesAChainDeeperThanItsThreadStack() throws Throwable
+    {
+        String md = renderOnASmallStack(formNestedAsDeepAsTheBudgetAllows());
+
+        // The document is megabytes wide (the indentation alone is quadratic in the depth), so the
+        // failure message carries its size rather than the document.
+        assertTrue("the outline must reach the bottom of the chain, not the bottom of the stack" //$NON-NLS-1$
+            + " (rendered " + md.length() + " chars)", md.contains(deepestOutlineLine())); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The same render, asked whether it thinks it was truncated. It was not: the chain is one element
+     * shorter than the budget, so a truncation note here would mean the budget branch fired on a form
+     * the outline had rendered completely.
+     *
+     * @throws Throwable when the walk ran the thread out of stack
+     */
+    @Test
+    public void testTheDeepItemOutlineDoesNotReportItselfTruncated() throws Throwable
+    {
+        String md = renderOnASmallStack(formNestedAsDeepAsTheBudgetAllows());
+
+        assertFalse("nothing was dropped, so no truncation note is due (rendered " //$NON-NLS-1$
+            + md.length() + " chars)", md.contains("item outline truncated")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ============ the ORDER and the INDENTATION of the outline walk are what it prints ============
+    //
+    // Depth-first pre-order: an element's own line, then the whole subtree under each 'items' child in
+    // list order, then the subtree under each singular containment in the order
+    // SINGULAR_ITEM_CONTAINMENTS declares - each child one level deeper than its parent. A stack that
+    // pushed siblings forward would reverse all three of those orderings; a stack that derived depth
+    // from anything but its own entry would mis-indent every line after a descent.
+
+    /**
+     * A form built so that each ordering is separately observable in the outline: the form's own
+     * command bar, three root siblings G/T/B, a subtree under G, and a Table carrying an items child,
+     * an auto command bar and a context menu at once. Every singular containment is given a child of
+     * its own, because a childless, titleless one is a designer default the outline skips.
+     *
+     * @return the form
+     */
+    private static EObject formWhoseOutlineSpellsOutTheWalkOrder()
+    {
+        EObject form = newForm();
+
+        EObject group = newItem(MODEL.formGroup, "G", 10); //$NON-NLS-1$
+        addItem(group, newItem(MODEL.formField, "G1", 11)); //$NON-NLS-1$
+        addItem(group, newItem(MODEL.formField, "G2", 12)); //$NON-NLS-1$
+        addItem(form, group);
+
+        EObject table = newItem(MODEL.table, "T", 20); //$NON-NLS-1$
+        addItem(table, newItem(MODEL.formField, "T1", 21)); //$NON-NLS-1$
+        EObject tableBar = newItem(MODEL.autoCommandBar, "TBar", 22); //$NON-NLS-1$
+        addItem(tableBar, newItem(MODEL.formField, "TBarButton", 23)); //$NON-NLS-1$
+        table.eSet(table.eClass().getEStructuralFeature("autoCommandBar"), tableBar); //$NON-NLS-1$
+        EObject tableMenu = newItem(MODEL.formGroup, "TMenu", 24); //$NON-NLS-1$
+        addItem(tableMenu, newItem(MODEL.formField, "TMenuItem", 25)); //$NON-NLS-1$
+        table.eSet(table.eClass().getEStructuralFeature("contextMenu"), tableMenu); //$NON-NLS-1$
+        addItem(form, table);
+
+        addItem(form, newItem(MODEL.formField, "B", 30)); //$NON-NLS-1$
+
+        EObject formBar = newItem(MODEL.autoCommandBar, "FBar", 90); //$NON-NLS-1$
+        addItem(formBar, newItem(MODEL.formField, "FBarButton", 91)); //$NON-NLS-1$
+        form.eSet(form.eClass().getEStructuralFeature("autoCommandBar"), formBar); //$NON-NLS-1$
+
+        return form;
+    }
+
+    /**
+     * The whole outline, as one literal block. A pin on membership would survive every reordering and
+     * every indentation slip; the order and the indentation ARE the observable, so both are written
+     * down.
+     */
+    @Test
+    public void testTheItemOutlineIsInTheWalksDepthFirstPreOrder()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseOutlineSpellsOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("the lines must come out in the order the walk visits the elements: " + md, //$NON-NLS-1$
+            md.contains("- FBar (type: AutoCommandBar, id: 90)\n" //$NON-NLS-1$
+                + "  - FBarButton (type: FormField, id: 91)\n" //$NON-NLS-1$
+                + "- G (type: FormGroup, id: 10)\n" //$NON-NLS-1$
+                + "  - G1 (type: FormField, id: 11)\n" //$NON-NLS-1$
+                + "  - G2 (type: FormField, id: 12)\n" //$NON-NLS-1$
+                + "- T (type: Table, id: 20)\n" //$NON-NLS-1$
+                + "  - T1 (type: FormField, id: 21)\n" //$NON-NLS-1$
+                + "  - TBar (type: AutoCommandBar, id: 22)\n" //$NON-NLS-1$
+                + "    - TBarButton (type: FormField, id: 23)\n" //$NON-NLS-1$
+                + "  - TMenu (type: FormGroup, id: 24)\n" //$NON-NLS-1$
+                + "    - TMenuItem (type: FormField, id: 25)\n" //$NON-NLS-1$
+                + "- B (type: FormField, id: 30)\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * Its own literal for the thing a forward-pushing stack breaks and a correct one does not: two
+     * SIBLINGS under one parent, in the order the list holds them. Written separately because JUnit
+     * stops a method at its first failed assertion, so a pin sharing a method with another is only
+     * ever exercised while that other one passes.
+     */
+    @Test
+    public void testOutlineSiblingsKeepTheirListOrder()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseOutlineSpellsOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("G1 is added before G2, so it is printed first: " + md, //$NON-NLS-1$
+            md.indexOf("  - G1 (type: FormField, id: 11)") //$NON-NLS-1$
+                < md.indexOf("  - G2 (type: FormField, id: 12)")); //$NON-NLS-1$
+    }
+
+    /**
+     * And its own literal for the ordering a single-level form cannot show: a child's whole SUBTREE is
+     * printed before the next sibling is reached, so TBarButton - two levels under the table, at the
+     * bottom of the FIRST of its two singular containments - precedes TMenu, the second one.
+     *
+     * <p>The pair is deliberately a NESTED one. The form root's own top-level items are walked by
+     * {@code renderItems}, which calls the walk once per item, so their relative order is decided
+     * outside the walk and no defect in it could disturb them; a pin taken across two root siblings
+     * would therefore hold whatever the walk did.</p>
+     */
+    @Test
+    public void testAnOutlineSubtreeIsFinishedBeforeTheNextSiblingIsReached()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseOutlineSpellsOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("depth-first: everything under TBar comes before TMenu: " + md, //$NON-NLS-1$
+            md.indexOf("    - TBarButton (type: FormField, id: 23)") //$NON-NLS-1$
+                < md.indexOf("  - TMenu (type: FormGroup, id: 24)")); //$NON-NLS-1$
+    }
+
+    /**
+     * The singular containments come AFTER the items children of the same element, and among
+     * themselves in the order {@code SINGULAR_ITEM_CONTAINMENTS} declares - a table with only an auto
+     * command bar would pass whichever way the two were pushed.
+     */
+    @Test
+    public void testOutlineSingularContainmentsFollowTheItemsAndKeepTheirDeclarationOrder()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseOutlineSpellsOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("items first, then autoCommandBar, then contextMenu: " + md, //$NON-NLS-1$
+            md.indexOf("  - T1 (type: FormField, id: 21)") //$NON-NLS-1$
+                < md.indexOf("  - TBar (type: AutoCommandBar, id: 22)") //$NON-NLS-1$
+                && md.indexOf("  - TBar (type: AutoCommandBar, id: 22)") //$NON-NLS-1$
+                    < md.indexOf("  - TMenu (type: FormGroup, id: 24)")); //$NON-NLS-1$
+    }
+
+    /**
+     * The indentation pin proper. Every line before this one descends or stays level, so an
+     * implementation that carried a single running depth would still get them right; what it cannot
+     * get right is the RETURN - {@code B} is a root sibling printed immediately after a line two
+     * levels deep, and its indentation comes from the entry that pushed it, not from the line above.
+     */
+    @Test
+    public void testOutlineDepthIsCarriedPerNodeNotDerivedFromThePreviousLine()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formWhoseOutlineSpellsOutTheWalkOrder(), "en"); //$NON-NLS-1$
+
+        assertTrue("B returns to column 0 straight after a depth-2 line: " + md, //$NON-NLS-1$
+            md.contains("    - TMenuItem (type: FormField, id: 25)\n" //$NON-NLS-1$
+                + "- B (type: FormField, id: 30)\n")); //$NON-NLS-1$
     }
 
     @Test
