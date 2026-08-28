@@ -397,6 +397,194 @@ public class ComparisonNodeRendererTest
         assertFalse("the form snapshot must carry no raw XML tag: " + text, text.contains("<")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ every side's structure is headed by THAT side's own name ============
+    //
+    // request.address is how the CALLER reached the node - an FQN or a node id, addressing one
+    // side - and it used to head all three form-structure sections. For a form renamed between the
+    // sides that attributes structure to the wrong FQN: the Other and Ancestor sections showed
+    // their own side's form under the MAIN side's name, and nothing in the section says otherwise,
+    // because the heading is the only name in it. The tree answers the question itself, per side,
+    // and it is the same value the summary table above already prints.
+
+    /** The symlinks the sides of {@link #renamedFormNode()} carry - deliberately unlike the request address. */
+    private static final String MAIN_FORM_SYMLINK = "Catalog.Alpha.Form.ItemForm"; //$NON-NLS-1$
+
+    private static final String OTHER_FORM_SYMLINK = "Catalog.Beta.Form.RenamedForm"; //$NON-NLS-1$
+
+    private static final String ANCESTOR_FORM_SYMLINK = "Catalog.Gamma.Form.OldForm"; //$NON-NLS-1$
+
+    /**
+     * A form node whose three sides carry three DIFFERENT names, which is what a rename between the
+     * sides looks like in the tree.
+     *
+     * @return the node
+     */
+    private static FormComparisonNode renamedFormNode()
+    {
+        FormComparisonNode node = mock(FormComparisonNode.class);
+        when(node.eClass()).thenReturn(MODEL.formNodeClass);
+        when(node.getSymlink(ComparisonSide.MAIN)).thenReturn(MAIN_FORM_SYMLINK);
+        when(node.getSymlink(ComparisonSide.OTHER)).thenReturn(OTHER_FORM_SYMLINK);
+        when(node.getSymlink(ComparisonSide.COMMON_ANCESTOR)).thenReturn(ANCESTOR_FORM_SYMLINK);
+        return node;
+    }
+
+    /**
+     * @param name the form's own name, so the three sides are distinguishable objects
+     * @return a form-like object
+     */
+    private static EObject formNamed(String name)
+    {
+        EObject form = new DynamicEObjectImpl(MODEL.formClass);
+        form.eSet(MODEL.formName, name);
+        return form;
+    }
+
+    /**
+     * @return the document for a form node whose sides are three differently named forms
+     */
+    private static String renderRenamedForm()
+    {
+        return render(renamedFormNode(), ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(formNamed("MainForm"), formNamed("OtherForm"), //$NON-NLS-1$ //$NON-NLS-2$
+                formNamed("AncestorForm")))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheMainFormStructureIsHeadedByTheMainSideName()
+    {
+        String section = sectionOf(renderRenamedForm(), "## Form structure (Main)"); //$NON-NLS-1$
+
+        assertTrue("the main section is headed by the main side's own name: " + section, //$NON-NLS-1$
+            section.contains("# Form Structure: " + MAIN_FORM_SYMLINK)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheOtherFormStructureIsHeadedByTheOtherSideName()
+    {
+        String section = sectionOf(renderRenamedForm(), "## Form structure (Other)"); //$NON-NLS-1$
+
+        assertTrue("the other side's structure is the other side's form, and must be headed by " //$NON-NLS-1$
+            + "its name: " + section, //$NON-NLS-1$
+            section.contains("# Form Structure: " + OTHER_FORM_SYMLINK)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAncestorFormStructureIsHeadedByTheAncestorSideName()
+    {
+        String section = sectionOf(renderRenamedForm(), "## Form structure (Ancestor)"); //$NON-NLS-1$
+
+        assertTrue("and the ancestor's, by the ancestor's: " + section, //$NON-NLS-1$
+            section.contains("# Form Structure: " + ANCESTOR_FORM_SYMLINK)); //$NON-NLS-1$
+    }
+
+    /**
+     * The ABSENCE that the three pins above would not catch on their own: a heading that gained the
+     * side's name while keeping the request's would still attribute the structure to an FQN that
+     * does not hold it. The request address is chosen to share no substring with the symlinks.
+     */
+    @Test
+    public void testAFormStructureSectionDoesNotCarryTheAddressOfAnotherSide()
+    {
+        String section = sectionOf(renderRenamedForm(), "## Form structure (Other)"); //$NON-NLS-1$
+
+        assertFalse("the address the node was reached by is not this side's name: " + section, //$NON-NLS-1$
+            section.contains("Catalog.Products")); //$NON-NLS-1$
+    }
+
+    /**
+     * The one side that has no name to be headed by borrows the request's OUT LOUD. A heading that
+     * cannot be established must not read like one that was - that is the same defect as the one
+     * above, just arrived at from the other end.
+     */
+    @Test
+    public void testASideWithNoNameOfItsOwnSaysWhereItsHeadingCameFrom()
+    {
+        FormComparisonNode node = mock(FormComparisonNode.class);
+        when(node.eClass()).thenReturn(MODEL.formNodeClass);
+        when(node.getSymlink(ComparisonSide.MAIN)).thenReturn(MAIN_FORM_SYMLINK);
+        when(node.getSymlink(ComparisonSide.OTHER)).thenReturn(null);
+
+        String section = sectionOf(render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(formNamed("MainForm"), formNamed("OtherForm"), //$NON-NLS-1$ //$NON-NLS-2$
+                null))),
+            "## Form structure (Other)"); //$NON-NLS-1$
+
+        assertTrue("a borrowed heading must say it is borrowed, and from which side: " + section, //$NON-NLS-1$
+            section.contains("carries no name of its own") //$NON-NLS-1$
+                && section.contains("the address the node was reached by (Main)")); //$NON-NLS-1$
+    }
+
+    /**
+     * And it still prints the address it borrowed, because it is the only one the document has.
+     * Separated from the pin above so that a fallback which dropped the heading entirely fails
+     * here rather than passing there.
+     */
+    @Test
+    public void testASideWithNoNameOfItsOwnStillCarriesTheBorrowedAddress()
+    {
+        FormComparisonNode node = mock(FormComparisonNode.class);
+        when(node.eClass()).thenReturn(MODEL.formNodeClass);
+        when(node.getSymlink(ComparisonSide.OTHER)).thenReturn(""); //$NON-NLS-1$
+
+        String section = sectionOf(render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(null, formNamed("OtherForm"), null))), //$NON-NLS-1$
+            "## Form structure (Other)"); //$NON-NLS-1$
+
+        assertTrue("the borrowed address is still the heading: " + section, //$NON-NLS-1$
+            section.contains("# Form Structure: Catalog.Products")); //$NON-NLS-1$
+    }
+
+    /**
+     * A name made of whitespace is no name, and it must reach the SAME fallback an absent one
+     * does.
+     * <p>
+     * The defect: the fallback asked whether the symlink was EMPTY. A symlink of spaces or tabs
+     * is not empty, so it passed as this side's own name - the notice was suppressed and the
+     * heading was rendered as {@code # Form Structure:} followed by whitespace, which reads as a
+     * name read off this side and is not one. What decides the fallback is whether the value is
+     * an ADDRESS.
+     */
+    @Test
+    public void aSideWhoseNameIsOnlyWhitespaceSaysWhereItsHeadingCameFrom()
+    {
+        String section = sectionOf(renderWithABlankOtherName(), "## Form structure (Other)"); //$NON-NLS-1$
+
+        assertTrue("whitespace is not a name, so the heading is borrowed and must say so: " //$NON-NLS-1$
+            + section,
+            section.contains("carries no name of its own") //$NON-NLS-1$
+                && section.contains("the address the node was reached by (Main)")); //$NON-NLS-1$
+    }
+
+    /**
+     * And it heads the section with the address it borrowed, rather than with the whitespace it
+     * had. In its own test for the reason the empty-name pair is split: JUnit stops a method at
+     * its first failed assertion, so a heading assertion sharing a method with the notice one
+     * would only be reached while the notice was already right.
+     */
+    @Test
+    public void aSideWhoseNameIsOnlyWhitespaceIsHeadedByTheBorrowedAddress()
+    {
+        String section = sectionOf(renderWithABlankOtherName(), "## Form structure (Other)"); //$NON-NLS-1$
+
+        assertTrue("the borrowed address is the heading, not the whitespace: " + section, //$NON-NLS-1$
+            section.contains("# Form Structure: Catalog.Products")); //$NON-NLS-1$
+    }
+
+    /**
+     * @return the document for a node whose Other side is named with whitespace alone
+     */
+    private static String renderWithABlankOtherName()
+    {
+        FormComparisonNode node = mock(FormComparisonNode.class);
+        when(node.eClass()).thenReturn(MODEL.formNodeClass);
+        when(node.getSymlink(ComparisonSide.MAIN)).thenReturn(MAIN_FORM_SYMLINK);
+        when(node.getSymlink(ComparisonSide.OTHER)).thenReturn(" \t"); //$NON-NLS-1$
+        return render(node, ComparisonNodeStatus.FINISHED,
+            access(new ComparedObjects<EObject>(formNamed("MainForm"), formNamed("OtherForm"), //$NON-NLS-1$ //$NON-NLS-2$
+                null)));
+    }
+
     // ==================== Module node ====================
 
     @Test

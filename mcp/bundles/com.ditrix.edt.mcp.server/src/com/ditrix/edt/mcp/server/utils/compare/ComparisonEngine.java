@@ -7,13 +7,10 @@
 package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -351,10 +348,12 @@ public final class ComparisonEngine
 
     private final Backend backend;
     private final ComparisonSessionRegistry sessions;
+    private final SnapshotIo snapshotIo;
 
-    private ComparisonEngine(Backend backend, long idleTtlMillis)
+    private ComparisonEngine(Backend backend, long idleTtlMillis, SnapshotIo snapshotIo)
     {
         this.backend = backend;
+        this.snapshotIo = snapshotIo;
         // The MONOTONIC source, not the wall clock: every budget the registry keeps - the claim,
         // the idle TTL, the wait for a launch to begin - is a span of ELAPSED time, and a clock
         // correction moves a wall-clock reading in both directions. See ElapsedTime.
@@ -373,7 +372,7 @@ public final class ComparisonEngine
     public static void install(Supplier<IComparisonManager> managerSupplier)
     {
         INSTANCE.set(new ComparisonEngine(managerBackend(managerSupplier),
-            ComparisonSessionRegistry.DEFAULT_IDLE_TTL_MILLIS));
+            ComparisonSessionRegistry.DEFAULT_IDLE_TTL_MILLIS, SnapshotIo.REAL));
     }
 
     /**
@@ -466,7 +465,29 @@ public final class ComparisonEngine
      */
     static ComparisonEngine forTesting(Backend backend, long idleTtlMillis)
     {
-        return new ComparisonEngine(backend, idleTtlMillis);
+        return forTesting(backend, idleTtlMillis, SnapshotIo.REAL);
+    }
+
+    /**
+     * The same facade with the snapshot's two file-system steps replaced.
+     * <p>
+     * Package-scoped for the same reason {@link #forTesting(Backend, long)} is: two states
+     * {@link #snapshotOfZip} is required to answer correctly are not reachable through any
+     * input. A temp area that cannot be written cannot be arranged, because
+     * {@code Files.createTempFile} resolves {@code java.io.tmpdir} once into a static final
+     * and never reads the property again; and an {@code Error} out of the copy - an
+     * {@code OutOfMemoryError} while the entry is buffered is the realistic one - has no
+     * archive that produces it on demand. Both decide what the caller is told, so both are
+     * given a seam.
+     *
+     * @param backend the backend to drive
+     * @param idleTtlMillis the session idle TTL
+     * @param snapshotIo how the private copy is created and filled
+     * @return a facade that is NOT installed as the singleton
+     */
+    static ComparisonEngine forTesting(Backend backend, long idleTtlMillis, SnapshotIo snapshotIo)
+    {
+        return new ComparisonEngine(backend, idleTtlMillis, snapshotIo);
     }
 
     /**
@@ -813,13 +834,26 @@ public final class ComparisonEngine
      * deserialized while the {@code ZipFile} is still open and it is closed before the return - so
      * deleting the temporary once the call comes back cannot take anything away from the caller.
      * <p>
-     * <b>A snapshot that cannot be taken changes nothing.</b> The copy is best-effort: when it
-     * fails - a path that is not a file, an unreadable one, no room for the temporary - the
-     * caller's own path is handed to the platform unvalidated, exactly as it was before this
-     * existed. That is the same answer this method already gave to a zip it could not open: not
-     * read is not "does not address this comparison", and the platform fails the launch naming the
-     * file. Refusing here instead would turn an environment problem into a refusal about the
-     * caller's file.
+     * <b>The snapshot holds ONE entry - the one this comparison restores from.</b> It used to be a
+     * byte-for-byte copy of the whole archive, which put no bound at all on what a launch copied
+     * into the system temporary directory: a valid archive holding this comparison's small
+     * settings entry beside a multi-gigabyte unrelated one was duplicated in full before anything
+     * was looked up, and the codec's document and entry-count bounds do not cover a raw copy. The
+     * platform reads exactly one entry - measured above - so the copy is now of exactly that entry,
+     * and the snapshot's size is the size of what will actually be read. The entry itself is
+     * bounded by {@link MergeRulesCodec#MAX_DOCUMENT_BYTES}, which is the same ceiling this server
+     * puts on a merge-rules document everywhere else it reads or writes one.
+     * <p>
+     * <b>"Not read" and "not snapshotted" are DIFFERENT answers, and collapsing them would walk
+     * round the bound.</b> An archive this process could not open or read is one nothing was
+     * learnt about: the caller's own path goes to the platform, which opens it with its own
+     * {@code ZipFile} and fails the launch naming their file - a refusal invented here would be
+     * about an archive this code never managed to look at. But a snapshot that could not be TAKEN
+     * - no room for the temporary, a write that failed, an entry past the bound - is not that: it
+     * is this server establishing that it cannot deliver what the snapshot promises. Falling back
+     * to the caller's path there would restore from a file nothing checked, which is the very race
+     * the snapshot exists to close, and it would make the bound above unenforceable by simply
+     * exceeding it. Such a launch is REFUSED, and the refusal names what could not be done.
      * <p>
      * Only a zip is examined, and only a zip is copied. An {@code .xml} file is the document
      * itself and carries no address, so there is nothing to disprove about it, nothing to be
@@ -840,55 +874,140 @@ public final class ComparisonEngine
      * wording, and a {@link RuntimeException} from the platform propagates as the platform threw
      * it, exactly as it did before a snapshot existed.
      *
-     * @throws IllegalStateException when the file cannot be read, is not a rules file, or is a zip
-     *     that holds no entry this comparison would restore from - the message names the CALLER's
-     *     file, because that is the thing the caller can fix
+     * @throws IllegalStateException when the file cannot be read, is not a rules file, is a zip
+     *     that holds no entry this comparison would restore from, or is one whose entry could not
+     *     be copied into the private snapshot - the message names the CALLER's file, because that
+     *     is the thing the caller can fix
      */
     public RestoredMergeSettings restoreMergeSettings(ComparisonProcessHandle handle, String fileName)
     {
-        Path snapshot = snapshotOfZip(fileName);
+        ZipSnapshot snapshot = snapshotOfZip(handle, fileName);
         try
         {
-            String unaddressed = zipHoldsNothingFor(handle, fileName, snapshot);
-            if (unaddressed != null)
+            if (snapshot.refusal != null)
             {
-                throw new IllegalStateException(unaddressed);
+                throw new IllegalStateException(snapshot.refusal);
             }
             return backend.restoreMergeSettings(handle,
-                snapshot == null ? fileName : snapshot.toString());
+                snapshot.file == null ? fileName : snapshot.file.toString());
         }
         catch (IOException | InvalidPreferencesFormatException e)
         {
             throw new IllegalStateException("Could not read the merge-rules file '" + fileName //$NON-NLS-1$
-                + "': " + aboutTheCallersFile(ComparisonFailures.describe(e), fileName, snapshot), //$NON-NLS-1$
+                + "': " //$NON-NLS-1$
+                + aboutTheCallersFile(ComparisonFailures.describe(e), fileName, snapshot.file),
                 e);
         }
         finally
         {
-            discard(snapshot);
+            discard(snapshot.file);
         }
     }
 
     /**
-     * Copies a zipped rules file to a private temporary, so that what is CHECKED and what the
-     * platform RESTORES are one file rather than one path read twice.
+     * The private one-entry copy a launch reads from, or the reason there is none.
+     *
+     * <h2>Three states, and the third is why this is not a {@link Path}</h2>
+     * <ul>
+     *   <li>A {@link #file} - the entry this comparison restores from, alone in an archive of its
+     *       own. The platform reads this and nothing else.</li>
+     *   <li>Neither field - nothing was snapshotted and nothing is claimed: the caller's path is
+     *       not a zip, or is a zip this process could not open or read. The caller's own path goes
+     *       to the platform, exactly as it did before snapshots existed.</li>
+     *   <li>A {@link #refusal} - the archive was read and the launch must not proceed: it holds no
+     *       entry for this comparison, or its entry could not be copied. Both are conclusions
+     *       drawn from something that WAS read, which is what separates them from the state
+     *       above.</li>
+     * </ul>
+     */
+    private static final class ZipSnapshot
+    {
+        /** The private one-entry archive, or {@code null} when none was taken. */
+        private final Path file;
+
+        /** Why the launch must not proceed, or {@code null} when nothing was disproved. */
+        private final String refusal;
+
+        private ZipSnapshot(Path file, String refusal)
+        {
+            this.file = file;
+            this.refusal = refusal;
+        }
+
+        /** @return the state that claims nothing: no copy, no refusal */
+        static ZipSnapshot none()
+        {
+            return new ZipSnapshot(null, null);
+        }
+
+        /**
+         * @param file the private one-entry archive
+         * @return the state a launch reads from
+         */
+        static ZipSnapshot of(Path file)
+        {
+            return new ZipSnapshot(file, null);
+        }
+
+        /**
+         * @param refusal what was refused and why
+         * @return the state that stops the launch
+         */
+        static ZipSnapshot refused(String refusal)
+        {
+            return new ZipSnapshot(null, refusal);
+        }
+    }
+
+    /**
+     * Copies the ONE entry this comparison restores from into a private temporary, so that what is
+     * CHECKED and what the platform RESTORES are one file rather than one path read twice.
      * <p>
      * The temporary keeps the {@code .zip} extension because the platform asserts on it, and
      * carries nothing else of the caller's path - see {@link #restoreMergeSettings} for the
-     * measurement that says nothing else is read from it.
+     * measurement that says nothing else is read from it. It holds one entry under the source's own
+     * name, which is what makes it the same archive as far as EDT's lookup is concerned and what
+     * makes its size proportional to what is actually read.
      * <p>
-     * Every failure answers {@code null}, which means "there is no snapshot" and never "the file is
-     * bad": a caller's path that is not a zip has nothing to snapshot, and one that could not be
-     * copied was not judged. Both leave the caller's own path to be handed to the platform.
+     * <b>The three answers are not interchangeable.</b> Nothing to snapshot (not a zip) and nothing
+     * READ (an archive that could not be opened) both answer {@link ZipSnapshot#none()}, which
+     * claims nothing and leaves the caller's own path to the platform. An archive that WAS read and
+     * either holds nothing for this comparison or holds an entry that could not be copied answers
+     * {@link ZipSnapshot#refused}: the first is the silent no-op this check exists against, and the
+     * second is this server unable to keep the promise the copy makes - and falling back there
+     * would restore from an archive nothing checked.
      *
+     * <h2>The SOURCE is read before the temporary is made, so the answer follows the evidence</h2>
+     * The temporary used to be created first, and the copy - the first statement that touched
+     * the source at all - ran after it. A temp area with no room therefore answered
+     * {@link ZipSnapshot#refused} for an archive this process had never tried to open: when
+     * that archive was itself missing or corrupt the honest answer was
+     * {@link ZipSnapshot#none()}, and the caller got a refusal decided by which statement
+     * happened to run first rather than by anything read. The distinction above is the whole
+     * point of this method, so it is not left to statement order: the source is read FIRST,
+     * and only an archive that opened and holds this comparison's entry ever causes a
+     * temporary to exist.
+     * <p>
+     * That costs one extra open of the source on the way through. It is the cheap half of the
+     * work - the walk reads the central directory {@code ZipFile} has already validated on
+     * open and stops at the first match, while the entry itself is still inflated exactly
+     * once, by the copy - and it buys an archive that holds nothing for this comparison a
+     * refusal with no temporary created for it at all.
+     * <p>
+     * The probe does not decide the outcome, and deliberately so: what the archive holds is
+     * read off the COPY, so a file replaced between the two opens is still caught by the check
+     * below rather than by the probe's stale answer. The probe answers one question only -
+     * whether the source could be read.
+     *
+     * @param handle the comparison, whose three project names name the entry
      * @param fileName the caller's path
-     * @return the private copy, or {@code null} when there is nothing to copy or the copy failed
+     * @return the snapshot, the refusal, or neither
      */
-    private static Path snapshotOfZip(String fileName)
+    private ZipSnapshot snapshotOfZip(ComparisonProcessHandle handle, String fileName)
     {
-        if (fileName == null)
+        if (handle == null || fileName == null)
         {
-            return null;
+            return ZipSnapshot.none();
         }
         Path path;
         try
@@ -899,39 +1018,168 @@ public final class ComparisonEngine
         {
             // A spelling that is not even a path was refused by the tool long before a handle
             // existed; nothing is claimed about one that somehow arrives here.
-            return null;
+            return ZipSnapshot.none();
         }
         if (!MergeRulesCodec.isZip(path))
         {
-            return null;
+            return ZipSnapshot.none();
         }
-        Path copy = null;
+        // Read off the handle BEFORE anything is created. It reads three descriptors, so it can
+        // throw on a handle whose descriptors are not what it claims, and nothing here or in the
+        // read below is inside any cleanup - so a temporary created first would be left in the
+        // temp area by an exception thrown from either.
+        String entryId = mergeRulesEntryId(handle);
         try
         {
-            copy = Files.createTempFile("edt-mcp-merge-rules", MergeRulesCodec.ZIP_EXTENSION); //$NON-NLS-1$
-            // Streamed INTO the file that was just created, rather than Files.copy(path, copy,
-            // REPLACE_EXISTING), and both halves of that matter. REPLACE_EXISTING unlinks the
-            // temporary and creates a new file carrying the SOURCE's mode, so a rules file that
-            // is 0644 inside somebody's private directory would be re-created 0644 in the shared
-            // temp area - the copy would stop being private exactly when the original was not.
-            // And Files.copy calls a DIRECTORY copied when it has created an empty directory of
-            // that name: a directory named '<something>.zip' would then become a "snapshot" the
-            // platform is handed, where EDT lists it, finds no archive, and restores nothing -
-            // the silent no-op this whole check exists against. Opening it for reading refuses it
-            // instead, and the caller's own path is what goes to the platform.
-            try (InputStream source = Files.newInputStream(path);
-                OutputStream target =
-                    Files.newOutputStream(copy, StandardOpenOption.TRUNCATE_EXISTING))
+            // The FIRST statement that touches the source, and it runs before anything is
+            // created. Reading is what tells the two refusable states apart from the state
+            // that claims nothing, so nothing able to refuse happens before it.
+            MergeRulesCodec.ZipEntryLookup probe = MergeRulesCodec.lookUpEntry(path, entryId);
+            if (!probe.found())
             {
-                source.transferTo(target);
+                // Read, and it holds nothing this comparison would restore from. Answered
+                // here rather than after a copy because there is nothing to copy: no
+                // temporary is created for an archive already known to be the wrong one.
+                return ZipSnapshot.refused(zipHoldsNothingFor(fileName, entryId, probe));
             }
-            return copy;
         }
-        catch (IOException | RuntimeException e) // NOSONAR no snapshot is a state, not a failure
+        catch (IOException | RuntimeException e) // NOSONAR not read is a state, not a failure
         {
-            discard(copy);
-            return null;
+            // The SOURCE could not be opened or read - a missing file, a directory named
+            // '.zip', a truncated archive. Nothing was learnt, so nothing is claimed: the
+            // platform opens the same path with its own ZipFile and fails the launch naming
+            // the caller's file.
+            return ZipSnapshot.none();
         }
+        Path copy;
+        try
+        {
+            // Created here rather than inside the codec so that a temp area with no room is this
+            // method's answer to give: it is a snapshot that could not be TAKEN, which refuses.
+            // Reached only once the source has been read, so this refusal is never the answer
+            // to an archive that could not be opened.
+            copy = snapshotIo.createTemporary();
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return ZipSnapshot.refused(couldNotSnapshot(fileName,
+                "no private copy could be created (" //$NON-NLS-1$
+                    + ComparisonFailures.describe(e) + ").")); //$NON-NLS-1$
+        }
+        // From here the temporary exists and only the returned snapshot may keep it. Removal
+        // is a finally and not a call on each exit, because the exits are not all returns:
+        // this method runs BEFORE the caller's own try/finally, so an Error - an
+        // OutOfMemoryError while the entry is buffered is the realistic one - passed through
+        // uncaught and left the temporary in the temp area. The Error still propagates; it is
+        // the file that is not left.
+        boolean taken = false;
+        try
+        {
+            MergeRulesCodec.AddressedEntryCopy copied;
+            try
+            {
+                copied = snapshotIo.copyInto(path, entryId, copy);
+            }
+            catch (IOException | RuntimeException e) // NOSONAR not read is a state, not a failure
+            {
+                // The source was readable a moment ago and is not now, or its entry could not
+                // be inflated. Still a failure of the SOURCE, so still nothing claimed.
+                return ZipSnapshot.none();
+            }
+            if (!copied.lookup().found())
+            {
+                // What the archive holds is read off the COPY, not off the probe: a file
+                // replaced between the two opens is caught here.
+                return ZipSnapshot.refused(zipHoldsNothingFor(fileName, entryId, copied.lookup()));
+            }
+            if (copied.failure() != null)
+            {
+                return ZipSnapshot.refused(couldNotSnapshot(fileName, copied.failure()));
+            }
+            taken = true;
+            return ZipSnapshot.of(copy);
+        }
+        finally
+        {
+            if (!taken)
+            {
+                discard(copy);
+            }
+        }
+    }
+
+    /**
+     * The two file-system steps a snapshot is made of, behind one name.
+     * <p>
+     * {@link #REAL} is production and is exactly the two calls {@link #snapshotOfZip} used to
+     * make inline. The seam exists because neither failure can be arranged from outside - see
+     * {@link ComparisonEngine#forTesting(Backend, long, SnapshotIo)} - and both decide which of
+     * the three answers a caller gets.
+     */
+    interface SnapshotIo
+    {
+        /** The two calls production makes. */
+        SnapshotIo REAL = new SnapshotIo()
+        {
+            @Override
+            public Path createTemporary() throws IOException
+            {
+                return Files.createTempFile("edt-mcp-merge-rules", //$NON-NLS-1$
+                    MergeRulesCodec.ZIP_EXTENSION);
+            }
+
+            @Override
+            public MergeRulesCodec.AddressedEntryCopy copyInto(Path source, String entryId,
+                Path target) throws IOException
+            {
+                return MergeRulesCodec.copyAddressedEntry(source, entryId, target);
+            }
+        };
+
+        /**
+         * @return a new empty private file, named so that {@link #discard} and the tests can
+         *     find it
+         * @throws IOException when the temp area cannot take one
+         */
+        Path createTemporary() throws IOException;
+
+        /**
+         * @param source the caller's archive
+         * @param entryId the entry this comparison restores from
+         * @param target the file {@link #createTemporary()} produced
+         * @return what the archive holds, and whether the copy was produced
+         * @throws IOException when the SOURCE cannot be opened or its entry cannot be read
+         */
+        MergeRulesCodec.AddressedEntryCopy copyInto(Path source, String entryId, Path target)
+            throws IOException;
+    }
+
+    /**
+     * The refusal for an archive whose entry this comparison would restore from could not be put
+     * into a private copy.
+     * <p>
+     * It is a REFUSAL and not a quiet fallback, and the difference is the whole point: the copy is
+     * what makes the archive that was checked the archive the platform reads, so a launch that
+     * proceeded without it would restore from a file nothing here looked at - and the bound on the
+     * copy would be avoidable by exceeding it. It names what could not be done and what to do, and
+     * says plainly that no decision was applied, so a caller is never left wondering whether some
+     * of them were.
+     *
+     * @param fileName the caller's path
+     * @param why what could not be done, as a phrase
+     * @return the message
+     */
+    private static String couldNotSnapshot(String fileName, String why)
+    {
+        return "The merge-rules file '" + fileName //$NON-NLS-1$
+            + "' was NOT applied and the comparison was not started, because " + why //$NON-NLS-1$
+            + " This server launches from a private copy of the one entry the platform reads, so " //$NON-NLS-1$
+            + "that the archive it CHECKED is the archive the platform RESTORES from; starting " //$NON-NLS-1$
+            + "from the caller's path instead would apply decisions out of a file nothing had " //$NON-NLS-1$
+            + "looked at, which is the very thing that copy exists to prevent. No decision was " //$NON-NLS-1$
+            + "applied - the launch never happened. Make room in the system temporary directory " //$NON-NLS-1$
+            + "(or point 'java.io.tmpdir' somewhere with room), check the entry is a " //$NON-NLS-1$
+            + "merge-settings document of a sane size, and start the comparison again."; //$NON-NLS-1$
     }
 
     /**
@@ -1022,52 +1270,24 @@ public final class ComparisonEngine
     }
 
     /**
-     * Whether a zipped merge-rules file carries nothing this comparison would restore from.
-     *
-     * <h2>Three ways to answer, and only one of them refuses</h2>
-     * <ul>
-     *   <li>There is no snapshot - nothing is claimed. Either the file is not a zip (an xml file is
-     *       the document itself and has no entry to address) or the copy could not be taken, and a
-     *       file this call did not manage to hold still is one it has learnt nothing about.</li>
-     *   <li>The snapshot could not be opened or read - nothing is claimed either. The platform
-     *       opens the SAME snapshot with its own {@code ZipFile} and fails the launch naming the
-     *       file, so a refusal invented here would put this plugin's words on an archive it did
-     *       not manage to look at.</li>
-     *   <li>The snapshot was read and the entry is not in it - refused, naming the id that was
-     *       looked for and what the archive holds instead.</li>
-     * </ul>
+     * The refusal for a zipped merge-rules file that carries nothing this comparison would restore
+     * from.
      * <p>
-     * The snapshot is what is READ and {@code fileName} is what is NAMED: the caller has a path
-     * they can inspect and re-send, and the temporary this call happened to copy it into is not it.
+     * This is the silent no-op the whole check exists against: the platform would log a warning,
+     * answer {@code null}, and start the comparison with no decisions at all while the caller, who
+     * named a file, has every reason to believe theirs were applied.
+     * <p>
+     * The ARCHIVE is what was read and {@code fileName} is what is NAMED: the caller has a path
+     * they can inspect and re-send, and it is the only half of this they can act on.
      *
-     * @param handle the comparison the decisions would belong to
      * @param fileName the caller's path, for the message
-     * @param snapshot the private copy the platform will also read, or {@code null} when none was
-     *     taken
-     * @return the refusal, or {@code null} when nothing was disproved
+     * @param entryId the entry EDT would look for
+     * @param lookup what the archive holds instead
+     * @return the refusal
      */
-    private static String zipHoldsNothingFor(ComparisonProcessHandle handle, String fileName,
-        Path snapshot)
+    private static String zipHoldsNothingFor(String fileName, String entryId,
+        MergeRulesCodec.ZipEntryLookup lookup)
     {
-        if (handle == null || fileName == null || snapshot == null)
-        {
-            return null;
-        }
-        String entryId = mergeRulesEntryId(handle);
-        MergeRulesCodec.ZipEntryLookup lookup;
-        try
-        {
-            lookup = MergeRulesCodec.lookUpEntry(snapshot, entryId);
-        }
-        catch (IOException e)
-        {
-            // Not read is not "does not address this comparison"; see the second case above.
-            return null;
-        }
-        if (lookup.found())
-        {
-            return null;
-        }
         return "The merge-rules file '" + fileName //$NON-NLS-1$
             + "' is a zip that holds nothing for THIS comparison, so starting with it would have " //$NON-NLS-1$
             + "applied none of its decisions and said nothing about it. A zip keeps one entry per " //$NON-NLS-1$

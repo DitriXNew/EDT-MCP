@@ -523,6 +523,182 @@ public class FormStructureReaderTest
             md.contains("_(no event handlers)_")); //$NON-NLS-1$
     }
 
+    // ============ the ROWS the handler walk keeps are bounded too, and separately ============
+    //
+    // MAX_NODES counts ELEMENTS. A row is a bound event, and one element carries as many of them
+    // as it has events bound, so a form can hold hundreds of thousands of rows inside a budget of
+    // 5000 elements - on one element or spread over them. The walk used to append every one of
+    // them to a list and the caller's limit was applied afterwards, at the render, so the rows
+    // past it were built, held for the whole walk and then thrown away. That is the same
+    // accumulation the budget already bounds on the pending stack: bounded there for what the walk
+    // QUEUES, unbounded here for what it KEEPS.
+    //
+    // The two bounds stay two statements. "There were more rows than are shown" is the row cap;
+    // "the element budget ran out" is the walk's. Neither may be inferred from the other, which is
+    // why the walk carries on visiting elements after the rows are full.
+
+    /**
+     * @param handlers how many bound events to give the one element
+     * @return an element carrying that many handlers, named {@code H0..H(n-1)}
+     */
+    private static EObject elementWithHandlers(int handlers)
+    {
+        EObject group = newItem(MODEL.formGroup, "G", 1); //$NON-NLS-1$
+        for (int i = 0; i < handlers; i++)
+        {
+            addHandler(group, "OnChange", null, "H" + i); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return group;
+    }
+
+    /**
+     * @param rows the accumulator to read
+     * @return the handler procedure names it kept, in order
+     */
+    private static List<String> keptHandlerNames(FormStructureReader.HandlerRows rows)
+    {
+        List<String> names = new ArrayList<>();
+        for (String[] row : rows.kept())
+        {
+            names.add(row[2]);
+        }
+        return names;
+    }
+
+    @Test
+    public void testTheHandlerWalkKeepsNoMoreRowsThanTheCapAllows()
+    {
+        FormStructureReader.HandlerRows rows = new FormStructureReader.HandlerRows(3);
+
+        FormStructureReader.collectHandlers(elementWithHandlers(10), "G", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {MAX_NODES}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertEquals("one element's handlers are not bounded by the element budget, so the cap " //$NON-NLS-1$
+            + "has to bite as they are found", //$NON-NLS-1$
+            List.of("H0", "H1", "H2"), keptHandlerNames(rows)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * And the flag, in its own method: rows that are never kept leave no trace in the numbers, so a
+     * walk that simply stopped keeping them would render a cut table that reads as a whole one.
+     * JUnit stops a method at its first failed assertion, which is why this is not a line above.
+     */
+    @Test
+    public void testTheHandlerWalkReportsThatItDeclinedRows()
+    {
+        FormStructureReader.HandlerRows rows = new FormStructureReader.HandlerRows(3);
+
+        FormStructureReader.collectHandlers(elementWithHandlers(10), "G", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {MAX_NODES}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertTrue("rows were found and not kept, and that must be reported", rows.declined()); //$NON-NLS-1$
+    }
+
+    /**
+     * The positive control for the flag: a form whose handlers all fit declines nothing. Without
+     * this an accumulator that raised the flag unconditionally would satisfy the pin above, and
+     * every complete table would be announced as truncated.
+     */
+    @Test
+    public void testTheHandlerWalkDeclinesNothingWhenEveryRowFits()
+    {
+        FormStructureReader.HandlerRows rows = new FormStructureReader.HandlerRows(3);
+
+        FormStructureReader.collectHandlers(elementWithHandlers(3), "G", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {MAX_NODES}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertFalse("exactly as many rows as the cap allows is a complete table: " //$NON-NLS-1$
+            + keptHandlerNames(rows), rows.declined());
+    }
+
+    /**
+     * The half that a cap alone would break: the walk must keep VISITING elements after its rows
+     * are full, because whether the element budget ran out is a different question and only a walk
+     * that spends the budget can answer it.
+     * <p>
+     * A CHAIN rather than a flat form, and that is what makes this a pin: on a flat form the very
+     * first push already finds more children than the budget can reach and raises the flag there,
+     * so a walk that stopped after the root would still look cut short. Here the budget only runs
+     * out three elements down, which a walk that stopped at a full accumulator never reaches.
+     */
+    @Test
+    public void testTheHandlerWalkFinishesItsElementBudgetAfterTheRowsAreFull()
+    {
+        EObject root = newItem(MODEL.formGroup, "R", 1); //$NON-NLS-1$
+        addHandler(root, "OnChange", null, "R1"); //$NON-NLS-1$ //$NON-NLS-2$
+        addHandler(root, "OnOpen", null, "R2"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject parent = root;
+        for (int i = 0; i < 4; i++)
+        {
+            EObject group = newItem(MODEL.formGroup, "G" + i, 10 + i); //$NON-NLS-1$
+            addItem(parent, group);
+            parent = group;
+        }
+        boolean[] cutShort = {false};
+
+        FormStructureReader.collectHandlers(root, "R", "en", //$NON-NLS-1$ //$NON-NLS-2$
+            new FormStructureReader.HandlerRows(1), new int[] {3}, cutShort, new ArrayDeque<>());
+
+        assertTrue("the rows fill on the root, and the element budget only runs out three " //$NON-NLS-1$
+            + "elements below it - a walk that stopped at the full accumulator would report a " //$NON-NLS-1$
+            + "form it never finished looking at as complete", cutShort[0]); //$NON-NLS-1$
+    }
+
+    /**
+     * A form whose handlers exceed a row cap of 1 AND whose elements exceed the walk's budget, as a
+     * chain so the walk only meets its budget at the bottom.
+     *
+     * @return the form
+     */
+    private static EObject formPastBothTheRowCapAndTheWalkBound()
+    {
+        EObject form = newForm();
+        addHandler(form, "OnOpen", null, "FormOnOpen"); //$NON-NLS-1$ //$NON-NLS-2$
+        addHandler(form, "BeforeClose", null, "FormBeforeClose"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject parent = form;
+        for (int i = 0; i < MAX_NODES; i++)
+        {
+            EObject group = newItem(MODEL.formGroup, "G" + i, i); //$NON-NLS-1$
+            addItem(parent, group);
+            parent = group;
+        }
+        return form;
+    }
+
+    @Test
+    public void testARowCapAndACutShortWalkAreBothReported()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formPastBothTheRowCapAndTheWalkBound(), "en", 1); //$NON-NLS-1$
+
+        assertTrue("a row was declined, so the cap note is due: " + md, //$NON-NLS-1$
+            md.contains("event handlers truncated: only the first 1")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACutShortWalkIsStillReportedWhenTheRowCapAlsoBit()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formPastBothTheRowCapAndTheWalkBound(), "en", 1); //$NON-NLS-1$
+
+        assertTrue("and the walk's own bound is a separate statement, printed too: " + md, //$NON-NLS-1$
+            md.contains("the handler walk stopped after visiting " + MAX_NODES)); //$NON-NLS-1$
+    }
+
+    /**
+     * The row the cap DID keep is still rendered, so a cap that dropped everything - or one applied
+     * before the first row - would not pass here.
+     */
+    @Test
+    public void testTheRowsWithinTheCapAreStillRendered()
+    {
+        String md = FormStructureReader.render("CommonForm.F", //$NON-NLS-1$
+            formPastBothTheRowCapAndTheWalkBound(), "en", 1); //$NON-NLS-1$
+
+        assertTrue("the first row is what the cap kept: " + md, //$NON-NLS-1$
+            md.contains("| (form) | OnOpen | FormOnOpen |")); //$NON-NLS-1$
+    }
+
 
     // ============= both form walks are bounded by VISITS, so neither may recurse =============
     //
@@ -1158,8 +1334,8 @@ public class FormStructureReaderTest
         MeasuringDeque<FormStructureReader.PendingElement> pending = new MeasuringDeque<>();
 
         FormStructureReader.collectHandlers(elementWithChildren(CHILDREN_FAR_PAST_THE_BUDGET),
-            "Form", "en", new ArrayList<>(), new int[] {SMALL_BUDGET}, new boolean[] {false}, //$NON-NLS-1$ //$NON-NLS-2$
-            pending);
+            "Form", "en", new FormStructureReader.HandlerRows(FormStructureReader.MAX_NODES), //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {SMALL_BUDGET}, new boolean[] {false}, pending);
 
         assertTrue("the walk may not hold more pending elements than its budget can ever visit - " //$NON-NLS-1$
             + "peaked at " + pending.peak + " on an element with " + CHILDREN_FAR_PAST_THE_BUDGET //$NON-NLS-1$ //$NON-NLS-2$
@@ -1222,13 +1398,14 @@ public class FormStructureReaderTest
             addHandler(child, "OnChange", null, "C" + i + "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             addItem(group, child);
         }
-        List<String[]> rows = new ArrayList<>();
+        FormStructureReader.HandlerRows rows =
+            new FormStructureReader.HandlerRows(FormStructureReader.MAX_NODES);
 
         FormStructureReader.collectHandlers(group, "G", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
             new int[] {SMALL_BUDGET}, new boolean[] {false}, new ArrayDeque<>());
 
         List<String> handlers = new ArrayList<>();
-        for (String[] row : rows)
+        for (String[] row : rows.kept())
         {
             handlers.add(row[2]);
         }
@@ -1367,13 +1544,14 @@ public class FormStructureReaderTest
         EObject b = newItem(MODEL.formField, "B", 4); //$NON-NLS-1$
         addHandler(b, "OnChange", null, "BOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
         addItem(root, b);
-        List<String[]> rows = new ArrayList<>();
+        FormStructureReader.HandlerRows rows =
+            new FormStructureReader.HandlerRows(FormStructureReader.MAX_NODES);
 
         FormStructureReader.collectHandlers(root, "R", "en", rows, new int[] {SMALL_BUDGET}, //$NON-NLS-1$ //$NON-NLS-2$
             new boolean[] {false}, new ArrayDeque<>());
 
         List<String> handlers = new ArrayList<>();
-        for (String[] row : rows)
+        for (String[] row : rows.kept())
         {
             handlers.add(row[2]);
         }

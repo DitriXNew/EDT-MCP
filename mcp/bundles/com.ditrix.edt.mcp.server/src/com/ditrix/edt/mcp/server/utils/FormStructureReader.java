@@ -149,7 +149,7 @@ public final class FormStructureReader
      * elements.
      *
      * <p>This bound is INDEPENDENT of the caller's row limit and has to be reported independently.
-     * The row cap bites on rows that were collected and declined, and it is visible in the numbers;
+     * The row cap bites on rows the walk DECLINED TO KEEP, and it is visible in the numbers;
      * this one bites on elements that were never LOOKED AT, so it can leave the section holding
      * fewer handlers than the caller asked for - or none at all - and every surface that would have
      * betrayed it stays silent: no row was declined, so no cap note is due, and a shorter table is
@@ -543,7 +543,7 @@ public final class FormStructureReader
      * to each event of the form root and every element, or {@code _(no event handlers)_} when none.
      *
      * <p>TWO independent bounds can narrow this section, and each is reported on its own. The
-     * caller's {@code limit} declines collected rows and is announced by {@link #appendCapNote}; the
+     * caller's {@code limit} declines rows and is announced by {@link #appendCapNote}; the
      * walk's {@link #MAX_NODES} ceiling stops the traversal and is announced by
      * {@link #HANDLERS_WALK_CUT_SHORT_NOTE}. Neither implies the other: a walk cut short usually
      * collects FEWER rows than the limit, so gating the report on the row cap - which is what this
@@ -551,12 +551,20 @@ public final class FormStructureReader
      * sentence is therefore reserved for a walk that COMPLETED; a cut-short walk that found nothing
      * says {@link #HANDLERS_NONE_FOUND_WALK_CUT_SHORT} instead, which claims nothing about the
      * form.</p>
+     *
+     * <p><b>The row cap is applied by the WALK, not here.</b> It used to be applied here, over a
+     * list the walk had filled without one, and {@link #MAX_NODES} did not stand in for it: that
+     * budget counts ELEMENTS, and one element carries as many handler rows as it has bound events,
+     * so a form with hundreds of thousands of them - on one element or spread over the 5000 the
+     * budget allows - was materialised in full and then had all but {@code limit} of its rows
+     * thrown away. {@link HandlerRows} declines them as they are found instead, which is the same
+     * bound the walk already puts on what it QUEUES, applied to what it KEEPS.</p>
      */
     private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language,
         int limit)
     {
         sb.append("## Event handlers\n\n"); //$NON-NLS-1$
-        List<String[]> handlers = new ArrayList<>();
+        HandlerRows handlers = new HandlerRows(limit);
         boolean[] walkCutShort = {false};
         // collectHandlers walks the form root's 'items' AND its singular containments (the form-wide
         // auto command bar, context menus, tooltips), so the whole element tree is covered from here. It
@@ -564,23 +572,18 @@ public final class FormStructureReader
         // independent walk) so the Event-handlers section honours the same cap on a pathological form.
         collectHandlers(formModel, FORM_OWNER_LABEL, language, handlers, new int[] {MAX_NODES},
             walkCutShort);
-        if (handlers.isEmpty())
+        if (handlers.kept().isEmpty())
         {
             sb.append(walkCutShort[0] ? HANDLERS_NONE_FOUND_WALK_CUT_SHORT
                 : "_(no event handlers)_").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        // The walk keeps its OWN budget: that one guards the traversal against a pathological form
-        // and is not a caller preference, so the rows are capped here, where the caller's limit is
-        // what decides how much of the document it asked for.
-        int shown = Math.min(limit, handlers.size());
-        for (int i = 0; i < shown; i++)
+        for (String[] row : handlers.kept())
         {
-            String[] row = handlers.get(i);
             sb.append(MarkdownUtils.tableRow(row[0], row[1], row[2]));
         }
-        if (shown < handlers.size())
+        if (handlers.declined())
         {
             appendCapNote(sb, "event handlers", limit); //$NON-NLS-1$
         }
@@ -1283,10 +1286,19 @@ public final class FormStructureReader
      * now holds at most {@code budget} entries (or the single root entry when the budget is already
      * gone), which is the bound the guard advertises.
      *
+     * <p>
+     * <b>And the ROWS are bounded too, by {@link HandlerRows} rather than by this budget.</b> The
+     * budget counts elements; the rows are what the elements carry, and one element carries a row
+     * per bound event, so neither number bounds the other. The walk keeps going after the rows are
+     * full - it has to, because whether the ELEMENT budget ran out is a different statement from
+     * "there were more rows than shown", and only a walk that reaches the end of the budget can
+     * make the first one honestly.
+     *
      * @param root the form root, whose {@code handlers} list is read first
      * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
      * @param language the event-name language CODE
-     * @param rows the accumulator receiving {@code {owner, event, handler}} rows
+     * @param rows the accumulator receiving {@code {owner, event, handler}} rows, which keeps at
+     *            most the caller's row cap of them
      * @param budget the shared per-visited-element node budget, capping the walk on a pathological form
      * @param cutShort raised when the budget actually DECLINED an element, so the caller can report
      *            a walk that stopped early instead of publishing a short list as a complete one.
@@ -1295,7 +1307,7 @@ public final class FormStructureReader
      *            is still visited - the same off-by-one the item outline is gated against
      */
     private static void collectHandlers(EObject root, String rootOwnerLabel, String language,
-        List<String[]> rows, int[] budget, boolean[] cutShort)
+        HandlerRows rows, int[] budget, boolean[] cutShort)
     {
         collectHandlers(root, rootOwnerLabel, language, rows, budget, cutShort, new ArrayDeque<>());
     }
@@ -1311,13 +1323,14 @@ public final class FormStructureReader
      * @param root the form root, whose {@code handlers} list is read first
      * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
      * @param language the event-name language CODE
-     * @param rows the accumulator receiving {@code {owner, event, handler}} rows
+     * @param rows the accumulator receiving {@code {owner, event, handler}} rows, bounded by its own
+     *            row cap
      * @param budget the shared per-visited-element node budget
      * @param cutShort raised when the budget actually DECLINED an element
      * @param pending the walk's stack, empty on entry and drained on exit
      */
     static void collectHandlers(EObject root, String rootOwnerLabel, String language,
-        List<String[]> rows, int[] budget, boolean[] cutShort, Deque<PendingElement> pending)
+        HandlerRows rows, int[] budget, boolean[] cutShort, Deque<PendingElement> pending)
     {
         if (root == null)
         {
@@ -1335,11 +1348,107 @@ public final class FormStructureReader
             budget[0]--;
             for (EObject handler : getReferenceList(current.element, FEATURE_HANDLERS))
             {
+                // Asked BEFORE the row is built: past the cap the strings would be read off the
+                // model only to be dropped, and the whole point of the cap is that nothing past it
+                // is retained. Leaving the loop still RECORDS the decline - there is a handler in
+                // hand, so "there were more rows than are shown" is established - and it leaves
+                // only this element's remaining handlers; the WALK carries on, because the element
+                // budget is a separate statement (see this method's own doc).
+                if (rows.full())
+                {
+                    rows.decline();
+                    break;
+                }
                 String procName = stringValue(getValue(handler, FEATURE_NAME));
                 String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
-                rows.add(new String[] {current.ownerLabel, eventName, procName});
+                rows.add(current.ownerLabel, eventName, procName);
             }
             pushHandlerChildren(current.element, pending, budget, cutShort);
+        }
+    }
+
+    /**
+     * The Event-handlers table's rows, capped at the caller's row limit as they are collected.
+     *
+     * <h2>Why the cap lives here and not at the render</h2>
+     * The walk's {@link FormStructureReader#MAX_NODES} budget counts ELEMENTS. A row is a bound
+     * event, and one element carries as many of them as it has events bound, so a form can hold
+     * hundreds of thousands of rows within a budget of 5000 elements - on a single element or
+     * spread across them. Collecting them all and then rendering the first {@code limit} kept every
+     * one of those rows alive for the length of the walk, which is precisely the accumulation the
+     * budget was put on the pending stack to prevent. So this keeps {@code cap} rows and counts
+     * nothing else.
+     *
+     * <h2>{@link #declined()} is a different statement from the walk's cut-short flag</h2>
+     * This one says "there were more rows than are shown"; the walk's says "the element budget ran
+     * out, so elements were never looked at". A form can produce either, both or neither, and the
+     * section prints them independently - which is why the walk carries on collecting elements
+     * after this accumulator is full rather than stopping: stopping would leave the element budget
+     * unspent and the second statement unanswerable.
+     */
+    static final class HandlerRows
+    {
+        private final List<String[]> rows = new ArrayList<>();
+
+        private final int cap;
+
+        private boolean declined;
+
+        /**
+         * @param cap the most rows to keep; read as at least 1, because an accumulator that keeps
+         *            nothing would make "no handler was found" indistinguishable from "no handler
+         *            was kept", and the section says something quite different about each
+         */
+        HandlerRows(int cap)
+        {
+            this.cap = Math.max(1, cap);
+        }
+
+        /** @return whether the cap is reached, so nothing more will be kept */
+        boolean full()
+        {
+            return rows.size() >= cap;
+        }
+
+        /**
+         * Keeps one row, or declines it and records that it did.
+         *
+         * @param owner the Element-column label
+         * @param event the event name
+         * @param handler the BSL procedure name
+         */
+        void add(String owner, String event, String handler)
+        {
+            if (full())
+            {
+                decline();
+                return;
+            }
+            rows.add(new String[] {owner, event, handler});
+        }
+
+        /**
+         * Records that a row was found and not kept, without building it.
+         * <p>
+         * The caller that leaves its loop at {@link #full()} still holds the handler that did not
+         * fit, so the fact this flag reports - that there are more rows than are shown - is
+         * established there; building the row it is about only to drop it is not.
+         */
+        void decline()
+        {
+            declined = true;
+        }
+
+        /** @return the rows kept, in collection order; never more than the cap */
+        List<String[]> kept()
+        {
+            return rows;
+        }
+
+        /** @return whether a row was found and NOT kept, which is what the cap note reports */
+        boolean declined()
+        {
+            return declined;
         }
     }
 

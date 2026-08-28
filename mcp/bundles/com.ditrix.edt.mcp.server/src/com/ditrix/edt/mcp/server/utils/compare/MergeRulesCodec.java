@@ -1457,6 +1457,68 @@ public final class MergeRulesCodec
      */
     public static ZipEntryLookup lookUpEntry(Path file, String entryId) throws IOException
     {
+        return walkFor(file, entryId, null).lookup();
+    }
+
+    /**
+     * Copies the ONE entry a comparison would restore from into a NEW single-entry archive at
+     * {@code target}, so a launch reads a file whose size is the size of what it reads.
+     *
+     * <h2>Why one entry is the whole archive as far as the platform is concerned</h2>
+     * Measured from {@code ComparisonManager.deserializeMergeSettingsFromZipFile}
+     * ({@code com._1c.g5.v8.dt.compare} 29.0.0, EDT 2026.2.0): it opens {@code new ZipFile(path)},
+     * walks {@code entries()}, and at the FIRST entry whose name minus its extension equals the
+     * comparison's own id it deserializes THAT entry and returns. No other entry is opened, none is
+     * needed, and an archive with no match produces a logged warning and a {@code null}. So an
+     * archive holding just that entry, under the entry's own name, answers the platform's lookup
+     * exactly as the original did - and the walk here stops at the first match too, which is the
+     * same entry the platform would have taken.
+     *
+     * <h2>What this bounds, and what it does not</h2>
+     * The whole-archive copy this replaces was unbounded: a valid archive holding the expected
+     * small entry beside a multi-gigabyte unrelated one was duplicated byte for byte before
+     * anything was looked up, and neither {@link #MAX_DOCUMENT_BYTES} nor {@link #MAX_ZIP_ENTRIES}
+     * covered a raw copy. Now nothing but the addressed entry is read at all, and the entry itself
+     * is read through {@link #readAtMost} at {@link #MAX_DOCUMENT_BYTES} - the same ceiling this
+     * codec puts on a merge-settings document read from anywhere else. There is still no
+     * {@link #MAX_ZIP_ENTRIES} bound on the WALK, for the reason {@link #lookUpEntry} states.
+     *
+     * <h2>The two failures are told apart, and the asymmetry is the point</h2>
+     * Reading the SOURCE - opening the archive, inflating the addressed entry - throws
+     * {@link IOException}: nothing was established, and a caller who turned that into a refusal
+     * would be refusing an archive it never managed to look at. Producing the TARGET does not
+     * throw; it answers {@link AddressedEntryCopy#failure()}, because the archive WAS read and what
+     * failed is this codec's own promise to hold a copy of it. Callers act on those differently.
+     *
+     * @param source the archive to copy the entry out of
+     * @param entryId the id this comparison will look for, already without an extension
+     * @param target the file to write the single-entry archive to; overwritten, never appended to
+     * @return what the archive holds, and whether the copy was produced
+     * @throws IOException when the archive cannot be opened, or the addressed entry cannot be read
+     */
+    public static AddressedEntryCopy copyAddressedEntry(Path source, String entryId, Path target)
+        throws IOException
+    {
+        if (target == null)
+        {
+            throw new IllegalArgumentException("a copy needs somewhere to go"); //$NON-NLS-1$
+        }
+        return walkFor(source, entryId, target);
+    }
+
+    /**
+     * The one walk both public faces above are: the platform's matching rule, applied once.
+     *
+     * @param file the archive to walk
+     * @param entryId the id to match, already without an extension
+     * @param target where to copy the matched entry, or {@code null} to answer what is there and
+     *     copy nothing
+     * @return what the archive holds, and - when a target was given - whether the copy was produced
+     * @throws IOException when the archive cannot be opened, or the matched entry cannot be read
+     */
+    private static AddressedEntryCopy walkFor(Path file, String entryId, Path target)
+        throws IOException
+    {
         try (ZipFile zip = new ZipFile(file.toFile()))
         {
             List<String> kept = new ArrayList<>();
@@ -1472,14 +1534,112 @@ public final class MergeRulesCodec
                 walked++;
                 if (removeExtension(name).equals(entryId))
                 {
-                    return ZipEntryLookup.found(walked);
+                    ZipEntryLookup found = ZipEntryLookup.found(walked);
+                    return target == null ? AddressedEntryCopy.of(found, null)
+                        : copyEntry(zip, entry, target, found);
                 }
                 if (kept.size() < MAX_LISTED_ZIP_ENTRIES)
                 {
                     kept.add(name);
                 }
             }
-            return ZipEntryLookup.absent(kept, walked);
+            return AddressedEntryCopy.of(ZipEntryLookup.absent(kept, walked), null);
+        }
+    }
+
+    /**
+     * Writes one entry into a new single-entry archive, under the name it already has.
+     * <p>
+     * The name is carried over unchanged because it is what the platform matches on: a name that
+     * reduced to the id in the source reduces to it here too, whatever directory prefix or
+     * extension it wears. The bytes are re-deflated rather than moved across raw - the JDK offers
+     * no raw entry copy - which is why the expanded size is what is bounded.
+     *
+     * @param zip the open source archive
+     * @param entry the matched entry
+     * @param target the file to write
+     * @param found the lookup to report alongside
+     * @return the copy's outcome
+     * @throws IOException when the entry itself cannot be read - a failure of the SOURCE
+     */
+    private static AddressedEntryCopy copyEntry(ZipFile zip, ZipEntry entry, Path target,
+        ZipEntryLookup found) throws IOException
+    {
+        byte[] content;
+        try (InputStream in = zip.getInputStream(entry))
+        {
+            content = readAtMost(in, MAX_DOCUMENT_BYTES);
+        }
+        if (content == null)
+        {
+            return AddressedEntryCopy.of(found,
+                tooLarge("the entry '" + entry.getName() + "' expands", //$NON-NLS-1$ //$NON-NLS-2$
+                    "Extract it and check what it actually holds.")); //$NON-NLS-1$
+        }
+        try
+        {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (ZipOutputStream out = new ZipOutputStream(bytes))
+            {
+                out.putNextEntry(new ZipEntry(entry.getName()));
+                out.write(content);
+                out.closeEntry();
+            }
+            Files.write(target, bytes.toByteArray());
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return AddressedEntryCopy.of(found, "the entry '" + entry.getName() //$NON-NLS-1$
+                + "' could not be written to a private copy (" + describeFailure(e) + ")."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return AddressedEntryCopy.of(found, null);
+    }
+
+    /**
+     * What {@link MergeRulesCodec#copyAddressedEntry} found, and whether it could keep it.
+     * <p>
+     * Two facts that a single boolean would fuse into one: whether the archive HOLDS the entry a
+     * comparison would restore from, and whether the private copy of it was produced. The first is
+     * about the caller's file and the second is about this process, and a caller acts on them
+     * differently - the first refuses the launch as unaddressed, the second refuses it as
+     * unverifiable, and neither is "there is nothing to say".
+     */
+    public static final class AddressedEntryCopy
+    {
+        private final ZipEntryLookup lookup;
+
+        private final String failure;
+
+        private AddressedEntryCopy(ZipEntryLookup lookup, String failure)
+        {
+            this.lookup = lookup;
+            this.failure = failure;
+        }
+
+        /**
+         * @param lookup what the archive holds
+         * @param failure why the copy was not produced, or {@code null} when it was (or when none
+         *     was asked for)
+         * @return the outcome
+         */
+        private static AddressedEntryCopy of(ZipEntryLookup lookup, String failure)
+        {
+            return new AddressedEntryCopy(lookup, failure);
+        }
+
+        /** @return what the archive holds - see {@link ZipEntryLookup} */
+        public ZipEntryLookup lookup()
+        {
+            return lookup;
+        }
+
+        /**
+         * @return why the private copy was not produced, or {@code null} when nothing failed;
+         *     always {@code null} when the entry is absent, because then there was nothing to copy
+         */
+        public String failure()
+        {
+            return failure;
         }
     }
 

@@ -63,6 +63,10 @@ public class ComparisonEngineTest
         List<String> entriesSeen = Collections.emptyList();
         /** Whether that path was a regular file then - what EDT's own reader branches on. */
         boolean handedARegularFile;
+        /** How big the file on that path was - the copy this launch made, when there was one. */
+        long snapshotBytes = -1L;
+        /** The text of the first entry in it, so an empty copy is not mistaken for a faithful one. */
+        String firstEntryText = ""; //$NON-NLS-1$
         /** Stands in for another process replacing the caller's file while the platform reads. */
         Runnable beforeReading;
         /** Whether the platform's failure quotes the path it was handed, as a real one would. */
@@ -156,6 +160,8 @@ public class ComparisonEngineTest
             // both are "a path" - and it is the CONTENT the platform matches its entry against.
             handedARegularFile = Files.isRegularFile(Paths.get(fileName));
             entriesSeen = entryNamesOf(fileName);
+            snapshotBytes = sizeOf(fileName);
+            firstEntryText = firstEntryTextOf(fileName);
             if (failNamingThePathItWasHanded)
             {
                 throw new IOException("could not read '" + fileName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -165,6 +171,22 @@ public class ComparisonEngineTest
                 throw fileFailure;
             }
             return restored;
+        }
+    }
+
+    /**
+     * A descriptor that throws when asked for its project name.
+     * <p>
+     * The one thing the entry id is built out of, refusing to answer - which is what a handle whose
+     * descriptors are not what it claims does.
+     */
+    private static final class UnnameableDescriptor
+        implements IComparisonDataSourceDescriptor
+    {
+        @Override
+        public String getProjectName()
+        {
+            throw new IllegalStateException("this descriptor has no project"); //$NON-NLS-1$
         }
     }
 
@@ -1062,6 +1084,411 @@ public class ComparisonEngineTest
         }
     }
 
+    // ==== the snapshot is of the ENTRY that will be read, not of the archive around it ====
+    //
+    // The copy was a byte-for-byte transferTo of the whole file, which put no bound at all on what
+    // a launch wrote into the system temporary directory: a valid archive holding this
+    // comparison's small settings entry beside a multi-gigabyte unrelated one was duplicated in
+    // full before anything was even looked up, and neither the codec's document bound nor its
+    // entry-count bound covers a raw copy. The platform reads exactly one entry - measured from
+    // ComparisonManager.deserializeMergeSettingsFromZipFile, which returns at the FIRST entry whose
+    // name minus its extension is the comparison's id and opens no other - so the copy is of that
+    // entry, and the snapshot's size is the size of what will actually be read.
+
+    /** Big enough that a whole-archive copy is unmistakable, small enough to write in a test. */
+    private static final int BULKY_ENTRY_BYTES = 2 * 1024 * 1024;
+
+    /** What a one-entry archive of "<Settings/>" comfortably fits in. */
+    private static final int A_SMALL_ARCHIVE = 4096;
+
+    @Test
+    public void theSnapshotHoldsOnlyTheEntryThisComparisonRestoresFrom() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipWithABulkyNeighbour("mixed.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            "bulk.bin", BULKY_ENTRY_BYTES); //$NON-NLS-1$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertEquals("the platform opens ONE entry and no other, so that is the whole of what " //$NON-NLS-1$
+            + "the private copy has to hold", //$NON-NLS-1$
+            List.of("Main_Other_Ancestor.xml"), backend.entriesSeen); //$NON-NLS-1$
+    }
+
+    /**
+     * And the SIZE, in its own method: an implementation that copied the archive whole would still
+     * satisfy nothing above about bytes, and the bytes are what the finding is about.
+     */
+    @Test
+    public void theSnapshotIsTheSizeOfWhatIsReadAndNotOfTheArchive() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipWithABulkyNeighbour("mixed.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            "bulk.bin", BULKY_ENTRY_BYTES); //$NON-NLS-1$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertTrue("the copy is proportional to the entry that will be read, not to the archive " //$NON-NLS-1$
+            + "it came out of - archive " + Files.size(zip) + " bytes, copy " //$NON-NLS-1$ //$NON-NLS-2$
+            + backend.snapshotBytes, backend.snapshotBytes < A_SMALL_ARCHIVE);
+    }
+
+    /**
+     * The positive control for both: the entry has to arrive with its CONTENT. A copy that wrote
+     * the name and no bytes would be small, hold one entry, and restore nothing - which is the
+     * silent no-op this whole area exists against.
+     */
+    @Test
+    public void theCopiedEntryCarriesTheBytesItHadInTheArchive() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipWithABulkyNeighbour("mixed.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            "bulk.bin", BULKY_ENTRY_BYTES); //$NON-NLS-1$
+
+        engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            zip.toString());
+
+        assertEquals("the entry the platform reads is the entry the caller's archive held", //$NON-NLS-1$
+            "<Settings/>", backend.firstEntryText); //$NON-NLS-1$
+    }
+
+    // ==== "could not be READ" and "could not be SNAPSHOTTED" are different answers ====
+    //
+    // The first claims nothing: the platform opens the caller's own path with its own ZipFile and
+    // fails the launch naming their file, and a refusal invented here would be about an archive
+    // this code never managed to look at (pinned by aZipThatCannotBeOpenedIsLeftToThePlatform).
+    // The second is this server establishing that it cannot keep the promise the copy makes.
+    // Falling back to the caller's path there would restore from a file nothing checked - the very
+    // race the snapshot closes - and would make the bound on the copy avoidable by exceeding it.
+
+    @Test
+    public void anEntryTooLargeToCopyRefusesInsteadOfFallingBackToTheCallersPath() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipWhoseEntryExpandsTo("huge.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesCodec.MAX_DOCUMENT_BYTES + 1);
+
+        try
+        {
+            engineOver(backend).restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                zip.toString());
+            fail("a snapshot that could not be taken must refuse, not hand over the unchecked path"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            // The message is pinned below; what this one is about is the call list.
+        }
+
+        assertEquals("nothing may reach EDT once this server knows it cannot verify what it " //$NON-NLS-1$
+            + "would be launching from", Collections.emptyList(), backend.calls); //$NON-NLS-1$
+    }
+
+    @Test
+    public void theRefusalForAnUncopiableEntrySaysWhatWasRefusedAndWhy() throws IOException
+    {
+        Path zip = zipWhoseEntryExpandsTo("huge.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesCodec.MAX_DOCUMENT_BYTES + 1);
+
+        try
+        {
+            engineOver(new RecordingBackend()).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("expected the uncopiable entry to be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            String message = e.getMessage();
+            assertTrue("the refusal must name the caller's file: " + message, //$NON-NLS-1$
+                message.contains(zip.toString()));
+            assertTrue("it must name the entry that could not be copied: " + message, //$NON-NLS-1$
+                message.contains("Main_Other_Ancestor.xml")); //$NON-NLS-1$
+            assertTrue("it must say what the bound was: " + message, //$NON-NLS-1$
+                message.contains("past 16 MB")); //$NON-NLS-1$
+            assertTrue("and it must say that nothing was applied, so a caller is not left " //$NON-NLS-1$
+                + "wondering whether some decisions were: " + message, //$NON-NLS-1$
+                message.contains("No decision was applied")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The other end of the same distinction, as an ABSENCE: a refusal about a snapshot must not be
+     * worded as a refusal about the ARCHIVE'S ADDRESSING. The archive here addresses this
+     * comparison perfectly well, and telling the caller to go and find a different zip would send
+     * them after a file that is not the problem.
+     */
+    @Test
+    public void theRefusalForAnUncopiableEntryDoesNotCallTheArchiveUnaddressed() throws IOException
+    {
+        Path zip = zipWhoseEntryExpandsTo("huge.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesCodec.MAX_DOCUMENT_BYTES + 1);
+
+        try
+        {
+            engineOver(new RecordingBackend()).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("expected the uncopiable entry to be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertFalse("the archive holds exactly what this comparison looks for: " //$NON-NLS-1$
+                + e.getMessage(),
+                e.getMessage().contains("holds nothing for THIS comparison")); //$NON-NLS-1$
+        }
+    }
+
+    /** A refused snapshot leaves no half-written temporary behind either. */
+    @Test
+    public void theSnapshotIsRemovedWhenTheEntryCouldNotBeCopied() throws IOException
+    {
+        Path zip = zipWhoseEntryExpandsTo("huge.zip", "Main_Other_Ancestor.xml", //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesCodec.MAX_DOCUMENT_BYTES + 1);
+        List<String> before = snapshotsInTheTempArea();
+
+        try
+        {
+            engineOver(new RecordingBackend()).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("expected the uncopiable entry to be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            // What is left in the temp area is the point.
+        }
+
+        List<String> left = snapshotsInTheTempArea();
+        left.removeAll(before);
+        assertEquals("a refused snapshot must not leave its temporary behind", List.of(), left); //$NON-NLS-1$
+    }
+
+    /**
+     * The entry id is read off the HANDLE, and reading it can throw - so it is read before
+     * anything is created. Nothing between here and the temporary's own {@code finally} is
+     * inside any cleanup, so a temporary created first would be left in the system temp area by
+     * an exception thrown after it.
+     *
+     * @throws IOException when the temp area cannot be listed
+     */
+    @Test
+    public void aHandleThatCannotBeNamedLeavesNoTemporaryBehind() throws IOException
+    {
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonProcessHandle unnameable = new ComparisonProcessHandle(new FakeDescriptor("Main"), //$NON-NLS-1$
+            new UnnameableDescriptor(), new FakeDescriptor("Ancestor"), ComparisonScope.EMPTY_SCOPE); //$NON-NLS-1$
+        List<String> before = snapshotsInTheTempArea();
+
+        try
+        {
+            engineOver(new RecordingBackend()).restoreMergeSettings(unnameable, zip.toString());
+            fail("a handle that cannot be named cannot be launched from"); //$NON-NLS-1$
+        }
+        catch (RuntimeException expected)
+        {
+            // The platform's own failure is left as the platform threw it; the temp area is the
+            // point of this test.
+        }
+
+        List<String> left = snapshotsInTheTempArea();
+        left.removeAll(before);
+        assertEquals("nothing may be created before the id that decides what to copy is known", //$NON-NLS-1$
+            List.of(), left);
+    }
+
+    // ==== the answer follows what was READ, not what happened to run first ====
+    //
+    // The temporary used to be created BEFORE the copy, which is the first statement that
+    // touches the source at all. So a temp area that could not take a file answered with a
+    // refusal for an archive this process had never tried to open - and when that archive was
+    // itself missing, the caller was refused over a file whose real problem was that it does
+    // not exist. Two states decided by statement order rather than by evidence.
+
+    /** A temp area that takes nothing. The copy is unreachable and says so if it is reached. */
+    private static final ComparisonEngine.SnapshotIo NO_TEMP_AREA = new ComparisonEngine.SnapshotIo()
+    {
+        @Override
+        public Path createTemporary() throws IOException
+        {
+            throw new IOException("No space left on device"); //$NON-NLS-1$
+        }
+
+        @Override
+        public MergeRulesCodec.AddressedEntryCopy copyInto(Path source, String entryId, Path target)
+        {
+            throw new IllegalStateException("nothing may be copied into a file that was never made"); //$NON-NLS-1$
+        }
+    };
+
+    /**
+     * @param backend the backend to drive
+     * @param io how the snapshot is made
+     * @return the facade over both
+     */
+    private static ComparisonEngine engineOver(RecordingBackend backend, ComparisonEngine.SnapshotIo io)
+    {
+        return ComparisonEngine.forTesting(backend, ComparisonSessionRegistry.DEFAULT_IDLE_TTL_MILLIS,
+            io);
+    }
+
+    /**
+     * A source that could not be READ is left to the platform even when a snapshot could not
+     * have been TAKEN either. Both things are wrong at once, and only one of them is this
+     * server's to report: nothing was learnt about the archive, so nothing is claimed about it,
+     * and the platform opens the caller's own path and fails the launch naming their file.
+     * <p>
+     * This is the ordering pin. With the temporary created first, the refusal was reached
+     * without the source having been touched at all.
+     */
+    @Test
+    public void aZipThatCannotBeOpenedIsLeftToThePlatformEvenWithNowhereToPutASnapshot()
+    {
+        RecordingBackend backend = new RecordingBackend();
+
+        engineOver(backend, NO_TEMP_AREA).restoreMergeSettings(
+            threeWayHandle("Main", "Other", "Ancestor"), "nowhere/missing.zip"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertEquals("an archive nothing managed to open is the platform's to fail on", //$NON-NLS-1$
+            Collections.singletonList("restoreMergeSettings"), backend.calls); //$NON-NLS-1$
+        assertEquals("and it is the CALLER'S path that goes there, there being no snapshot", //$NON-NLS-1$
+            "nowhere/missing.zip", backend.restoredFrom); //$NON-NLS-1$
+    }
+
+    /**
+     * The other half of the same order, as an ABSENCE: an archive that WAS read and holds this
+     * comparison's entry, with nowhere to put the copy, is still a refusal. The fix above must
+     * not have turned "could not be TAKEN" into "claims nothing" - that would hand the platform
+     * a path nothing checked, which is what the snapshot exists to prevent.
+     *
+     * @throws IOException when the archive cannot be written
+     */
+    @Test
+    public void aReadableArchiveWithNowhereToPutTheSnapshotIsStillRefused() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend, NO_TEMP_AREA).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("a snapshot that could not be taken must refuse, not hand over the path"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the refusal must name the caller's file: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(zip.toString()));
+        }
+
+        assertEquals("nothing may reach EDT once this server knows it cannot verify what it " //$NON-NLS-1$
+            + "would be launching from", Collections.emptyList(), backend.calls); //$NON-NLS-1$
+    }
+
+    /**
+     * And an archive that holds nothing for this comparison is refused with no temporary made
+     * for it at all - the read settles it, so there is nothing to copy.
+     *
+     * @throws IOException when the archive cannot be written
+     */
+    @Test
+    public void anArchiveThatAddressesAnotherComparisonIsRefusedWithoutMakingATemporary()
+        throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("foreign.zip", "Someone_Else_Entirely.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend, NO_TEMP_AREA).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("a zip that addresses another comparison must be refused"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the refusal is about the ADDRESSING, which the read settled: " //$NON-NLS-1$
+                + e.getMessage(),
+                e.getMessage().contains("holds nothing for THIS comparison")); //$NON-NLS-1$
+        }
+    }
+
+    // ==== an Error is not a return, and the temporary is removed on every way out ====
+
+    /** Stands in for the {@code OutOfMemoryError} that buffering the entry can raise. */
+    private static final class SimulatedVmError
+        extends Error
+    {
+        private static final long serialVersionUID = 1L;
+
+        SimulatedVmError()
+        {
+            super("out of memory while the entry was buffered"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * An {@code Error} out of the copy leaves no temporary in the system temp area, and reaches
+     * the caller as it was thrown.
+     * <p>
+     * The window: {@code snapshotOfZip} runs BEFORE the caller's own {@code try}/{@code finally},
+     * and its own {@code catch} is {@code IOException | RuntimeException} - so an {@code Error}
+     * passed through with the file already created and nothing to remove it. The realistic one is
+     * an {@code OutOfMemoryError} while up to 16 MB of entry is buffered. The removal is a
+     * {@code finally} rather than a call on each exit precisely because the exits are not all
+     * returns; catching the {@code Error} would be the other, wrong, way to close it.
+     *
+     * @throws IOException when the archive cannot be written or the temp area cannot be listed
+     */
+    @Test
+    public void anErrorOutOfTheCopyLeavesNoTemporaryBehindAndStillReachesTheCaller()
+        throws IOException
+    {
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        SimulatedVmError thrown = new SimulatedVmError();
+        List<String> before = snapshotsInTheTempArea();
+        Error caught = null;
+
+        try
+        {
+            engineOver(new RecordingBackend(), copyThatThrows(thrown)).restoreMergeSettings(
+                threeWayHandle("Main", "Other", "Ancestor"), zip.toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        catch (SimulatedVmError e)
+        {
+            caught = e;
+        }
+
+        assertSame("an Error is the VM's to report and must propagate, not be turned into an " //$NON-NLS-1$
+            + "answer", thrown, caught); //$NON-NLS-1$
+        List<String> left = snapshotsInTheTempArea();
+        left.removeAll(before);
+        assertEquals("an Error may not leave the temporary in the temp area either", //$NON-NLS-1$
+            List.of(), left);
+    }
+
+    /**
+     * @param error what the copy raises
+     * @return a real temp file, and a copy into it that fails the way the VM does
+     */
+    private static ComparisonEngine.SnapshotIo copyThatThrows(Error error)
+    {
+        return new ComparisonEngine.SnapshotIo()
+        {
+            @Override
+            public Path createTemporary() throws IOException
+            {
+                // The REAL one: the file this test is about has to actually exist, in the place
+                // the production code puts it, or there is nothing to be left behind.
+                return ComparisonEngine.SnapshotIo.REAL.createTemporary();
+            }
+
+            @Override
+            public MergeRulesCodec.AddressedEntryCopy copyInto(Path source, String entryId,
+                Path target)
+            {
+                throw error;
+            }
+        };
+    }
+
     /**
      * @return the names of the snapshots this class's own prefix owns in the system temp area
      * @throws IOException when the temp area cannot be listed
@@ -1133,6 +1560,109 @@ public class ComparisonEngineTest
             return List.of();
         }
         return names;
+    }
+
+    /**
+     * @param fileName the path to measure
+     * @return its size in bytes, or {@code -1} when there is nothing there to measure
+     */
+    private static long sizeOf(String fileName)
+    {
+        try
+        {
+            return Files.size(Paths.get(fileName));
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return -1L;
+        }
+    }
+
+    /**
+     * @param fileName the archive to read
+     * @return the text of its first entry, or an empty string when there is no readable archive
+     *         there or it holds nothing
+     */
+    private static String firstEntryTextOf(String fileName)
+    {
+        try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(fileName))
+        {
+            java.util.Enumeration<? extends ZipEntry> entries = archive.entries();
+            if (!entries.hasMoreElements())
+            {
+                return ""; //$NON-NLS-1$
+            }
+            try (java.io.InputStream in = archive.getInputStream(entries.nextElement()))
+            {
+                return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return ""; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Writes a VALID archive holding this comparison's small settings entry beside one large
+     * unrelated entry - the shape a whole-archive copy duplicates in full.
+     * <p>
+     * The neighbour is filled with pseudo-random bytes so DEFLATE cannot shrink it: the point of
+     * the fixture is that the archive on disk really is large, and an incompressible neighbour is
+     * the only way to be sure of that whatever the compression method.
+     *
+     * @param fileName the archive's name
+     * @param entryName the entry this comparison restores from
+     * @param neighbourName the unrelated entry's name
+     * @param neighbourBytes how many bytes to give the unrelated entry
+     * @return the archive
+     * @throws IOException when it cannot be written
+     */
+    private static Path zipWithABulkyNeighbour(String fileName, String entryName,
+        String neighbourName, int neighbourBytes) throws IOException
+    {
+        Path dir = Files.createTempDirectory("comparison-engine-test"); //$NON-NLS-1$
+        dir.toFile().deleteOnExit();
+        Path zip = dir.resolve(fileName);
+        zip.toFile().deleteOnExit();
+        byte[] bulk = new byte[neighbourBytes];
+        new java.util.Random(42).nextBytes(bulk);
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            out.putNextEntry(new ZipEntry(entryName));
+            out.write("<Settings/>".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+            out.closeEntry();
+            out.putNextEntry(new ZipEntry(neighbourName));
+            out.write(bulk);
+            out.closeEntry();
+        }
+        return zip;
+    }
+
+    /**
+     * Writes an archive whose addressed entry EXPANDS past a given size while the archive itself
+     * stays small - zeroes, so the file on disk is a few kilobytes.
+     *
+     * @param fileName the archive's name
+     * @param entryName the entry this comparison restores from
+     * @param expandedBytes how many bytes the entry expands to
+     * @return the archive
+     * @throws IOException when it cannot be written
+     */
+    private static Path zipWhoseEntryExpandsTo(String fileName, String entryName, int expandedBytes)
+        throws IOException
+    {
+        Path dir = Files.createTempDirectory("comparison-engine-test"); //$NON-NLS-1$
+        dir.toFile().deleteOnExit();
+        Path zip = dir.resolve(fileName);
+        zip.toFile().deleteOnExit();
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip)))
+        {
+            out.putNextEntry(new ZipEntry(entryName));
+            out.write(new byte[expandedBytes]);
+            out.closeEntry();
+        }
+        return zip;
     }
 
     private static ComparisonProcessHandle threeWayHandle(String main, String other, String ancestor)

@@ -883,6 +883,29 @@ public final class ComparisonNodeRenderer
 
     // ==================== Form structure ====================
 
+    /**
+     * Renders one {@code ## Form structure} section per side the comparison resolved a form for.
+     *
+     * <h2>Each section is headed by ITS OWN side's name</h2>
+     * A node is reached from one side - {@link Request#address} is the FQN or node id the caller
+     * typed, and {@link Request#side} says which side it addressed - and all three sections used to
+     * be rendered under it. For a form RENAMED between the sides that is simply wrong: the other
+     * and ancestor sections showed one form's structure under the other form's FQN, and a reader
+     * has no way to tell, because the heading is the only name in the section. The per-side symlink
+     * is the tree's own answer to "what is this node called on that side", which is the same value
+     * the summary table prints, so each section is headed by it.
+     * <p>
+     * A side whose symlink carries no address is the one case where there is nothing to head it
+     * with, and it borrows the request's address OUT LOUD - a heading that cannot be established
+     * must not read as one that was. BLANK and absent are the same case here: a heading of
+     * whitespace names nothing, so a name that is all whitespace is no name.
+     *
+     * @param sb the document being assembled
+     * @param request the call description, for the language, the row limit and the fallback address
+     * @param node the form node
+     * @param access the read port; {@code null} means the compared objects were never read, and
+     *     there is no structure to render
+     */
     private static void appendFormStructure(StringBuilder sb, Request request, ComparisonNode node,
         NodeAccess access)
     {
@@ -899,6 +922,31 @@ public final class ComparisonNodeRenderer
                 continue;
             }
             sb.append("## Form structure (").append(sideLabel(side)).append(")\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            // THIS side's own name, not the request's. request.address is how the caller reached
+            // the node - an FQN or a node id, on ONE side - and it was handed to all three renders,
+            // so a form renamed between the sides had its other and ancestor structures printed
+            // under a heading naming the MAIN side's form. The document then attributed structure
+            // to an FQN that does not hold it.
+            String address = symlinkOf(node, side);
+            if (address.isBlank())
+            {
+                // A side with no symlink is not a side to borrow another's name for. Said out
+                // loud rather than papered over: the heading below is still the only address this
+                // document has, and a reader who is not told it came from elsewhere would read it
+                // as this side's own.
+                //
+                // BLANK, not empty. A symlink of spaces or tabs is not empty, so it used to take
+                // this branch's place while carrying nothing: the notice was suppressed and the
+                // section was headed 'Form Structure:' followed by whitespace, which reads as a
+                // name read off this side and is not one. What decides the fallback is whether
+                // the value is an ADDRESS, and whitespace is not.
+                address = request.address;
+                sb.append("> This side carries no name of its own in the comparison tree, so the ") //$NON-NLS-1$
+                    .append("heading below repeats the address the node was reached by (") //$NON-NLS-1$
+                    .append(sideLabel(request.side))
+                    .append("). It is NOT a name read off this side, and the structure under it ") //$NON-NLS-1$
+                    .append("is.\n\n"); //$NON-NLS-1$
+            }
             // The SHARED form reader, on the per-side model object the comparison already resolved.
             // Its FQN-based entry point is deliberately not used: it addresses our workspace project,
             // not the comparison's virtual one, so it would render the wrong side's form.
@@ -908,8 +956,7 @@ public final class ComparisonNodeRenderer
             // Without the limit the reader applied only its own MAX_NODES guard, so limit=1 still
             // produced every attribute, command, parameter and event handler the form has and an
             // item outline of up to 5000 lines, in a section the caller had asked to keep small.
-            sb.append(FormStructureReader.render(request.address, form, request.language,
-                request.limit));
+            sb.append(FormStructureReader.render(address, form, request.language, request.limit));
             sb.append('\n');
         }
     }
