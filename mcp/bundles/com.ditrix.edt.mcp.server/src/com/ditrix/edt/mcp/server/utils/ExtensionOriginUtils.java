@@ -166,19 +166,26 @@ public final class ExtensionOriginUtils
             {
                 return DeclaredBaseProject.UNREADABLE;
             }
-            Map<String, String> headers;
-            try (InputStream contents = manifestFile.getContents(true))
-            {
-                headers = ProjectManifest.parseProjectManifest(contents);
-            }
+            Map<String, String> headers = parseManifest(manifestFile);
             if (manifestFile.getModificationStamp() != stampBefore)
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            // The workspace stamp only moves for a workspace-mediated write. A rewrite performed
+            // OUTSIDE Eclipse (a checkout, an external editor) is invisible to it until a refresh,
+            // and getContents(true) reads the local file - so a single read can land mid-write.
+            // Reading a second time and requiring identical headers catches a manifest still in
+            // flight. A manifest that is STABLY truncated is a corrupt project, which no cheap check
+            // can tell apart from a legitimately unlinked one; that residual case is why the caller
+            // additionally requires the project to have SETTLED before it acts on NONE.
+            if (headers == null || !headers.equals(parseManifest(manifestFile)))
             {
                 return DeclaredBaseProject.UNREADABLE;
             }
             // Manifest-Version and Runtime-Version are mandatory in every DT project kind (verified
             // on configuration, extension, external-objects and a freshly created external-objects
             // project). Their absence means this is not a complete manifest, however well it parsed.
-            if (headers == null || isBlank(headers.get(ProjectManifest.MANIFEST_VERSION))
+            if (isBlank(headers.get(ProjectManifest.MANIFEST_VERSION))
                 || isBlank(headers.get(ProjectManifest.RUNTIME_VERSION)))
             {
                 return DeclaredBaseProject.UNREADABLE;
@@ -194,6 +201,15 @@ public final class ExtensionOriginUtils
             Activator.logError("Error reading project manifest for: " //$NON-NLS-1$
                 + project.getName(), e);
             return DeclaredBaseProject.UNREADABLE;
+        }
+    }
+
+    /** One parse of the project manifest; {@code null} when it yields no headers. */
+    private static Map<String, String> parseManifest(IFile manifestFile) throws Exception
+    {
+        try (InputStream contents = manifestFile.getContents(true))
+        {
+            return ProjectManifest.parseProjectManifest(contents);
         }
     }
 

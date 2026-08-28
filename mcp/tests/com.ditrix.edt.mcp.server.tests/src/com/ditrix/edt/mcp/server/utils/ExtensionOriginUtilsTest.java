@@ -165,4 +165,29 @@ public class ExtensionOriginUtilsTest
         when(project.getFile(ProjectManifest.DT_PROJECT_MANIFEST)).thenReturn(manifest);
         return project;
     }
+
+    /**
+     * The workspace modification stamp does not move for a rewrite performed outside Eclipse, so a
+     * single read can land mid-write with the stamp unchanged. Two reads that disagree prove the
+     * manifest is in flight.
+     */
+    @Test
+    public void manifestThatDiffersBetweenReadsIsUnreadable() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IFile manifest = mock(IFile.class);
+        when(manifest.exists()).thenReturn(true);
+        when(manifest.getModificationStamp()).thenReturn(42L);
+        when(project.getName()).thenReturn("Probe"); //$NON-NLS-1$
+        when(project.getFile(ProjectManifest.DT_PROJECT_MANIFEST)).thenReturn(manifest);
+        when(manifest.getContents(true)).thenReturn(
+            new ByteArrayInputStream(
+                "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n".getBytes(StandardCharsets.UTF_8)), //$NON-NLS-1$
+            new ByteArrayInputStream(
+                ("Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n" //$NON-NLS-1$
+                    + "Base-Project: Base\n").getBytes(StandardCharsets.UTF_8))); //$NON-NLS-1$
+
+        assertEquals(ExtensionOriginUtils.DeclaredBaseProject.UNREADABLE,
+            ExtensionOriginUtils.readDeclaredBaseProject(project));
+    }
 }

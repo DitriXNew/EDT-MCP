@@ -745,6 +745,16 @@ public final class ProjectStateChecker
                     // no reference to a base-configuration object, which makes it genuinely
                     // unrelated. Failing closed here instead would hand every workspace that merely
                     // has one open the workspace-wide scan this scoping exists to avoid.
+                    ProjectStateResult unlinkedState = env.getProjectState(registeredProject);
+                    if (unlinkedState == null || unlinkedState.getState() != ProjectState.READY)
+                    {
+                        // A project that has not SETTLED proves nothing about what its Xtext
+                        // contribution currently holds. While an unlink is being taken up, the
+                        // manifest can already say "no base" although the index still carries the
+                        // references the project had while it was linked - excluding it then would
+                        // drop indexed references AND report the scan complete.
+                        return SearchDependenciesResult.undetermined();
+                    }
                     if (env.readDeclaredBaseProject(registeredProject) != DeclaredBaseProject.NONE)
                     {
                         // DECLARED: the manifest says this project HAS a base that the runtime could

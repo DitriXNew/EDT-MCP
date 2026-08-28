@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -159,7 +160,11 @@ public class BslReferenceSearchTest
         ArgumentCaptor<Iterable<URI>> sources = ArgumentCaptor.forClass((Class)Iterable.class);
         assertTrue(stable);
         assertTrue(before.getProjects().containsAll(before.getExtensionProjects()));
-        verify(environment, times(1)).getOpenDtProjects();
+        // The caller's snapshot is NOT re-derived: the environment is sampled exactly twice, once
+        // after URI enumeration (which decides scoped vs fallback) and once after the finder has RUN
+        // (which re-proves completeness across the search itself, since the scoped URI list is frozen
+        // before it starts). A third sample would mean `before` was being recomputed.
+        verify(environment, times(2)).getOpenDtProjects();
         verify(finder).findReferences(eq(targets), sources.capture(), isNull(), eq(acceptor), eq(monitor));
         verify(finder, never()).findAllReferences(any(), any(), any(), any());
         assertEquals(new LinkedHashSet<>(Arrays.asList(baseURI, extensionURI)),
@@ -514,5 +519,58 @@ public class BslReferenceSearchTest
             result.add(uri);
         }
         return result;
+    }
+
+    /**
+     * The scoped URI list is frozen BEFORE the finder runs, so a dependent project that appears while
+     * the search is in flight is absent from it. Completeness must therefore be re-proved after the
+     * search, not only after enumeration - otherwise a strict caller is told "found nothing" about a
+     * scope that had already stopped being the whole scope.
+     */
+    @Test
+    public void dependentAppearingDuringTheSearchMakesTheScanIncomplete()
+    {
+        IProject base = project("Base"); //$NON-NLS-1$
+        IProject extension = project("Base.tests"); //$NON-NLS-1$
+        IProject latecomer = project("Base.late"); //$NON-NLS-1$
+        URI baseURI = platformURI("Base", "src/CommonModules/Base/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        IResourceDescription baseDescription = description(baseURI);
+        IResourceDescriptions index = mock(IResourceDescriptions.class);
+        when(index.getAllResourceDescriptions())
+            .thenReturn(Collections.singletonList(baseDescription));
+        IResourceServiceProvider resourceServiceProvider = provider(index);
+        IReferenceFinder finder = mock(IReferenceFinder.class);
+        Iterable<URI> targets = Collections.singletonList(URI.createURI("bm:/target")); //$NON-NLS-1$
+        IAcceptor<IReferenceDescription> acceptor = ignored -> { };
+        NullProgressMonitor monitor = new NullProgressMonitor();
+
+        List<IProject> searchProjects = Arrays.asList(base, extension);
+        List<IProject> extensionProjects = Collections.singletonList(extension);
+        Map<String, ProjectState> readiness = new LinkedHashMap<>();
+        readiness.put("Base", ProjectState.READY); //$NON-NLS-1$
+        readiness.put("Base.tests", ProjectState.READY); //$NON-NLS-1$
+        SearchDependenciesResult before = SearchDependenciesResult.determined(
+            searchProjects, extensionProjects, readiness);
+
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        // Sample 1 (after enumeration) still sees the original scope; sample 2 (after the finder
+        // has run) sees the latecomer, which is precisely the window this test exists for.
+        when(environment.getOpenDtProjects())
+            .thenReturn(searchProjects, Arrays.asList(base, extension, latecomer));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(extensionProjects, Arrays.asList(extension, latecomer));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(extensionProjects, Arrays.asList(extension, latecomer));
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.resolveBaseProject(latecomer)).thenReturn(base);
+        when(environment.isExtensionProject(extension)).thenReturn(true);
+        when(environment.isExtensionProject(latecomer)).thenReturn(true);
+        when(environment.getProjectState(any(IProject.class))).thenReturn(state(ProjectState.READY));
+
+        boolean stable = BslReferenceSearch.findReferences(resourceServiceProvider, finder, base,
+            targets, acceptor, monitor, before, environment);
+
+        assertFalse(stable);
+        verify(finder).findReferences(eq(targets), any(), isNull(), eq(acceptor), eq(monitor));
     }
 }

@@ -135,9 +135,9 @@ public final class BslReferenceSearch
         SearchDependenciesResult before, CascadeEnvironment environment)
     {
         ScopeResolution scope = resolveScope(resourceServiceProvider, baseProject, before);
-        SearchDependenciesResult after =
+        SearchDependenciesResult afterEnumeration =
             ProjectStateChecker.determineSearchDependencies(baseProject, environment);
-        boolean stable = before != null && before.hasSameSnapshot(after);
+        boolean stable = before != null && before.hasSameSnapshot(afterEnumeration);
         if (before != null && before.isDetermined() && !stable)
         {
             // Even if source enumeration already selected a fallback, the caller's adopted targets
@@ -153,14 +153,28 @@ public final class BslReferenceSearch
                 + projectName + "' (" + scope.projectCount + " project(s), " //$NON-NLS-1$ //$NON-NLS-2$
                 + scope.sourceResourceURIs.size() + " indexed resource(s))."); //$NON-NLS-1$
             finder.findReferences(targetURIs, scope.sourceResourceURIs, null, acceptor, monitor);
-            return stable;
+            return stable && stillStableAfterSearch(baseProject, before, environment);
         }
 
         Activator.logInfo("BSL reference scan: scoped source enumeration unavailable for project '" //$NON-NLS-1$
             + projectName + "' (" + scope.failureReason //$NON-NLS-1$
             + "); using complete workspace Xtext index fallback."); //$NON-NLS-1$
         finder.findAllReferences(targetURIs, null, acceptor, monitor);
-        return stable;
+        return stable && stillStableAfterSearch(baseProject, before, environment);
+    }
+
+    /**
+     * Re-proves the snapshot once the finder has RUN. The scoped URI list is frozen before the search
+     * starts, so a project or indexed module joining while the finder works is absent from it; the
+     * fallback enumerates for itself but still searches the adopted TARGET set captured earlier. In
+     * both cases a change spanning the search means completeness was not proven, so the caller must
+     * treat the scan as incomplete rather than as "found nothing".
+     */
+    private static boolean stillStableAfterSearch(IProject baseProject,
+        SearchDependenciesResult before, CascadeEnvironment environment)
+    {
+        return before != null && before.hasSameSnapshot(
+            ProjectStateChecker.determineSearchDependencies(baseProject, environment));
     }
 
     private static ScopeResolution resolveScope(IResourceServiceProvider resourceServiceProvider,
