@@ -213,6 +213,69 @@ public class ProjectStateCheckerTest
         assertTrue(search.getProjects().containsAll(search.getExtensionProjects()));
     }
 
+    /**
+     * An external-objects project is legitimately UNLINKED - {@code create_project} REJECTS
+     * baseProjectName for that kind, so this is the state it is CREATED in. Treating that null
+     * parent as "undeterminable" hands every workspace merely containing one the workspace-wide
+     * scan this scoping exists to avoid, and (because adopted-target augmentation needs the
+     * snapshot) silently drops references living in a genuine extension.
+     */
+    @Test
+    public void unlinkedExternalObjectsProjectIsUnrelatedRatherThanUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        IProject unlinkedExternalObjects = mockOpenProject("UnlinkedProbe"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects())
+            .thenReturn(Arrays.asList(base, extension, unlinkedExternalObjects));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Arrays.asList(extension, unlinkedExternalObjects));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.resolveBaseProject(unlinkedExternalObjects)).thenReturn(null);
+        when(environment.isExtensionProject(extension)).thenReturn(true);
+        when(environment.isExtensionProject(unlinkedExternalObjects)).thenReturn(false);
+        when(environment.getProjectState(any(IProject.class)))
+            .thenReturn(new ProjectStateResult(ProjectState.READY, "ready")); //$NON-NLS-1$
+
+        SearchDependenciesResult search =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertTrue(search.isDetermined());
+        assertEquals(2, search.getProjectNames().size());
+        assertTrue(search.getProjectNames().contains("Base")); //$NON-NLS-1$
+        assertTrue(search.getProjectNames().contains("Base.tests")); //$NON-NLS-1$
+        assertFalse(search.getProjectNames().contains("UnlinkedProbe")); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(extension), search.getExtensionProjects());
+    }
+
+    /**
+     * The unlinked-is-unrelated shortcut applies ONLY where both views agree the project is not an
+     * extension. A runtime registration claiming extension kind while the permanent nature does not
+     * is unclassifiable, and an extension without a base means an unusable registration - never
+     * "unrelated".
+     */
+    @Test
+    public void unlinkedDependentClaimingRuntimeExtensionKindIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject unlinkedDependent = mockOpenProject("UnlinkedProbe"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, unlinkedDependent));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(unlinkedDependent));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        when(environment.resolveBaseProject(unlinkedDependent)).thenReturn(null);
+        when(environment.isExtensionProject(unlinkedDependent)).thenReturn(true);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void dependencySnapshotRejectsTargetExtensionOutsideSourceScope()
     {

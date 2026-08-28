@@ -655,10 +655,12 @@ public final class ProjectStateChecker
      * only extensions adopt configuration objects and participate in adopted-target augmentation.
      * <p>
      * Runtime registrations are cross-checked against the permanent dependent-project natures
-     * ({@code V8ExtensionNature} and {@code V8ExternalObjectsNature}). If any such open project is
-     * missing from the registry or its parent cannot be resolved, the snapshot is undetermined. This
-     * is deliberately workspace-wide: without that registration, the nature cannot tell us which base
-     * the project depends on. The result records each member's current {@link ProjectState} and derives
+     * ({@code V8ExtensionNature} and {@code V8ExternalObjectsNature}). A dependent project missing
+     * from the registry, or an EXTENSION whose parent cannot be resolved, leaves the snapshot
+     * undetermined and therefore workspace-wide: without that registration the nature cannot tell
+     * us which base the project depends on. An external-objects project with no parent is NOT that
+     * case - it is legitimately unlinked, has no base-configuration scope to reference, and is
+     * classified as unrelated. The result records each member's current {@link ProjectState} and derives
      * its extension subset from those SAME members. By construction, every extension used for adopted
      * TARGET augmentation therefore belongs to the SOURCE scope represented by this snapshot; a target
      * can never be searched in a scope that excludes the project it lives in. Extension kind is filtered
@@ -701,31 +703,55 @@ public final class ProjectStateChecker
                 }
             }
 
+            // Collected BEFORE the dependent walk: an EXTENSION structurally requires a parent while
+            // an external-objects project may legitimately have none, and only the permanent nature
+            // can tell those two apart when the parent resolves to null.
+            Set<String> extensionNatureProjectNames = new HashSet<>();
+            for (IProject extensionNatureProject : openExtensionNatureProjects)
+            {
+                if (!extensionNatureProjectNames.add(requiredProjectName(extensionNatureProject)))
+                {
+                    return SearchDependenciesResult.undetermined();
+                }
+            }
+
             Map<String, IProject> resolvedDependentBases = new LinkedHashMap<>();
+            Set<String> unlinkedDependentNames = new HashSet<>();
             for (IProject natureProject : openDependentNatureProjects)
             {
                 String name = requiredProjectName(natureProject);
                 IProject registeredProject = registeredProjects.get(name);
-                if (registeredProject == null || resolvedDependentBases.containsKey(name))
+                if (registeredProject == null || resolvedDependentBases.containsKey(name)
+                    || unlinkedDependentNames.contains(name))
                 {
                     return SearchDependenciesResult.undetermined();
                 }
                 IProject resolvedBase = env.resolveBaseProject(registeredProject);
                 if (resolvedBase == null)
                 {
-                    // Both permanent dependent natures require a parent. Null can mean the runtime
-                    // registration is currently unusable, not that this is an unrelated project.
-                    return SearchDependenciesResult.undetermined();
+                    if (extensionNatureProjectNames.contains(name)
+                        || env.isExtensionProject(registeredProject))
+                    {
+                        // An extension cannot exist without its base, so null here means the runtime
+                        // registration is currently unusable rather than "unrelated" - and a project
+                        // the two views disagree about is not classifiable at all.
+                        return SearchDependenciesResult.undetermined();
+                    }
+                    // An external-objects project is legitimately UNLINKED: create_project REJECTS
+                    // baseProjectName for that kind, so this is the state such a project is CREATED
+                    // in. Without a parent it has no base-configuration scope and can therefore hold
+                    // no reference to a base-configuration object, which makes it genuinely
+                    // unrelated. Failing closed here instead would hand every workspace that merely
+                    // has one open the workspace-wide scan this scoping exists to avoid.
+                    unlinkedDependentNames.add(name);
+                    continue;
                 }
                 resolvedDependentBases.put(name, resolvedBase);
             }
 
-            Set<String> extensionNatureProjectNames = new HashSet<>();
-            for (IProject extensionNatureProject : openExtensionNatureProjects)
+            for (String extensionNatureProjectName : extensionNatureProjectNames)
             {
-                String name = requiredProjectName(extensionNatureProject);
-                if (!extensionNatureProjectNames.add(name)
-                    || !resolvedDependentBases.containsKey(name))
+                if (!resolvedDependentBases.containsKey(extensionNatureProjectName))
                 {
                     // The extension-nature view must be a subset of the already-validated dependent
                     // view. A mismatch means the supposedly single capture changed underneath us.
