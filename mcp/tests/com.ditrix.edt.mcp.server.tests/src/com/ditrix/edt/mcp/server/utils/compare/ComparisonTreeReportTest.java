@@ -55,6 +55,12 @@ public class ComparisonTreeReportTest
 
     private static final String DOCUMENT_ORDER = "Document.Order"; //$NON-NLS-1$
 
+    /** The engine's reason for a name it pulls in AFTER a reading has been taken. */
+    private static final String LATE_NAME_REASON = "pulled in after the reading"; //$NON-NLS-1$
+
+    /** And for one more reason under a name that reading already carried. */
+    private static final String LATE_EXTRA_REASON = "a second reason, after the reading"; //$NON-NLS-1$
+
     private static final String ABSENT_CELL = "—"; //$NON-NLS-1$
 
     @Test
@@ -551,6 +557,38 @@ public class ComparisonTreeReportTest
         assertContains(report, "Content was compared INSIDE THE SCOPE ONLY"); //$NON-NLS-1$
     }
 
+    @Test
+    public void testACopiedScopeDoesNotGrowWithTheEngine()
+    {
+        // The scope object the handle hands out is the one the engine keeps extending, and it
+        // extends it IN PLACE: extendScope puts the name into the map getExtendedScope returns
+        // and appends the reason to the list already under it. So the copy has to be deep enough
+        // to cover BOTH, and this test makes the two fail separately - a new name kills a copy
+        // that kept the platform's map, a second reason kills a copy that took the map but shared
+        // its lists.
+        ComparisonScope scope = requestedScope(CATALOG_GOODS);
+        scope.extendScope(CATALOG_WAREHOUSES, "referenced by " + CATALOG_GOODS, //$NON-NLS-1$
+            ComparisonSide.MAIN);
+
+        ComparisonTreeReport.ScopeSnapshot snapshot =
+            ComparisonTreeReport.ScopeSnapshot.copyOf(scope);
+
+        scope.extendScope(DOCUMENT_ORDER, LATE_NAME_REASON, ComparisonSide.MAIN);
+        scope.extendScope(CATALOG_WAREHOUSES, LATE_EXTRA_REASON, ComparisonSide.MAIN);
+
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+        collector.accept(conflicting(61L, CATALOG_GOODS));
+        String report = render(collector, snapshot, false);
+
+        // What the reading DID carry is still there: without this the copy could be empty.
+        assertContains(report, CATALOG_WAREHOUSES);
+        assertContains(report, "referenced by " + CATALOG_GOODS); //$NON-NLS-1$
+        assertFalse("a name added after the reading was taken is not part of it:\n" + report, //$NON-NLS-1$
+            report.contains(DOCUMENT_ORDER));
+        assertFalse("nor is a reason added after it:\n" + report, //$NON-NLS-1$
+            report.contains(LATE_EXTRA_REASON));
+    }
+
     // === fixtures ===
 
     private static ComparisonScope requestedScope(String symlink)
@@ -578,6 +616,14 @@ public class ComparisonTreeReportTest
 
     private static String render(ComparisonTreeReport.Collector collector, ComparisonScope scope,
         boolean globalScope)
+    {
+        // Copied HERE, which is where production copies it: inside the boundary that read the
+        // tree, not at the moment the text is assembled.
+        return render(collector, ComparisonTreeReport.ScopeSnapshot.copyOf(scope), globalScope);
+    }
+
+    private static String render(ComparisonTreeReport.Collector collector,
+        ComparisonTreeReport.ScopeSnapshot scope, boolean globalScope)
     {
         return ComparisonTreeReport.render(
             new ComparisonTreeReport.Header("cmp-1", "TestConfiguration", "origin/main", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

@@ -51,6 +51,7 @@ import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.matching.MatchingStrategy;
 import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
+import com._1c.g5.v8.dt.compare.model.ComparisonSide;
 import com._1c.g5.v8.dt.compare.model.RootComparisonNode;
 import com._1c.g5.v8.dt.compare.model.TopComparisonNode;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -1330,6 +1331,151 @@ public class CompareConfigurationsToolTest
         }
     }
 
+    // ======== The scope table describes the reading the ROWS came from ========
+
+    /** What the caller asked for, and the only thing the boundary saw in the scope. */
+    private static final String REQUESTED_OBJECT = "Catalog.Products"; //$NON-NLS-1$
+
+    /** What the engine pulls in AFTER the tree has been walked. */
+    private static final String LATE_ADDITION = "Catalog.PulledInLate"; //$NON-NLS-1$
+
+    /** The engine's reason for it, distinct enough to be searched for on its own. */
+    private static final String LATE_REASON = "referenced, after the tree was read"; //$NON-NLS-1$
+
+    /**
+     * The finding: the rows and the tree's state came out of one comparison read, and the scope
+     * table was rendered from {@code handle.getFullScope()} AFTERWARDS. The engine extends that
+     * object in place as it pulls dependencies in - {@code extendScope} writes straight into the
+     * map and the reason lists the report prints - so the table could list objects, and reasons,
+     * added after the rows beside them had been collected, with the whole page presented as one
+     * picture of one comparison.
+     * <p>
+     * Here the engine extends the scope at the exact instant the read boundary closes. The report
+     * may only show what the boundary saw.
+     *
+     * @throws Exception never; the tree is readable in this fixture
+     */
+    @Test
+    public void testAnObjectAddedAfterTheWalkIsNotInTheScopeTable() throws Exception
+    {
+        ComparisonScope scope = scopeRequesting(REQUESTED_OBJECT);
+
+        String report = reportOverScope(scope,
+            () -> scope.extendScope(LATE_ADDITION, LATE_REASON, ComparisonSide.MAIN));
+
+        assertContains(report, REQUESTED_OBJECT);
+        assertFalse("the scope table must describe the reading the rows came from:\n" + report, //$NON-NLS-1$
+            report.contains(LATE_ADDITION));
+        assertFalse("and the reasons are part of that reading too:\n" + report, //$NON-NLS-1$
+            report.contains(LATE_REASON));
+    }
+
+    /**
+     * The mirror, and without it the fix could be "never report what the engine added": an
+     * addition the engine had already made when the tree was read IS part of that reading, and
+     * the report has to carry it - name and reason both - in the engine's own column.
+     *
+     * @throws Exception never; the tree is readable in this fixture
+     */
+    @Test
+    public void testAnObjectAddedBeforeTheWalkIsInTheScopeTable() throws Exception
+    {
+        ComparisonScope scope = scopeRequesting(REQUESTED_OBJECT);
+        scope.extendScope(LATE_ADDITION, LATE_REASON, ComparisonSide.MAIN);
+
+        String report = reportOverScope(scope, () -> {
+            // The engine does nothing further: the whole scope was already there to be read.
+        });
+
+        assertContains(report, LATE_ADDITION);
+        assertContains(report, LATE_REASON);
+        // And still in the engine's column, never the caller's: the snapshot copies the two
+        // halves from the two accessors that answer them and never merges them.
+        assertFalse("what the engine added is not what the caller requested:\n" + report, //$NON-NLS-1$
+            cellOfScopeRow(report, "| main |", 2).contains(LATE_ADDITION)); //$NON-NLS-1$
+        assertContains(cellOfScopeRow(report, "| main |", 3), LATE_ADDITION); //$NON-NLS-1$
+    }
+
+    /**
+     * @param symlink the one qualified name the caller asked for, on all three sides
+     * @return a scope of its own - never {@code ComparisonScope.EMPTY_SCOPE}, which is a shared
+     *     MUTABLE singleton one extending test would change for every other
+     */
+    private static ComparisonScope scopeRequesting(String symlink)
+    {
+        return new ComparisonScope(List.of(symlink), List.of(symlink), List.of(symlink));
+    }
+
+    /**
+     * Drives the production report path over a scripted session, letting the caller move the
+     * comparison ON at the exact moment the read boundary closes.
+     *
+     * @param scope the scope the handle carries - the live object, as in production
+     * @param afterBoundary what the engine does the instant the read returns and before the
+     *     report is assembled: the window the defect lived in
+     * @return the rendered report
+     * @throws ComparisonException never in this fixture; the session answers a readable tree
+     */
+    private static String reportOverScope(ComparisonScope scope, Runnable afterBoundary)
+        throws ComparisonException
+    {
+        IComparisonSession session = mock(IComparisonSession.class);
+        RootComparisonNode root = mock(RootComparisonNode.class);
+        withChildren(root, mock(TopComparisonNode.class));
+        when(root.bmGetId()).thenReturn(Long.valueOf(ROOT_NODE_ID));
+        when(session.getRootNode()).thenReturn(root);
+        when(session.getTopNodeStatus(ROOT_NODE_ID)).thenReturn(ComparisonNodeStatus.FINISHED);
+        when(session.runComparisonTreeReadonlyTask(any())).thenAnswer(invocation -> {
+            IBmTask<?> task = invocation.getArgument(0);
+            Object read = task.execute(null, null);
+            afterBoundary.run();
+            return read;
+        });
+        IComparisonManager manager = mock(IComparisonManager.class);
+        when(manager.getComparisonSession(any())).thenReturn(session);
+
+        ComparisonEngine.install(() -> manager);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(
+                new ComparisonProcessHandle(new NamedDataSource("Demo"), //$NON-NLS-1$
+                    new NamedDataSource("Other"), scope), //$NON-NLS-1$
+                new CompareMergeProcessBatch(List.of()));
+            return new CompareConfigurationsTool.EngineBackend().report(comparisonId,
+                new LaunchRequest("TestConfiguration", "origin/main", "v1.0", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    false));
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * @param report the rendered report
+     * @param rowStart the row's leading cell, e.g. {@code "| main |"}
+     * @param index the wanted cell's zero-based position in that row
+     * @return the cell, searched inside the Scope section only - the header table has a "main"
+     *     row of its own, and matching that one would test nothing
+     */
+    private static String cellOfScopeRow(String report, String rowStart, int index)
+    {
+        int from = report.indexOf("## Scope"); //$NON-NLS-1$
+        int to = report.indexOf("## Top objects"); //$NON-NLS-1$
+        assertTrue("both section headings must be present:\n" + report, from >= 0 && to > from); //$NON-NLS-1$
+        for (String line : report.substring(from, to).split("\n")) //$NON-NLS-1$
+        {
+            if (line.startsWith(rowStart))
+            {
+                String[] cells = line.split("\\|", -1); //$NON-NLS-1$
+                assertTrue("row is too short: " + line, cells.length > index); //$NON-NLS-1$
+                return cells[index];
+            }
+        }
+        fail("no row starting with '" + rowStart + "' in:\n" + report); //$NON-NLS-1$ //$NON-NLS-2$
+        return null;
+    }
+
     // ======== The report names the COMMIT, not only the expression that named it ========
 
     /** A full commit id, the shape {@code GitRevisionResolver} hands back. */
@@ -1401,8 +1547,8 @@ public class CompareConfigurationsToolTest
 
         String report = ComparisonTreeReport.render(
             CompareConfigurationsTool.headerFor("cmp-1", request, "finished", true), //$NON-NLS-1$ //$NON-NLS-2$
-            new ComparisonScope(Collections.emptyList(), Collections.emptyList(),
-                Collections.emptyList()),
+            ComparisonTreeReport.ScopeSnapshot.copyOf(new ComparisonScope(Collections.emptyList(),
+                Collections.emptyList(), Collections.emptyList())),
             new ComparisonTreeReport.Collector(100, false));
 
         assertContains(report, "vendor/2.5.14 (" + OTHER_COMMIT + ")"); //$NON-NLS-1$ //$NON-NLS-2$

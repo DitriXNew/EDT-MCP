@@ -383,8 +383,8 @@ public class ComparisonNodeStateTest
         String report = ComparisonTreeReport.render(
             new ComparisonTreeReport.Header("cmp-1", "TestConfiguration", "origin/main", "v1.0", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
                 "finished", true), //$NON-NLS-1$
-            new ComparisonScope(Collections.emptyList(), Collections.emptyList(),
-                Collections.emptyList()),
+            ComparisonTreeReport.ScopeSnapshot.copyOf(new ComparisonScope(Collections.emptyList(),
+                Collections.emptyList(), Collections.emptyList())),
             collector);
         // The row is the one starting with the node id; Change is its fifth cell
         // (nodeId | Main | Other | Ancestor | Change | Node status).

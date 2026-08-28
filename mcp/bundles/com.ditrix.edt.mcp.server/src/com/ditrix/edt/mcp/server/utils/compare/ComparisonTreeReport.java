@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,9 +30,11 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
  * INSIDE the comparison's own read task - the nodes are {@code IBmObject}s of the
  * comparison's private BM store, so they are not valid outside it. It copies each node into
  * a plain {@link Node} and keeps the counters;</li>
- * <li>{@link #render(Header, ComparisonScope, Collector)} is pure text assembly over those
- * copies plus the {@link ComparisonScope}, which is an ordinary object owned by the handle
- * and safe to read afterwards.</li>
+ * <li>{@link #render(Header, ScopeSnapshot, Collector)} is pure text assembly over those
+ * copies plus a {@link ScopeSnapshot} - and that is a COPY of the handle's scope taken in the
+ * same read, not the handle's own object. The scope is not safe to read afterwards: the engine
+ * extends it in place while the run proceeds, so a table rendered from it later lists objects
+ * the rows beside it were never collected under. See {@link ScopeSnapshot}.</li>
  * </ul>
  * <p>
  * Three honesty rules are built into the rendering and are what its tests pin:
@@ -178,6 +181,149 @@ public final class ComparisonTreeReport
     }
 
     /**
+     * The comparison's scope as ONE reading saw it, copied out of the live {@link ComparisonScope}
+     * the handle owns.
+     *
+     * <h2>Why a copy, and why it is taken where the tree is walked</h2>
+     * {@code ComparisonProcessHandle.getFullScope()} hands back the very object the engine
+     * extends. Read off {@code ComparisonScope} 29.0.0: {@code extendScope} puts the added name
+     * into the {@code HashMap} that {@link ComparisonScope#getExtendedScope} returns and appends
+     * the reason to the {@code List} already under that name - both in place, neither copied,
+     * neither wrapped unmodifiable. So a report that asked the handle AFTER walking the tree
+     * listed a scope the rows below it were never collected under and presented the two as one
+     * picture; and iterating that map while the engine writes to it is not merely inconsistent,
+     * it is a plain {@code HashMap} read during someone else's {@code put}.
+     * <p>
+     * The copy is therefore taken inside the SAME comparison read that copies the rows, and it is
+     * the copy the report renders. Whatever that boundary is worth for the nodes it is worth for
+     * this; and an immutable copy taken there cannot grow afterwards whatever the boundary is
+     * worth.
+     * <p>
+     * {@link ComparisonScope#getInputScope} is the one half that would not have needed defending -
+     * that list is built once in the constructor, wrapped {@code Collections.unmodifiableList},
+     * and never touched by {@code extendScope}. It is copied anyway, because the point is that
+     * the two halves of one reading cannot come from two instants: they arrive together or not
+     * at all.
+     *
+     * <h2>The two halves stay apart</h2>
+     * {@link #requested(ComparisonSide)} is what the caller asked for and
+     * {@link #added(ComparisonSide)} is what the engine pulled in by itself, copied from the two
+     * accessors that answer exactly those questions. Neither is
+     * {@link ComparisonScope#getScope}, which is the two merged: rendering that as the request
+     * would report objects the caller never named as objects the caller chose.
+     */
+    public static final class ScopeSnapshot
+    {
+        /** What a handle that reported no scope at all copies to. */
+        private static final ScopeSnapshot ABSENT = new ScopeSnapshot(null, null);
+
+        private final Map<ComparisonSide, List<String>> requested;
+
+        private final Map<ComparisonSide, Map<String, List<String>>> added;
+
+        private ScopeSnapshot(Map<ComparisonSide, List<String>> requested,
+            Map<ComparisonSide, Map<String, List<String>>> added)
+        {
+            this.requested = requested;
+            this.added = added;
+        }
+
+        /**
+         * Copies one live scope. Call from inside the comparison read whose tree the report
+         * describes, and nowhere else.
+         *
+         * @param scope the handle's live scope, or {@code null} when it reported none
+         * @return the copy; {@link #isPresent()} answers {@code false} for a {@code null} scope
+         */
+        public static ScopeSnapshot copyOf(ComparisonScope scope)
+        {
+            if (scope == null)
+            {
+                return ABSENT;
+            }
+            Map<ComparisonSide, List<String>> requestedCopy = new EnumMap<>(ComparisonSide.class);
+            Map<ComparisonSide, Map<String, List<String>>> addedCopy =
+                new EnumMap<>(ComparisonSide.class);
+            for (ComparisonSide side : ComparisonSide.values())
+            {
+                // getInputScope, NOT getScope: getScope also carries what the engine pulled in by
+                // itself, and presenting that as the caller's request is the lie this report
+                // exists to avoid.
+                requestedCopy.put(side, copyNames(scope.getInputScope(side)));
+                addedCopy.put(side, copyAdditions(scope.getExtendedScope(side)));
+            }
+            return new ScopeSnapshot(requestedCopy, addedCopy);
+        }
+
+        /**
+         * @return {@code true} when a scope was reported at all; {@code false} says the handle
+         *     carried none, which is not the same as a scope that named nothing
+         */
+        public boolean isPresent()
+        {
+            return requested != null;
+        }
+
+        /**
+         * @param side the side
+         * @return the qualified names the CALLER asked for on that side; never {@code null}, and
+         *     empty is the platform's "compare everything" rather than a refusal
+         */
+        public List<String> requested(ComparisonSide side)
+        {
+            return requested == null ? Collections.emptyList()
+                : requested.getOrDefault(side, Collections.emptyList());
+        }
+
+        /**
+         * @param side the side
+         * @return what the ENGINE added on that side, each qualified name with the engine's own
+         *     reasons for it; never {@code null}
+         */
+        public Map<String, List<String>> added(ComparisonSide side)
+        {
+            return added == null ? Collections.emptyMap()
+                : added.getOrDefault(side, Collections.emptyMap());
+        }
+
+        /**
+         * @param names the platform's list (may be {@code null})
+         * @return an immutable copy
+         */
+        private static List<String> copyNames(List<String> names)
+        {
+            return names == null || names.isEmpty() ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(names));
+        }
+
+        /**
+         * Copies the additions of one side, REASONS INCLUDED.
+         * <p>
+         * The value lists are copied and not shared. {@code extendScope} appends the reason to the
+         * list already under a name, so a copy that kept the platform's lists would keep growing
+         * after the reading was taken - and the map would look copied while the deepest thing the
+         * report prints was still live.
+         *
+         * @param additions the live map (may be {@code null} or the platform's empty map)
+         * @return an immutable copy, in the platform's own iteration order; the report sorts what
+         *     it prints, because a {@code HashMap}'s order is not one
+         */
+        private static Map<String, List<String>> copyAdditions(Map<String, List<String>> additions)
+        {
+            if (additions == null || additions.isEmpty())
+            {
+                return Collections.emptyMap();
+            }
+            Map<String, List<String>> copy = new LinkedHashMap<>();
+            for (Map.Entry<String, List<String>> entry : additions.entrySet())
+            {
+                copy.put(entry.getKey(), copyNames(entry.getValue()));
+            }
+            return Collections.unmodifiableMap(copy);
+        }
+    }
+
+    /**
      * Accumulates the tree while it is still readable, keeping WHOLE counters and at most
      * {@code limit} rows.
      * <p>
@@ -318,11 +464,12 @@ public final class ComparisonTreeReport
      * Renders the whole report.
      *
      * @param header fixed facts about the run
-     * @param scope the comparison's scope (may be {@code null} when the handle reported none)
+     * @param scope the comparison's scope AS ONE READING SAW IT - never the handle's live object;
+     *     {@code null} reads the same as a snapshot of a handle that reported none
      * @param collector the accumulated tree
      * @return Markdown
      */
-    public static String render(Header header, ComparisonScope scope, Collector collector)
+    public static String render(Header header, ScopeSnapshot scope, Collector collector)
     {
         StringBuilder out = new StringBuilder();
         out.append("# Comparison: ").append(header.projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -345,16 +492,16 @@ public final class ComparisonTreeReport
      * Renders the requested scope and, separately, whatever the engine added to it.
      *
      * @param out the report being assembled
-     * @param scope the comparison's scope (may be {@code null})
+     * @param scope the scope as the tree's own reading saw it (may be {@code null})
      * @param limit largest number of qualified names to list per side - in the table cells AND in
      *     the reasons below them, which describe the same names
      * @param globalScope the session's own answer to whether the run covered everything
      */
-    private static void appendScope(StringBuilder out, ComparisonScope scope, int limit,
+    private static void appendScope(StringBuilder out, ScopeSnapshot scope, int limit,
         boolean globalScope)
     {
         out.append("\n## Scope\n\n"); //$NON-NLS-1$
-        if (scope == null)
+        if (scope == null || !scope.isPresent())
         {
             out.append("The comparison reported no scope, so what it covered is unknown.\n"); //$NON-NLS-1$
             return;
@@ -362,11 +509,11 @@ public final class ComparisonTreeReport
         out.append(MarkdownUtils.tableHeader("Side", "Requested", "Added by the engine")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         for (ComparisonSide side : ComparisonSide.values())
         {
-            // getInputScope, NOT getScope: getScope also carries what the engine pulled in by
-            // itself, and presenting that as the caller's request is the lie this report exists
-            // to avoid.
-            List<String> requested = scope.getInputScope(side);
-            Map<String, List<String>> added = scope.getExtendedScope(side);
+            // Two accessors, deliberately never merged: the snapshot keeps the caller's
+            // request and the engine's own additions apart, because presenting the second as the
+            // first is the lie this report exists to avoid.
+            List<String> requested = scope.requested(side);
+            Map<String, List<String>> added = scope.added(side);
             out.append(MarkdownUtils.tableRow(sideName(side), describeRequested(requested, limit),
                 describeAdded(added, limit)));
         }
@@ -382,11 +529,7 @@ public final class ComparisonTreeReport
         int total = 0;
         for (ComparisonSide side : ComparisonSide.values())
         {
-            Map<String, List<String>> added = scope.getExtendedScope(side);
-            if (added == null)
-            {
-                continue;
-            }
+            Map<String, List<String>> added = scope.added(side);
             total += added.size();
             int shownForSide = 0;
             // Sorted, because the platform hands this back as a HashMap: an unordered report
@@ -551,11 +694,12 @@ public final class ComparisonTreeReport
      * Renders the counters and the page of top nodes.
      *
      * @param out the report being assembled
-     * @param scope the comparison's scope (may be {@code null}), used only to tell a run that
-     *     named objects from a whole-configuration run when nothing was compared
+     * @param scope the scope as the tree's own reading saw it (may be {@code null}), used only
+     *     to tell a run that named objects from a whole-configuration run when nothing was
+     *     compared
      * @param collector the accumulated tree
      */
-    private static void appendNodes(StringBuilder out, ComparisonScope scope, Collector collector)
+    private static void appendNodes(StringBuilder out, ScopeSnapshot scope, Collector collector)
     {
         out.append("\n## Top objects\n\n"); //$NON-NLS-1$
         out.append("**Total:** ").append(collector.getTotal()).append(" top nodes — ") //$NON-NLS-1$ //$NON-NLS-2$
@@ -605,9 +749,9 @@ public final class ComparisonTreeReport
      * while a whole-configuration run that produced nothing is a comparison to look at.
      *
      * @param out the report being assembled
-     * @param scope the comparison's scope (may be {@code null})
+     * @param scope the scope as the tree's own reading saw it (may be {@code null})
      */
-    private static void appendNothingCompared(StringBuilder out, ComparisonScope scope)
+    private static void appendNothingCompared(StringBuilder out, ScopeSnapshot scope)
     {
         out.append("The comparison reported no top nodes at all, so nothing was compared. ") //$NON-NLS-1$
             .append("That is an absence of data, NOT a statement that the sides agree.\n"); //$NON-NLS-1$
@@ -623,20 +767,19 @@ public final class ComparisonTreeReport
     }
 
     /**
-     * @param scope the comparison's scope (may be {@code null})
+     * @param scope the scope as the tree's own reading saw it (may be {@code null})
      * @return {@code true} when the caller named at least one object on at least one side; an
      *     empty input scope on every side is the platform's "compare everything", not a request
      */
-    private static boolean hasRequestedScope(ComparisonScope scope)
+    private static boolean hasRequestedScope(ScopeSnapshot scope)
     {
-        if (scope == null)
+        if (scope == null || !scope.isPresent())
         {
             return false;
         }
         for (ComparisonSide side : ComparisonSide.values())
         {
-            List<String> requested = scope.getInputScope(side);
-            if (requested != null && !requested.isEmpty())
+            if (!scope.requested(side).isEmpty())
             {
                 return true;
             }

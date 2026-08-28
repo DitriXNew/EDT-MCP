@@ -2706,6 +2706,89 @@ public class CompareConfigurationsTool implements IMcpTool
         }
 
         /**
+         * Everything the terminal report rests on, read inside ONE comparison boundary.
+         *
+         * <h2>Why this is a type and not three local variables</h2>
+         * The report is one picture of one comparison, and the comparison does not stand still:
+         * the engine keeps walking, and it EXTENDS the handle's scope object IN PLACE as it pulls
+         * dependencies in. So every reading the report states has to be taken beside the rows it
+         * describes - and "taken beside the rows" is only enforceable if there is no way to hand
+         * the renderer a value that was not. The constructor is private and
+         * {@link #take(ComparisonView, ComparisonTreeReport.Collector)} is the only way to build
+         * one, so reintroducing a late read means changing this type rather than moving one call.
+         * <p>
+         * That is the defect this closes, and it was live: the rows were collected inside
+         * {@code engine.read}, while the scope table was rendered from
+         * {@code handle.getFullScope()} afterwards - so the table could list objects, and reasons,
+         * that the engine added AFTER the rows had been collected, with both presented as one
+         * reading. The same family as the state the poll used to carry over: an answer assembled
+         * from more than one observation while the output claims it is one.
+         */
+        static final class TreeReading
+        {
+            private final String state;
+
+            private final boolean globalScope;
+
+            private final ComparisonTreeReport.ScopeSnapshot scope;
+
+            private TreeReading(String state, boolean globalScope,
+                ComparisonTreeReport.ScopeSnapshot scope)
+            {
+                this.state = state;
+                this.globalScope = globalScope;
+                this.scope = scope;
+            }
+
+            /**
+             * Takes the whole reading. Call ONLY from inside
+             * {@code ComparisonEngine.read(view, ...)}: the walk needs that boundary for the BM
+             * objects it touches, and the scope copy needs it for the reason this class exists.
+             *
+             * @param view the leased comparison
+             * @param collector the report being accumulated
+             * @return the reading
+             */
+            static TreeReading take(ComparisonView view,
+                ComparisonTreeReport.Collector collector)
+            {
+                String state = walkAndDescribeState(view, collector);
+                // The SESSION's own answer, computed once in its constructor and kept there. The
+                // scope object cannot answer this: the engine extends it as it pulls dependencies
+                // in, so deriving it from the scope would call a whole-configuration run scoped
+                // the moment one name had been added.
+                boolean global = view.isGlobalScope();
+                // Dereferenced with NO null guard on the view's handle, deliberately. A view is
+                // only ever built around one, so a missing handle is a broken view - and folding
+                // that into ScopeSnapshot.copyOf(null) would print "the comparison reported no
+                // scope", which is a claim about the HANDLE'S ANSWER made where there was no
+                // handle to answer. Left to throw, it lands in the caller's "reading the
+                // comparison tree" failure, which says only what was observed. The one thing
+                // this may report as "no scope" is a real handle that carried none.
+                return new TreeReading(state, global,
+                    ComparisonTreeReport.ScopeSnapshot.copyOf(view.handle().getFullScope()));
+            }
+
+            /** @return the comparison's state, as the boundary that walked the tree saw it */
+            String state()
+            {
+                return state;
+            }
+
+            /** @return the session's own answer to "did this run cover the whole configuration" */
+            boolean isGlobalScope()
+            {
+                return globalScope;
+            }
+
+            /** @return the scope, copied in the boundary that collected the rows */
+            ComparisonTreeReport.ScopeSnapshot scope()
+            {
+                return scope;
+            }
+        }
+
+        /**
          * Walks one leased comparison tree and renders it.
          *
          * @param engine the read-only facade
@@ -2720,11 +2803,10 @@ public class CompareConfigurationsTool implements IMcpTool
         {
             ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(
                 request.getLimit(), request.isChangedOnly());
-            // Both deliberately without an initialiser: the compiler then refuses a path that
-            // renders the report without having read the session's answers, instead of quietly
-            // rendering the scoped caveat - or the state - on a default nobody observed.
-            boolean globalScope;
-            String state;
+            // Deliberately without an initialiser: the compiler then refuses a path that renders
+            // the report without having read the session's answers, instead of quietly rendering
+            // the scoped caveat - or the state, or the scope - on a default nobody observed.
+            TreeReading reading;
             try
             {
                 PlatformAnswer<ComparisonView> answer = engine.view(handle);
@@ -2737,21 +2819,21 @@ public class CompareConfigurationsTool implements IMcpTool
                 // Read through the comparison's OWN transaction: the nodes are objects of the
                 // comparison's private BM store, and BmTransactions.read(project, ...) would open
                 // a transaction on a different store entirely (CLAUDE.md don't #1).
-                state = engine.read(view, "Read comparison tree", //$NON-NLS-1$
-                    (transaction, monitor) -> walkAndDescribeState(view, collector));
-                // The SESSION's own answer, computed once in its constructor and kept there. The
-                // scope object cannot answer this after the fact: the engine extends it as it
-                // pulls dependencies in, so asking it here would call a whole-configuration run
-                // scoped the moment one name had been added.
-                globalScope = view.isGlobalScope();
+                reading = engine.read(view, "Read comparison tree", //$NON-NLS-1$
+                    (transaction, monitor) -> TreeReading.take(view, collector));
             }
             catch (RuntimeException e)
             {
                 throw new ComparisonException(
                     messageOf(ComparisonFailures.failed("reading the comparison tree", e)), e); //$NON-NLS-1$
             }
-            return ComparisonTreeReport.render(headerFor(comparisonId, request, state, globalScope),
-                handle.getFullScope(), collector);
+            // Nothing below this line asks the live comparison anything. The header's two facts
+            // and the scope table all come out of the one reading above, so the report is one
+            // picture of one instant rather than a composite of the instants it happened to be
+            // assembled at.
+            return ComparisonTreeReport.render(
+                headerFor(comparisonId, request, reading.state(), reading.isGlobalScope()),
+                reading.scope(), collector);
         }
 
         /**
