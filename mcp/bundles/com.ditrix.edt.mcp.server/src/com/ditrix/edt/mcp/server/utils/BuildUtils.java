@@ -153,8 +153,8 @@ public final class BuildUtils
             // Wait for ALL derived data. Callers of this method depend on that: the cascade
             // pre-flight opens a BM batch session afterwards, and RevalidateObjectsTool reports
             // "Revalidation completed" on the strength of it. Waiting only for the model would let
-            // both claim something that has not happened - see waitForModelData for the callers that
-            // genuinely only need the model.
+            // both claim something that has not happened. The model-only probe lives in
+            // ProjectStateChecker.isModelDataComputed, bounded and non-blocking, for the write gate.
             Activator.logInfo("Waiting for derived data computations for: " + project.getName()); //$NON-NLS-1$
             boolean completed = ddManager.waitAllComputations(timeoutMs);
             
@@ -170,49 +170,6 @@ public final class BuildUtils
         catch (Exception e)
         {
             Activator.logError("Error waiting for derived data", e); //$NON-NLS-1$
-        }
-    }
-
-    /**
-     * Waits for the derived data the MODEL and the reference index need, without waiting for the
-     * validation checks.
-     * <p>
-     * Issue #495: the checks run for hours on a large configuration, and
-     * {@link #waitForDerivedData(IProject, long)} waits for them too - so a caller that only wants to
-     * edit metadata sat out its whole timeout while a background validation it does not depend on
-     * kept the pipeline busy. {@code waitImportantDataComputations} waits on the platform's own set of
-     * segments to wait for during the incremental phase, so the distinction stays EDT's to maintain,
-     * and it accounts for QUEUED work because it starts by draining the accumulated contexts.
-     *
-     * @param project the IProject to wait for
-     * @param timeoutMs timeout in milliseconds
-     */
-    public static void waitForModelData(IProject project, long timeoutMs)
-    {
-        try
-        {
-            IDerivedDataManager ddManager = resolveDerivedDataManager(project);
-            if (ddManager == null)
-            {
-                return;
-            }
-            Activator.logInfo("Waiting for model data computations for: " + project.getName()); //$NON-NLS-1$
-            if (ddManager.waitImportantDataComputations(timeoutMs))
-            {
-                Activator.logInfo("Model data computations completed for: " + project.getName()); //$NON-NLS-1$
-            }
-            else
-            {
-                Activator.logInfo("Model data wait timed out for: " + project.getName()); //$NON-NLS-1$
-            }
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error waiting for model data", e); //$NON-NLS-1$
         }
     }
 

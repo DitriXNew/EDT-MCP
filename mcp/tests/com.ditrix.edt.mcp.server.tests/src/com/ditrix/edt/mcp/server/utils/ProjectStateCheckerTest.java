@@ -38,6 +38,7 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 
 import org.mockito.ArgumentCaptor;
 
+import com._1c.g5.v8.derived.DerivedDataStatus;
 import com._1c.g5.v8.derived.IDerivedDataManager;
 
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils.DeclaredBaseProject;
@@ -829,39 +830,43 @@ public class ProjectStateCheckerTest
     /**
      * Issue #495: the validation checks run for HOURS on a large configuration and keep both
      * isIdle() and isAllComputed() false, which used to switch metadata editing off for that whole
-     * time. The question a metadata edit actually needs answered is whether the MODEL and the index
-     * are computed, and only the platform's own important-data wait answers it - it drains the
-     * accumulated contexts first, so QUEUED model work counts, which no snapshot of the active
-     * pipeline stage can see.
+     * time. What a metadata edit needs answered is whether the MODEL and the index are computed, and
+     * only the platform's own important-data wait answers it - it drains the accumulated contexts
+     * first, so QUEUED model work counts, which no snapshot of the active pipeline stage can see.
      */
     @Test
     public void modelDataIsComputedWhenTheImportantWaitSaysSo() throws Exception
     {
-        IDerivedDataManager manager = mock(IDerivedDataManager.class);
-        when(manager.waitImportantDataComputations(anyLong())).thenReturn(true);
-
-        assertTrue(ProjectStateChecker.isModelDataComputed(manager));
+        assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, false)));
     }
 
     /** Validation still running is irrelevant; unfinished MODEL work is not. */
     @Test
     public void pendingModelDataIsNotReady() throws Exception
     {
-        IDerivedDataManager manager = mock(IDerivedDataManager.class);
-        when(manager.waitImportantDataComputations(anyLong())).thenReturn(false);
-
-        assertFalse(ProjectStateChecker.isModelDataComputed(manager));
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, false)));
     }
 
     /**
-     * The probe must pass a POSITIVE timeout: the platform treats a non-positive one as "wait until
-     * some task finishes" with no bound, which would hang the gate every write tool calls.
+     * An ACTIVE model synchronisation is tracked separately from the pipeline, so the important-data
+     * wait can drain what has accumulated so far and answer "complete" while the model is still
+     * moving. Admitting a write there would run it against a stale model and index.
+     */
+    @Test
+    public void activeModelSynchronisationIsNeverReady() throws Exception
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, true)));
+    }
+
+    /**
+     * The probe must pass a POSITIVE timeout. It is also wrapped in a BoundedJob because the timeout
+     * does NOT bound the platform call: waitImportantDataComputations drains accumulated contexts
+     * first, and that drain waits on its lock without a timeout.
      */
     @Test
     public void theProbeIsBoundedByAPositiveTimeout() throws Exception
     {
-        IDerivedDataManager manager = mock(IDerivedDataManager.class);
-        when(manager.waitImportantDataComputations(anyLong())).thenReturn(true);
+        IDerivedDataManager manager = managerThatAnswers(true, false);
 
         ProjectStateChecker.isModelDataComputed(manager);
 
@@ -874,15 +879,30 @@ public class ProjectStateCheckerTest
     @Test
     public void anUnanswerableProbeIsNotReady() throws Exception
     {
+        IDerivedDataManager noStatus = mock(IDerivedDataManager.class);
+        when(noStatus.getDerivedDataStatus()).thenReturn(null);
+        assertFalse(ProjectStateChecker.isModelDataComputed(noStatus));
+
         IDerivedDataManager throwing = mock(IDerivedDataManager.class);
-        when(throwing.waitImportantDataComputations(anyLong()))
-            .thenThrow(new IllegalStateException("no pipeline")); //$NON-NLS-1$
+        when(throwing.getDerivedDataStatus()).thenThrow(new IllegalStateException("no pipeline")); //$NON-NLS-1$
         assertFalse(ProjectStateChecker.isModelDataComputed(throwing));
 
-        IDerivedDataManager interrupted = mock(IDerivedDataManager.class);
-        when(interrupted.waitImportantDataComputations(anyLong()))
+        IDerivedDataManager failing = managerThatAnswers(true, false);
+        when(failing.waitImportantDataComputations(anyLong()))
             .thenThrow(new InterruptedException("stopped")); //$NON-NLS-1$
-        assertFalse(ProjectStateChecker.isModelDataComputed(interrupted));
+        assertFalse(ProjectStateChecker.isModelDataComputed(failing));
         Thread.interrupted();
+    }
+
+    private static IDerivedDataManager managerThatAnswers(boolean important, boolean syncActive)
+        throws InterruptedException
+    {
+        DerivedDataStatus status = mock(DerivedDataStatus.class);
+        when(status.isModelSyncActive()).thenReturn(Boolean.valueOf(syncActive).booleanValue());
+        IDerivedDataManager manager = mock(IDerivedDataManager.class);
+        when(manager.getDerivedDataStatus()).thenReturn(status);
+        when(manager.waitImportantDataComputations(anyLong()))
+            .thenReturn(Boolean.valueOf(important).booleanValue());
+        return manager;
     }
 }

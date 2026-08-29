@@ -57,6 +57,18 @@ import com.google.gson.JsonObject;
  */
 public class ApplyQuickFixTool extends AbstractMetadataWriteTool
 {
+    /**
+     * A quick fix is driven by a MARKER, which is validation output: the checks and the marker
+     * cleaner are exactly the work that decides whether that marker still stands. Acting on one
+     * while they run would apply a fix for a problem that may no longer exist, so this tool keeps
+     * the strict gate that issue #495 relaxes for ordinary metadata edits.
+     */
+    @Override
+    protected boolean requiresValidationSettled()
+    {
+        return true;
+    }
+
     public static final String NAME = "apply_quick_fix"; //$NON-NLS-1$
 
     private static final String KEY_PROJECT = "projectName"; //$NON-NLS-1$

@@ -147,6 +147,10 @@ public final class ProjectStateChecker
      */
     private static final long MODEL_PROBE_TIMEOUT_MS = 200L;
 
+    /** Managers with a model-data probe in flight; see {@link #isModelDataComputed}. */
+    private static final java.util.Set<IDerivedDataManager> PROBES_IN_FLIGHT =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** The DT project behind a workspace project, or {@code null} when it is not an EDT project. */
     private static IDtProject resolveDtProject(IProject project)
     {
@@ -325,23 +329,66 @@ public final class ProjectStateChecker
      */
     static boolean isModelDataComputed(IDerivedDataManager ddManager)
     {
+        // At most ONE probe per manager may be in flight. BoundedJob's deadline frees the CALLER but
+        // cannot interrupt the platform wait, so a wedged pipeline would otherwise get a fresh stuck
+        // job per metadata write until the pool is exhausted - the same hazard waitForDiskExport
+        // guards with its one-waiter-per-project rule. A probe that finds one already running has
+        // proven nothing and says so.
+        if (!PROBES_IN_FLIGHT.add(ddManager))
+        {
+            return false;
+        }
         try
         {
-            return ddManager.waitImportantDataComputations(MODEL_PROBE_TIMEOUT_MS);
+            if (isModelSyncActive(ddManager))
+            {
+                return false;
+            }
+            // Written by the job thread and read here only after BoundedJob reports the job finished -
+            // that report is the happens-before edge, the same one the .mdo export barrier relies on.
+            boolean[] computed = { false };
+            BoundedJob.Result result = BoundedJob.run("Probing model-data readiness", //$NON-NLS-1$
+                MODEL_PROBE_TIMEOUT_MS,
+                monitor -> computed[0] = ddManager.waitImportantDataComputations(MODEL_PROBE_TIMEOUT_MS));
+            if (result.getOutcome() != BoundedJob.Outcome.COMPLETED || result.getFailure() != null
+                || !computed[0])
+            {
+                return false;
+            }
+            // Re-read AFTER the wait: a synchronisation that STARTS between the first read and the
+            // wait has not enqueued its contexts yet, so the drain sees an empty queue and the
+            // important segments still look complete for the PREVIOUS model. One observation before
+            // and one after is the only pair that excludes that window.
+            return !isModelSyncActive(ddManager);
         }
-        catch (InterruptedException e)
+        finally
         {
-            Thread.currentThread().interrupt();
-            return false;
+            PROBES_IN_FLIGHT.remove(ddManager);
+        }
+    }
+
+    /**
+     * Whether the model is being synchronised - or whether that cannot be established, which counts
+     * the same way. Synchronisation is tracked separately from the pipeline, so an active one means
+     * model and index contexts that are not enqueued yet.
+     *
+     * @param ddManager the project's derived-data manager
+     * @return {@code true} when a synchronisation is active OR the status could not be read
+     */
+    private static boolean isModelSyncActive(IDerivedDataManager ddManager)
+    {
+        try
+        {
+            DerivedDataStatus status = ddManager.getDerivedDataStatus();
+            return status == null || status.isModelSyncActive();
         }
         catch (RuntimeException e)
         {
-            // Not being able to ASK is never proof of readiness.
-            Activator.logError("Cannot probe model-data readiness; treating it as not ready", e); //$NON-NLS-1$
-            return false;
+            Activator.logError("Cannot read the derived-data status; treating it as not ready", e); //$NON-NLS-1$
+            return true;
         }
     }
-    
+
     /**
      * Checks if a project is ready and returns error message if not.
      * Convenience method for tools that need to check before executing.
@@ -1287,21 +1334,24 @@ public final class ProjectStateChecker
             @Override
             public void waitForDerivedData(IProject project, long timeoutMs)
             {
-                BuildUtils.waitForModelData(project, timeoutMs);
+                BuildUtils.waitForDerivedData(project, timeoutMs);
             }
 
             @Override
             public boolean isBuilding(IProject project)
             {
-                return modelBuildingErrorOrNull(project) != null;
+                return buildingErrorOrNull(project) != null;
             }
 
             @Override
             public String buildingErrorOrNull(IProject project)
             {
-                // The cascade is a MODEL operation: it needs the model and the reference index to
-                // compute the sites it rewrites, and nothing the validation checks produce (#495).
-                return ProjectStateChecker.modelBuildingErrorOrNull(project);
+                // The cascade stays STRICT. It rewrites BSL occurrences found through EDT's FULL-TEXT
+                // search index, whose FTS_INDEXING_SEGMENT and FTS_CLEANER_SEGMENT sit in the NORMAL
+                // bucket - and initAutoWaitRules builds the "important" set from SYNC, AFTER_SYNC and
+                // BEFORE_BUILD only, so the model wait does NOT cover them. A rename admitted on that
+                // wait could miss an occurrence and leave a stale reference behind.
+                return ProjectStateChecker.buildingErrorOrNull(project);
             }
 
             @Override
