@@ -178,6 +178,27 @@ public final class ComparisonNodeRenderer
      */
     public static final String UNREADABLE = "_(could not be read)_"; //$NON-NLS-1$
 
+    /**
+     * The cell for a side whose object does not HAVE this property at all.
+     * <p>
+     * Two matched sides need not be instances of the same concrete class - form elements are the
+     * ordinary case - so a property assignable on one of them can be a property the other does not
+     * carry. Rendering that as an empty cell said "this side has no value there", which is a
+     * statement about the object's contents; the truth is that the object has no such slot. The
+     * two then compared equal whenever the side that HAS the property left it empty, so the
+     * differing count could be zero and the document could announce no property differences over
+     * sides that do not even agree on which properties exist.
+     * <p>
+     * Like {@link #UNREADABLE} this is a RENDERING and nothing else, and for the same reason: any
+     * text a cell can carry is text a metadata property can legitimately hold. Whether the side
+     * carries the property is held beside the cell in {@link PropertyRow#present}, and it is that
+     * flag - never the rendered text - that {@link #compare} reads back.
+     * <p>
+     * It is not used for a side that carries no compared OBJECT: there the whole row is empty
+     * because the object is absent, which the summary above the table already states.
+     */
+    public static final String NOT_ON_THIS_SIDE = "_(not a property of this side)_"; //$NON-NLS-1$
+
     /** Opening notice for a node the engine has not finished comparing. */
     public static final String NOT_FINISHED_NOTICE = "Subtree not finished"; //$NON-NLS-1$
 
@@ -614,6 +635,13 @@ public final class ComparisonNodeRenderer
      * differing count loses it, and the summary tells the caller the property could not be read
      * when it was read perfectly well. The flag is set by the ONE place that knows - the
      * introspector's own {@code readFailed} - and nothing downstream has to guess.
+     * <p>
+     * {@link #present} is that SAME shape asked of a different question, out of band for the same
+     * reason. A side that does not carry the property at all rendered as an empty cell, which is
+     * also how a side that carries it empty renders, so the two compared equal - see
+     * {@link ComparisonNodeRenderer#NOT_ON_THIS_SIDE}. Presence is therefore recorded where it is
+     * known, at the moment the introspector lists a side's features, and never recovered from the
+     * cell.
      */
     private static final class PropertyRow
     {
@@ -622,6 +650,14 @@ public final class ComparisonNodeRenderer
 
         /** Whether the read of that side's value FAILED, independent of what the cell renders. */
         private final boolean[] readFailed = new boolean[SIDES.length];
+
+        /**
+         * Whether that side's object carries this property AT ALL - independent of its value, and
+         * independent of whether the value could be read. Stays false for a side whose object is
+         * absent, which is why {@link ComparisonNodeRenderer#compare} asks it only of the sides
+         * that have one.
+         */
+        private final boolean[] present = new boolean[SIDES.length];
 
         PropertyRow()
         {
@@ -660,6 +696,7 @@ public final class ComparisonNodeRenderer
         {
             collectProperties(rows, sides[i], i);
         }
+        markAbsentProperties(rows, sides);
 
         List<String> differing = new ArrayList<>();
         List<String> undetermined = new ArrayList<>();
@@ -756,9 +793,13 @@ public final class ComparisonNodeRenderer
     }
 
     /**
-     * Adds {@code source}'s assignable properties into {@code rows} under column {@code index}. A
-     * feature the side does not carry stays {@code null} and renders as an empty cell - which is also
-     * how a side whose object is absent renders, and the summary table above says which case it is.
+     * Adds {@code source}'s assignable properties into {@code rows} under column {@code index}, and
+     * records that this side HAS each of them.
+     * <p>
+     * A feature the side does not carry is left to {@link #markAbsentProperties}, which is the only
+     * place that can tell it apart from a side with no object at all. It used to be left to the
+     * initial empty string, so it rendered - and compared - exactly like a property the side has
+     * and leaves empty.
      * <p>
      * A property the introspector could not READ is the one case that does NOT render as an empty
      * cell: it gets {@link #UNREADABLE}. Both arrive from the introspector as a {@code null}
@@ -783,6 +824,7 @@ public final class ComparisonNodeRenderer
                 row = new PropertyRow();
                 rows.put(info.name, row);
             }
+            row.present[index] = true;
             if (info.readFailed)
             {
                 row.readFailed[index] = true;
@@ -795,10 +837,39 @@ public final class ComparisonNodeRenderer
         }
     }
 
+    /**
+     * Marks every cell where the side HAS an object but that object has no such property.
+     * <p>
+     * Done here, in the one place that holds both the rows and the three objects, rather than in
+     * {@link #collectProperties} - which is called per side and cannot tell "this side lacks the
+     * property" from "this side was never collected because it carries no object". The two must
+     * not render alike: the second is an absent object, which the summary above the table already
+     * states, and the first is a property mismatch between two objects that are both there.
+     *
+     * @param rows the collected rows, modified in place
+     * @param sides the three compared objects, {@code null} where the side has none
+     */
+    private static void markAbsentProperties(Map<String, PropertyRow> rows, EObject[] sides)
+    {
+        for (PropertyRow row : rows.values())
+        {
+            for (int i = 0; i < sides.length; i++)
+            {
+                if (sides[i] != null && !row.present[i])
+                {
+                    row.values[i] = NOT_ON_THIS_SIDE;
+                }
+            }
+        }
+    }
+
     /** What one property row establishes about the sides that carry an object. */
     private enum RowState
     {
-        /** Two sides that were both READ carry different values. */
+        /**
+         * The sides disagree: either two of them that were both READ carry different values, or
+         * one of them carries the property and another does not have it at all.
+         */
         DIFFERENT,
         /** Nothing disagrees, but at least one side could not be read, so nothing is established. */
         UNDETERMINED,
@@ -815,6 +886,15 @@ public final class ComparisonNodeRenderer
      * the two-answer version reported exactly that - it compared the placeholder for a failed read
      * with the placeholder for an absent value and found them equal.
      * <p>
+     * <b>PRESENCE is asked before any value.</b> Two matched sides need not be instances of the
+     * same concrete class, so one of them can simply not have the property. That is a difference,
+     * and it is established without reading anything - which is why it is answered first. Read as
+     * values, the commonest shape of it came back SAME: the side that has the property left it
+     * empty, the side that lacks it rendered empty too, so a node whose two sides do not even
+     * agree on which properties exist could be reported with zero differing properties. Presence
+     * is taken from {@link PropertyRow#present}, never from the cell, for the reason the paragraph
+     * below states about {@link PropertyRow#readFailed}.
+     * <p>
      * Which sides were unreadable is taken from {@link PropertyRow#readFailed} and NOT from the
      * rendered cells. Reading it back out of the text made the answer depend on what the
      * configuration happens to contain: a property whose value really is {@link #UNREADABLE} was
@@ -830,12 +910,20 @@ public final class ComparisonNodeRenderer
     {
         Set<String> readable = new LinkedHashSet<>();
         boolean anyUnreadable = false;
+        boolean anyPresent = false;
+        boolean anyAbsent = false;
         for (int i = 0; i < sides.length; i++)
         {
             if (sides[i] == null)
             {
                 continue;
             }
+            if (!row.present[i])
+            {
+                anyAbsent = true;
+                continue;
+            }
+            anyPresent = true;
             if (row.readFailed[i])
             {
                 anyUnreadable = true;
@@ -844,6 +932,15 @@ public final class ComparisonNodeRenderer
             {
                 readable.add(row.values[i] == null ? "" : row.values[i]); //$NON-NLS-1$
             }
+        }
+        if (anyPresent && anyAbsent)
+        {
+            // Established without reading a single value, and therefore ahead of everything below:
+            // one object has this property and another does not, which is a difference between the
+            // sides whatever the values are and whatever failed. Asking the values first sent the
+            // commonest shape of it - the side that HAS the property leaves it empty - through the
+            // equal branch, because the absent side's cell was the same empty string.
+            return RowState.DIFFERENT;
         }
         if (readable.size() > 1)
         {

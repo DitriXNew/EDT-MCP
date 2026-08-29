@@ -42,6 +42,10 @@ import com._1c.g5.v8.dt.compare.model.ComparisonSide;
  * difference.</li>
  * </ol>
  * <p>
+ * <b>A presence answer is only ever given for a side that was identified.</b> A one-sided node
+ * whose {@code getNodeSide()} is {@code null} names no side, so there is nothing to turn into an
+ * addition or a deletion and the state is {@link #NOT_REPORTED} - see {@link #decodeOneSided}.
+ * <p>
  * The ancestor-relative questions are asked with {@link ComparisonFlags#hasChanged} against
  * {@link ComparisonSide#COMMON_ANCESTOR}, and the last one with
  * {@link ComparisonFlags#hasDifferences} rather than {@code hasChanged}: the platform's own
@@ -77,7 +81,12 @@ public enum ComparisonNodeState
     DIFFERS("differs between main and other", true), //$NON-NLS-1$
     /** Compared, and equal on every side. */
     IDENTICAL("identical", false), //$NON-NLS-1$
-    /** The engine attached no comparison verdict at all - NOT a statement of equality. */
+    /**
+     * The engine left the question unanswered - NOT a statement of equality, and not a statement
+     * about presence either. Two ways in, and both are an absence of a verdict rather than a
+     * verdict: no {@link ComparisonFlags} object at all, and a node that calls itself one-sided
+     * without naming the side it exists on.
+     */
     NOT_REPORTED("not reported by the engine", true), //$NON-NLS-1$
     /** Not compared yet - the tree is lazy, so this is NOT a statement about equality. */
     NOT_COMPARED("not compared yet", true); //$NON-NLS-1$
@@ -181,6 +190,22 @@ public enum ComparisonNodeState
 
     /**
      * Names the one-sided case, which the ancestor turns into an addition or a deletion.
+     * <p>
+     * <b>Every answer here is read off the side the node names, and there is no fallback that
+     * guesses one.</b> The parameter may be {@code null} - the platform's own accessor is nullable
+     * and this method's contract says so - and a {@code null} side means the node reported that it
+     * exists on ONE side without saying which. That is a question nobody answered, so it is
+     * {@link #NOT_REPORTED}, the vocabulary this document already carries for exactly that: no
+     * verdict was attached, and the state {@link #differs()}, so the node still survives the
+     * {@code changedOnly} filter. It used to fall through to {@link #ONLY_IN_ANCESTOR}, which
+     * renders "deleted on both sides" - a three-sided verdict about presence, reached without
+     * having identified a single side, and printed into both the top-level table and the expanded
+     * report as if the engine had said it.
+     * <p>
+     * {@link #ONLY_IN_ANCESTOR} is therefore reserved for {@link ComparisonSide#COMMON_ANCESTOR}
+     * and nothing else: it is the one side whose presence really does mean both working sides
+     * dropped the object. Any side this enum does not know - a constant added by a later platform
+     * included - is unanswered rather than assumed, for the same reason.
      *
      * @param side the side the object exists on (may be {@code null})
      * @param ancestorExists whether the common ancestor still has the object
@@ -196,6 +221,10 @@ public enum ComparisonNodeState
         {
             return ancestorExists ? DELETED_ON_OTHER : ADDED_ON_MAIN;
         }
-        return ONLY_IN_ANCESTOR;
+        if (side == ComparisonSide.COMMON_ANCESTOR)
+        {
+            return ONLY_IN_ANCESTOR;
+        }
+        return NOT_REPORTED;
     }
 }

@@ -528,11 +528,10 @@ public final class MergeRulesDocument
      *
      * <p>
      * <b>It does NOT ask whether the object exists on any side</b> - see
-     * {@link #absentOnEveryTopObjectKeySide(String)}. The two questions have different right
-     * answers: reading a file must decode {@code NONE:NONE:NONE} into three absent sides and
-     * report it faithfully, because the key is already in somebody's file and hiding it would be
-     * a worse report; authoring one must refuse it. Folding the second question in here would make
-     * the read report LESS truthful in order to fix the write.
+     * {@link #spellsSideAbsentOnEveryTopObjectKeySide(String)}, which reports only how the key is
+     * SPELLED. Existence is not a question a key can answer: {@code NONE} is both the platform's
+     * absence marker and a legal 1C name, so the two readings of {@code NONE:NONE:NONE} are told
+     * apart by a live comparison and by nothing else.
      *
      * @param key a node key
      * @return {@code true} when the key has exactly two separators AND all three components name
@@ -544,22 +543,27 @@ public final class MergeRulesDocument
     }
 
     /**
-     * Whether a top-object-shaped key spells {@link #SIDE_ABSENT} on ALL THREE sides.
+     * Whether a top-object-shaped key SPELLS {@link #SIDE_ABSENT} on all three sides.
      * <p>
-     * {@code NONE:NONE:NONE} passes {@link #isTopObjectKey(String)}: it has two separators and
-     * every component names something, {@code NONE} being the platform's own name for "this side
-     * has no such object". What it describes, though, is an object that exists on NO side - and
-     * a comparison has no such node, because a node is what one of its three sides contributed.
-     * EDT keys its nodes by string equality, so a decision recorded under this key matches nothing
-     * in any comparison: reported as written, and never applicable. That is the same failure the
-     * empty-component check refuses, arrived at from the other direction - there the component was
-     * not a name, here every component is a name and the object still is not there.
+     * It reports the spelling and stops there, and the name says so, because the readings of that
+     * spelling have opposite consequences and this predicate cannot choose between them (see
+     * {@link TopObjectKey}). <b>The ambiguity is PER COMPONENT</b>, so a key of three such
+     * components has eight readings, not two: each side is independently either absent or holding
+     * an object named {@code NONE}. Seven of them describe a node a comparison really has - one
+     * side is enough - and only the eighth, every side truly absent, describes nothing, since a
+     * node is what one of its three sides contributed and a decision under such a key would be
+     * reported as recorded and never applied.
+     * <p>
+     * The predicate used to be called {@code absentOnEveryTopObjectKeySide} and its caller refused
+     * the key outright, stating that eighth reading as fact. Only a comparison can tell them
+     * apart, so what this answers is the spelling and the decision belongs where the comparison
+     * is.
      *
      * @param key a node key
      * @return {@code true} when the key has the top-object shape and each of its three components
      *         is exactly {@link #SIDE_ABSENT}
      */
-    public static boolean absentOnEveryTopObjectKeySide(String key)
+    public static boolean spellsSideAbsentOnEveryTopObjectKeySide(String key)
     {
         if (!hasTopObjectKeyShape(key))
         {
@@ -568,8 +572,7 @@ public final class MergeRulesDocument
         int first = key.indexOf(KEY_SEPARATOR);
         int second = key.indexOf(KEY_SEPARATOR, first + 1);
         // Exact equality, as TopObjectKey.parse reads the same literal: the platform writes NONE
-        // and matches it verbatim, so an object genuinely named "none" is a name like any other
-        // and must not be mistaken for an absence.
+        // and matches it verbatim, so an object genuinely named "none" is a name like any other.
         return SIDE_ABSENT.equals(key.substring(0, first))
             && SIDE_ABSENT.equals(key.substring(first + 1, second))
             && SIDE_ABSENT.equals(key.substring(second + 1));
@@ -712,12 +715,19 @@ public final class MergeRulesDocument
     /**
      * The {@code Node} children of an element, in document order - the list every lookup scans,
      * and therefore the definition of what counts as a node of the tree.
+     * <p>
+     * <b>It builds a NEW list on every call and scans every child to do it</b>, so how many times
+     * it is asked about one element is that element's share of a walk's cost. It records that on
+     * the element itself ({@link Element#nodeChildListings()}), which is how a walk that resolves
+     * each key separately can be told apart from one that lists a level once - see
+     * {@code MergeRulesCodec.rejectDuplicateSiblingKeys}, whose bound is pinned that way.
      *
      * @param parent the element to read
      * @return the node children, never {@code null}
      */
     static List<Element> nodeChildren(Element parent)
     {
+        parent.nodeChildListings++;
         List<Element> nodes = new ArrayList<>();
         for (Element child : parent.children())
         {
@@ -890,6 +900,23 @@ public final class MergeRulesDocument
         private final List<Element> children = new ArrayList<>();
 
         /**
+         * How many times this element's {@code Node} children have been LISTED.
+         * <p>
+         * A measurement and nothing else: it is written by {@link MergeRulesDocument#nodeChildren}
+         * alone, no production code reads it, and it takes no part in what this element IS - it is
+         * excluded from every rewrite, and two elements that differ only in it are the same
+         * document. It exists because the cost of a tree walk is otherwise unobservable from
+         * outside: a walk that lists a level once and one that re-resolves every key produce the
+         * SAME result and differ only in how often they ask this question, so a test with no way
+         * to count the asking can only pin the cost as a duration, which is not a bound.
+         * <p>
+         * It does not saturate: it is a plain {@code int}, so an element listed more than two
+         * billion times would wrap. Nothing depends on the value, which is why that is acceptable
+         * rather than guarded.
+         */
+        private int nodeChildListings;
+
+        /**
          * Creates an element.
          *
          * @param tag the tag name
@@ -1060,6 +1087,17 @@ public final class MergeRulesDocument
         {
             return children;
         }
+
+        /**
+         * How many times {@link MergeRulesDocument#nodeChildren} has listed this element's node
+         * children - see {@link #nodeChildListings} for why the number exists at all.
+         *
+         * @return the count, never negative for any document this codec can read
+         */
+        int nodeChildListings()
+        {
+            return nodeChildListings;
+        }
     }
 
     /**
@@ -1147,12 +1185,46 @@ public final class MergeRulesDocument
     }
 
     /**
-     * A top-object key split into the three names the platform joins with a colon. The literal
-     * {@link MergeRulesDocument#SIDE_ABSENT} means the side has no such object, which is a
-     * fact about the comparison - not a name - and is therefore modelled as {@code null}.
+     * A top-object key split into the three components the platform joins with a colon.
+     *
+     * <h2>{@link MergeRulesDocument#SIDE_ABSENT} is AMBIGUOUS, and this class says so</h2>
+     * The platform writes the literal {@code NONE} for a side that has no such object. It is also
+     * a legal 1C name: the platform's own predicate for an identifier
+     * ({@code com._1c.g5.v8.dt.common.StringUtils.isValidName}, read off its bytecode) asks only
+     * that the first code point be alphabetic or {@code '_'} and the rest alphabetic, a digit or
+     * {@code '_'} - there is no keyword list - so a metadata object may be called {@code NONE},
+     * and {@code TopNodePathGenerator}, which formats {@code "%s:%s:%s"} out of the three
+     * symlinks, then produces a component indistinguishable from the absence marker.
+     * <p>
+     * So a component that reads {@code NONE} establishes NEITHER answer on its own, and this class
+     * hands out the spelling plus {@link SideState} rather than converting it to a decided one. It
+     * used to answer {@code null} - "absent" - unconditionally, and every reader downstream then
+     * stated an absence that had never been established: the read report printed "(absent)" for a
+     * side that carries an object called {@code NONE}, and a key of three such components was
+     * refused for naming no object at all, while a live comparison holds exactly that node and
+     * resolves the key by string equality without any ambiguity to speak of.
+     * <p>
+     * Which is the general shape of the answer: <b>only a comparison can settle it</b>, because
+     * only a comparison knows what the sides contain. Nothing here should try.
      */
     public static final class TopObjectKey
     {
+        /** What one component of a top-object key establishes about its side. */
+        public enum SideState
+        {
+            /**
+             * The component names the object on that side. Any spelling other than
+             * {@link MergeRulesDocument#SIDE_ABSENT}, which is what makes this one certain.
+             */
+            NAMED,
+            /**
+             * The component is the literal {@link MergeRulesDocument#SIDE_ABSENT}: the object is
+             * absent on that side, OR the object is present and its name IS that literal. The key
+             * alone cannot tell, and neither can this class.
+             */
+            AMBIGUOUS
+        }
+
         private final String main;
 
         private final String other;
@@ -1167,7 +1239,7 @@ public final class MergeRulesDocument
         }
 
         /**
-         * Splits a three-name key.
+         * Splits a three-component key, keeping every component EXACTLY as the file spells it.
          *
          * @param key a key with exactly two colon separators
          * @return the parsed key
@@ -1176,27 +1248,30 @@ public final class MergeRulesDocument
         {
             int first = key.indexOf(KEY_SEPARATOR);
             int second = key.indexOf(KEY_SEPARATOR, first + 1);
-            return new TopObjectKey(side(key.substring(0, first)), side(key.substring(first + 1, second)),
-                side(key.substring(second + 1)));
+            return new TopObjectKey(key.substring(0, first), key.substring(first + 1, second),
+                key.substring(second + 1));
         }
 
         /**
          * Joins three names into a key, writing {@link MergeRulesDocument#SIDE_ABSENT} for an
          * absent side.
+         * <p>
+         * <b>The collision is the platform's and cannot be avoided here.</b> An absent side and a
+         * side holding an object NAMED {@code NONE} produce the same component, because that is
+         * the one key EDT matches against, and writing anything else would address no node at all.
+         * What a caller can rely on is the reverse direction: {@link #parse} does not decide
+         * between the two readings, and {@link #state} reports the component as
+         * {@link SideState#AMBIGUOUS}.
          *
-         * @param main the name on the main side, or {@code null}
-         * @param other the name on the other side, or {@code null}
-         * @param ancestor the name on the common-ancestor side, or {@code null}
+         * @param main the name on the main side, or {@code null} when the object is absent there
+         * @param other the name on the other side, or {@code null} when the object is absent there
+         * @param ancestor the name on the common-ancestor side, or {@code null} when the object is
+         *            absent there
          * @return the key
          */
         public static String format(String main, String other, String ancestor)
         {
             return literal(main) + KEY_SEPARATOR + literal(other) + KEY_SEPARATOR + literal(ancestor);
-        }
-
-        private static String side(String value)
-        {
-            return SIDE_ABSENT.equals(value) ? null : value;
         }
 
         private static String literal(String value)
@@ -1205,9 +1280,23 @@ public final class MergeRulesDocument
         }
 
         /**
-         * The name on the main side.
+         * What a component establishes about its side.
          *
-         * @return the name, or {@code null} when the object is absent there
+         * @param component one of the three components, as spelled
+         * @return {@link SideState#AMBIGUOUS} for the {@link MergeRulesDocument#SIDE_ABSENT}
+         *         literal, {@link SideState#NAMED} for anything else
+         */
+        public static SideState state(String component)
+        {
+            // Exact equality, as TopObjectKey.parse and EDT's own reader both match the literal
+            // verbatim: an object genuinely named "none" is a name like any other.
+            return SIDE_ABSENT.equals(component) ? SideState.AMBIGUOUS : SideState.NAMED;
+        }
+
+        /**
+         * The main side's component, exactly as the file spells it.
+         *
+         * @return the component, never {@code null}; ask {@link #mainState()} what it establishes
          */
         public String main()
         {
@@ -1215,9 +1304,9 @@ public final class MergeRulesDocument
         }
 
         /**
-         * The name on the other side.
+         * The other side's component, exactly as the file spells it.
          *
-         * @return the name, or {@code null} when the object is absent there
+         * @return the component, never {@code null}; ask {@link #otherState()} what it establishes
          */
         public String other()
         {
@@ -1225,9 +1314,10 @@ public final class MergeRulesDocument
         }
 
         /**
-         * The name on the common-ancestor side.
+         * The common-ancestor side's component, exactly as the file spells it.
          *
-         * @return the name, or {@code null} when the object is absent there
+         * @return the component, never {@code null}; ask {@link #ancestorState()} what it
+         *         establishes
          */
         public String ancestor()
         {
@@ -1235,20 +1325,42 @@ public final class MergeRulesDocument
         }
 
         /**
-         * Whether the names differ between the sides, i.e. the object was renamed. Compares
-         * only the sides that HAVE a name: an absent side is not a different name.
+         * What the main component establishes.
          *
-         * @return {@code true} when two present names differ
+         * @return the state, never {@code null}
          */
-        public boolean isRename()
+        public SideState mainState()
         {
-            return !equalOrAbsent(main, other) || !equalOrAbsent(main, ancestor)
-                || !equalOrAbsent(other, ancestor);
+            return state(main);
         }
 
-        private static boolean equalOrAbsent(String left, String right)
+        /**
+         * What the other component establishes.
+         *
+         * @return the state, never {@code null}
+         */
+        public SideState otherState()
         {
-            return left == null || right == null || left.equals(right);
+            return state(other);
         }
+
+        /**
+         * What the ancestor component establishes.
+         *
+         * @return the state, never {@code null}
+         */
+        public SideState ancestorState()
+        {
+            return state(ancestor);
+        }
+
+        // There is deliberately no isRename() here any more. It answered a BOOLEAN - "the object
+        // was renamed" - over components that may be ambiguous, and the only way to keep the
+        // boolean was to read an AMBIGUOUS component as an absence, which is the exact collapse
+        // this class exists to stop: 'Added:NONE:Added' is a rename if that middle component is
+        // the name NONE, and is not one if it is an absence, and the key does not say. Nothing in
+        // this plugin called it, so the answer is to remove the question rather than to publish a
+        // definite answer to it. A caller who needs it wants a THREE-valued one, taken with the
+        // comparison in hand.
     }
 }

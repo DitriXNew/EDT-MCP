@@ -434,7 +434,16 @@ public class MergeRulesTool implements IMcpTool
     {
         List<Decision> decisions = document.decisions();
         int unreachable = document.unreachableRuleCount();
-        StringBuilder out = new StringBuilder("# Merge rules: ").append(document.sourceLabel()).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The heading is a CONSTANT, and the source is a field below it. It used to be
+        // "# Merge rules: " + sourceLabel, and that label is not this server's text: for a zip it
+        // ends in the ENTRY name, and a zip entry name is an arbitrary string that may legally
+        // hold a line break followed by anything - a heading, a table, an instruction - where a
+        // filesystem path could not. Concatenated into a heading, that is a second document
+        // growing inside this one, indistinguishable from the real report. So the label goes
+        // through MarkdownUtils.inlineCode, which cannot be read as markup at all, and it goes
+        // into a field, where a break would at worst end a line rather than open a section.
+        StringBuilder out = new StringBuilder("# Merge rules\n\n"); //$NON-NLS-1$
+        out.append("- Source: ").append(MarkdownUtils.inlineCode(document.sourceLabel())).append('\n'); //$NON-NLS-1$
         out.append("- Format version: ").append(document.formatVersion()).append('\n'); //$NON-NLS-1$
         out.append("- Decisions: ").append(decisions.size()).append('\n'); //$NON-NLS-1$
         out.append("- Preserved sections this tool does not interpret: ") //$NON-NLS-1$
@@ -476,9 +485,16 @@ public class MergeRulesTool implements IMcpTool
             out.append('\n').append(unreachableRuleClause(unreachable));
         }
         out.append("\n> Levels: `root` = the whole configuration, `collection` = every object of one " //$NON-NLS-1$
-            + "kind, `object` = one object keyed by its name on the three sides ('NONE' = absent " //$NON-NLS-1$
-            + "there), `member` = below the object, where the platform keys nodes by a computed " //$NON-NLS-1$
-            + "POSITION that shifts when other rules change - reported here, never authored.\n"); //$NON-NLS-1$
+            + "kind, `object` = one object keyed by its name on the three sides, `member` = below " //$NON-NLS-1$
+            + "the object, where the platform keys nodes by a computed POSITION that shifts when " //$NON-NLS-1$
+            + "other rules change - reported here, never authored.\n" //$NON-NLS-1$
+            // Said once, here, rather than decided per cell: the side columns print the key
+            // exactly as the file spells it, and this is what the one ambiguous spelling means.
+            + "> A side column reading '" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$
+            + "' is the platform's marker for 'the object does not exist on that side' - and is " //$NON-NLS-1$
+            + "also what a side holding an object NAMED '" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$
+            + "' looks like, that being a legal 1C name. The key cannot tell the two apart; a " //$NON-NLS-1$
+            + "running comparison resolves it.\n"); //$NON-NLS-1$
         return out.toString();
     }
 
@@ -543,14 +559,27 @@ public class MergeRulesTool implements IMcpTool
         return "member"; //$NON-NLS-1$
     }
 
+    /**
+     * One side's cell of the decisions table: the component EXACTLY as the file spells it.
+     * <p>
+     * It used to print "(absent)" wherever the component read {@link MergeRulesDocument#SIDE_ABSENT},
+     * which is a statement about the configuration that the key does not support - {@code NONE} is
+     * the platform's absence marker AND a legal 1C name, so the cell claimed an absence for a side
+     * that may hold an object called {@code NONE} (see {@code MergeRulesDocument.TopObjectKey}).
+     * Printing the spelling states only what the file says; what the two readings are is in the
+     * legend under the table, once, instead of being decided per cell.
+     *
+     * @param key the parsed key, or empty when the decision does not address a top object
+     * @param reader which of the three components to render
+     * @return the cell
+     */
     private static String side(Optional<TopObjectKey> key, Function<TopObjectKey, String> reader)
     {
         if (key.isEmpty())
         {
             return "-"; //$NON-NLS-1$
         }
-        String name = reader.apply(key.get());
-        return name == null ? "(absent)" : name; //$NON-NLS-1$
+        return reader.apply(key.get());
     }
 
     // ==================== write ====================
@@ -913,6 +942,18 @@ public class MergeRulesTool implements IMcpTool
                 + "while EDT 2026.2 does not read it at all.") //$NON-NLS-1$
                 .toJson();
         }
+        if (!validated)
+        {
+            // Asked here and not at the parse, because until this point it was not known whether
+            // anything would be in a position to answer it. A validated write has had every key
+            // looked up in the comparison, which settles the one spelling a key cannot settle by
+            // itself; unvalidated, nothing can, and the refusal says so rather than choosing.
+            String unresolved = unresolvedAbsentSpellingRefusal(requested, comparison.isPresent());
+            if (unresolved != null)
+            {
+                return unresolved;
+            }
+        }
         if (refusal != null)
         {
             return refusal;
@@ -1069,7 +1110,9 @@ public class MergeRulesTool implements IMcpTool
             .append(requested.size() - replaced).append(" new, ").append(replaced).append(" replaced)\n"); //$NON-NLS-1$ //$NON-NLS-2$
         if (isSet(basedOn))
         {
-            out.append("- Based on: ").append(document.sourceLabel()) //$NON-NLS-1$
+            // The same label, through the same helper, for the same reason: 'basedOn' may name a
+            // zip, and the label then ends in that archive's ENTRY name. See renderRead.
+            out.append("- Based on: ").append(MarkdownUtils.inlineCode(document.sourceLabel())) //$NON-NLS-1$
                 .append(carriedOverClause(existingDecisions, replaced));
         }
         out.append("- Decisions in the file now: ").append(document.decisions().size()).append('\n'); //$NON-NLS-1$
@@ -1547,11 +1590,6 @@ public class MergeRulesTool implements IMcpTool
             {
                 return emptySide;
             }
-            String absentEverywhere = absentOnEverySideRefusal(key, position);
-            if (absentEverywhere != null)
-            {
-                return absentEverywhere;
-            }
             boolean topObjectLevel = i == MergeRulesDocument.MAX_AUTHORABLE_DEPTH - 1;
             if (topObjectLevel && !MergeRulesDocument.isTopObjectKey(key))
             {
@@ -1609,40 +1647,102 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
-     * Refuses a key that spells the platform's {@code NONE} on all three sides.
+     * Refuses a key that spells the platform's {@code NONE} on all three sides, and ONLY when
+     * nothing was in a position to resolve what it spells.
+     *
+     * <h2>Why this is not decided next to {@link #emptyTopObjectSideRefusal(String, int)}</h2>
+     * That refusal is certain: a component that is empty is not a name and not the absence marker
+     * either, so no comparison anywhere has a node for it. This one is NOT. {@code NONE} is how
+     * the platform spells "this side has no such object" AND a legal 1C name - the platform's own
+     * identifier predicate has no keyword list - so {@code NONE:NONE:NONE} reads two ways: an
+     * object present on no side, which no comparison has a node for, or an object called
+     * {@code NONE} on all three, which is an ordinary node that a comparison resolves by the same
+     * string equality as any other. It used to be refused unconditionally, next to the empty-side
+     * check, stating the first reading as fact - so a decision about a real node was rejected for
+     * naming no object, while the running comparison would have found it.
      * <p>
-     * The mirror image of {@link #emptyTopObjectSideRefusal(String, int)}, and the last hole its
-     * fix left. There the components were not names; here every component IS a name - {@code NONE}
-     * is how the platform spells "this side has no such object" - and the key still describes
-     * nothing, because an object absent on the main side, the other side AND the common ancestor
-     * exists in no comparison at all. A node is what one of the three sides contributed, so a key
-     * that contributes none matches no node by string equality: the decision would be reported as
-     * recorded and could never be applied. Without a live comparison to consult, this is the only
-     * place it can be caught.
+     * <b>So the key is put to the comparison, and this is what happens when there is none.</b>
+     * A validated write has already asked: {@code firstRefusedDecision} looks every decision up in
+     * the snapshot and refuses the ones the comparison does not have, this key included and with a
+     * message that says which node was missing. Unvalidated, nothing can tell the readings apart,
+     * and the refusal says exactly that instead of picking one.
+     *
      * <p>
-     * Asked of EVERY level, like the empty-side check and for the same reason: at the collection
-     * level the key is equally meaningless, and naming what is actually wrong with it beats
-     * refusing it as "an object key at the collection level".
+     * <b>It is only ever reached with no comparison NAMED - which is not the same as none having
+     * ANSWERED.</b> A call that names one and cannot be validated has already been refused above,
+     * so {@code idGiven} is false by the time this runs; but with no id this tool still resolves
+     * whichever comparison is RUNNING, and that one may have answered with a tree it could not
+     * read. The two states get different sentences, because the way out differs: start a
+     * comparison, against wait for the one already there. Told to "pass comparisonId" in the
+     * second state, the caller lands on the unreadable-tree refusal above - advice that resolves
+     * nothing.
      *
      * @param key one key of the chain, already trimmed
      * @param position the decision's position, for the message
-     * @return the refusal, or {@code null} when the key names at least one present side
+     * @param comparisonAnswered whether a comparison answered at all, though without a readable
+     *            tree - the difference between "start one" and "wait for this one"
+     * @return the refusal, or {@code null} when the key is not spelled that way
      */
-    private static String absentOnEverySideRefusal(String key, int position)
+    private static String unresolvedAbsentSpellingRefusal(String key, int position,
+        boolean comparisonAnswered)
     {
-        if (!MergeRulesDocument.absentOnEveryTopObjectKeySide(key))
+        if (!MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide(key))
         {
             return null;
         }
-        return ToolResult.error("Decision #" + position + ": '" + key + "' says the object is " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + MergeRulesDocument.SIDE_ABSENT + " on all three sides, so it names no object at " //$NON-NLS-1$
-            + "all. Nothing was written. A comparison node exists because one of the three sides " //$NON-NLS-1$
-            + "has the object, and the key is matched verbatim, so this one matches no node in " //$NON-NLS-1$
-            + "any comparison - the decision would be recorded and never applied. At least one " //$NON-NLS-1$
-            + "side must carry the object's name: 'A:A:A' when the name is the same everywhere, " //$NON-NLS-1$
-            + "'A:" + MergeRulesDocument.SIDE_ABSENT + ":" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$ //$NON-NLS-2$
-            + "' when only the main side has it. Read an existing rules file with mode '" //$NON-NLS-1$
-            + MODE_READ + "' to see the exact keys.").toJson(); //$NON-NLS-1$
+        return ToolResult.error("Decision #" + position + ": '" + key + "' spells " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + MergeRulesDocument.SIDE_ABSENT + " on every side, and nothing here can tell what " //$NON-NLS-1$
+            + "that means. Nothing was written. '" + MergeRulesDocument.SIDE_ABSENT //$NON-NLS-1$
+            + "' is the platform's marker for 'the object does not exist on this side', and it " //$NON-NLS-1$
+            + "is also a legal 1C name, so EACH of the three parts reads both ways on its own: " //$NON-NLS-1$
+            + "this key addresses an ordinary node as soon as ANY side holds an object NAMED '" //$NON-NLS-1$
+            + MergeRulesDocument.SIDE_ABSENT + "', and addresses nothing only if every side is " //$NON-NLS-1$
+            + "truly absent - which no comparison has a node for, so the decision would be " //$NON-NLS-1$
+            + "recorded and never applied. Only a comparison can say which: " //$NON-NLS-1$
+            + (comparisonAnswered
+                ? "the running comparison answered here, but its tree could not be read, so " //$NON-NLS-1$
+                    + "nothing could look the key up. get_comparison_node says whether that " //$NON-NLS-1$
+                    + "tree is still building; re-send this write once it has finished" //$NON-NLS-1$
+                : "no comparison answered at all - start one with compare_configurations and " //$NON-NLS-1$
+                    + "re-send this write, and the key is looked up instead of guessed at here") //$NON-NLS-1$
+            + ". If you meant an object with a name, spell the name: 'A:A:A' when it is the same " //$NON-NLS-1$
+            + "everywhere, 'A:" + MergeRulesDocument.SIDE_ABSENT + ":" //$NON-NLS-1$ //$NON-NLS-2$
+            + MergeRulesDocument.SIDE_ABSENT + "' when only the main side has it. Read an existing " //$NON-NLS-1$
+            + "rules file with mode '" + MODE_READ + "' to see the exact keys.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The first decision THIS CALL sent whose key spells {@code NONE} on every side, when no
+     * comparison was in a position to resolve it.
+     * <p>
+     * Asked of every key of the chain, though in practice only the object level reaches it: a
+     * three-part key at the COLLECTION level is refused during the parse by the shape rule, and
+     * that refusal is certain where this one is not. The loop stays general so the question does
+     * not depend on which level the shape rule happens to police.
+     * <p>
+     * Only the keys this call sent, matching where the check used to live (the parse of the
+     * request). A key inherited through {@code basedOn} is already in a file somebody wrote, and
+     * this tool does not refuse to rewrite what it can read.
+     *
+     * @param requested the decisions this call sent, in the order they arrived
+     * @param comparisonAnswered whether a comparison answered without a readable tree
+     * @return the refusal, or {@code null} when no requested key is spelled that way
+     */
+    private static String unresolvedAbsentSpellingRefusal(List<RequestedDecision> requested,
+        boolean comparisonAnswered)
+    {
+        for (int i = 0; i < requested.size(); i++)
+        {
+            for (String key : requested.get(i).path)
+            {
+                String refusal = unresolvedAbsentSpellingRefusal(key, i + 1, comparisonAnswered);
+                if (refusal != null)
+                {
+                    return refusal;
+                }
+            }
+        }
+        return null;
     }
 
     /**

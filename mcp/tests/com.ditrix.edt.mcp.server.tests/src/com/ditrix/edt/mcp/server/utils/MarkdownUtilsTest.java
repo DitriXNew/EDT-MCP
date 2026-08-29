@@ -240,6 +240,113 @@ public class MarkdownUtilsTest
             MarkdownUtils.keyValueTable("K", "V", null));
     }
 
+    // ========== inlineCode ==========
+
+    /**
+     * The defect this exists against: text that is not ours, placed in a document, ending a line
+     * and starting a block of its own. Everything below is one property of the result - one line,
+     * fenced, nothing outside the fence - so that no test passes by naming a character.
+     */
+    @Test
+    public void testInlineCodeNeverLeavesItsLine()
+    {
+        String rendered = MarkdownUtils.inlineCode("a\n\n# Injected\n\n| x | y |\nb");
+
+        assertEquals("the result is ONE line: " + rendered, -1, rendered.indexOf('\n'));
+        assertEquals(-1, rendered.indexOf('\r'));
+    }
+
+    @Test
+    public void testInlineCodeNeutralisesEveryUnicodeLineTerminator()
+    {
+        // The set is defined by a property - "Unicode calls it a line terminator" - and not by a
+        // guess at which ones a renderer might honour.
+        String rendered = MarkdownUtils.inlineCode("a\u000Bb\u000Cc\u0085d\u2028e\u2029f");
+
+        assertEquals("`a\uFFFDb\uFFFDc\uFFFDd\uFFFDe\uFFFDf`", rendered);
+    }
+
+    @Test
+    public void testInlineCodeNeutralisesControlCharactersAndDelete()
+    {
+        assertEquals("`a\uFFFDb\uFFFDc`", MarkdownUtils.inlineCode("a\u0000b\u007Fc"));
+    }
+
+    /**
+     * The delimiter is the OTHER way out of a code span, and it is closed by CommonMark's own
+     * rule - a longer fence - rather than by removing anything from the text.
+     */
+    @Test
+    public void testInlineCodeOutgrowsAnyRunOfBackticks()
+    {
+        // No padding here: the body neither starts nor ends with a backtick, so nothing could
+        // run into the fence.
+        assertEquals("``a`b``", MarkdownUtils.inlineCode("a`b"));
+        assertEquals("````a```b````", MarkdownUtils.inlineCode("a```b"));
+    }
+
+    @Test
+    public void testInlineCodeKeepsABacktickOffTheFence()
+    {
+        // Both ends padded together: CommonMark strips one space from each side only when both
+        // are there, so padding one end would keep the other's space in the value.
+        assertEquals("`` ` ``", MarkdownUtils.inlineCode("`"));
+    }
+
+    @Test
+    public void testInlineCodeKeepsTheTextItIsGiven()
+    {
+        assertEquals("`Main_Other_Ancestor.xml`", MarkdownUtils.inlineCode("Main_Other_Ancestor.xml"));
+        // The backslashes are Java escapes for ONE backslash each: a Windows path, with the
+        // markup characters that used to be live in the heading beside it.
+        assertEquals("`C:\\tmp\\rules.zip!a[b](c)*d*`",
+            MarkdownUtils.inlineCode("C:\\tmp\\rules.zip!a[b](c)*d*"));
+    }
+
+    @Test
+    public void testInlineCodeNeverSplitsASurrogatePair()
+    {
+        // U+1F600, whose low surrogate is U+DE00 - well above every character this replaces, so
+        // there is no code unit here it can touch.
+        String emoji = new String(Character.toChars(0x1F600));
+
+        assertEquals("`" + emoji + "`", MarkdownUtils.inlineCode(emoji));
+    }
+
+    /**
+     * A body that already begins and ends with a space needs the padding too - for the opposite
+     * reason to a backtick. CommonMark strips one space from each end of such a span, so an
+     * unpadded `` ` x ` `` renders as "x" and the report has quietly edited a value it is
+     * reproducing.
+     */
+    @Test
+    public void testInlineCodeKeepsTheSpacesAtBothEndsOfTheText()
+    {
+        assertEquals("`  x  `", MarkdownUtils.inlineCode(" x "));
+    }
+
+    /** A space at ONE end is not stripped, so padding there would ADD one. */
+    @Test
+    public void testInlineCodeDoesNotPadWhenOnlyOneEndIsASpace()
+    {
+        assertEquals("` x`", MarkdownUtils.inlineCode(" x"));
+        assertEquals("`x `", MarkdownUtils.inlineCode("x "));
+    }
+
+    /** ...and a body of nothing but spaces is not stripped either, so it is not padded. */
+    @Test
+    public void testInlineCodeLeavesAnAllSpaceBodyAlone()
+    {
+        assertEquals("`   `", MarkdownUtils.inlineCode("   "));
+    }
+
+    @Test
+    public void testInlineCodeRendersNothingAsAnEmptySpanRatherThanAsBareFences()
+    {
+        assertEquals("` `", MarkdownUtils.inlineCode(""));
+        assertEquals("` `", MarkdownUtils.inlineCode(null));
+    }
+
     /** Counts column-delimiter pipes (a backslash-escaped pipe does not count). */
     private static int countUnescapedPipes(String s)
     {

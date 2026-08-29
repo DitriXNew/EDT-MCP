@@ -27,6 +27,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.Enumeration;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -2221,10 +2222,25 @@ public final class MergeRulesCodec
      * <p>
      * Breadth before depth on purpose - the shallowest collision is the one a reader can act on,
      * and reporting a deep one first would name a node whose own ancestor is already ambiguous.
+     *
+     * <h2>Each level's child list is built ONCE</h2>
+     * The keyed children are RETAINED as they are checked, and the descent walks the retained
+     * elements. It used to re-resolve every key through {@code MergeRulesDocument.findNode}, which
+     * rebuilds and rescans the whole child list on each call: a flat level of {@code n} uniquely
+     * keyed siblings cost {@code n} rebuilds of an {@code n}-element list and about {@code n²/2}
+     * key comparisons - inside the sizes {@link #MAX_DOCUMENT_BYTES} and {@link #MAX_DOCUMENT_NODES}
+     * already admit, and merge-settings files ARE flat at the object level, one sibling per top
+     * object of a collection.
      * <p>
-     * The descent goes through {@code MergeRulesDocument.findNode} rather than through the child
-     * the loop above happens to hold: what is walked is then, by construction, the element a
-     * lookup for that key would land on.
+     * <b>It walks the same elements the old descent did, by construction and not by resemblance.</b>
+     * {@code findNode} answers with the FIRST {@code Node} child carrying the key; the retained
+     * element is the first one carrying it, because a second one throws out of the loop above
+     * before any descent begins. The duplicate detection and its message are untouched - this
+     * changes what the walk COSTS, not what it decides.
+     * <p>
+     * The bound is observable rather than asserted: {@link MergeRulesDocument#nodeChildren} counts
+     * its own calls on the element it is asked about, so a test can pin "once per parent" and see
+     * a re-resolving walk turn it into "once per parent, plus once per key".
      *
      * @param parent the element whose {@code Node} children are this level
      * @param path the keys of the ancestors, starting at {@link MergeRulesDocument#ROOT_KEY}
@@ -2233,7 +2249,7 @@ public final class MergeRulesCodec
     private static void rejectDuplicateSiblingKeys(Element parent, List<String> path)
         throws MergeRulesFormatException
     {
-        Set<String> keys = new LinkedHashSet<>();
+        Map<String, Element> keyed = new LinkedHashMap<>();
         for (Element child : MergeRulesDocument.nodeChildren(parent))
         {
             String key = child.attribute(MergeRulesDocument.ATTR_KEY);
@@ -2245,16 +2261,16 @@ public final class MergeRulesCodec
                 // about.
                 continue;
             }
-            if (!keys.add(key))
+            if (keyed.putIfAbsent(key, child) != null)
             {
                 throw new MergeRulesFormatException(duplicateNodeKey(key, path));
             }
         }
-        for (String key : keys)
+        for (Map.Entry<String, Element> child : keyed.entrySet())
         {
             List<String> here = new ArrayList<>(path);
-            here.add(key);
-            rejectDuplicateSiblingKeys(MergeRulesDocument.findNode(parent, key), here);
+            here.add(child.getKey());
+            rejectDuplicateSiblingKeys(child.getValue(), here);
         }
     }
 

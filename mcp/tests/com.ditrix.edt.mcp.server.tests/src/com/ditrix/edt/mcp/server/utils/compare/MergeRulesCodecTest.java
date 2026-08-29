@@ -10,7 +10,6 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -256,19 +255,23 @@ public class MergeRulesCodecTest
         assertEquals("Alpha", key.main()); //$NON-NLS-1$
         assertEquals("Beta", key.other()); //$NON-NLS-1$
         assertEquals("Gamma", key.ancestor()); //$NON-NLS-1$
-        assertTrue("three different names is what a rename looks like", key.isRename()); //$NON-NLS-1$
+        assertEquals(TopObjectKey.SideState.NAMED, key.mainState());
     }
 
     @Test
-    public void testNoneMeansTheSideHasNoSuchObject() throws Exception
+    public void testNoneIsReportedAsAmbiguousRatherThanAsAnAbsence() throws Exception
     {
         TopObjectKey key = decisionFor("Added:NONE:Added").topObjectKey().orElseThrow(); //$NON-NLS-1$
         assertEquals("Added", key.main()); //$NON-NLS-1$
-        // The load-bearing one: without the NONE branch this would read back the literal "NONE"
-        // as if some object were called that.
-        assertNull("NONE is the absence of an object on that side, not a name", key.other()); //$NON-NLS-1$
+        assertEquals(TopObjectKey.SideState.NAMED, key.mainState());
+        // The load-bearing pair. The component is handed back as SPELLED and its state says what
+        // that spelling establishes - which is not "absent": NONE is also a legal 1C name. This
+        // used to answer null, i.e. "the object is not on that side", about a side that may hold
+        // an object called NONE.
+        assertEquals(MergeRulesDocument.SIDE_ABSENT, key.other());
+        assertEquals(TopObjectKey.SideState.AMBIGUOUS, key.otherState());
         assertEquals("Added", key.ancestor()); //$NON-NLS-1$
-        assertFalse("an absent side is not a different name", key.isRename()); //$NON-NLS-1$
+        assertEquals(TopObjectKey.SideState.NAMED, key.ancestorState());
     }
 
     @Test
@@ -363,50 +366,47 @@ public class MergeRulesCodecTest
     // ============ A key has to name at least one side that HAS the object ============
 
     @Test
-    public void testAKeyAbsentOnEverySideIsRecognisedAsSuch()
+    public void testAKeySpellingAbsentOnEverySideIsRecognisedAsSuch()
     {
-        // Every earlier gate passes it - two separators, and NONE names something - yet an object
-        // absent on the main side, the other side AND the ancestor exists in no comparison, so
-        // the key matches no node by string equality.
-        assertTrue(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:NONE:NONE")); //$NON-NLS-1$
+        // The predicate reports the SPELLING and nothing more - what that spelling means is a
+        // question only a comparison can answer, see the ambiguity tests below.
+        assertTrue(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("NONE:NONE:NONE")); //$NON-NLS-1$
     }
 
     @Test
-    public void testOnePresentSideIsEnoughToNameSomething()
+    public void testOneNamedSideIsEnoughToNameSomething()
     {
-        assertFalse("one present side is exactly how a deletion is addressed", //$NON-NLS-1$
-            MergeRulesDocument.absentOnEveryTopObjectKeySide("Added:NONE:NONE")); //$NON-NLS-1$
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:Renamed:NONE")); //$NON-NLS-1$
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:NONE:Gone")); //$NON-NLS-1$
+        assertFalse("one named side is exactly how a deletion is addressed", //$NON-NLS-1$
+            MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("Added:NONE:NONE")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("NONE:Renamed:NONE")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("NONE:NONE:Gone")); //$NON-NLS-1$
     }
 
     @Test
-    public void testAnObjectGenuinelyNamedNoneIsNotAnAbsence()
+    public void testTheAbsenceMarkerIsMatchedExactly()
     {
         // The literal is matched exactly, as TopObjectKey.parse matches it. A 1C object may be
-        // called 'none', and reading that as an absence would refuse a real object.
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("none:none:none")); //$NON-NLS-1$
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("None:NONE:NONE")); //$NON-NLS-1$
+        // called 'none', and any other spelling is a name like any other.
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("none:none:none")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("None:NONE:NONE")); //$NON-NLS-1$
     }
 
     @Test
-    public void testAKeyThatIsNotTopObjectShapedIsNeverAbsentEverywhere()
+    public void testAKeyThatIsNotTopObjectShapedNeverSpellsAbsentEverywhere()
     {
         // Same rule as the empty-sides question: a key with no separators has no sides at all,
-        // so it cannot be absent on them.
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("commonModules")); //$NON-NLS-1$
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide("NONE:NONE")); //$NON-NLS-1$
-        assertFalse(MergeRulesDocument.absentOnEveryTopObjectKeySide(null));
+        // so it cannot spell anything on them.
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("commonModules")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide("NONE:NONE")); //$NON-NLS-1$
+        assertFalse(MergeRulesDocument.spellsSideAbsentOnEveryTopObjectKeySide(null));
     }
 
     @Test
-    public void testReadingStillDecodesAKeyAbsentOnEverySide() throws Exception
+    public void testReadingStillDecodesAKeySpellingAbsentOnEverySide() throws Exception
     {
         // The deliberate NON-change, pinned so a later tidy-up does not fold the new question
-        // into isTopObjectKey. Writing such a key is refused by the tool; READING one has to
-        // report it faithfully - it is already in somebody's file, and "absent on all three
-        // sides" is the truth about it. Folding the check in here would make the report worse in
-        // order to fix the write.
+        // into isTopObjectKey. READING such a key has to report it faithfully - it is already in
+        // somebody's file - and what it is reported AS is the spelling, not a decision about it.
         MergeRulesDocument document = MergeRulesCodec.parse("<?xml version=\"1.0\"?>" //$NON-NLS-1$
             + "<Settings Format_version=\"2.0\"><MergeSettings><Node Key=\"$$Root$$\">" //$NON-NLS-1$
             + "<Node Key=\"commonModules\"><Node Key=\"NONE:NONE:NONE\" MergeRule=\"DoNotMerge\"/>" //$NON-NLS-1$
@@ -416,9 +416,12 @@ public class MergeRulesCodecTest
 
         assertTrue(MergeRulesDocument.isTopObjectKey("NONE:NONE:NONE")); //$NON-NLS-1$
         TopObjectKey key = decision.topObjectKey().orElseThrow();
-        assertNull(key.main());
-        assertNull(key.other());
-        assertNull(key.ancestor());
+        assertEquals(MergeRulesDocument.SIDE_ABSENT, key.main());
+        assertEquals(MergeRulesDocument.SIDE_ABSENT, key.other());
+        assertEquals(MergeRulesDocument.SIDE_ABSENT, key.ancestor());
+        assertEquals(TopObjectKey.SideState.AMBIGUOUS, key.mainState());
+        assertEquals(TopObjectKey.SideState.AMBIGUOUS, key.otherState());
+        assertEquals(TopObjectKey.SideState.AMBIGUOUS, key.ancestorState());
     }
 
     @Test
@@ -592,6 +595,68 @@ public class MergeRulesCodecTest
             assertTrue("the path to the pair must be named: " + e.getMessage(), //$NON-NLS-1$
                 e.getMessage().contains("$$Root$$ / commonModules")); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * The duplicate-key scan lists each level's children ONCE, whatever the level holds.
+     *
+     * <h2>Why the bound and not a duration</h2>
+     * The scan checked the siblings for duplicates and then re-resolved every key through
+     * {@code findNode}, which rebuilds and rescans the whole child list per call: a flat level of
+     * {@code n} uniquely keyed siblings cost {@code n} rebuilds of an {@code n}-element list and
+     * about {@code n^2/2} key comparisons. A flat level is not the pathological case - it is what
+     * a merge-settings file IS at the object level, one sibling per top object of a collection -
+     * and the sizes that reach here are bounded only by 16 MB and the node limit.
+     * <p>
+     * Nothing about the RESULT changes, which is why this is pinned as a counted bound. The
+     * re-resolving walk and the one-pass walk visit the same elements and refuse the same files,
+     * so no assertion about the document could tell them apart; what differs is how many times
+     * the level's children are listed, and {@code Element} counts exactly that. A timing would
+     * measure the machine.
+     *
+     * @throws Exception when the document cannot be parsed
+     */
+    @Test
+    public void testEachLevelsChildrenAreListedOnce() throws Exception
+    {
+        int siblings = 200;
+        StringBuilder xml = new StringBuilder("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">"); //$NON-NLS-1$
+        for (int i = 0; i < siblings; i++)
+        {
+            xml.append("<Node Key=\"c").append(i).append("\" MergeRule=\"DoNotMerge\"/>"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        xml.append("</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+
+        MergeRulesDocument document = MergeRulesCodec.parse(xml.toString());
+
+        assertEquals("the scan must list the root's children exactly once, whatever it finds " //$NON-NLS-1$
+            + "there - re-resolving each key costs one more listing per key", //$NON-NLS-1$
+            1, document.root().nodeChildListings());
+        assertEquals("and the document itself is unchanged by how it was walked", //$NON-NLS-1$
+            siblings, document.decisions().size());
+    }
+
+    /**
+     * The positive control for the counter: it really does move. Without this, a counter that was
+     * never incremented at all would satisfy the bound above.
+     *
+     * @throws Exception when the document cannot be parsed
+     */
+    @Test
+    public void testTheListingCounterCountsListings() throws Exception
+    {
+        MergeRulesDocument document =
+            MergeRulesCodec.parse("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+                + "<Node Key=\"$$Root$$\"><Node Key=\"a\" MergeRule=\"DoNotMerge\"/></Node>" //$NON-NLS-1$
+                + "</MergeSettings></Settings>"); //$NON-NLS-1$
+        MergeRulesDocument.Element root = document.root();
+        int before = root.nodeChildListings();
+
+        document.decisions();
+
+        assertTrue("reading the decisions lists the root's children again", //$NON-NLS-1$
+            root.nodeChildListings() > before);
     }
 
     /**

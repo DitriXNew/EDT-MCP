@@ -102,6 +102,80 @@ public class ComparisonNodeRendererTest
             text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
     }
 
+    // ============ A property one side does not HAVE is not a property it left empty ============
+
+    /**
+     * The defect, in the shape that hides completely: the side that HAS the property leaves it
+     * empty, and the side that does not have it renders empty too, so the two compare equal.
+     * <p>
+     * The document then says the sides carry no differing property while they do not even agree
+     * on which properties exist. Presence is now recorded per side, out of band from the cell -
+     * the same shape {@code readFailed} already uses, and for the same reason: any text a cell can
+     * carry is text a property can hold, so the cell cannot be the source of truth.
+     */
+    @Test
+    public void testAPropertyMissingFromOneSideIsADifferenceEvenWhenTheOtherIsEmpty()
+    {
+        EObject main = mdObject("Products", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = slimObject("Products"); //$NON-NLS-1$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertTrue("the missing property is a difference: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
+    }
+
+    /** ...and the document must not then announce that nothing differs. */
+    @Test
+    public void testTheReportDoesNotClaimNoPropertyDifferencesOverAMissingProperty()
+    {
+        EObject main = mdObject("Products", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = slimObject("Products"); //$NON-NLS-1$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertFalse("the sides do not agree on which properties exist: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NO_DIFFERENCES + " in the compared properties")); //$NON-NLS-1$
+    }
+
+    /** The cell says which case it is, instead of borrowing the empty cell's meaning. */
+    @Test
+    public void testTheMissingSideRendersAsMissingRatherThanAsEmpty()
+    {
+        EObject main = mdObject("Products", "a comment"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = slimObject("Products"); //$NON-NLS-1$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        String row = rowContaining(text, "a comment"); //$NON-NLS-1$
+        assertNotNull(text, row);
+        assertTrue("the side without the property must say so: " + row, //$NON-NLS-1$
+            row.contains(ComparisonNodeRenderer.NOT_ON_THIS_SIDE));
+    }
+
+    /**
+     * The control that keeps the new rule off the case it must not touch: a side with NO OBJECT is
+     * not a side missing a property. Its cells stay empty and the row stays equal - the summary
+     * above the table is what says the object is one-sided.
+     */
+    @Test
+    public void testASideWithNoObjectIsNotTreatedAsAMissingProperty()
+    {
+        EObject main = mdObject("Products", "same"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = mdObject("Products", "same"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(main, other, null)));
+
+        assertTrue("the absent ancestor must not become a difference: " + text, //$NON-NLS-1$
+            text.contains("**Properties:** 2 (0 differing)")); //$NON-NLS-1$
+        assertFalse("and no cell may claim a property is missing there: " + text, //$NON-NLS-1$
+            text.contains(ComparisonNodeRenderer.NOT_ON_THIS_SIDE));
+    }
+
     // ==================== A failed read is not an empty cell ====================
 
     /**
@@ -1906,6 +1980,20 @@ public class ComparisonNodeRendererTest
         return stub;
     }
 
+    /**
+     * An object of a DIFFERENT concrete class that carries a name and no 'comment' at all - not an
+     * empty comment, no such property.
+     *
+     * @param name the name
+     * @return the object
+     */
+    private static EObject slimObject(String name)
+    {
+        EObject object = new DynamicEObjectImpl(MODEL.slimClass);
+        object.eSet(MODEL.slimName, name);
+        return object;
+    }
+
     private static EObject mdObject(String name, String comment)
     {
         EObject object = new DynamicEObjectImpl(MODEL.mdClass);
@@ -1980,6 +2068,8 @@ public class ComparisonNodeRendererTest
         final EClass mdClass;
         final EAttribute mdName;
         final EAttribute mdComment;
+        final EClass slimClass;
+        final EAttribute slimName;
         final EClass formClass;
         final EAttribute formName;
         final EReference formAttributes;
@@ -2002,6 +2092,15 @@ public class ComparisonNodeRendererTest
             mdClass.getEStructuralFeatures().add(mdName);
             mdClass.getEStructuralFeatures().add(mdComment);
             pkg.getEClassifiers().add(mdClass);
+
+            // A DIFFERENT concrete class, carrying only the 'name'. Two matched sides need not be
+            // instances of one class - form elements are the ordinary case - so 'comment' is a
+            // property one side has and the other does not have at all.
+            slimClass = factory.createEClass();
+            slimClass.setName("SlimCatalogLike"); //$NON-NLS-1$
+            slimName = stringAttribute(factory, "name"); //$NON-NLS-1$
+            slimClass.getEStructuralFeatures().add(slimName);
+            pkg.getEClassifiers().add(slimClass);
 
             formClass = factory.createEClass();
             formClass.setName("FormLike"); //$NON-NLS-1$

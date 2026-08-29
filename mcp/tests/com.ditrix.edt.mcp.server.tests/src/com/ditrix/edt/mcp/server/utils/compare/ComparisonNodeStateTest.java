@@ -200,6 +200,92 @@ public class ComparisonNodeStateTest
             ComparisonNodeState.decode(node(flags, null), (ComparisonNodeStatus)null));
     }
 
+    // ==================== One-sided nodes: only an identified side gets a verdict ============
+
+    /**
+     * The defect: a node that says it is one-sided WITHOUT saying which side, reported as
+     * "deleted on both sides".
+     * <p>
+     * {@code getNodeSide()} is nullable - this decoder's own contract says so - and the fallback
+     * treated "no side named" as "the ancestor's side", which is a three-sided verdict about
+     * presence reached without identifying a single side. It reached both documents: the top
+     * report's row and the expanded node's State cell.
+     */
+    @Test
+    public void testAOneSidedNodeThatNamesNoSideIsNotReportedAsADeletion()
+    {
+        ComparisonNodeState state = ComparisonNodeState.decode(oneSided(null, true), true);
+
+        assertEquals(ComparisonNodeState.NOT_REPORTED, state);
+    }
+
+    /** The same node, pinned by what it may not SAY - the label is what reaches the caller. */
+    @Test
+    public void testTheUnnamedSideNeverRendersAsDeletedOnBothSides()
+    {
+        String label = ComparisonNodeState.decode(oneSided(null, true), true).label();
+
+        assertFalse(label, label.contains("deleted")); //$NON-NLS-1$
+    }
+
+    /** And whether the ancestor has it does not turn an unidentified side into an answer. */
+    @Test
+    public void testAnUnnamedSideIsUnansweredWhateverTheAncestorHolds()
+    {
+        assertEquals(ComparisonNodeState.NOT_REPORTED,
+            ComparisonNodeState.decode(oneSided(null, false), true));
+    }
+
+    /** ...and it survives the changedOnly filter: a node nobody judged is not an equal one. */
+    @Test
+    public void testAnUnnamedSideStillSurvivesTheChangedOnlyFilter()
+    {
+        assertTrue(ComparisonNodeState.decode(oneSided(null, true), true).differs());
+    }
+
+    /**
+     * {@link ComparisonNodeState#ONLY_IN_ANCESTOR} is RESERVED for the ancestor side - the one
+     * side whose presence really does mean both working sides dropped the object. This is the
+     * positive control for the tests above: the verdict still exists, and is still reachable.
+     */
+    @Test
+    public void testOnlyInAncestorIsReservedForTheAncestorSide()
+    {
+        assertEquals(ComparisonNodeState.ONLY_IN_ANCESTOR,
+            ComparisonNodeState.decode(oneSided(ComparisonSide.COMMON_ANCESTOR, true), true));
+    }
+
+    /** The two ordinary one-sided cases, unchanged, so the new branch cannot have swallowed them. */
+    @Test
+    public void testAOneSidedNodeOnAKnownSideIsStillAnAdditionOrADeletion()
+    {
+        assertEquals(ComparisonNodeState.ADDED_ON_MAIN,
+            ComparisonNodeState.decode(oneSided(ComparisonSide.MAIN, false), true));
+        assertEquals(ComparisonNodeState.DELETED_ON_OTHER,
+            ComparisonNodeState.decode(oneSided(ComparisonSide.MAIN, true), true));
+        assertEquals(ComparisonNodeState.ADDED_ON_OTHER,
+            ComparisonNodeState.decode(oneSided(ComparisonSide.OTHER, false), true));
+        assertEquals(ComparisonNodeState.DELETED_ON_MAIN,
+            ComparisonNodeState.decode(oneSided(ComparisonSide.OTHER, true), true));
+    }
+
+    /**
+     * A node that reports itself as existing on ONE side.
+     *
+     * @param side the side it names, or {@code null} for the case the platform's accessor allows
+     * @param ancestorExists whether the common ancestor still has the object
+     * @return the node
+     */
+    private static TopComparisonNode oneSided(ComparisonSide side, boolean ancestorExists)
+    {
+        TopComparisonNode node = node(new ComparisonFlags(), ComparisonNodeStatus.FINISHED);
+        when(Boolean.valueOf(node.isOneSideNode())).thenReturn(Boolean.TRUE);
+        when(node.getNodeSide()).thenReturn(side);
+        when(Boolean.valueOf(node.isAncestorObjectExists()))
+            .thenReturn(Boolean.valueOf(ancestorExists));
+        return node;
+    }
+
     // ==================== Parity: the two documents describe one node alike ====================
 
     /**
