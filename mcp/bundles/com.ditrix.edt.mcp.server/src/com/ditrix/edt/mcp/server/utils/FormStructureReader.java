@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 
@@ -16,6 +17,7 @@ import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -381,7 +383,21 @@ public final class FormStructureReader
         }
         for (EObject item : items)
         {
-            appendItem(sb, item, 0, language, budget, truncated);
+            if (budget[0] <= 0)
+            {
+                // The item in hand is itself the proof that something was dropped, which is all
+                // the flag claims - and with nothing left to spend, reading the rest of the list
+                // could add neither a line to the outline nor a fact to the report. Each of these
+                // items used to be pushed and popped to raise the same flag again.
+                truncated[0] = true;
+                break;
+            }
+            // A null element is an absent child, not a child that renders as nothing. See
+            // getReferenceList for when the model's list can hold one at all.
+            if (item != null)
+            {
+                appendItem(sb, item, 0, language, budget, truncated);
+            }
         }
         // Gate the note on the explicit flag (set only when a node was actually dropped), NOT on an
         // exhausted budget: a form with EXACTLY MAX_NODES nodes drains the budget to 0 yet renders
@@ -414,6 +430,10 @@ public final class FormStructureReader
         for (int i = 0; i < shown; i++)
         {
             EObject attribute = attributes.get(i);
+            if (attribute == null)
+            {
+                continue;
+            }
             sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
                 valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
                 Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
@@ -447,6 +467,10 @@ public final class FormStructureReader
         for (int i = 0; i < shown; i++)
         {
             EObject parameter = parameters.get(i);
+            if (parameter == null)
+            {
+                continue;
+            }
             Object comment = getValue(parameter, FEATURE_COMMENT);
             sb.append(MarkdownUtils.tableRow(nameOf(parameter), valueTypeOf(parameter),
                 Boolean.toString(booleanFeature(parameter, FEATURE_KEY_PARAMETER)),
@@ -472,36 +496,50 @@ public final class FormStructureReader
     private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language,
         int limit)
     {
-        List<EObject> owners = new ArrayList<>();
-        for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
-        {
-            if (!getReferenceList(attribute, FEATURE_COLUMNS).isEmpty())
-            {
-                owners.add(attribute);
-            }
-        }
-        if (owners.isEmpty())
-        {
-            return;
-        }
-        sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // ONE pass, into a buffer of its own. Whether the section exists at all is a claim about
+        // every attribute, so nothing can shorten the walk in the case where no attribute carries
+        // a column; what used to be paid for regardless was a LIST of the ones that do, built in
+        // full before the row cap could admit its first row. The cap now ends the pass, and the
+        // only rows held are the ones it admitted.
+        StringBuilder rows = new StringBuilder();
         int shown = 0;
         boolean capped = false;
-        for (EObject owner : owners)
+        for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
         {
-            for (EObject column : getReferenceList(owner, FEATURE_COLUMNS))
+            if (attribute == null)
             {
+                continue;
+            }
+            for (EObject column : getReferenceList(attribute, FEATURE_COLUMNS))
+            {
+                if (column == null)
+                {
+                    continue;
+                }
                 if (shown >= limit)
                 {
                     capped = true;
                     break;
                 }
-                sb.append(MarkdownUtils.tableRow(nameOf(owner), nameOf(column),
+                rows.append(MarkdownUtils.tableRow(nameOf(attribute), nameOf(column),
                     titleOf(column, language), valueTypeOf(column)));
                 shown++;
             }
+            if (capped)
+            {
+                break;
+            }
         }
+        if (shown == 0)
+        {
+            // No attribute carries a column, and that is the only thing this can mean: render
+            // clamps the limit to at least 1, so a form that has a column always produces a row
+            // before the cap can bite.
+            return;
+        }
+        sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        sb.append(rows);
         if (capped)
         {
             appendCapNote(sb, "attribute columns", limit); //$NON-NLS-1$
@@ -528,6 +566,10 @@ public final class FormStructureReader
         for (int i = 0; i < shown; i++)
         {
             EObject command = commands.get(i);
+            if (command == null)
+            {
+                continue;
+            }
             sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language),
                 actionHandlerOf(command)));
         }
@@ -766,7 +808,13 @@ public final class FormStructureReader
         }
         for (int i = keptItems - 1; i >= 0; i--)
         {
-            pending.push(new PendingItem(items.get(i), childDepth));
+            // Read one at a time, and only the ones there is room for: the list is the model's
+            // own, so this is where an element far past the budget stops being paid for at all.
+            EObject child = items.get(i);
+            if (child != null)
+            {
+                pending.push(new PendingItem(child, childDepth));
+            }
         }
     }
 
@@ -864,35 +912,87 @@ public final class FormStructureReader
     // ==================== EMF reflection helpers ====================
 
     /**
-     * Reads a containment/reference list feature by name, returning the contained {@link EObject}s.
-     * Returns an empty list when the feature is absent or not a many-valued reference, so callers never
-     * have to null-check.
+     * Reads a many-valued reference feature by name as a READ-ONLY VIEW of the model's own list -
+     * nothing is copied and no element is touched until a caller asks for it. Returns an empty
+     * list when the feature is absent or is not a many-valued reference, so callers never have to
+     * null-check the list itself.
+     *
+     * <h2>Why a view and not the copy this used to return</h2>
+     * Every caller here is capped - by a row limit, by the walk's node budget, or by nothing more
+     * than {@code isEmpty()} - and the copy was taken BEFORE the cap could look at it. A form
+     * whose element carries a hundred thousand handlers therefore cost a hundred thousand reads
+     * and a second list of that size to answer {@code limit=1}: a cap that is paid for in full
+     * bounds the OUTPUT and not the work, which is the one thing it is there for. The cost is
+     * gone at the accessor rather than at one call site, because all of them have that shape.
+     * <p>
+     * What makes the view exact rather than hopeful is that neither list this reader is ever handed
+     * has to be materialised to answer {@code size()} or {@code get(i)}, and the two are different
+     * classes - which is why the property is stated and not the hierarchy. A form object in EDT is
+     * a {@code BmObject}, and its many-valued features answer with {@code BmBasicEStoreEList}
+     * (EMF's {@code EStoreEObjectImpl.BasicEStoreEList}), which delegates both the size and each
+     * index straight to the BM store - so the copy was N store reads to answer a question about
+     * one. The dynamic EMF objects the unit tests build answer with {@code BasicEList}, which is
+     * array-backed. A RESOLVING list, either way, resolves the elements that are read and no
+     * others, which the copy denied it.
+     *
+     * <h2>What the elements are, measured against the platform</h2>
+     * The gate is {@link EReference} rather than "is many", and that is what makes the elements
+     * {@link EObject}s without a filter. A stored reference list refuses both a wrong type and a
+     * null as they go IN, in both of the families above - read out of the 2026.1 bytecode rather
+     * than assumed:
+     * <ul>
+     * <li>{@code EcoreEList.validate} throws {@code ArrayStoreException} for an element outside
+     * the reference's instance class, and {@code EObjectEList.canContainNull()} answers
+     * {@code false}, which makes {@code AbstractEList.validate} refuse a null with "The 'no null'
+     * constraint is violated";</li>
+     * <li>{@code DelegatingEcoreEList.validate} throws the same {@code ArrayStoreException}, and
+     * its {@code canContainNull()} answers {@code false} for every feature whose type is an
+     * EClass - which a reference's always is.</li>
+     * </ul>
+     * So on the features this class reads, all of them stored containments, the filter the copy
+     * performed could never drop anything, and dropping the filter drops no behaviour.
+     * <p>
+     * The guards at the call sites are for the case that reasoning does not reach: a DERIVED or
+     * volatile feature answering with a list built by neither path -
+     * {@code EcoreEList.UnmodifiableEList} wraps a raw {@code Object[]} and validates nothing, and
+     * EMF's own {@code addUnique} bypasses {@code validate} - and this reader is reflective, so it
+     * is handed whatever the feature answers. On such a list the guards keep a null out of the
+     * accessors that would dereference it, and that is ALL they restore: its place is still
+     * counted by {@code size()}, so a cap or a budget can be spent on it and a truncation reported
+     * for a member that was never a child, and an element of the wrong type would surface as a
+     * {@code ClassCastException} instead of being skipped. Both are strictly beyond what any
+     * feature here can produce, and buying the guarantee back would mean walking every list on
+     * every read - the cost this method exists to remove. A many-valued EAttribute (a feature map
+     * included) answers empty, which is what the filter did for it.
+     *
+     * <h2>It is LIVE, and it is read-only</h2>
+     * The list is the model's, so it must be read inside the same transaction as the object it
+     * came from - the class's own rule already - and it must not be retained past it. Writing
+     * through it would be writing to the model behind {@link FormElementWriter}'s back, so the
+     * view refuses it.
+     *
+     * @param object the object to read, or {@code null}
+     * @param featureName the feature's name
+     * @return the view, never {@code null}, and never modifiable
      */
     @SuppressWarnings("unchecked")
     public static List<EObject> getReferenceList(EObject object, String featureName)
     {
-        List<EObject> result = new ArrayList<>();
         if (object == null)
         {
-            return result;
+            return List.of();
         }
         EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature == null || !feature.isMany())
+        if (!(feature instanceof EReference) || !feature.isMany())
         {
-            return result;
+            return List.of();
         }
         Object value = object.eGet(feature);
-        if (value instanceof List<?>)
+        if (!(value instanceof List<?>))
         {
-            for (Object element : (List<?>)value)
-            {
-                if (element instanceof EObject)
-                {
-                    result.add((EObject)element);
-                }
-            }
+            return List.of();
         }
-        return result;
+        return Collections.unmodifiableList((List<EObject>)value);
     }
 
     /**
@@ -983,7 +1083,10 @@ public final class FormStructureReader
         List<String> names = new ArrayList<>();
         for (EObject type : types)
         {
-            names.add(typeItemName(type));
+            if (type != null)
+            {
+                names.add(typeItemName(type));
+            }
         }
         return String.join(", ", names); //$NON-NLS-1$
     }
@@ -1348,6 +1451,12 @@ public final class FormStructureReader
             budget[0]--;
             for (EObject handler : getReferenceList(current.element, FEATURE_HANDLERS))
             {
+                if (handler == null)
+                {
+                    // Never a row, and never counted as one: the cap decides between handlers
+                    // this element HAS, and the model's list may legally hold a null.
+                    continue;
+                }
                 // Asked BEFORE the row is built: past the cap the strings would be read off the
                 // model only to be dropped, and the whole point of the cap is that nothing past it
                 // is retained. Leaving the loop still RECORDS the decline - there is a handler in
@@ -1480,7 +1589,10 @@ public final class FormStructureReader
         for (int i = keptItems - 1; i >= 0; i--)
         {
             EObject child = items.get(i);
-            pending.push(new PendingElement(child, nameOf(child)));
+            if (child != null)
+            {
+                pending.push(new PendingElement(child, nameOf(child)));
+            }
         }
     }
 

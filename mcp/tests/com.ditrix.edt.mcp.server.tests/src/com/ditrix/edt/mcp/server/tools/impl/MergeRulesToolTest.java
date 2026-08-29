@@ -269,6 +269,11 @@ public class MergeRulesToolTest
      */
     private static final String ENTRY_ID = "MainCfg_VendorCfg_BaseCfg"; //$NON-NLS-1$
 
+    /** One root decision, as the wire spells it: the smallest write these tests can make. */
+    private static final String ROOT_DO_NOT_MERGE =
+        "[{\"path\":[],\"rule\":\"DoNotMerge\"}]"; //$NON-NLS-1$
+
+
     private Path workDir;
 
     @Before
@@ -1689,6 +1694,99 @@ public class MergeRulesToolTest
             result.contains("Container: '.zip', entry `" + ENTRY_ID + ".xml`")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ============ the report's own structure is not the caller's to write ============
+    //
+    // The heading used to be "# Merge rules written: " + the target PATH, concatenated. That path
+    // is the caller's text: on every filesystem but NTFS a file name may hold a line break, and a
+    // break inside a heading ends it and lets whatever follows be read as a new block. It is the
+    // twin of the defect just fixed on the READ label, and it takes the same fix - the value goes
+    // through MarkdownUtils.inlineCode, which no spelling can be read out of.
+    //
+    // The pins below use a BACKTICK and U+2028, because both are legal in a file name on every
+    // platform this suite runs on where a raw line break is not - and because a backtick is
+    // exactly what a hand-written code span cannot survive either, so a "fix" that wrapped the
+    // path in two backticks of its own would fail them.
+
+    @Test
+    public void testTheTargetPathIsReportedAsOneCodeSpan()
+    {
+        // The span is spelled out here rather than computed with inlineCode: a pin that asked the
+        // helper what to expect would follow the helper anywhere, including into not being called.
+        // Two fence characters because the name holds a run of one, and no padding because the
+        // path neither begins nor ends with a backtick or a space.
+        Path target = file("r`x`.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", ROOT_DO_NOT_MERGE)); //$NON-NLS-1$
+
+        assertEquals("the path must be ONE code span, fenced past its own backticks:\n" + result, //$NON-NLS-1$
+            "# Merge rules written: ``" + target + "``", //$NON-NLS-1$ //$NON-NLS-2$
+            lineStartingWith(result, "# Merge rules written:")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALineSeparatorInTheTargetPathCannotReachTheHeading()
+    {
+        // U+2028 is a line terminator to Unicode and to a good many readers, and it is legal in a
+        // file name on NTFS and on POSIX alike - so this is the injected break the filesystem does
+        // not stop, tested where a raw newline cannot be.
+        char separator = (char)0x2028;
+        Path target = file("r" + separator + "x.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", ROOT_DO_NOT_MERGE)); //$NON-NLS-1$
+
+        assertFalse("the write must have happened before its report means anything:\n" + result, //$NON-NLS-1$
+            result.trim().startsWith("{")); //$NON-NLS-1$
+        assertEquals("no separator of the caller's may reach the report:\n" + result, //$NON-NLS-1$
+            -1, result.indexOf(separator));
+        assertTrue("and the file must still be NAMED - a report that dropped the path would pass " //$NON-NLS-1$
+            + "the assertion above and tell the caller nothing:\n" + result, //$NON-NLS-1$
+            result.contains(target.toString().replace(separator, (char)0xFFFD)));
+    }
+
+    @Test
+    public void testAZipEntryNameCannotForgeALineOfTheWriteReport()
+    {
+        // The other value in this report that is not this server's text: the entry id is the three
+        // PROJECT names the platform put in the comparison's descriptors, joined by an underscore,
+        // and it reaches the Container line unvalidated.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        String hostile = "Main\n\n# Merge rules written: forged\n\n- Container: '.xml'\n\nOther"; //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authorityNamingEntry("cmp-7", hostile))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", ROOT_DO_NOT_MERGE)); //$NON-NLS-1$
+
+        assertEquals("the report has exactly ONE top-level heading:\n" + result, //$NON-NLS-1$
+            1, countOccurrences(result, "\n# ") + (result.startsWith("# ") ? 1 : 0)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("and no line of it is the injected one:\n" + result, //$NON-NLS-1$
+            result.contains("\n- Container: '.xml'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheZipEntryNameIsStillReportedAsOneCodeSpan()
+    {
+        // ...and it is still SAID, in the one form that says it safely. The entry name here holds
+        // a backtick as well as a break, which is what separates this fix from a smaller one: a
+        // span written out as two backticks in the source neutralises the break and is then closed
+        // by the name's own backtick, so the rest of the sentence goes back to being markup. The
+        // fence is spelled out rather than computed with inlineCode, so the pin does not follow
+        // the helper into not being called.
+        Path target = file("r.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authorityNamingEntry("cmp-7", "Ma`in\nOther"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", ROOT_DO_NOT_MERGE)); //$NON-NLS-1$
+
+        String container = lineStartingWith(result, "- Container:"); //$NON-NLS-1$
+        assertTrue("the entry name must survive, on that one line, fenced past its own backtick " //$NON-NLS-1$
+            + "and with the break neutralised: " + container, //$NON-NLS-1$
+            container.contains("entry ``Ma`in" + (char)0xFFFD + "Other.xml``")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     @Test
     public void testTheReportOfAnXmlSaysEdt20262DoesNotReadIt()
     {
@@ -3099,6 +3197,38 @@ public class MergeRulesToolTest
             {
                 // The reading that carries no verdict: this comparison exists and its tree could
                 // not be read, so nothing here refuses a decision and nothing here accepts one.
+                return RuleSnapshot.unreadable();
+            }
+        };
+    }
+
+    /**
+     * An authority that answers no verdict and names its entry whatever the caller says - the shape
+     * of a comparison whose PROJECT names are hostile to the report that quotes them.
+     *
+     * @param id the comparison id
+     * @param entryId the entry name the zip is addressed to
+     * @return the authority
+     */
+    private static MergeRuleAuthority authorityNamingEntry(String id, String entryId)
+    {
+        return new MergeRuleAuthority()
+        {
+            @Override
+            public String comparisonId()
+            {
+                return id;
+            }
+
+            @Override
+            public String mergeRulesEntryId()
+            {
+                return entryId;
+            }
+
+            @Override
+            public RuleSnapshot rulesFor(Collection<List<String>> nodePaths)
+            {
                 return RuleSnapshot.unreadable();
             }
         };

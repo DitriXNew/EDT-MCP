@@ -11,7 +11,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
+import java.util.AbstractList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,6 +28,7 @@ import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
@@ -132,6 +135,45 @@ public class FormStructureReaderTest
         List<EObject> attrs = FormStructureReader.getReferenceList(item, "attributes"); //$NON-NLS-1$
         assertNotNull(attrs);
         assertTrue(attrs.isEmpty());
+    }
+
+    @Test
+    public void testTheReferenceListRefusesToBeWrittenThrough()
+    {
+        // It is the model's OWN list now, not a copy of it, so a caller that added to it would be
+        // editing the form behind FormElementWriter's back. The view is what makes that
+        // impossible rather than merely undocumented.
+        EObject group = newItem(MODEL.formGroup, "G", 1); //$NON-NLS-1$
+        addItem(group, newItem(MODEL.formField, "C", 2)); //$NON-NLS-1$
+        List<EObject> items = FormStructureReader.getReferenceList(group, "items"); //$NON-NLS-1$
+
+        try
+        {
+            items.add(newItem(MODEL.formField, "Injected", 3)); //$NON-NLS-1$
+            fail("the view must not accept a write into the model"); //$NON-NLS-1$
+        }
+        catch (UnsupportedOperationException expected)
+        {
+            // the contract
+        }
+        assertEquals("and the model must be untouched", 1, //$NON-NLS-1$
+            FormStructureReader.getReferenceList(group, "items").size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAManyValuedAttributeIsNotAReferenceList()
+    {
+        // The gate is EReference and not "is many", and that is what makes every element an
+        // EObject without looking at any of them. A many-valued EAttribute - here a DataPath's
+        // 'segments', a list of Strings - answers empty, as it did when each element was tested.
+        EObject dataPath = new DynamicEObjectImpl(MODEL.dataPath);
+        @SuppressWarnings("unchecked")
+        EList<String> segments =
+            (EList<String>)dataPath.eGet(MODEL.dataPath.getEStructuralFeature("segments")); //$NON-NLS-1$
+        segments.add("Object"); //$NON-NLS-1$
+
+        assertTrue("a String list is not a list of EObjects, whatever its cardinality", //$NON-NLS-1$
+            FormStructureReader.getReferenceList(dataPath, "segments").isEmpty()); //$NON-NLS-1$
     }
 
     @Test
@@ -1342,6 +1384,307 @@ public class FormStructureReaderTest
             + " children under a budget of " + SMALL_BUDGET, pending.peak <= SMALL_BUDGET); //$NON-NLS-1$
     }
 
+    // ============ and the cap bounds the READING of the model, not only what is kept ============
+    //
+    // The finding, one layer under the one above: every many-valued feature was read through a
+    // helper that COPIED it into an ArrayList before returning, so an element with a hundred
+    // thousand handlers was walked in full - and a second list of that size allocated - before the
+    // row cap or the node budget could decline the first one. The bound was on the output alone.
+    // getReferenceList now returns a read-only VIEW of the model's own list, so an element that is
+    // never reached is never read either.
+    //
+    // Pinned by COUNTING the elements handed out, never by timing: the count is a property of the
+    // walk, a duration is a property of the machine. CountingObject wraps one feature's list and
+    // counts every element that leaves it, by index or through an iterator alike.
+
+    /** Handlers on ONE element, chosen far past the row cap these tests hand the walk. */
+    private static final int HANDLERS_FAR_PAST_THE_CAP = 5000;
+
+    @Test
+    public void testTheOutlineWalkReadsOnlyTheChildrenItsBudgetCanReach()
+    {
+        CountingObject group = countingElementWithChildren(CHILDREN_FAR_PAST_THE_BUDGET);
+
+        FormStructureReader.appendItem(new StringBuilder(), group, 0, "en", //$NON-NLS-1$
+            new int[] {SMALL_BUDGET}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertTrue("the walk may not READ more children than its budget can ever visit - read " //$NON-NLS-1$
+            + group.reads + " of " + CHILDREN_FAR_PAST_THE_BUDGET + " under a budget of " //$NON-NLS-1$ //$NON-NLS-2$
+            + SMALL_BUDGET, group.reads <= SMALL_BUDGET); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheHandlerWalkReadsOnlyTheChildrenItsBudgetCanReach()
+    {
+        CountingObject group = countingElementWithChildren(CHILDREN_FAR_PAST_THE_BUDGET);
+
+        FormStructureReader.collectHandlers(group, "Form", "en", //$NON-NLS-1$ //$NON-NLS-2$
+            new FormStructureReader.HandlerRows(FormStructureReader.MAX_NODES),
+            new int[] {SMALL_BUDGET}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertTrue("the walk may not READ more children than its budget can ever visit - read " //$NON-NLS-1$
+            + group.reads + " of " + CHILDREN_FAR_PAST_THE_BUDGET + " under a budget of " //$NON-NLS-1$ //$NON-NLS-2$
+            + SMALL_BUDGET, group.reads <= SMALL_BUDGET); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheHandlerRowCapDoesNotPayForEveryHandlerOfTheElement()
+    {
+        // The row cap and the node budget are different statements (see collectHandlers), so this
+        // runs with the budget wide open: what bounds the reading here is the cap alone. One read
+        // past the cap is expected and is the point - the loop has to HOLD a handler it will not
+        // keep in order to know there was one, which is what "more rows than are shown" rests on.
+        CountingObject element = countingElementWithHandlers(HANDLERS_FAR_PAST_THE_CAP);
+        FormStructureReader.HandlerRows rows = new FormStructureReader.HandlerRows(1);
+
+        FormStructureReader.collectHandlers(element, "G", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {MAX_NODES}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertEquals("the cap keeps one row", 1, rows.kept().size()); //$NON-NLS-1$
+        assertTrue("and reports that there were more", rows.declined()); //$NON-NLS-1$
+        assertTrue("a cap of 1 may not read " + element.reads + " of " //$NON-NLS-1$ //$NON-NLS-2$
+            + HANDLERS_FAR_PAST_THE_CAP + " handlers", element.reads <= 2); //$NON-NLS-1$
+    }
+
+    /**
+     * Root items chosen past BOTH caps that read the form's own {@code items}: the outline's
+     * {@code rowLimit} and the handler walk's own {@link FormStructureReader#MAX_NODES} budget.
+     */
+    private static final int ROOT_ITEMS_PAST_BOTH_WALKS = 4 * MAX_NODES;
+
+    /** Collection attributes chosen far past the row cap the column section is rendered under. */
+    private static final int ATTRIBUTES_FAR_PAST_THE_ROW_CAP = 5000;
+
+    @Test
+    public void testTheItemsSectionStopsReadingWhenItsBudgetIsSpent()
+    {
+        // Through the PUBLIC render, because that is where this list is read in production and the
+        // walk's own overload never sees it: the section used to hand every root item to
+        // appendItem, which pushed it, popped it, found the budget gone and raised the same flag
+        // again - so limit=1 read every item a form has.
+        //
+        // The bound is the sum of the two passes that read this list, each stated as its own:
+        // the outline reads the items it renders plus the one that proves it stopped, and the
+        // handler walk is bounded by MAX_NODES, which is ITS bound and not this one.
+        int limit = 4;
+        CountingObject form = countingFormWithItems(ROOT_ITEMS_PAST_BOTH_WALKS);
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en", limit); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the outline must say it stopped", //$NON-NLS-1$
+            md.contains("item outline truncated")); //$NON-NLS-1$
+        assertTrue("the item list may be read " + (limit + 1) + " times by the outline and " //$NON-NLS-1$ //$NON-NLS-2$
+            + MAX_NODES + " by the handler walk, not " + ROOT_ITEMS_PAST_BOTH_WALKS //$NON-NLS-1$
+            + " times by each - read " + form.reads, form.reads <= MAX_NODES + limit + 1); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAttributeColumnsSectionStopsReadingWhenItsRowCapIsFull()
+    {
+        // The section used to decide whether it exists by walking every attribute into a list of
+        // the ones with columns, and only then start filling the table - so a cap of two rows was
+        // paid for with a pass over every attribute the form has, plus a list of them.
+        int limit = 2;
+        CountingObject form = countingFormWithColumnBearingAttributes(ATTRIBUTES_FAR_PAST_THE_ROW_CAP);
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en", limit); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the section must say the cap bit", //$NON-NLS-1$
+            md.contains("attribute columns truncated")); //$NON-NLS-1$
+        // Two reads for the Attributes table's own rows, and three here: two attributes whose
+        // column is shown, and the one whose column trips the cap.
+        assertTrue("a cap of " + limit + " rows may not read " + form.reads + " of " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ATTRIBUTES_FAR_PAST_THE_ROW_CAP + " attributes", form.reads <= 5); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAttributeColumnsSectionNamesTheOwnerAndEveryColumn()
+    {
+        // The output the pass above is not allowed to change: the section is written from a buffer
+        // now, so what it prints - and that it prints at all - has to be pinned by itself.
+        EObject form = newForm();
+        EObject goods = newAttribute("Goods"); //$NON-NLS-1$
+        addTo(goods, "columns", newAttribute("Price")); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(goods, "columns", newAttribute("Count")); //$NON-NLS-1$ //$NON-NLS-2$
+        addAttribute(form, goods);
+        addAttribute(form, newAttribute("Plain")); //$NON-NLS-1$
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the section exists when an attribute has columns:\n" + md, //$NON-NLS-1$
+            md.contains("## Attribute columns")); //$NON-NLS-1$
+        // Scoped to the section: the Attributes table above it carries a row for every one of
+        // these attributes, so a claim about the whole document would be satisfied by that table.
+        String section = sectionOf(md, "## Attribute columns"); //$NON-NLS-1$
+        assertTrue("each column is a row under its owner:\n" + section, //$NON-NLS-1$
+            section.contains("| Goods | Price |")); //$NON-NLS-1$
+        assertTrue("in the order the model holds them:\n" + section, //$NON-NLS-1$
+            section.indexOf("| Goods | Price |") < section.indexOf("| Goods | Count |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("and an attribute without columns contributes no row:\n" + section, //$NON-NLS-1$
+            section.contains("Plain")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAttributeColumnsSectionIsOmittedWhenNoAttributeHasColumns()
+    {
+        EObject form = newForm();
+        addAttribute(form, newAttribute("Plain")); //$NON-NLS-1$
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a form without a collection attribute must not pay for an empty section:\n" //$NON-NLS-1$
+            + md, md.contains("## Attribute columns")); //$NON-NLS-1$
+    }
+
+    /**
+     * @param document the rendered document
+     * @param heading the section's heading line
+     * @return that section alone, up to the next heading of the same level
+     */
+    private static String sectionOf(String document, String heading)
+    {
+        String from = document.substring(document.indexOf(heading));
+        int next = from.indexOf("\n## ", heading.length()); //$NON-NLS-1$
+        return next < 0 ? from : from.substring(0, next);
+    }
+
+    /**
+     * @param items how many root items to give the form
+     * @return a form counting every root item READ out of its {@code items} list
+     */
+    private static CountingObject countingFormWithItems(int items)
+    {
+        CountingObject form = new CountingObject(MODEL.form, "items"); //$NON-NLS-1$
+        for (int i = 0; i < items; i++)
+        {
+            addItem(form, newItem(MODEL.formField, "F" + i, i)); //$NON-NLS-1$
+        }
+        form.count();
+        return form;
+    }
+
+    /**
+     * @param attributes how many collection attributes to give the form, each carrying one column
+     * @return a form counting every attribute READ out of its {@code attributes} list
+     */
+    private static CountingObject countingFormWithColumnBearingAttributes(int attributes)
+    {
+        CountingObject form = new CountingObject(MODEL.form, "attributes"); //$NON-NLS-1$
+        for (int i = 0; i < attributes; i++)
+        {
+            EObject attribute = newAttribute("A" + i); //$NON-NLS-1$
+            addTo(attribute, "columns", newAttribute("C" + i)); //$NON-NLS-1$ //$NON-NLS-2$
+            addAttribute(form, attribute);
+        }
+        form.count();
+        return form;
+    }
+
+    /**
+     * @param children how many direct children to give the element
+     * @return an element counting every child READ out of its {@code items} list
+     */
+    private static CountingObject countingElementWithChildren(int children)
+    {
+        CountingObject group = new CountingObject(MODEL.formGroup, "items"); //$NON-NLS-1$
+        group.eSet(MODEL.itemName, "G"); //$NON-NLS-1$
+        group.eSet(MODEL.itemId, Integer.valueOf(1));
+        for (int i = 0; i < children; i++)
+        {
+            addItem(group, newItem(MODEL.formField, "C" + i, 100 + i)); //$NON-NLS-1$
+        }
+        group.count();
+        return group;
+    }
+
+    /**
+     * @param handlers how many bound events to give the element
+     * @return an element counting every handler READ out of its {@code handlers} list
+     */
+    private static CountingObject countingElementWithHandlers(int handlers)
+    {
+        CountingObject group = new CountingObject(MODEL.formGroup, "handlers"); //$NON-NLS-1$
+        group.eSet(MODEL.itemName, "G"); //$NON-NLS-1$
+        group.eSet(MODEL.itemId, Integer.valueOf(1));
+        for (int i = 0; i < handlers; i++)
+        {
+            addHandler(group, "OnChange", null, "H" + i); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        group.count();
+        return group;
+    }
+
+    /**
+     * An element that counts how many members of ONE many-valued feature are actually handed out.
+     *
+     * <p>Counting starts on {@link #count()}, so building the fixture is not mistaken for reading
+     * it - and the list handed out while building stays the model's own, which is what the builder
+     * writes into.</p>
+     */
+    private static final class CountingObject
+        extends DynamicEObjectImpl
+    {
+        /** How many elements of the counted feature have been read out of it. */
+        int reads;
+
+        private final String featureName;
+
+        private boolean counting;
+
+        CountingObject(EClass eClass, String featureName)
+        {
+            super(eClass);
+            this.featureName = featureName;
+        }
+
+        /** Starts counting: everything read from here on is a read the walk asked for. */
+        void count()
+        {
+            counting = true;
+        }
+
+        @Override
+        public Object eGet(EStructuralFeature feature)
+        {
+            Object value = super.eGet(feature);
+            if (counting && featureName.equals(feature.getName()) && value instanceof List<?>)
+            {
+                return new CountingList((List<?>)value);
+            }
+            return value;
+        }
+
+        /**
+         * A view that counts one read per element handed out. {@link AbstractList}'s own iterator
+         * goes through {@code get}, so an element read by iteration counts exactly as one read by
+         * index - and {@code size()} counts as none, which is what makes "read three of five
+         * thousand" a statement about the elements rather than about the list.
+         */
+        private final class CountingList
+            extends AbstractList<Object>
+        {
+            private final List<?> delegate;
+
+            CountingList(List<?> delegate)
+            {
+                this.delegate = delegate;
+            }
+
+            @Override
+            public Object get(int index)
+            {
+                reads++;
+                return delegate.get(index);
+            }
+
+            @Override
+            public int size()
+            {
+                return delegate.size();
+            }
+        }
+    }
+
     /**
      * The half a bound alone would let through: WHICH elements come out, and which one trips the cut.
      * Children the budget cannot reach are now left off the stack instead of being pushed, popped and
@@ -1852,6 +2195,15 @@ public class FormStructureReaderTest
             attributeSavedData.setName("savedData"); //$NON-NLS-1$
             attributeSavedData.setEType(EcorePackage.Literals.EBOOLEAN);
             formAttribute.getEStructuralFeatures().add(attributeSavedData);
+            // A collection attribute's columns are attributes in their own right (issue #295), so
+            // the reference is to this same EClass - which is also what makes a column carry the
+            // name and title the '## Attribute columns' section prints.
+            EReference attributeColumns = factory.createEReference();
+            attributeColumns.setName("columns"); //$NON-NLS-1$
+            attributeColumns.setEType(formAttribute);
+            attributeColumns.setContainment(true);
+            attributeColumns.setUpperBound(-1);
+            formAttribute.getEStructuralFeatures().add(attributeColumns);
 
             // CommandHandler-like pair: the command's contained action holding the handler name.
             commandHandler = factory.createEClass();

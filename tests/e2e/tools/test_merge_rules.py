@@ -21,10 +21,14 @@ The format is the platform's own (measured on MergeSettingsTree): `Settings/@For
 an object keyed `main:other:ancestor`, with `NONE` for a side on which the object does not exist.
 
 What these tests prove that a unit test cannot: the CONTRACT on the wire.
-  - read renders the decisions of a real file: a rename shows three different names, `NONE`
-    renders as an absent side rather than as an object called "NONE", a positional child below
-    the object is reported as a read-only `member` row, and the payload the tool does not
-    interpret is counted rather than quietly dropped.
+  - read renders the decisions of a real file: a rename shows three different names, a side
+    spelled `NONE` is printed AS THE FILE SPELLS IT - the platform's absence marker and an object
+    legally named `NONE` are the same eight characters in a key, so the table reports and a legend
+    explains instead of deciding - a positional child below the object is reported as a read-only
+    `member` row, and the payload the tool does not interpret is counted rather than quietly
+    dropped. The report NAMES what it read, in a `Source:` field: the heading is a constant,
+    because a zip entry name is an arbitrary string that may hold a line break and Markdown, and
+    concatenated into a heading it would forge a second report inside the real one.
   - a write with no live comparison SAYS it was not validated and names compare_configurations -
     it must never read like a checked file. Validation has THREE outcomes, not two: a comparison
     whose tree has FINISHED checks every rule, a comparison that answers while its tree cannot be
@@ -102,6 +106,15 @@ def _read_file(path):
         return f.read()
 
 
+def _line_starting_with(text, prefix):
+    # A field is a claim about ONE line: asserting against the whole report would be satisfied by
+    # the same words anywhere in it, including inside a value the report is quoting.
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return line
+    raise AssertionError("no line starts with %r in:\n%s" % (prefix, text))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # READ
 # ──────────────────────────────────────────────────────────────────────────────
@@ -112,17 +125,28 @@ def test_read_reports_the_decisions_of_a_saved_file():
 
     r = call("merge_rules", {"mode": "read", "filePath": path})
     assert_ok(r, "read a saved merge-rules file")
-    assert_contains(r.text, "# Merge rules:", "the report must name what it read")
+    # The contract, not the shape it used to take: the report must NAME what it read. That
+    # name moved out of the heading and into a field of its own, rendered as code, because a zip
+    # entry name may legally carry a line break and Markdown and would otherwise forge headings
+    # inside the report. Asserted on the Source LINE, so a report that names nothing cannot pass.
+    source = _line_starting_with(r.text, "- Source:")
+    # The WHOLE line, not a substring of it: `path + ".bak"` contains `path`, so a containment
+    # check would accept a report naming a different file. The backticks are the rendering the
+    # heading was traded for, and this is the only place on the wire that they are pinned.
+    assert source == "- Source: `%s`" % path, \
+        "the report must name the source it read, got: " + source
     assert_contains(r.text, "Format version: 2.0", "the format version is part of the answer")
     assert_contains(r.text, "Decisions: 4", "the fixture holds four decisions")
     # A rename: three different names on the three sides.
     assert_contains(r.text, "| Alpha | Beta | Gamma |",
                     "a top-object key must be split into main/other/ancestor")
-    # NONE is the absence of the object on that side, not the name of an object called NONE.
-    assert_contains(r.text, "| Added | (absent) | Added |",
-                    "NONE must render as an absent side")
-    assert_not_contains(r.text, "| Added | NONE | Added |",
-                        "the literal NONE must not be presented as an object name")
+    # A side column prints the key AS THE FILE SPELLS IT. `NONE` is the platform's marker for
+    # "the object does not exist on that side" AND a legal 1C name, and the key cannot tell the
+    # two apart - so the table states neither, and the legend says why.
+    assert_contains(r.text, "| Added | NONE | Added |",
+                    "a side column must print the key as spelled, not a verdict about it")
+    assert_contains(r.text, "A side column reading 'NONE'",
+                    "and the report must say what that one ambiguous spelling means")
     # A collection element is keyed by a computed position: reported, never authored.
     assert_contains(r.text, "| member |", "a positional child is reported at member level")
     assert_contains(r.text, "Preserved sections this tool does not interpret: 1",

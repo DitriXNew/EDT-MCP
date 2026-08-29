@@ -85,7 +85,7 @@ EDT reads merge settings from two containers, and WHICH ones it reads depends on
 
 ## Output
 Markdown.
-- read: the source (naming the zip ENTRY when the file was a zip), the format version, the decision count, how many blocks are carried through uninterpreted, and a table `# | Node | Level | Main | Other | Ancestor | Rule | Order side`. `Level` is `root` / `collection` / `object` / `member`; the three name columns are filled only for an object row, where an absent side shows `(absent)`.
+- read: the source (naming the zip ENTRY when the file was a zip), the format version, the decision count, how many blocks are carried through uninterpreted, and a table `# | Node | Level | Main | Other | Ancestor | Rule | Order side`. `Level` is `root` / `collection` / `object` / `member`; the three name columns are filled only for an object row and print the key AS THE FILE SPELLS IT - a side reading `NONE` is the platform's marker for "the object does not exist on that side" and also a legal 1C name, which the key cannot tell apart, so the table reports the spelling and a legend line says what the two readings are.
 - write: the validation line described above, a `Container:` line saying which file was produced and which EDT reads it, the counts (recorded / new / replaced / in the file now), and the decisions as written. When `basedOn` was given, the `Based on:` line says how many of the decisions that document already held KEPT THE RULE THEY ARRIVED WITH - a decision this call wrote at a path the starting document already carried is counted as replaced, not as kept, so the two numbers never describe the same decision twice.
 
 ## Gotchas

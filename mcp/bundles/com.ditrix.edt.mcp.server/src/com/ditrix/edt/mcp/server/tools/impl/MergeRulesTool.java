@@ -1036,8 +1036,13 @@ public class MergeRulesTool implements IMcpTool
                 + MergeRulesCodec.ZIP_EXTENSION + "' (which needs a live comparison to name its " //$NON-NLS-1$
                 + "entry) for a file that works on both.\n"; //$NON-NLS-1$
         }
-        return "- Container: '" + MergeRulesCodec.ZIP_EXTENSION + "', entry `" + zipEntryId //$NON-NLS-1$ //$NON-NLS-2$
-            + ".xml` - read by EDT 2026.1 and 2026.2 alike, and ADDRESSED BY THAT EXACT STRING: " //$NON-NLS-1$
+        // The entry name is the PLATFORM's text - three project names joined by an underscore -
+        // and it reaches this line unvalidated, so it goes through the same helper the source
+        // label does rather than into a code span spelled out here: a backtick in a project name
+        // closes a hand-written span and hands the rest of the sentence to the reader as markup.
+        return "- Container: '" + MergeRulesCodec.ZIP_EXTENSION + "', entry " //$NON-NLS-1$ //$NON-NLS-2$
+            + MarkdownUtils.inlineCode(zipEntryId + MergeRulesCodec.XML_EXTENSION)
+            + " - read by EDT 2026.1 and 2026.2 alike, and ADDRESSED BY THAT EXACT STRING: " //$NON-NLS-1$
             + "EDT restores this entry for ANY comparison whose main, other and ancestor project " //$NON-NLS-1$
             + "names, joined by '_' in that order, spell it - this run or a later one over other " //$NON-NLS-1$
             + "revisions - so re-using the file re-applies these decisions. It is a string, not a " //$NON-NLS-1$
@@ -1054,7 +1059,15 @@ public class MergeRulesTool implements IMcpTool
         int replaced, Optional<MergeRuleAuthority> comparison, boolean validated,
         MergeRulesDocument document, int limit, String zipEntryId)
     {
-        StringBuilder out = new StringBuilder("# Merge rules written: ").append(file).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The target path through the SAME helper as the read report's source label, and for the
+        // same reason: the path is the caller's text, not this server's. A file name may hold a
+        // line break on the filesystems this server runs on, and concatenated into a heading that
+        // break ends the heading and lets what follows be read as a new block - a second document
+        // growing inside the report, indistinguishable from the real one. inlineCode cannot be
+        // read as markup at all, so the heading stays one heading whatever the path is spelled
+        // with.
+        StringBuilder out = new StringBuilder("# Merge rules written: ") //$NON-NLS-1$
+            .append(MarkdownUtils.inlineCode(file.toString())).append("\n\n"); //$NON-NLS-1$
         if (validated)
         {
             // "ONE reading" is claimed because it is now true, and it was the missing half of this
