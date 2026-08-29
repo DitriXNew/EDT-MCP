@@ -93,7 +93,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         // lookup. Only the transient BUILDING state is refused here; a missing/closed
         // project falls through to resolveProjectAndConfig's value-naming error. Checked
         // on the calling thread before marshalling onto the UI thread.
-        String building = ProjectStateChecker.buildingErrorOrNull(params.get("projectName")); //$NON-NLS-1$
+        String building = ProjectStateChecker.modelBuildingErrorOrNull(params.get("projectName")); //$NON-NLS-1$
         if (building != null)
         {
             return ToolResult.error(building).toJson();

@@ -141,6 +141,20 @@ public final class ProjectStateChecker
     }
     
     /**
+     * How long {@link #isModelDataComputed(IDerivedDataManager)} may wait while probing. It must be
+     * POSITIVE: the platform treats a non-positive timeout as "wait until a task finishes", without a
+     * bound. Small enough to stay a probe on a gate that every write tool calls.
+     */
+    private static final long MODEL_PROBE_TIMEOUT_MS = 200L;
+
+    /** The DT project behind a workspace project, or {@code null} when it is not an EDT project. */
+    private static IDtProject resolveDtProject(IProject project)
+    {
+        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+        return dtProjectManager == null ? null : dtProjectManager.getDtProject(project);
+    }
+
+    /**
      * Checks if a project is ready for operations.
      * A project is ready when:
      * - It exists and is open
@@ -212,109 +226,120 @@ public final class ProjectStateChecker
             return new ProjectStateResult(ProjectState.UNKNOWN, "Cannot determine build state");
         }
         
-        boolean idle = ddManager.isIdle();
-        boolean allComputed = ddManager.isAllComputed();
-        if (idle && allComputed)
+        // Check if computation pipeline is idle
+        if (!ddManager.isIdle())
         {
-            return new ProjectStateResult(ProjectState.READY, "Project is ready");
+            DerivedDataStatus status = ddManager.getDerivedDataStatus();
+            String statusStr = status != null ? status.toString() : "computing";
+            return new ProjectStateResult(ProjectState.BUILDING, 
+                "Project is building: " + statusStr);
         }
-
-        // Issue #495: a large configuration spends HOURS in the post-build validation checks. That
-        // work keeps the pipeline busy and keeps isAllComputed() false, which used to report the
-        // project as "building" and switch metadata editing off for the whole run - even though
-        // everything the model and the index need has already been computed by then.
-        if (!onlyPostBuildChecksRemain(ddManager))
+        
+        // Check if all derived data is computed
+        if (!ddManager.isAllComputed())
         {
-            if (!idle)
-            {
-                DerivedDataStatus status = ddManager.getDerivedDataStatus();
-                String statusStr = status != null ? status.toString() : "computing";
-                return new ProjectStateResult(ProjectState.BUILDING,
-                    "Project is building: " + statusStr);
-            }
-            return new ProjectStateResult(ProjectState.BUILDING,
+            return new ProjectStateResult(ProjectState.BUILDING, 
                 "Project build in progress (derived data not complete)");
         }
-
-        // Logged because this is the ONE place the relaxation changes an answer: without it,
-        // "ready while checks run" is indistinguishable from "ready because everything finished",
-        // in the field and in a live verification alike.
-        Activator.logInfo("Project '" + dtProject.getName() //$NON-NLS-1$
-            + "' is READY for model work while post-build validation is still running."); //$NON-NLS-1$
-        return new ProjectStateResult(ProjectState.READY,
-            "Project is ready (validation checks are still running)"); //$NON-NLS-1$
+        
+        return new ProjectStateResult(ProjectState.READY, "Project is ready");
     }
 
     /**
-     * Whether the only derived-data work left is the POST-BUILD stage, which is where EDT registers
-     * the validation checks - and nothing the model or the index needs.
+     * The MODEL-readiness gate: {@code null} when the project's model and index have been computed,
+     * an actionable error otherwise. Unlike {@link #buildingErrorOrNull(IProject)} this does NOT wait
+     * for the validation checks.
      * <p>
-     * This deliberately does NOT test a hand-written list of check segment ids. EDT's own
-     * {@code ProjectBuilder} groups six of them as "check segments", but that grouping is wrong for
-     * this question: {@code CDI_CHECKS_SEGMENT} (data-integrity) is registered in
-     * {@code BEFORE_BUILD} and must complete before the model is usable, while the five that make a
-     * large configuration wait for hours - {@code M_CHECKS_SEGMENT}, {@code CM_CHECKS_SEGMENT},
-     * {@code L_CHECKS_SEGMENT}, {@code CL_CHECKS_SEGMENT} and {@code M_CLEANER_SEGMENT} - are all in
-     * {@code AFTER_BUILD}. Asking the platform which STAGE is active therefore answers the question
-     * without a list that silently rots when a segment is added.
+     * Issue #495: on a large configuration the checks run for HOURS, and they keep both
+     * {@code isIdle()} and {@code isAllComputed()} false - so a gate built on those switched metadata
+     * editing off for that whole time. The checks are not what a metadata edit depends on: a rename
+     * cascade needs the model and the reference index in order to compute the sites it must rewrite,
+     * and the checks produce markers from that model rather than contributing to it.
      * <p>
-     * Anything else - a null status, an unknown stage, or an active model synchronisation - is not
-     * proof that the model has settled and keeps the project BUILDING.
+     * Nor can excluding them re-create the batch-session collision {@link
+     * #settleBeforeCascadeOrError(String, long)} exists to avoid: {@code Reactor.executeTask} raises
+     * "Unable to execute task because batch session is active" only for a {@code READ_WRITE}
+     * transaction, and every check computer - {@code ModelCheckDerivedDataComputer},
+     * {@code LanguageCheckDerivedDataComputer}, {@code MarkerCleanerDerivedDataComputer} - runs
+     * through {@code executeReadonlyTask}. The check bundle contains no read-write BM task at all.
+     * <p>
+     * The question is asked through {@code waitImportantDataComputations}, the platform's own wait on
+     * the segments that must be complete during the incremental phase, because that is the ONLY form
+     * of the question that accounts for QUEUED work: it begins with
+     * {@code contextManager.waitAccumulatedContextProcessing}. Inferring readiness from the active
+     * pipeline STAGE does not - a change arriving during a long post-build check enqueues model work
+     * in an earlier bucket while the reported stage stays {@code AFTER_BUILD}. The timeout must stay
+     * POSITIVE: with {@code timeout <= 0} the platform waits on its task condition without a bound.
      *
-     * @param ddManager the project's derived-data manager (never {@code null} here)
-     * @return {@code true} when only post-build validation remains
+     * @param project the project the caller wants to edit (a {@code null} project skips the check)
+     * @return an actionable error, or {@code null} when the model may be edited
      */
-    static boolean onlyPostBuildChecksRemain(IDerivedDataManager ddManager)
+    public static String modelBuildingErrorOrNull(IProject project)
+    {
+        if (project == null)
+        {
+            return null;
+        }
+        IDtProject dtProject = resolveDtProject(project);
+        if (dtProject == null)
+        {
+            return null;
+        }
+        IDerivedDataManagerProvider ddProvider = Activator.getDefault().getDerivedDataManagerProvider();
+        IDerivedDataManager ddManager = ddProvider == null ? null : ddProvider.get(dtProject);
+        if (ddManager == null)
+        {
+            // Cannot ask: fall back to the strict gate rather than inventing readiness.
+            return buildingErrorOrNull(project);
+        }
+        if (isModelDataComputed(ddManager))
+        {
+            return null;
+        }
+        return "Project is building: the model or the reference index is still being computed. " //$NON-NLS-1$
+            + "Please wait and retry."; //$NON-NLS-1$
+    }
+
+    /**
+     * Name-addressed {@link #modelBuildingErrorOrNull(IProject)}.
+     *
+     * @param projectName the project the caller wants to edit (null/empty skips the check)
+     * @return an actionable error, or {@code null} when the model may be edited
+     */
+    public static String modelBuildingErrorOrNull(String projectName)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return null;
+        }
+        return modelBuildingErrorOrNull(org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+            .getRoot().getProject(projectName));
+    }
+
+    /**
+     * Probes whether the platform's IMPORTANT (model and index) computations are complete, without
+     * waiting for validation. See {@link #modelBuildingErrorOrNull(IProject)} for why this shape.
+     *
+     * @param ddManager the project's derived-data manager
+     * @return {@code true} only when the important computations are proven complete
+     */
+    static boolean isModelDataComputed(IDerivedDataManager ddManager)
     {
         try
         {
-            DerivedDataStatus status = ddManager.getDerivedDataStatus();
-            if (status == null)
-            {
-                return false;
-            }
-            // getActiveStage() returns DerivedDataSegmentBucket, which lives in a package the
-            // platform does NOT export, so it cannot be named here. Read it reflectively and compare
-            // the enum's name: the decision itself stays in onlyPostBuildStage, where it is testable
-            // without the restricted type.
-            Object stage = DerivedDataStatus.class.getMethod("getActiveStage").invoke(status); //$NON-NLS-1$
-            return onlyPostBuildStage(stage == null ? null : String.valueOf(stage),
-                status.isModelSyncActive());
+            return ddManager.waitImportantDataComputations(MODEL_PROBE_TIMEOUT_MS);
         }
-        catch (ReflectiveOperationException | RuntimeException e)
+        catch (InterruptedException e)
         {
-            // Not being able to ASK is never proof that only checks remain, so this degrades to the
-            // previous behaviour (the project stays BUILDING while anything is computing). Logged
-            // because a platform change here would otherwise silently switch the relaxation off.
-            Activator.logError("Cannot read the derived-data pipeline stage; " //$NON-NLS-1$
-                + "treating the project as building", e); //$NON-NLS-1$
+            Thread.currentThread().interrupt();
             return false;
         }
-    }
-
-    /**
-     * The pure decision behind {@link #onlyPostBuildChecksRemain(IDerivedDataManager)}: is the named
-     * pipeline stage one that runs AFTER everything the model and the index need?
-     * <p>
-     * This deliberately does not test a list of check segment ids. EDT's own {@code ProjectBuilder}
-     * groups six ids as "check segments", but that grouping is wrong for this question:
-     * {@code CDI_CHECKS_SEGMENT} (data integrity) is registered in {@code BEFORE_BUILD} and must
-     * complete before the model is usable, while the five that make a large configuration wait for
-     * hours - {@code M_CHECKS_SEGMENT}, {@code CM_CHECKS_SEGMENT}, {@code L_CHECKS_SEGMENT},
-     * {@code CL_CHECKS_SEGMENT} and {@code M_CLEANER_SEGMENT} - are all registered in
-     * {@code AFTER_BUILD}. Asking which STAGE is active answers it without a list that rots.
-     *
-     * @param stageName the active stage's enum name, or {@code null} when there is none
-     * @param modelSyncActive whether the model is being synchronised
-     * @return {@code true} only when the remaining work is post-build validation
-     */
-    static boolean onlyPostBuildStage(String stageName, boolean modelSyncActive)
-    {
-        if (modelSyncActive)
+        catch (RuntimeException e)
         {
+            // Not being able to ASK is never proof of readiness.
+            Activator.logError("Cannot probe model-data readiness; treating it as not ready", e); //$NON-NLS-1$
             return false;
         }
-        return "AFTER_BUILD".equals(stageName) || "FINISHING".equals(stageName); //$NON-NLS-1$ //$NON-NLS-2$
     }
     
     /**
@@ -1262,19 +1287,21 @@ public final class ProjectStateChecker
             @Override
             public void waitForDerivedData(IProject project, long timeoutMs)
             {
-                BuildUtils.waitForDerivedData(project, timeoutMs);
+                BuildUtils.waitForModelData(project, timeoutMs);
             }
 
             @Override
             public boolean isBuilding(IProject project)
             {
-                return buildingErrorOrNull(project) != null;
+                return modelBuildingErrorOrNull(project) != null;
             }
 
             @Override
             public String buildingErrorOrNull(IProject project)
             {
-                return ProjectStateChecker.buildingErrorOrNull(project);
+                // The cascade is a MODEL operation: it needs the model and the reference index to
+                // compute the sites it rewrites, and nothing the validation checks produce (#495).
+                return ProjectStateChecker.modelBuildingErrorOrNull(project);
             }
 
             @Override
