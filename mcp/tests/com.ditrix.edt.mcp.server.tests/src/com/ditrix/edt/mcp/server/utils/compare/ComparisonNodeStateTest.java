@@ -177,13 +177,64 @@ public class ComparisonNodeStateTest
             ComparisonNodeState.decode(node(null, ComparisonNodeStatus.FINISHED), true));
     }
 
-    /** ...and it survives the changedOnly filter, which is what {@code differs()} decides. */
+    /** ...and it survives the changedOnly filter, which {@code survivesChangedOnly()} decides. */
     @Test
     public void testNoVerdictSurvivesTheChangedOnlyFilter()
     {
-        assertTrue(ComparisonNodeState.NOT_REPORTED.differs());
-        assertTrue(ComparisonNodeState.NOT_COMPARED.differs());
-        assertFalse(ComparisonNodeState.IDENTICAL.differs());
+        assertTrue(ComparisonNodeState.NOT_REPORTED.survivesChangedOnly());
+        assertTrue(ComparisonNodeState.NOT_COMPARED.survivesChangedOnly());
+        assertFalse(ComparisonNodeState.IDENTICAL.survivesChangedOnly());
+    }
+
+    /**
+     * ...and being shown is NOT being counted. The same predicate used to answer both questions,
+     * so keeping a node nobody judged visible under {@code changedOnly} - which it must be - also
+     * added it to the report's count of differences, and the total claimed a finding the row
+     * beside it says was never made.
+     */
+    @Test
+    public void testNoVerdictEstablishesNoDifference()
+    {
+        assertFalse(ComparisonNodeState.NOT_REPORTED.establishesDifference());
+        assertFalse(ComparisonNodeState.NOT_COMPARED.establishesDifference());
+    }
+
+    /** The positive control: a real verdict is still counted, so the split cut nothing off. */
+    @Test
+    public void testARealVerdictStillEstablishesADifference()
+    {
+        assertTrue(ComparisonNodeState.CONFLICT.establishesDifference());
+        assertTrue(ComparisonNodeState.CHANGED_ON_BOTH.establishesDifference());
+        assertTrue(ComparisonNodeState.ADDED_ON_MAIN.establishesDifference());
+        assertFalse(ComparisonNodeState.IDENTICAL.establishesDifference());
+    }
+
+    /**
+     * The two questions may part company only in ONE direction. A state that establishes a
+     * difference and is then hidden from the caller who asked for the changed objects would be
+     * counted in a total whose row cannot be found, which is the mirror image of the defect this
+     * split exists to fix - and it is expressible the moment the two answers stop being read off
+     * one verdict.
+     */
+    @Test
+    public void testCountedAlwaysImpliesShown()
+    {
+        for (ComparisonNodeState state : ComparisonNodeState.values())
+        {
+            assertTrue(state.name(),
+                !state.establishesDifference() || state.survivesChangedOnly());
+        }
+    }
+
+    /** And exactly one state may be dropped by the filter: the one that asserts sameness. */
+    @Test
+    public void testIdenticalIsTheOnlyStateTheFilterMayDrop()
+    {
+        for (ComparisonNodeState state : ComparisonNodeState.values())
+        {
+            assertEquals(state.name(), state != ComparisonNodeState.IDENTICAL,
+                state.survivesChangedOnly());
+        }
     }
 
     /** The status wins over the flags: an uncompared subtree is never described as an equal one. */
@@ -240,7 +291,15 @@ public class ComparisonNodeStateTest
     @Test
     public void testAnUnnamedSideStillSurvivesTheChangedOnlyFilter()
     {
-        assertTrue(ComparisonNodeState.decode(oneSided(null, true), true).differs());
+        assertTrue(ComparisonNodeState.decode(oneSided(null, true), true).survivesChangedOnly());
+    }
+
+    /** ...while establishing no difference: an unidentified side is not an observation. */
+    @Test
+    public void testAnUnnamedSideEstablishesNoDifference()
+    {
+        assertFalse(
+            ComparisonNodeState.decode(oneSided(null, true), true).establishesDifference());
     }
 
     /**

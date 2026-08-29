@@ -1381,7 +1381,16 @@ public class MergeRulesTool implements IMcpTool
                 {
                     return ParsedDecision.refused(unwritable);
                 }
-                path.add(key.trim());
+                String padded = paddedKeyRefusal(key, position, index + 1);
+                if (padded != null)
+                {
+                    return ParsedDecision.refused(padded);
+                }
+                // Added exactly as accepted. There is no trim here any more: it removed only what
+                // is at or below U+0020, so it cleaned an ASCII-padded key while leaving a
+                // U+2003-padded one to be recorded and never applied - and either way the key
+                // written was not the key sent. Both halves of that are now refusals.
+                path.add(key);
             }
         }
         else
@@ -1427,12 +1436,13 @@ public class MergeRulesTool implements IMcpTool
      * pair is one code point in the last range - an emoji in an object name is legal XML and would
      * be wrong to refuse.
      * <p>
-     * <b>Asked of the value as SENT, before the trim.</b> A control character below
-     * {@code U+0020} at either end is one {@code String.trim} silently deletes, so checking the
-     * trimmed value would answer for a key the caller did not send: a key that is nothing but
-     * U+0001 would become the EMPTY key, and one that merely starts with U+0001 would be
-     * quietly rewritten into a key the caller never sent - both the "reported as written,
-     * silently something else" shape this tool refuses everywhere else.
+     * <b>Asked of the value as SENT, and the value as sent is what gets written.</b> There is
+     * no normalisation anywhere on this path to be asked before: a {@code String.trim} used to
+     * stand between this check and the file, and it deleted exactly this - a key that is nothing
+     * but U+0001 became the EMPTY key, and one that merely starts with U+0001 was quietly
+     * rewritten into a key the caller never sent, both the "reported as written, silently
+     * something else" shape this tool refuses everywhere else. What that trim was there to tidy
+     * is refused instead, by {@link #paddedKeyRefusal}.
      * <p>
      * <b>The character is named by CODE, never echoed.</b> The refusal travels back through the
      * same JSON the offending byte would have broken, so putting it in the message would carry the
@@ -1508,6 +1518,60 @@ public class MergeRulesTool implements IMcpTool
     private static String codePointName(char character)
     {
         return String.format(Locale.ROOT, "U+%04X", (int)character); //$NON-NLS-1$
+    }
+
+
+    /**
+     * Refuses a key whose NAME is padded with whitespace, naming the character by code point and
+     * saying where it sits.
+     * <p>
+     * <b>Why a refusal and not a silent clean-up.</b> Normalising is the same defect in a better
+     * coat: the caller asked for one address and the file would carry another, and this tool's
+     * whole contract is that what it reports recorded is what it wrote. It is also the answer that
+     * stays true at the OTHER doors - a key carried in from {@code basedOn} is copied through
+     * verbatim, because rewriting another document's keys is not this tool's job, and a write path
+     * that stripped its own input would address a different node from the one the caller had just
+     * read out of that file, silently adding a decision where they meant to replace one. Refusing
+     * leaves exactly one rule for the whole tool: it never invents a key.
+     * <p>
+     * <b>The position is the UTF-16 offset, the unit {@link #unwritableKeyRefusal} already
+     * reports.</b> A name holding a character above {@code U+FFFF} before the padding therefore
+     * counts it as two, where a person counting on screen counts one. Reporting a code-point
+     * ordinal here would make the same word mean two different things in two refusals about the
+     * same key, and the sibling refusal cannot use code points at all: it points at a LONE
+     * surrogate, which is not a code point. One unit for both, named rather than assumed.
+     * <p>
+     * <b>Named by code, not echoed.</b> Every other refusal here quotes the offending key back,
+     * and this is the one where quoting it shows nothing: the character is invisible by
+     * construction, so the key would come back looking identical to the one the caller believes
+     * they sent. The code point and the position are the only form of it a reader can act on.
+     * <p>
+     * What counts as whitespace, why {@code isBlank} and {@code trim} disagreed about it, and
+     * which characters are deliberately NOT covered are all settled by
+     * {@link MergeRulesDocument#firstPaddedNameCharacter(String)}, which owns what a key is made
+     * of; this method only phrases the answer.
+     *
+     * @param key the key exactly as the caller sent it
+     * @param position the decision's position, for the message
+     * @param keyNumber the key's position within the chain, 1-based
+     * @return the refusal, or {@code null} when no name in the key is padded
+     */
+    private static String paddedKeyRefusal(String key, int position, int keyNumber)
+    {
+        int offset = MergeRulesDocument.firstPaddedNameCharacter(key);
+        if (offset < 0)
+        {
+            return null;
+        }
+        return ToolResult.error("Decision #" + position + ": key #" + keyNumber + " in '" //$NON-NLS-1$ //$NON-NLS-2$
+            + FIELD_PATH + "' has " + codePointName(key.charAt(offset)) //$NON-NLS-1$
+            + ", a whitespace character, at character " + (offset + 1) //$NON-NLS-1$
+            + ", where a name begins or ends. Nothing was written: EDT matches node keys by exact " //$NON-NLS-1$
+            + "string equality and no key it writes holds whitespace, so a padded name matches no " //$NON-NLS-1$
+            + "node in any comparison - the decision would be recorded and never applied. It is " //$NON-NLS-1$
+            + "not trimmed for you, because a key this tool rewrote is no longer the key you " //$NON-NLS-1$
+            + "asked for. Re-send it without the padding: ['commonModules'] for a collection, " //$NON-NLS-1$
+            + "['commonModules','A:A:A'] for one object.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1636,7 +1700,7 @@ public class MergeRulesTool implements IMcpTool
      * Asked of EVERY level, not just the object level, so that the collection level keeps refusing
      * a three-part key rather than quietly recording one as a collection name.
      *
-     * @param key one key of the chain, already trimmed
+     * @param key one key of the chain, exactly as the caller sent it
      * @param position the decision's position, for the message
      * @return the refusal, or {@code null} when the key is not a malformed top-object key
      */
@@ -1690,7 +1754,7 @@ public class MergeRulesTool implements IMcpTool
      * second state, the caller lands on the unreadable-tree refusal above - advice that resolves
      * nothing.
      *
-     * @param key one key of the chain, already trimmed
+     * @param key one key of the chain, exactly as the caller sent it
      * @param position the decision's position, for the message
      * @param comparisonAnswered whether a comparison answered at all, though without a readable
      *            tree - the difference between "start one" and "wait for this one"

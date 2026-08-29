@@ -382,6 +382,27 @@ def test_an_object_key_without_the_three_names_is_refused_with_the_form_spelled_
 
 
 @e2e_test(tool="merge_rules", kind="action")
+def test_a_key_padded_with_unicode_whitespace_is_refused_rather_than_recorded():
+    # The em space is not blank - the key names something - and String.trim cuts only what is at
+    # or below U+0020, so this key used to reach the file exactly as sent while the report called
+    # it RECORDED. EDT matches node keys by exact string equality, so it matches no node in any
+    # comparison: the padding makes the decision unappliable, and it is invisible in the request,
+    # which is why the refusal names the character by code point instead of quoting the key back.
+    target = os.path.join(_workdir(), "rules.xml")
+
+    r = call("merge_rules", {
+        "mode": "write",
+        "filePath": target,
+        "decisions": [{"path": ["commonModules\u2003"], "rule": "DoNotMerge"}],
+    })
+    err = assert_error(r, "a key padded with Unicode whitespace")
+    assert_error_quality(err, names=["U+2003"],
+                         suggests=["commonModules", "exact string equality"],
+                         ctx="whitespace-padded node key")
+    assert not os.path.exists(target), "the refused write must create nothing"
+
+
+@e2e_test(tool="merge_rules", kind="action")
 def test_a_zip_target_is_refused_because_edt_would_ignore_it():
     # A zip IS writable - it is the container EDT 2026.2 needs - but only when a live
     # comparison can name its entry. EDT restores the entry named after the launching

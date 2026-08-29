@@ -117,6 +117,14 @@ public class MergeRulesToolTest
      */
     private static final String CONTROL_CHARACTER = "\u0001"; //$NON-NLS-1$
 
+    /**
+     * EM SPACE. It IS whitespace to {@code Character.isWhitespace}, so a key holding it is not
+     * blank; it is far above the {@code U+0020} that {@code String.trim} cuts at, so the trim that
+     * used to stand before the write left it in place. Those two facts together are how a padded
+     * key reached the file and was reported as recorded.
+     */
+    private static final String EM_SPACE = "\u2003"; //$NON-NLS-1$
+
     /** A key whose names hold a code point above U+FFFF, which XML carries and this tool accepts. */
     private static final String ASTRAL_KEY =
         "A\ud83d\ude00:A\ud83d\ude00:A\ud83d\ude00"; //$NON-NLS-1$
@@ -3639,6 +3647,148 @@ public class MergeRulesToolTest
             result.startsWith("# Merge rules written:")); //$NON-NLS-1$
         assertTrue("and the writer escapes it rather than dropping it", //$NON-NLS-1$
             read(target).contains("Key=\"a&#9;b\"")); //$NON-NLS-1$
+    }
+
+
+    // ==== A padded name is not a name: isBlank and trim disagreed about Unicode whitespace ====
+    //
+    // "commonModules" followed by U+2003 is not blank - it names something - and String.trim cuts
+    // only what is at or below U+0020, so the padding walked past every check and the key reached
+    // the file exactly as sent. EDT matches node keys by exact string equality, so it matched no
+    // node in any comparison: written, reported as RECORDED, and impossible to apply. The trim is
+    // gone with it - a key this tool rewrote is no longer the key the caller asked for, and at the
+    // basedOn door it never rewrote one anyway.
+
+    @Test
+    public void testAKeyPaddedWithUnicodeWhitespaceIsRefusedByPosition() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\\u2003\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "#1", "key #1", "U+2003", "character 14"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePaddedKeyRefusalNamesTheCharacterByCodeRatherThanEchoingIt()
+        throws IOException
+    {
+        // This is the one refusal where echoing the key shows the caller nothing: the character is
+        // invisible by construction, so the quoted key would look identical to the one they
+        // believe they sent. Both halves in one test, because "does not contain it" is satisfied
+        // by any successful report too.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\\u2003\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "U+2003"); //$NON-NLS-1$
+        assertFalse("the refusal must not carry the invisible character it is about", //$NON-NLS-1$
+            result.contains(EM_SPACE));
+    }
+
+    @Test
+    public void testAPaddedNameInsideAnObjectKeyIsRefusedToo() throws IOException
+    {
+        // A top-object key is THREE names, so the middle one has two ends of its own. Checking
+        // only the ends of the whole key would leave 'Alpha<EM SPACE>:Beta:Gamma' recorded and
+        // never applied - the same defect, one level in.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",\"Alpha\\u2003:Beta:Gamma\"]," //$NON-NLS-1$ //$NON-NLS-2$
+                + "\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "key #2", "U+2003", "character 6"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANonBreakingSpaceIsRefusedThoughNeitherTrimNorStripRemovesIt()
+        throws IOException
+    {
+        // U+00A0 is NOT Character.isWhitespace, so String.strip leaves it exactly where trim did:
+        // swapping one normaliser for the other would have shipped this key to the file.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\\u00a0\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #1", "U+00A0", "character 14"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAsciiPaddedKeyIsRefusedInsteadOfBeingTrimmedIntoAnotherKey()
+        throws IOException
+    {
+        // The trim DID clean this one, and that is the point: the file then carried an address the
+        // caller never sent. Reported as recorded, silently something else - refused, like every
+        // other key this tool will not author.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\" commonModules\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #1", "U+0020", "character 1"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+
+    @Test
+    public void testAComponentOfNothingButANonBreakingSpaceIsRefusedRatherThanAccepted()
+        throws IOException
+    {
+        // The asymmetry between the two predicates, pinned. 'isBlank' asks Character.isWhitespace
+        // alone, which says NO to U+00A0, so this component reads as naming something to the
+        // empty-side check and used to be written as a key. It is caught by the padding check,
+        // whose predicate is the wider one - and it is caught only because the padding check does
+        // NOT skip components on the narrower 'isBlank'. Unify the two on isBlank and this key is
+        // accepted again.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",\"\\u00a0:Beta:Gamma\"]," //$NON-NLS-1$ //$NON-NLS-2$
+                + "\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertErrorNaming(result, "key #2", "U+00A0", "character 1"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWhitespaceInsideANameIsNotPaddingAndIsStillWritten() throws IOException
+    {
+        // The declared boundary, kept honest by a control: what is refused is PADDING - whitespace
+        // against the start or the end of a name. Whether a name may hold a space in the middle is
+        // a question about names, and only a live comparison answers that one; a check that
+        // refused every space would be a rule this tool invented.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",\"A B:A B:A B\"]," //$NON-NLS-1$ //$NON-NLS-2$
+                + "\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$
+
+        assertTrue("a space inside a name is not padding: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertTrue("and the key must reach the file as it was sent", //$NON-NLS-1$
+            read(target).contains("Key=\"A B:A B:A B\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAKeyThatIsNothingButUnicodeWhitespaceIsStillTheBlankRefusal()
+        throws IOException
+    {
+        // The gate above still owns this one, and it says the more useful thing: a key that names
+        // nothing is blank, whatever the whitespace was spelled with.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[\"commonModules\",\"\\u2003\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "key #2", "blank"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
     }
 
     // ============ Two decisions on one node are two answers to one question ============

@@ -628,6 +628,115 @@ public final class MergeRulesDocument
     }
 
     /**
+     * Where a key is PADDED with whitespace, which is the one defect in a key a caller cannot see
+     * by looking at their own request.
+     *
+     * <h2>A padded name is not a name</h2>
+     * EDT keys its nodes by string equality, and no key it writes carries whitespace: a collection
+     * is keyed by a model feature name and an object by its three 1C names, and neither kind of
+     * name can hold a space. A name with whitespace against one of its ends therefore matches no
+     * node in any comparison - the decision is recorded and can never be applied, which is the one
+     * failure this whole slice is built to refuse.
+     *
+     * <h2>Why it walked past every check around it</h2>
+     * {@code String.isBlank} is Unicode-aware and {@code String.trim} is not - trim cuts only code
+     * points at or below {@code U+0020}. A key of {@code commonModules} followed by {@code U+2003}
+     * is therefore not blank (it names something), not trimmed (the character is far above the
+     * cut) and not malformed in any other way, so it reached the file exactly as sent while the
+     * report called it recorded.
+     *
+     * <h2>What counts as whitespace here, and what deliberately does not</h2>
+     * {@code Character.isWhitespace} - the predicate {@code isBlank} itself asks, so the gate and
+     * this question cannot drift apart again - OR {@code Character.isSpaceChar}, which adds the
+     * non-breaking spaces ({@code U+00A0}, {@code U+2007}, {@code U+202F}): whitespace to every
+     * reader, and to neither {@code trim} nor {@code strip}. A zero-width or format character
+     * ({@code U+200B}, {@code U+FEFF}) is neither, and is NOT reported here - it is legal XML, it
+     * is not whitespace in any Unicode sense, and whether the node it names exists is a question
+     * only a live comparison answers. That is the boundary, stated so the next unnamed character
+     * is a decision rather than an omission.
+     *
+     * <h2>Asked per COMPONENT, and only about the ends</h2>
+     * A top-object key is three names, so its middle name has two ends of its own: this looks at
+     * each of the three, not only at the ends of the whole key. Whitespace INSIDE a name is left
+     * alone - it is not padding, and whether a name may hold a space is a question about names,
+     * which only a comparison can answer. A component that names nothing at all is not padded
+     * either; {@link #emptyTopObjectKeySides(String)} reports that one, in the words that tell the
+     * caller which side to fill in.
+     *
+     * <h2>The skip is narrower than the check, and that asymmetry is load-bearing</h2>
+     * A component is skipped when {@code isBlank} says it names nothing, and that predicate is
+     * {@code Character.isWhitespace} ALONE - narrower than the union asked one line below. So a
+     * component of nothing but {@code U+00A0} is not skipped: it is reported here as padding.
+     * That looks like an inconsistency and is the only safe way round. Widening the skip to the
+     * union would hand such a component to {@link #emptyTopObjectKeySides(String)}, which asks
+     * {@code isBlank} too and would answer that it names something - and the key would be
+     * accepted and written, which is exactly the outcome this method exists to prevent. Narrowing
+     * the check to {@code isBlank} instead would let every non-breaking space through. The
+     * refusal a caller gets for it names padding rather than an empty side; the guidance is the
+     * same either way, since neither key can be applied.
+     *
+     * @param key a node key (may be {@code null})
+     * @return the 0-based index of the first whitespace character that begins or ends a name in
+     *         this key, or {@code -1} when no name in it is padded
+     */
+    public static int firstPaddedNameCharacter(String key)
+    {
+        if (key == null)
+        {
+            return -1;
+        }
+        if (!hasTopObjectKeyShape(key))
+        {
+            return paddingIn(key, 0, key.length());
+        }
+        int first = key.indexOf(KEY_SEPARATOR);
+        int second = key.indexOf(KEY_SEPARATOR, first + 1);
+        int found = paddingIn(key, 0, first);
+        if (found < 0)
+        {
+            found = paddingIn(key, first + 1, second);
+        }
+        if (found < 0)
+        {
+            found = paddingIn(key, second + 1, key.length());
+        }
+        return found;
+    }
+
+    /**
+     * @param key the whole key
+     * @param from the first index of one name in it
+     * @param to one past its last index
+     * @return the index of the whitespace character at either end of that name, or {@code -1}
+     */
+    private static int paddingIn(String key, int from, int to)
+    {
+        if (from >= to || key.substring(from, to).isBlank())
+        {
+            return -1;
+        }
+        if (isSpace(key.charAt(from)))
+        {
+            return from;
+        }
+        if (isSpace(key.charAt(to - 1)))
+        {
+            return to - 1;
+        }
+        return -1;
+    }
+
+    /**
+     * @param character one character of a key
+     * @return whether it is whitespace in either of Unicode's two senses - the union is wider than
+     *         {@code trim} and wider than {@code strip}, which is the point
+     */
+    private static boolean isSpace(char character)
+    {
+        return Character.isWhitespace(character) || Character.isSpaceChar(character);
+    }
+
+    /**
      * Whether a key is an engine-computed POSITION ({@code getPositionAfterMerge()}) rather
      * than a name. Such a key shifts when other rules change, so it is read-only for us.
      *

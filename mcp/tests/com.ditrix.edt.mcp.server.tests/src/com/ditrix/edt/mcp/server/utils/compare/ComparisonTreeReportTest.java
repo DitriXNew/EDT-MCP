@@ -87,6 +87,69 @@ public class ComparisonTreeReportTest
         assertEquals(3, collector.getDiffering());
     }
 
+    /**
+     * A node the engine returned NO verdict for is listed - dropping it would present a subtree
+     * nobody judged as an equal one - and it is not one of the differences the comparison found.
+     * <p>
+     * One predicate used to answer both questions, so the row and the counter beside it disagreed:
+     * the Change cell said the engine never reported on this node while the headline counted it
+     * among the objects that differ.
+     */
+    @Test
+    public void testANodeWithNoVerdictIsListedUnderChangedOnly()
+    {
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+        collector.accept(notReported(41L, "Catalog.Unjudged")); //$NON-NLS-1$
+
+        String report = render(collector, emptyScope());
+
+        assertContains(report, "| 41 |"); //$NON-NLS-1$
+        assertContains(report, "not reported by the engine"); //$NON-NLS-1$
+    }
+
+    /** The other half, in its own test: listed is not counted. */
+    @Test
+    public void testANodeWithNoVerdictIsNotCountedAsADifference()
+    {
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+        collector.accept(notReported(41L, "Catalog.Unjudged")); //$NON-NLS-1$
+
+        assertEquals(1, collector.getTotal());
+        assertEquals(0, collector.getDiffering());
+    }
+
+    /** And the headline says so in the row's own words, so the two documents cannot disagree. */
+    @Test
+    public void testTheHeadlineCountsTheUnjudgedNodeUnderItsOwnName()
+    {
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+        collector.accept(notReported(41L, "Catalog.Unjudged")); //$NON-NLS-1$
+
+        String report = render(collector, emptyScope());
+
+        assertContains(report, "0 with differences"); //$NON-NLS-1$
+        assertContains(report, "1 not reported by the engine"); //$NON-NLS-1$
+    }
+
+    /**
+     * The positive control for both: a node the engine DID judge is still counted, and the
+     * unjudged counter stays at zero. Without it the two tests above are satisfied by a report
+     * that counts nothing at all.
+     */
+    @Test
+    public void testARealDifferenceIsStillCountedAsOne()
+    {
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+        collector.accept(conflicting(42L, CATALOG_WAREHOUSES));
+
+        String report = render(collector, emptyScope());
+
+        assertEquals(1, collector.getDiffering());
+        assertEquals(0, collector.getNotReported());
+        assertContains(report, "1 with differences"); //$NON-NLS-1$
+        assertContains(report, "0 not reported by the engine"); //$NON-NLS-1$
+    }
+
     @Test
     public void testChangeRelativeToTheAncestorIsNamedPerSide()
     {
@@ -688,6 +751,19 @@ public class ComparisonTreeReportTest
         when(node.getNodeSide()).thenReturn(side);
         when(node.isAncestorObjectExists()).thenReturn(ancestorExists);
         return node;
+    }
+
+    /**
+     * A node the engine FINISHED and attached no flags to: the absence of a verdict, which is not
+     * a verdict of "equal" and not a difference either.
+     *
+     * @param id the node id
+     * @param symlink the name on every side
+     * @return the stubbed node
+     */
+    private static TopComparisonNode notReported(long id, String symlink)
+    {
+        return node(id, symlink, symlink, symlink, null, ComparisonNodeStatus.FINISHED);
     }
 
     private static TopComparisonNode unfinished(long id, String symlink)

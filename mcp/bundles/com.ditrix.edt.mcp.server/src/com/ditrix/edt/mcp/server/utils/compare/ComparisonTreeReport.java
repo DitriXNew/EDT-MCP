@@ -341,6 +341,7 @@ public final class ComparisonTreeReport
         private int differing;
         private int conflicts;
         private int notCompared;
+        private int notReported;
 
         /**
          * @param limit largest number of rows to keep; clamped into {@code [1, MAX_LIMIT]}
@@ -389,11 +390,20 @@ public final class ComparisonTreeReport
             {
                 notCompared++;
             }
-            else if (change.differs())
+            if (change == ComparisonNodeState.NOT_REPORTED)
+            {
+                notReported++;
+            }
+            // THE TWO QUESTIONS ARE ASKED SEPARATELY, and the state answers each in its own
+            // words. One predicate served both, and the answer that keeps a node the engine gave
+            // no verdict for visible under changedOnly - which it must be - also added it to the
+            // count of differences, so the total claimed a finding the row beside it says was
+            // never made. See ComparisonNodeState: they part company on exactly the two absences.
+            if (change.establishesDifference())
             {
                 differing++;
             }
-            if (changedOnly && !change.differs())
+            if (changedOnly && !change.survivesChangedOnly())
             {
                 return;
             }
@@ -410,7 +420,10 @@ public final class ComparisonTreeReport
             return total;
         }
 
-        /** @return nodes with a difference, EXCLUDING the ones not compared yet */
+        /**
+         * @return nodes whose state ESTABLISHES a difference - so neither the ones not compared
+         *     yet nor the ones the engine returned no verdict for, since neither is an answer
+         */
         public int getDiffering()
         {
             return differing;
@@ -426,6 +439,15 @@ public final class ComparisonTreeReport
         public int getNotCompared()
         {
             return notCompared;
+        }
+
+        /**
+         * @return nodes the engine returned no verdict for - counted on their own, because they
+         *     are listed like every other row and belong to none of the counts beside it
+         */
+        public int getNotReported()
+        {
+            return notReported;
         }
 
         /** @return nodes that passed the filter, whether or not they fit the page */
@@ -702,10 +724,17 @@ public final class ComparisonTreeReport
     private static void appendNodes(StringBuilder out, ScopeSnapshot scope, Collector collector)
     {
         out.append("\n## Top objects\n\n"); //$NON-NLS-1$
+        // The last two numbers are spelled with the STATES' own labels, the same text the rows
+        // below carry in their Change cell, so a reader can add up what the table shows. A node
+        // the engine gave no verdict for is listed and counted here, and in "with differences" it
+        // is not: that count is what the comparison FOUND, and nothing was found about this node.
         out.append("**Total:** ").append(collector.getTotal()).append(" top nodes — ") //$NON-NLS-1$ //$NON-NLS-2$
             .append(collector.getDiffering()).append(" with differences, ") //$NON-NLS-1$
             .append(collector.getConflicts()).append(" conflicts, ") //$NON-NLS-1$
-            .append(collector.getNotCompared()).append(" not compared yet") //$NON-NLS-1$
+            .append(collector.getNotCompared()).append(' ')
+            .append(ComparisonNodeState.NOT_COMPARED.label()).append(", ") //$NON-NLS-1$
+            .append(collector.getNotReported()).append(' ')
+            .append(ComparisonNodeState.NOT_REPORTED.label())
             .append(Pagination.truncationNotice(collector.getRows().size(), collector.getMatching()))
             .append("\n\n"); //$NON-NLS-1$
 
