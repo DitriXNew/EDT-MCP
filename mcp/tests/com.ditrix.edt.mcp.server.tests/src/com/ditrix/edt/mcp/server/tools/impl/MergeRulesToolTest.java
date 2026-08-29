@@ -560,16 +560,23 @@ public class MergeRulesToolTest
         assertErrorNaming(result, "decisions", "write"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    // ==== a MALFORMED write-only payload is still a write-only payload ====
+    // ==== a write-only parameter is refused for having been SENT, whatever it holds ====
     //
-    // The hole above it: read mode judged 'decisions' by the EXTRACTED list, and the shared
-    // extractor keeps only JSON objects and drops the rest without a word. So '"decisions":[null]'
-    // - and an array of primitives - arrived as an EMPTY list, read exactly like an absent
-    // parameter, and the call SUCCEEDED as a read while the refusal above promises that a
-    // write-only parameter is refused. A caller who meant to write and picked the wrong mode got
-    // a report that looked like a result and was never told nothing had been recorded. Judged now
-    // by the same rule write mode uses, so the two modes cannot disagree about whether the
-    // parameter is there.
+    // Two narrowings stood here in turn, and each was narrower than the promise the refusal above
+    // makes. First, read mode judged 'decisions' by the EXTRACTED list, and the shared extractor
+    // keeps only JSON objects and drops the rest without a word - so '"decisions":[null]' arrived
+    // as an EMPTY list and read exactly like an absent parameter. Then it judged by write mode's
+    // malformed-element rule, which recognises an ARRAY holding a non-object - so '[]', an object
+    // and a scalar still read as absent, and a 'basedOn'/'comparisonId' spelled '' still read as
+    // absent through isSet. In every one of those the call SUCCEEDED as a read while the refusal
+    // promises that a write-only parameter is refused: a caller who meant to write and picked the
+    // wrong mode got a report that looked like a result and was never told that nothing had been
+    // recorded.
+    //
+    // The question asked now is the one the promise is about - was this parameter supplied at all
+    // - so there is no shape left to enumerate. The pins below are still one per shape, because a
+    // single pin would not distinguish "presence is the test" from "this one shape got a special
+    // case".
 
     @Test
     public void testReadRefusesADecisionsArrayOfNullsInsteadOfReadingItAsAbsent() throws IOException
@@ -630,6 +637,229 @@ public class MergeRulesToolTest
 
         assertTrue("an absent write-only parameter is absent: " + result, //$NON-NLS-1$
             result.startsWith("# Merge rules:")); //$NON-NLS-1$
+    }
+
+    /**
+     * An EMPTY array is the shape the previous boundary was drawn AROUND, and it is the reason
+     * that boundary had to go. Nothing can be recorded from it - which is what made it look
+     * harmless - but that is a statement about the VALUE, and the promise is about the parameter
+     * having been sent. A caller who sent it in read mode sent a write-only parameter.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testReadRefusesAnEmptyDecisionsArrayBecauseItWasStillSupplied() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReadRefusesADecisionsObjectBecauseItWasStillSupplied() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "{\"path\":[],\"rule\":\"DoNotMerge\"}")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReadRefusesAScalarDecisionsValueBecauseItWasStillSupplied() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "7.0")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions"); //$NON-NLS-1$
+    }
+
+    /**
+     * The bare {@code null} literal as the parameter's own value.
+     * <p>
+     * Reachable over the wire only as the four-character STRING: a JSON {@code null} argument is
+     * dropped by the protocol layer while it builds the argument map, so {@code "decisions": null}
+     * arrives as no key at all and reads. That limitation belongs to the transport and is stated
+     * in the tool rather than papered over here; what this pins is that the tool does not add a
+     * second limitation of its own by looking at the four characters.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testReadRefusesADecisionsValueThatIsTheBareNullLiteral() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "null")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions"); //$NON-NLS-1$
+    }
+
+    /**
+     * A key that IS there while holding no value at all is still supply: the test is
+     * {@code containsKey}, not a null check on what the key holds.
+     * <p>
+     * Only a direct caller can build this - the protocol layer never puts a null value in the map.
+     * It is pinned because it is exactly what separates "the key was sent" from "the key holds
+     * something", and those two readings are what this change moved between.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testReadRefusesADecisionsKeyThatHoldsNoValueAtAll() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", null)); //$NON-NLS-1$
+
+        assertErrorNaming(result, "decisions"); //$NON-NLS-1$
+    }
+
+    // The two siblings carry the SAME promise - one refusal covers all three - and carried the
+    // same lax test: isSet reads '' and '   ' as absent, so a read that supplied one of them
+    // succeeded as a read.
+
+    @Test
+    public void testReadRefusesAnEmptyBasedOnBecauseItWasStillSupplied() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", "")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "basedOn"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReadRefusesABlankComparisonIdBecauseItWasStillSupplied() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "comparisonId", "   ")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "comparisonId"); //$NON-NLS-1$
+    }
+
+    /**
+     * What the refusal has to SAY, now that it fires on an empty array.
+     * <p>
+     * An empty array is not malformed, so a message describing malformed content would be a lie
+     * about the very payload that made the boundary move. The refusal states the property that is
+     * true of every shape it fires on - the parameter is write-only - and names both modes, so the
+     * caller knows which one takes it.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheWriteOnlyRefusalCallsTheParameterWriteOnlyAndNamesBothModes()
+        throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "write-only", "mode 'read'", "mode 'write'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * And it must NOT reach for write mode's sentence, which is a statement about content.
+     * <p>
+     * The refusal is asserted FIRST and on purpose. A bare "the answer does not say 'is not an
+     * object'" passes on a successful read report too, so it would have held with this whole
+     * change reverted - a pin no mutation can redden. What is being pinned is a refusal that
+     * declines to call an empty array malformed, and both halves have to be stated.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheWriteOnlyRefusalDoesNotCallAnEmptyArrayMalformed() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions"); //$NON-NLS-1$
+        assertFalse("an empty array is not malformed content: " + result, //$NON-NLS-1$
+            result.contains("is not an object")); //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal names no write-only parameter the caller did NOT send - otherwise it would send
+     * them looking for two parameters they never passed.
+     * <p>
+     * Stated as "no write-only parameter", not as "only what was sent": the refusal also names
+     * {@code filePath} and {@code limit}, which - apart from {@code mode} itself - is the list of
+     * what read mode DOES take, and that is a different sentence.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheWriteOnlyRefusalNamesNoWriteOnlyParameterThatWasNotSupplied()
+        throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", "")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "basedOn"); //$NON-NLS-1$
+        assertFalse("a parameter that was never sent must not be named: " + result, //$NON-NLS-1$
+            result.contains("decisions")); //$NON-NLS-1$
+        assertFalse("a parameter that was never sent must not be named: " + result, //$NON-NLS-1$
+            result.contains("comparisonId")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the other half: every write-only parameter that WAS sent is named, in the order the
+     * schema declares them.
+     * <p>
+     * All three are sent with the values the old boundary read as absent, so this test also fails
+     * on the reverted code - where the call SUCCEEDS as a read - and the ORDER is asserted as one
+     * string, because three separate "contains" checks would pass on any permutation.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testTheWriteOnlyRefusalNamesEveryParameterThatWasSuppliedInSchemaOrder()
+        throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[]", "basedOn", "", "comparisonId", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+        assertErrorNaming(result, "basedOn, decisions, comparisonId"); //$NON-NLS-1$
+    }
+
+    /**
+     * And write mode keeps its OWN sentence: the widened presence test must not swallow the one
+     * message that says WHICH element is unusable.
+     *
+     * @throws IOException when the target cannot be inspected
+     */
+    @Test
+    public void testWriteStillRefusesAMalformedDecisionElementWithItsOwnSentence() throws IOException
+    {
+        Path target = file("rules.xml"); //$NON-NLS-1$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[null]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions", "#1", "is not an object"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("write mode must not answer with read mode's refusal: " + result, //$NON-NLS-1$
+            result.contains("write-only")); //$NON-NLS-1$
+        assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
     }
 
     // ==================== read ====================

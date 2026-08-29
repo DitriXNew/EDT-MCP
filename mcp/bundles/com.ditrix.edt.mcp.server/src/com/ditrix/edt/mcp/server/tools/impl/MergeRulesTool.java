@@ -173,6 +173,15 @@ public class MergeRulesTool implements IMcpTool
      */
     private static final List<String> REFUSED_RULES = List.of("CustomMerge", "MergeUsingExternalTool"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * The parameters {@link #MODE_WRITE} takes and {@link #MODE_READ} does not, in the order
+     * {@link #getInputSchema()} declares them - so a call carrying several of them is told about
+     * them in the order it could read them off the schema. Named in one place because the refusal
+     * and the presence test have to agree about which parameters the promise covers.
+     */
+    private static final List<String> WRITE_ONLY_PARAMETERS =
+        List.of(KEY_BASED_ON, KEY_DECISIONS, KEY_COMPARISON_ID);
+
     private final MergeRuleAuthoritySupplier authoritySupplier;
 
     /**
@@ -305,31 +314,40 @@ public class MergeRulesTool implements IMcpTool
 
         if (MODE_READ.equals(mode))
         {
-            // 'decisions' is judged PRESENT by the same rule write mode judges it MALFORMED by,
-            // and NOT by what survived extraction. The shared extractor keeps only JSON objects
-            // and drops the rest without a word, so '"decisions":[null]' - or an array of numbers
-            // - arrived here as an EMPTY list and read exactly like an absent parameter: the call
-            // then succeeded as a read while the answer this tool returns promises that a
-            // write-only parameter is refused. A caller who meant to write and picked the wrong
-            // mode got a successful-looking report and was never told that nothing had been
-            // recorded, which is the silent understatement the refusal below exists against.
-            // Write mode's judgement is reused rather than restated: one rule decides whether the
-            // parameter is there, so the two modes cannot come to disagree about it.
+            // Judged by what the caller SUPPLIED, and by nothing about the value.
             //
-            // The boundary that judgement draws, stated rather than left to be discovered: it
-            // recognises an ARRAY holding something that is not an object. A 'decisions' that is
-            // an empty array, an object, or a scalar is still read as absent here - and write mode
-            // does not call those malformed either, it refuses them further down for carrying no
-            // decision at all. Widening this to raw presence would be a SECOND rule about the same
-            // parameter, and the first thing it would change is the empty array, which is a
-            // payload neither mode can record anything from.
-            boolean malformedDecisions = nonObjectDecisionRefusal(params) != null;
-            if (!decisions.isEmpty() || malformedDecisions || isSet(basedOn) || isSet(comparisonId))
+            // The refusal below promises that a write-only parameter is refused rather than
+            // ignored, and that promise is about SUPPLY - "you sent a parameter this mode does not
+            // take". Every test of the VALUE that has stood here was narrower than the promise,
+            // and each one let some payload through as "absent": judging 'decisions' by the
+            // extracted list read '"decisions":[null]' as absent, because the shared extractor
+            // keeps only JSON objects and drops the rest without a word; widening that to write
+            // mode's malformed-element rule still read '[]', an object and a scalar as absent; and
+            // isSet still read an empty 'basedOn' or 'comparisonId' as absent. In every one of
+            // those a caller who meant to write and picked the wrong mode got a successful-looking
+            // report and was never told that nothing had been recorded.
+            //
+            // Asking about presence is not a second judgement about content - it is the simpler
+            // question the promise is actually about, and it has one answer for all three
+            // parameters. That is also why it does not compete with write mode's judgement: write
+            // mode still refuses a malformed 'decisions' with its own sentence naming the
+            // offending element, and this branch never reaches that code.
+            //
+            // The one shape this cannot see: the protocol layer skips a JSON null argument while
+            // building the map, so '"decisions": null' on the wire arrives as no key at all and
+            // reads. That is the transport's rule for every tool, not a boundary drawn here.
+            String supplied = suppliedWriteOnlyParameters(params);
+            if (supplied != null)
             {
-                return ToolResult.error("mode 'read' takes only " + KEY_FILE_PATH + " and " + McpKeys.LIMIT //$NON-NLS-1$ //$NON-NLS-2$
-                    + "; " + KEY_DECISIONS + " / " + KEY_BASED_ON + " / " + KEY_COMPARISON_ID //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + " belong to mode 'write'. Nothing was read: re-send with mode 'write' to " //$NON-NLS-1$
-                    + "record those decisions, or drop them to read the file.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("Apart from " + KEY_MODE + " itself, mode '" + MODE_READ //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' takes only " + KEY_FILE_PATH + " and " + McpKeys.LIMIT //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". This call also sent " + supplied //$NON-NLS-1$
+                    + " - write-only, and nothing was read. A write-only parameter is refused for " //$NON-NLS-1$
+                    + "having been SENT, not for what it holds: an empty array, an empty string, " //$NON-NLS-1$
+                    + "or a value this tool cannot use is still a parameter you supplied, and " //$NON-NLS-1$
+                    + "reading past it would answer a call you did not make. Re-send with mode '" //$NON-NLS-1$
+                    + MODE_WRITE + "' - carrying the payload you meant to record - or drop them " //$NON-NLS-1$
+                    + "to read the file.").toJson(); //$NON-NLS-1$
             }
             return read(filePath, limit);
         }
@@ -1182,13 +1200,13 @@ public class MergeRulesTool implements IMcpTool
     /**
      * Refuses a {@code decisions} array that carries an element which is not a JSON object.
      *
-     * <h2>Read mode asks this too, for its ANSWER rather than for its message</h2>
-     * Both modes have to decide whether {@code decisions} is THERE, and the extracted list cannot
-     * answer that: it is what survived {@code extractObjectArray}, which drops every non-object
-     * without a word, so a malformed array and an absent parameter are the same empty list. Write
-     * mode returns the sentence below; read mode only needs to know that the sentence exists, and
-     * refuses the write-only parameter with its own. One judgement, so a payload one mode calls
-     * malformed cannot be a payload the other calls absent.
+     * <h2>Write mode alone asks this, and that is the division of labour</h2>
+     * This sentence names the offending ELEMENT, so it is a statement about content and belongs
+     * where content is being recorded. Read mode does not ask it: there the only question is
+     * whether the parameter was supplied at all, which {@link #suppliedWriteOnlyParameters}
+     * answers for all three write-only parameters at once. Read mode did route through here once,
+     * and the effect was to narrow its question back to "an array holding a non-object", which
+     * read an empty array, an object and a scalar as an absent parameter.
      *
      * @param params the call arguments
      * @return the rendered refusal, or {@code null} when every element is an object (or the value is
@@ -1753,6 +1771,48 @@ public class MergeRulesTool implements IMcpTool
     private static boolean isSet(String value)
     {
         return value != null && !value.isBlank();
+    }
+
+    /**
+     * Names the write-only parameters this call SUPPLIED, in schema order, whatever they hold.
+     * <p>
+     * <b>Presence, and nothing about content.</b> {@link #MODE_READ} promises that a write-only
+     * parameter is refused rather than ignored, and that promise is about supply. Asking what a
+     * value HOLDS answers a different and narrower question, and every narrower answer this branch
+     * has carried let some payload through as "absent": the extracted decision list read
+     * {@code "decisions":[null]} as absent, write mode's malformed-element rule read an empty
+     * array, an object and a scalar as absent, and {@link #isSet} reads {@code ""} as absent. A
+     * caller who meant to write and picked the wrong mode then got a report that looked like a
+     * result.
+     * <p>
+     * <b>Write mode is deliberately not routed through this.</b> Write mode has to say WHICH
+     * element is unusable, and {@link #nonObjectDecisionRefusal} still says it; one presence test
+     * answering for both modes would replace that sentence with this one.
+     * <p>
+     * <b>The one shape this cannot see.</b> The protocol layer builds the argument map from the
+     * request and skips a JSON {@code null} value outright, so {@code "decisions": null} on the
+     * wire arrives here as no key at all and is read as absent. That is the transport's rule for
+     * every tool, not a boundary this tool draws. A key that IS present while holding a
+     * {@code null} value - which only a direct caller can construct - is supply, and is named.
+     *
+     * @param params the call arguments, may be {@code null}
+     * @return the supplied names joined by {@code ", "}, or {@code null} when none was supplied
+     */
+    private static String suppliedWriteOnlyParameters(Map<String, String> params)
+    {
+        if (params == null)
+        {
+            return null;
+        }
+        List<String> supplied = new ArrayList<>();
+        for (String name : WRITE_ONLY_PARAMETERS)
+        {
+            if (params.containsKey(name))
+            {
+                supplied.add(name);
+            }
+        }
+        return supplied.isEmpty() ? null : String.join(", ", supplied); //$NON-NLS-1$
     }
 
     /**
