@@ -2362,6 +2362,29 @@ public class CompareConfigurationsTool implements IMcpTool
      */
     static final class EngineBackend implements Backend
     {
+        /** How long {@link #readableView} waits between two attempts at an unreadable view. */
+        private final long unreadableRetryIntervalMs;
+
+        /** Production wiring: the same interval the poll loop ticks at. */
+        EngineBackend()
+        {
+            this(POLL_INTERVAL_MS);
+        }
+
+        /**
+         * The same seam the tool itself takes for its poll interval, and for the same reason:
+         * {@link CompareConfigurationsTool#MAX_UNREADABLE_TICKS} attempts at the production
+         * interval is three seconds of real sleeping, so the ending it governs could otherwise
+         * only be pinned by a test that spent them. It shortens the WAIT and nothing else - the
+         * attempt count, the answers and the sentences are the production ones.
+         *
+         * @param unreadableRetryIntervalMs how long to wait between two attempts
+         */
+        EngineBackend(long unreadableRetryIntervalMs)
+        {
+            this.unreadableRetryIntervalMs = unreadableRetryIntervalMs;
+        }
+
         @Override
         public String precheck(LaunchRequest request)
         {
@@ -2683,10 +2706,29 @@ public class CompareConfigurationsTool implements IMcpTool
                 + "no longer holds the session"; //$NON-NLS-1$
         }
 
+        /**
+         * {@inheritDoc}
+         * <p>
+         * <b>The ATTACHED facade, not {@link ComparisonEngine#get()}, and for the reason
+         * {@link #poll} and {@code get_comparison_node} already use it.</b> {@code get()} answers
+         * empty while EDT's comparison service is momentarily unregistered, and this method turned
+         * that empty into "the comparison service is not available in this workbench" - a verdict
+         * reached before one question had been asked. The tick that saw FINISHED had just been
+         * answered by that same service, so this is the narrow gap between the two reads and
+         * nothing else: the session is still registered, the handle still resolves, and the tree
+         * the caller asked for exists. What the job produced instead was a terminal ERROR carrying
+         * no tree, while the finished comparison went on holding EDT's single slot - the one
+         * ending that keeps it open by decision.
+         * <p>
+         * Going through the attached facade lets the READ answer for itself, exactly as the poll
+         * does: the absence arrives as {@link PlatformAnswer#unavailable()} at
+         * {@link #readableView}, which rides it out on the SAME budget the poll spends on an
+         * unreadable tick, and only a gap that outlasts the budget becomes the retryable refusal.
+         */
         @Override
         public String report(String comparisonId, LaunchRequest request) throws ComparisonException
         {
-            ComparisonEngine engine = ComparisonEngine.get().orElseThrow(
+            ComparisonEngine engine = ComparisonEngine.attached().orElseThrow(
                 () -> new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())));
             // LEASED for the whole read, not looked up for an instant at the start of it. The
             // sweep measures idleness from the last lookup, and walking a large configuration is
@@ -2701,7 +2743,8 @@ public class CompareConfigurationsTool implements IMcpTool
                     throw new ComparisonException(
                         messageOf(ComparisonFailures.sessionGone(comparisonId)));
                 }
-                return renderTree(engine, lease.handle(), comparisonId, request);
+                return renderTree(engine, lease.handle(), comparisonId, request,
+                    unreadableRetryIntervalMs);
             }
         }
 
@@ -2795,11 +2838,13 @@ public class CompareConfigurationsTool implements IMcpTool
          * @param handle the leased comparison's handle
          * @param comparisonId this plugin's id for it
          * @param request the request, for the page size and the filter
+         * @param retryIntervalMs how long to wait between two attempts at an unreadable view
          * @return the rendered Markdown report
          * @throws ComparisonException when the tree could not be read
          */
         private static String renderTree(ComparisonEngine engine, ComparisonProcessHandle handle,
-            String comparisonId, LaunchRequest request) throws ComparisonException
+            String comparisonId, LaunchRequest request, long retryIntervalMs)
+            throws ComparisonException
         {
             ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(
                 request.getLimit(), request.isChangedOnly());
@@ -2809,7 +2854,8 @@ public class CompareConfigurationsTool implements IMcpTool
             TreeReading reading;
             try
             {
-                PlatformAnswer<ComparisonView> answer = engine.view(handle);
+                PlatformAnswer<ComparisonView> answer =
+                    readableView(engine, handle, retryIntervalMs);
                 String unreadable = unreadableTreeMessage(answer, comparisonId);
                 if (unreadable != null)
                 {
@@ -2834,6 +2880,63 @@ public class CompareConfigurationsTool implements IMcpTool
             return ComparisonTreeReport.render(
                 headerFor(comparisonId, request, reading.state(), reading.isGlobalScope()),
                 reading.scope(), collector);
+        }
+
+        /**
+         * The comparison's view, waiting out a service gap on the SAME budget the poll spends.
+         *
+         * <h2>Why the terminal read gets to wait at all</h2>
+         * Everything the poll rides out on
+         * {@link CompareConfigurationsTool#MAX_UNREADABLE_TICKS} applies here unchanged: a
+         * service that could not be asked has observed nothing about the comparison, so one
+         * such reading must not end it. The difference is only WHEN it is taken - the poll's last
+         * tick said FINISHED, and this read follows it - and that makes the stakes higher rather
+         * than lower: there is no next tick to correct a wrong answer, and the tree this gives up
+         * on is a completed one nothing will produce again.
+         * <p>
+         * So the budget is reused rather than restated.
+         * {@link CompareConfigurationsTool#MAX_UNREADABLE_TICKS} attempts spaced
+         * {@code retryIntervalMs} apart is the same three seconds, spent in the same
+         * place: on the background job. It cannot lengthen the caller's own call, which
+         * {@code BackgroundJobPolling.await} bounds by {@code waitSeconds} whatever the job is
+         * doing, and three seconds against the job's own two-hour budget is what the poll already
+         * spends on one unreadable run.
+         * <p>
+         * Only "could not ask" is retried. An ANSWERED absence - EDT saying it no longer knows
+         * this handle - is a fact about the comparison and is returned at once, because waiting
+         * on a verdict only delays it. The fork itself is not made here: this returns the
+         * platform's answer and {@code unreadableTreeMessage} decides, so there is one place
+         * that tells the three apart.
+         *
+         * @param engine the attached facade
+         * @param handle the leased comparison's handle
+         * @param retryIntervalMs how long to wait between two attempts
+         * @return the platform's answer - a view, an answered absence, or an unavailability that
+         *     outlasted the budget
+         */
+        private static PlatformAnswer<ComparisonView> readableView(ComparisonEngine engine,
+            ComparisonProcessHandle handle, long retryIntervalMs)
+        {
+            PlatformAnswer<ComparisonView> answer = engine.view(handle);
+            for (int attempt = 1; attempt < MAX_UNREADABLE_TICKS && answer.isUnavailable();
+                attempt++)
+            {
+                try
+                {
+                    Thread.sleep(retryIntervalMs);
+                }
+                catch (InterruptedException e)
+                {
+                    // Somebody is ending this job. The flag is restored and the LAST answer is
+                    // returned rather than a fresh one: an interrupted wait has not made the
+                    // service any more reachable, and re-asking after it would spend the caller's
+                    // cancellation on one more platform call.
+                    Thread.currentThread().interrupt();
+                    return answer;
+                }
+                answer = engine.view(handle);
+            }
+            return answer;
         }
 
         /**

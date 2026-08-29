@@ -560,6 +560,78 @@ public class MergeRulesToolTest
         assertErrorNaming(result, "decisions", "write"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ==== a MALFORMED write-only payload is still a write-only payload ====
+    //
+    // The hole above it: read mode judged 'decisions' by the EXTRACTED list, and the shared
+    // extractor keeps only JSON objects and drops the rest without a word. So '"decisions":[null]'
+    // - and an array of primitives - arrived as an EMPTY list, read exactly like an absent
+    // parameter, and the call SUCCEEDED as a read while the refusal above promises that a
+    // write-only parameter is refused. A caller who meant to write and picked the wrong mode got
+    // a report that looked like a result and was never told nothing had been recorded. Judged now
+    // by the same rule write mode uses, so the two modes cannot disagree about whether the
+    // parameter is there.
+
+    @Test
+    public void testReadRefusesADecisionsArrayOfNullsInsteadOfReadingItAsAbsent() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[null]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions", "write"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testReadRefusesADecisionsArrayOfPrimitivesInsteadOfReadingItAsAbsent()
+        throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[1, 2]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "decisions", "write"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The ABSENCE that is the actual defect: what came back must not be a successful report.
+     * <p>
+     * Pinned separately from the wording above because these are two different claims about the
+     * same call, and the one that matters is the one a caller acts on. A refusal that named
+     * neither word would still be a refusal; a Markdown report that read the file perfectly well
+     * is the silent success this exists against, and it starts with the heading below.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAMalformedDecisionsPayloadNeverProducesASuccessfulReadReport() throws IOException
+    {
+        Path file = seedFixture();
+
+        String result = call(params("mode", "read", "filePath", file.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[null]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a call carrying decisions must never come back as a read report: " + result, //$NON-NLS-1$
+            result.contains("# Merge rules:")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the boundary stays where it was: {@code decisions} that is genuinely absent still reads.
+     * The refusal above must be triggered by the PARAMETER being there, not by read mode having
+     * become suspicious of every call.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testAReadWithNoDecisionsParameterAtAllStillReads() throws IOException
+    {
+        String result = call(params("mode", "read", "filePath", seedFixture().toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("an absent write-only parameter is absent: " + result, //$NON-NLS-1$
+            result.startsWith("# Merge rules:")); //$NON-NLS-1$
+    }
+
     // ==================== read ====================
 
     @Test

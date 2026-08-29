@@ -305,7 +305,26 @@ public class MergeRulesTool implements IMcpTool
 
         if (MODE_READ.equals(mode))
         {
-            if (!decisions.isEmpty() || isSet(basedOn) || isSet(comparisonId))
+            // 'decisions' is judged PRESENT by the same rule write mode judges it MALFORMED by,
+            // and NOT by what survived extraction. The shared extractor keeps only JSON objects
+            // and drops the rest without a word, so '"decisions":[null]' - or an array of numbers
+            // - arrived here as an EMPTY list and read exactly like an absent parameter: the call
+            // then succeeded as a read while the answer this tool returns promises that a
+            // write-only parameter is refused. A caller who meant to write and picked the wrong
+            // mode got a successful-looking report and was never told that nothing had been
+            // recorded, which is the silent understatement the refusal below exists against.
+            // Write mode's judgement is reused rather than restated: one rule decides whether the
+            // parameter is there, so the two modes cannot come to disagree about it.
+            //
+            // The boundary that judgement draws, stated rather than left to be discovered: it
+            // recognises an ARRAY holding something that is not an object. A 'decisions' that is
+            // an empty array, an object, or a scalar is still read as absent here - and write mode
+            // does not call those malformed either, it refuses them further down for carrying no
+            // decision at all. Widening this to raw presence would be a SECOND rule about the same
+            // parameter, and the first thing it would change is the empty array, which is a
+            // payload neither mode can record anything from.
+            boolean malformedDecisions = nonObjectDecisionRefusal(params) != null;
+            if (!decisions.isEmpty() || malformedDecisions || isSet(basedOn) || isSet(comparisonId))
             {
                 return ToolResult.error("mode 'read' takes only " + KEY_FILE_PATH + " and " + McpKeys.LIMIT //$NON-NLS-1$ //$NON-NLS-2$
                     + "; " + KEY_DECISIONS + " / " + KEY_BASED_ON + " / " + KEY_COMPARISON_ID //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -1162,6 +1181,14 @@ public class MergeRulesTool implements IMcpTool
 
     /**
      * Refuses a {@code decisions} array that carries an element which is not a JSON object.
+     *
+     * <h2>Read mode asks this too, for its ANSWER rather than for its message</h2>
+     * Both modes have to decide whether {@code decisions} is THERE, and the extracted list cannot
+     * answer that: it is what survived {@code extractObjectArray}, which drops every non-object
+     * without a word, so a malformed array and an absent parameter are the same empty list. Write
+     * mode returns the sentence below; read mode only needs to know that the sentence exists, and
+     * refuses the write-only parameter with its own. One judgement, so a payload one mode calls
+     * malformed cannot be a payload the other calls absent.
      *
      * @param params the call arguments
      * @return the rendered refusal, or {@code null} when every element is an object (or the value is

@@ -912,12 +912,14 @@ public final class ComparisonEngine
      *   <li>A {@link #file} - the entry this comparison restores from, alone in an archive of its
      *       own. The platform reads this and nothing else.</li>
      *   <li>Neither field - nothing was snapshotted and nothing is claimed: the caller's path is
-     *       not a zip, or is a zip this process could not open or read. The caller's own path goes
-     *       to the platform, exactly as it did before snapshots existed.</li>
+     *       not a zip, or is a zip this process could not open or read WHEN IT FIRST TRIED. The
+     *       caller's own path goes to the platform, exactly as it did before snapshots existed.
+     *       "When it first tried" is the whole of it: this state belongs to a source that was
+     *       never established, and stops being available the moment one was.</li>
      *   <li>A {@link #refusal} - the archive was read and the launch must not proceed: it holds no
-     *       entry for this comparison, or its entry could not be copied. Both are conclusions
-     *       drawn from something that WAS read, which is what separates them from the state
-     *       above.</li>
+     *       entry for this comparison, no private copy could be created for it, or the copy of
+     *       its entry failed. All three are conclusions drawn from something that WAS read, which
+     *       is what separates them from the state above.</li>
      * </ul>
      */
     private static final class ZipSnapshot
@@ -976,6 +978,13 @@ public final class ComparisonEngine
      * {@link ZipSnapshot#refused}: the first is the silent no-op this check exists against, and the
      * second is this server unable to keep the promise the copy makes - and falling back there
      * would restore from an archive nothing checked.
+     * <p>
+     * <b>The rule the branches below follow, in one sentence: the PROBE is the line - until it has
+     * accepted the archive an unreadable source has established nothing and is left to the
+     * platform, and once it has, every failure to snapshot that archive refuses and names what
+     * happened.</b> The line is the probe and not the temporary's creation, because what separates
+     * the two answers is whether anything was READ, and the probe is the first statement that
+     * reads.
      *
      * <h2>The SOURCE is read before the temporary is made, so the answer follows the evidence</h2>
      * The temporary used to be created first, and the copy - the first statement that touched
@@ -1080,11 +1089,19 @@ public final class ComparisonEngine
             {
                 copied = snapshotIo.copyInto(path, entryId, copy);
             }
-            catch (IOException | RuntimeException e) // NOSONAR not read is a state, not a failure
+            catch (IOException | RuntimeException e) // NOSONAR a read that failed is an answer
             {
-                // The source was readable a moment ago and is not now, or its entry could not
-                // be inflated. Still a failure of the SOURCE, so still nothing claimed.
-                return ZipSnapshot.none();
+                // REFUSED, and this used to fall back. The probe above has already accepted this
+                // archive: it opened, and it holds the entry this comparison restores from. So a
+                // read that fails HERE is not "nothing was established" - it says the source
+                // changed underneath us between two opens, which is precisely the race the
+                // private copy exists to remove. Handing the caller's own mutable path to the
+                // platform at that point would launch from an archive nothing had looked at,
+                // and would do it in the one case where there is positive evidence that looking
+                // again gives a different answer.
+                return ZipSnapshot.refused(couldNotSnapshot(fileName,
+                    "the archive it had just been read from could not be read again (" //$NON-NLS-1$
+                        + ComparisonFailures.describe(e) + ").")); //$NON-NLS-1$
             }
             if (!copied.lookup().found())
             {

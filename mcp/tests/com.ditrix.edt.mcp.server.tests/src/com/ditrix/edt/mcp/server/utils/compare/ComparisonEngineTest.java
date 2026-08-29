@@ -1410,6 +1410,141 @@ public class ComparisonEngineTest
         }
     }
 
+    // ==== after the probe has accepted the archive, a failed copy REFUSES ====
+    //
+    // The hole the split left. With the probe moved ahead of the temporary, the copy became the
+    // SECOND statement to touch the source - and its catch still answered "nothing established"
+    // and let the caller's own path go to the platform. By then the probe had already opened the
+    // archive and found this comparison's entry in it, so a read that fails now says the source
+    // changed underneath us between two opens: the very race the snapshot exists to remove,
+    // answered by handing the platform the mutable path.
+
+    /**
+     * @param failure what the copy raises instead of copying
+     * @return a real temp file, and a copy into it that fails the way a vanished source does
+     */
+    private static ComparisonEngine.SnapshotIo copyThatFails(IOException failure)
+    {
+        return new ComparisonEngine.SnapshotIo()
+        {
+            @Override
+            public Path createTemporary() throws IOException
+            {
+                return ComparisonEngine.SnapshotIo.REAL.createTemporary();
+            }
+
+            @Override
+            public MergeRulesCodec.AddressedEntryCopy copyInto(Path source, String entryId,
+                Path target) throws IOException
+            {
+                throw failure;
+            }
+        };
+    }
+
+    /**
+     * An archive the probe ACCEPTED and whose copy then failed is refused, and the refusal names
+     * what happened.
+     * <p>
+     * The distinction this pins is the one the method exists to make, and it is drawn by EVIDENCE
+     * rather than by which statement failed: before the probe succeeds an unreadable source has
+     * established nothing and is the platform's to fail on
+     * ({@link #aZipThatCannotBeOpenedIsLeftToThePlatform}); after it succeeds the archive has been
+     * established as readable AND as addressing this comparison, so a later failure to snapshot it
+     * is this server unable to keep the promise the copy makes.
+     *
+     * @throws IOException when the archive cannot be written
+     */
+    @Test
+    public void aCopyThatFailsAfterTheProbeAcceptedTheArchiveIsRefusedAndNotFallenBackFrom()
+        throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend, copyThatFails(new IOException("the archive was replaced"))) //$NON-NLS-1$
+                .restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    zip.toString());
+            fail("a source established by the probe and then unreadable must refuse"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the refusal must name the caller's file: " + e.getMessage(), //$NON-NLS-1$
+                e.getMessage().contains(zip.toString()));
+            assertTrue("and must say WHAT happened, not merely that something did: " //$NON-NLS-1$
+                + e.getMessage(),
+                e.getMessage().contains("could not be read again")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The same failure, pinned as the ABSENCE that is the whole point: the platform is not asked,
+     * and the caller's own mutable path is not what it would have been asked about.
+     * <p>
+     * Its own {@code @Test} because JUnit stops a method at its first failed assertion, so an
+     * absence sharing a method with the wording above would only ever be reached while the
+     * wording still held - and the fall-back this pins against is exactly the state in which it
+     * does not.
+     *
+     * @throws IOException when the archive cannot be written
+     */
+    @Test
+    public void aCopyThatFailsAfterTheProbeAcceptedTheArchiveReachesThePlatformNotAtAll()
+        throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            engineOver(backend, copyThatFails(new IOException("the archive was replaced"))) //$NON-NLS-1$
+                .restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    zip.toString());
+        }
+        catch (IllegalStateException e)
+        {
+            // The refusal is this test's precondition; its wording is pinned above.
+        }
+
+        assertEquals("a refusal must not reach EDT at all", Collections.emptyList(), //$NON-NLS-1$
+            backend.calls);
+        assertNull("and the caller's own path is the one thing that must NOT be handed over - " //$NON-NLS-1$
+            + "the copy failed because the source changed, so that path is the least trustworthy " //$NON-NLS-1$
+            + "thing this call has", backend.restoredFrom); //$NON-NLS-1$
+    }
+
+    /**
+     * And the refusal leaves no temporary behind. The refusing return runs through the same
+     * {@code finally} the successful one skips, and a snapshot that has already been created when
+     * the copy fails would otherwise stay in the system temp area for good.
+     *
+     * @throws IOException when the archive cannot be written or the temp area cannot be listed
+     */
+    @Test
+    public void aCopyThatFailsAfterTheProbeLeavesNoTemporaryBehind() throws IOException
+    {
+        RecordingBackend backend = new RecordingBackend();
+        Path zip = zipHolding("own.zip", "Main_Other_Ancestor.xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> before = snapshotsInTheTempArea();
+
+        try
+        {
+            engineOver(backend, copyThatFails(new IOException("the archive was replaced"))) //$NON-NLS-1$
+                .restoreMergeSettings(threeWayHandle("Main", "Other", "Ancestor"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    zip.toString());
+        }
+        catch (IllegalStateException e)
+        {
+            // Expected; this test is about what is left on disk afterwards.
+        }
+
+        List<String> left = snapshotsInTheTempArea();
+        left.removeAll(before);
+        assertEquals("a refused copy must not leave its snapshot behind", List.of(), left); //$NON-NLS-1$
+    }
+
     // ==== an Error is not a return, and the temporary is removed on every way out ====
 
     /** Stands in for the {@code OutOfMemoryError} that buffering the entry can raise. */

@@ -30,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -1297,6 +1298,31 @@ public class CompareConfigurationsToolTest
     private static String reportOverTreeStatus(ComparisonNodeStatus treeStatus)
         throws ComparisonException
     {
+        IComparisonManager manager = managerOverTreeStatus(treeStatus);
+
+        ComparisonEngine.install(() -> manager);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+            return new CompareConfigurationsTool.EngineBackend().report(comparisonId,
+                reportRequest());
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * The platform side of that fixture on its own: a comparison manager whose session answers a
+     * readable tree.
+     *
+     * @param treeStatus what the root's status says inside the read boundary
+     * @return the manager to install the facade over
+     */
+    private static IComparisonManager managerOverTreeStatus(ComparisonNodeStatus treeStatus)
+    {
         IComparisonSession session = mock(IComparisonSession.class);
         RootComparisonNode root = mock(RootComparisonNode.class);
         withChildren(root, mock(TopComparisonNode.class));
@@ -1315,20 +1341,14 @@ public class CompareConfigurationsToolTest
         });
         IComparisonManager manager = mock(IComparisonManager.class);
         when(manager.getComparisonSession(any())).thenReturn(session);
+        return manager;
+    }
 
-        ComparisonEngine.install(() -> manager);
-        try
-        {
-            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
-                new CompareMergeProcessBatch(List.of()));
-            return new CompareConfigurationsTool.EngineBackend().report(comparisonId,
-                new LaunchRequest("TestConfiguration", "origin/main", "v1.0", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    false));
-        }
-        finally
-        {
-            ComparisonEngine.uninstall();
-        }
+    /** @return the request the report fixtures render under */
+    private static LaunchRequest reportRequest()
+    {
+        return new LaunchRequest("TestConfiguration", "origin/main", "v1.0", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false);
     }
 
     // ======== The scope table describes the reading the ROWS came from ========
@@ -1948,6 +1968,267 @@ public class CompareConfigurationsToolTest
         finally
         {
             ComparisonEngine.uninstall();
+        }
+    }
+
+    // ==== the TERMINAL read rides out that same gap, on that same budget ====
+    //
+    // The half of the finding left behind when the poll was fixed. The report path asked
+    // ComparisonEngine.get(), which is empty exactly while EDT's comparison service is
+    // unregistered - and the tick that had just answered FINISHED came from that same service, so
+    // this is the window BETWEEN two reads and nothing else: the session is still registered, the
+    // handle still resolves, and the tree exists. What the job produced instead was a terminal
+    // ERROR carrying no tree, while the finished comparison went on holding EDT's single slot,
+    // which is the one ending that keeps it open by decision.
+
+    /** How long the retry waits between attempts in these tests. */
+    private static final long FAST_RETRY_MS = 1L;
+
+    /** A service that is absent for the first N questions and registered from then on. */
+    private static final class GappyService
+        implements Supplier<IComparisonManager>
+    {
+        private final IComparisonManager manager;
+
+        private final AtomicInteger asked = new AtomicInteger();
+
+        private final AtomicInteger absentAnswers = new AtomicInteger();
+
+        private volatile int absentForTheFirst;
+
+        GappyService(IComparisonManager manager)
+        {
+            this.manager = manager;
+        }
+
+        @Override
+        public IComparisonManager get()
+        {
+            if (asked.incrementAndGet() <= absentForTheFirst)
+            {
+                absentAnswers.incrementAndGet();
+                return null;
+            }
+            return manager;
+        }
+
+        int asked()
+        {
+            return asked.get();
+        }
+
+        int absentAnswers()
+        {
+            return absentAnswers.get();
+        }
+
+        void absentForTheFirst(int questions)
+        {
+            asked.set(0);
+            absentAnswers.set(0);
+            absentForTheFirst = questions;
+        }
+    }
+
+    /**
+     * A gap that heals inside the budget loses nothing: the finished tree is still reported.
+     * <p>
+     * The gap is sized from a MEASURED baseline rather than a guessed one. Taking the lease asks
+     * the service questions of its own, and a gap that did not outlast them would be over before
+     * the first view attempt - the test would then pass on the unfixed code and pin nothing at
+     * all. The last assertion is that self-check.
+     *
+     * @throws Exception never; the tree is readable once the service is back
+     */
+    @Test
+    public void testAServiceGapDuringTheTerminalReadStillProducesTheFinishedTree() throws Exception
+    {
+        GappyService service = new GappyService(
+            managerOverTreeStatus(ComparisonNodeStatus.FINISHED));
+        ComparisonEngine.install(service);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+            // The baseline: how many questions taking the lease alone asks of the service.
+            try (ComparisonSessionRegistry.Lease warmUp =
+                ComparisonEngine.attached().orElseThrow().sessions().lease(comparisonId))
+            {
+                assertTrue("the fixture's own session must be leasable", warmUp.held()); //$NON-NLS-1$
+            }
+            int leaseQuestions = service.asked();
+            // Absent for the lease AND for the two view attempts after it; back for the third.
+            service.absentForTheFirst(leaseQuestions + 2);
+
+            String report = new CompareConfigurationsTool.EngineBackend(FAST_RETRY_MS)
+                .report(comparisonId, reportRequest());
+
+            assertContains(report, FINISHED_STATE_ROW);
+            assertContains(report, "## Top objects"); //$NON-NLS-1$
+            assertTrue("the gap must have outlasted the lease, or the first view attempt found " //$NON-NLS-1$
+                + "the service registered and this test pinned nothing", //$NON-NLS-1$
+                service.absentAnswers() > leaseQuestions);
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * A gap that outlasts the budget is said to be RETRYABLE, and is not a verdict about the
+     * workbench.
+     * <p>
+     * The two sentences send the caller to opposite places. "This EDT installation does not carry
+     * the comparison bundles" tells them to stop; the truth is that the comparison is finished,
+     * registered, still holding EDT's slot, and readable with {@code get_comparison_node} the
+     * moment the service is back.
+     */
+    @Test
+    public void testAServiceGapThatOutlastsTheBudgetIsReportedAsRetryable()
+    {
+        ComparisonEngine.install(() -> null);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+
+            String message = reportFailure(comparisonId);
+
+            assertContains(message, "still registered"); //$NON-NLS-1$
+            assertContains(message, "get_comparison_node"); //$NON-NLS-1$
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * The same failure as an ABSENCE, in its own {@code @Test} because JUnit stops a method at its
+     * first failed assertion: the workbench verdict must be gone, not merely outnumbered by better
+     * wording beside it.
+     */
+    @Test
+    public void testAServiceGapIsNeverReportedAsAWorkbenchWithoutComparisonBundles()
+    {
+        ComparisonEngine.install(() -> null);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+
+            String message = reportFailure(comparisonId);
+
+            assertFalse("a momentary gap is not a statement about the installation: " + message, //$NON-NLS-1$
+                message.contains("does not carry the comparison bundles")); //$NON-NLS-1$
+            assertFalse("nor about the comparison having been ended elsewhere: " + message, //$NON-NLS-1$
+                message.contains("ended outside this server")); //$NON-NLS-1$
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * And the waiting is BOUNDED by the budget the poll loop spends, not by a new number and not
+     * by nothing at all.
+     * <p>
+     * Pinned as the count of view attempts, which is what the budget governs: the service is asked
+     * once per attempt, so the questions asked after the lease are the attempts made. A retry that
+     * never stopped would never reach this assertion, and one that never happened would answer 1.
+     */
+    @Test
+    public void testAnUnreadableTerminalReadSpendsTheSameBudgetThePollDoes()
+    {
+        GappyService service = new GappyService(
+            managerOverTreeStatus(ComparisonNodeStatus.FINISHED));
+        ComparisonEngine.install(service);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+            try (ComparisonSessionRegistry.Lease warmUp =
+                ComparisonEngine.attached().orElseThrow().sessions().lease(comparisonId))
+            {
+                assertTrue("the fixture's own session must be leasable", warmUp.held()); //$NON-NLS-1$
+            }
+            int leaseQuestions = service.asked();
+            // Absent for longer than the budget can outlast, so every attempt is spent.
+            service.absentForTheFirst(Integer.MAX_VALUE);
+
+            reportFailure(comparisonId);
+
+            assertEquals("the terminal read spends the poll's unreadable budget and no more", //$NON-NLS-1$
+                CompareConfigurationsTool.MAX_UNREADABLE_TICKS,
+                service.asked() - leaseQuestions);
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * And an ANSWERED absence is not waited on at all.
+     * <p>
+     * The two failures are told apart by whether the platform SPOKE. "EDT no longer knows this
+     * handle" is a verdict about the comparison, so it is taken once and reported as itself;
+     * riding it out would spend the budget delaying an answer that will not change, and would end
+     * by saying "momentarily unreadable" about a comparison that is gone. Pinned as the question
+     * count, because the wording alone would survive a retry that eventually gave the same answer.
+     */
+    @Test
+    public void testAnAnsweredAbsenceIsAVerdictAndIsNotRetried()
+    {
+        IComparisonManager manager = mock(IComparisonManager.class);
+        // The service is REGISTERED throughout and answers that it does not hold this handle.
+        when(manager.getComparisonSession(any())).thenReturn(null);
+        GappyService service = new GappyService(manager);
+        ComparisonEngine.install(service);
+        try
+        {
+            String comparisonId = ComparisonSessionRegistry.shared().register(comparisonHandle(),
+                new CompareMergeProcessBatch(List.of()));
+            try (ComparisonSessionRegistry.Lease warmUp =
+                ComparisonEngine.attached().orElseThrow().sessions().lease(comparisonId))
+            {
+                assertTrue("the fixture's own session must be leasable", warmUp.held()); //$NON-NLS-1$
+            }
+            int leaseQuestions = service.asked();
+            service.absentForTheFirst(0);
+
+            String message = reportFailure(comparisonId);
+
+            assertContains(message, "ended outside this server"); //$NON-NLS-1$
+            assertEquals("EDT's own answer is taken once, not ridden out", 1, //$NON-NLS-1$
+                service.asked() - leaseQuestions);
+        }
+        finally
+        {
+            ComparisonEngine.uninstall();
+        }
+    }
+
+    /**
+     * Runs the terminal report and returns the failure message, failing the test if it succeeded.
+     *
+     * @param comparisonId the registered comparison
+     * @return the message of the {@link ComparisonException} the report raised
+     */
+    private static String reportFailure(String comparisonId)
+    {
+        try
+        {
+            String report = new CompareConfigurationsTool.EngineBackend(FAST_RETRY_MS)
+                .report(comparisonId, reportRequest());
+            fail("expected the unreadable report to be refused, got:\n" + report); //$NON-NLS-1$
+            return null;
+        }
+        catch (ComparisonException e)
+        {
+            return e.getMessage();
         }
     }
 
