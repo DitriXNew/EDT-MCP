@@ -338,6 +338,7 @@ public final class ProjectStateChecker
         {
             return false;
         }
+        boolean jobStarted = false;
         try
         {
             if (isModelSyncActive(ddManager))
@@ -347,9 +348,21 @@ public final class ProjectStateChecker
             // Written by the job thread and read here only after BoundedJob reports the job finished -
             // that report is the happens-before edge, the same one the .mdo export barrier relies on.
             boolean[] computed = { false };
+            jobStarted = true;
+            // The claim is released by the WORKER, not by this method's finally: on a timeout
+            // BoundedJob.run returns while its job is STILL running, so releasing it here would let
+            // the next write start another uninterruptible probe on top of the wedged one.
             BoundedJob.Result result = BoundedJob.run("Probing model-data readiness", //$NON-NLS-1$
-                MODEL_PROBE_TIMEOUT_MS,
-                monitor -> computed[0] = ddManager.waitImportantDataComputations(MODEL_PROBE_TIMEOUT_MS));
+                MODEL_PROBE_TIMEOUT_MS, monitor -> {
+                    try
+                    {
+                        computed[0] = ddManager.waitImportantDataComputations(MODEL_PROBE_TIMEOUT_MS);
+                    }
+                    finally
+                    {
+                        PROBES_IN_FLIGHT.remove(ddManager);
+                    }
+                });
             if (result.getOutcome() != BoundedJob.Outcome.COMPLETED || result.getFailure() != null
                 || !computed[0])
             {
@@ -363,7 +376,10 @@ public final class ProjectStateChecker
         }
         finally
         {
-            PROBES_IN_FLIGHT.remove(ddManager);
+            if (!jobStarted)
+            {
+                PROBES_IN_FLIGHT.remove(ddManager);
+            }
         }
     }
 

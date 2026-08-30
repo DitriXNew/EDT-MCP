@@ -64,7 +64,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
      * the strict gate that issue #495 relaxes for ordinary metadata edits.
      */
     @Override
-    protected boolean requiresValidationSettled()
+    protected boolean requiresFullDerivedData()
     {
         return true;
     }

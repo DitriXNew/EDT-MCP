@@ -96,6 +96,19 @@ import com.google.gson.JsonParser;
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /**
+     * A non-forced delete answers "is anything still referencing this?" from the Xtext index, and a
+     * predefined-item delete does so even when the strict cascade settle is skipped. That index is
+     * built in the NORMAL bucket, which EDT's "important" segment set excludes - so the model gate
+     * could admit a delete whose reference check then runs against an index that is still being
+     * built and reports a clean bill of health. This tool keeps the strict gate.
+     */
+    @Override
+    protected boolean requiresFullDerivedData()
+    {
+        return true;
+    }
+
     /** Bounded cascade settle seam; production delegates to {@link ProjectStateChecker}. */
     @FunctionalInterface
     interface CascadeSettler
