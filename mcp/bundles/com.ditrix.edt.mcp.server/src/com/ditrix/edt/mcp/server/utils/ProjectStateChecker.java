@@ -338,7 +338,11 @@ public final class ProjectStateChecker
         {
             return false;
         }
-        boolean jobStarted = false;
+        // Who hands the claim back. It starts with this method and moves to the job once the job
+        // owns it; it moves BACK only for the outcomes that prove the job never ran and never will,
+        // because otherwise the manager would stay claimed forever and every later create/modify
+        // would report the model as building until the server restarts.
+        boolean releaseHere = true;
         try
         {
             if (isModelSyncActive(ddManager))
@@ -348,10 +352,7 @@ public final class ProjectStateChecker
             // Written by the job thread and read here only after BoundedJob reports the job finished -
             // that report is the happens-before edge, the same one the .mdo export barrier relies on.
             boolean[] computed = { false };
-            jobStarted = true;
-            // The claim is released by the WORKER, not by this method's finally: on a timeout
-            // BoundedJob.run returns while its job is STILL running, so releasing it here would let
-            // the next write start another uninterruptible probe on top of the wedged one.
+            releaseHere = false;
             BoundedJob.Result result = BoundedJob.run("Probing model-data readiness", //$NON-NLS-1$
                 MODEL_PROBE_TIMEOUT_MS, monitor -> {
                     try
@@ -363,8 +364,12 @@ public final class ProjectStateChecker
                         PROBES_IN_FLIGHT.remove(ddManager);
                     }
                 });
-            if (result.getOutcome() != BoundedJob.Outcome.COMPLETED || result.getFailure() != null
-                || !computed[0])
+            BoundedJob.Outcome outcome = result.getOutcome();
+            // TIMED_OUT and INTERRUPTED both mean the work MAY still be running, so the job keeps the
+            // claim and releases it when it exits. These two mean it never entered the work at all.
+            releaseHere = outcome == BoundedJob.Outcome.TIMED_OUT_BEFORE_START
+                || outcome == BoundedJob.Outcome.NOT_RUN;
+            if (outcome != BoundedJob.Outcome.COMPLETED || result.getFailure() != null || !computed[0])
             {
                 return false;
             }
@@ -376,7 +381,7 @@ public final class ProjectStateChecker
         }
         finally
         {
-            if (!jobStarted)
+            if (releaseHere)
             {
                 PROBES_IN_FLIGHT.remove(ddManager);
             }

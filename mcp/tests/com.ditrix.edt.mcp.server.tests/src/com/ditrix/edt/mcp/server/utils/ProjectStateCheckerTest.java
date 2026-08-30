@@ -905,4 +905,19 @@ public class ProjectStateCheckerTest
             .thenReturn(Boolean.valueOf(important).booleanValue());
         return manager;
     }
+
+    /**
+     * The one-probe-per-manager claim must be handed back after a normal probe, or the FIRST write
+     * would claim the manager forever and every later create/modify would report the model as
+     * building until the server restarts.
+     */
+    @Test
+    public void aCompletedProbeReleasesItsClaim() throws Exception
+    {
+        IDerivedDataManager manager = managerThatAnswers(true, false);
+
+        assertTrue(ProjectStateChecker.isModelDataComputed(manager));
+        assertTrue("the claim must be free for the next write", //$NON-NLS-1$
+            ProjectStateChecker.isModelDataComputed(manager));
+    }
 }
