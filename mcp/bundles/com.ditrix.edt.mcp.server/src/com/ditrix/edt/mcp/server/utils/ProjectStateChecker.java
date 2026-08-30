@@ -141,15 +141,18 @@ public final class ProjectStateChecker
     }
     
     /**
-     * How long {@link #isModelDataComputed(IDerivedDataManager)} may wait while probing. It must be
-     * POSITIVE: the platform treats a non-positive timeout as "wait until a task finishes", without a
-     * bound. Small enough to stay a probe on a gate that every write tool calls.
+     * The derived-data segments a metadata CREATE or MODIFY depends on: the metadata model and the
+     * form model.
+     * <p>
+     * An explicit list, on purpose. EDT's own "important" set is every segment in the SYNC,
+     * AFTER_SYNC and BEFORE_BUILD buckets, and the only way to ask about it is
+     * {@code waitImportantDataComputations} - a WAIT that its own timeout does not bound, which then
+     * needs a job wrapper and a one-in-flight claim whose ownership rules produced a defect on every
+     * attempt. Naming the segments makes this a pure query that cannot block, and makes the
+     * assumption reviewable, which a wait never was.
      */
-    private static final long MODEL_PROBE_TIMEOUT_MS = 200L;
-
-    /** Managers with a model-data probe in flight; see {@link #isModelDataComputed}. */
-    private static final java.util.Set<IDerivedDataManager> PROBES_IN_FLIGHT =
-        java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.List<String> MODEL_SEGMENTS =
+        java.util.Arrays.asList("MD", "FORM"); //$NON-NLS-1$ //$NON-NLS-2$
 
     /** The DT project behind a workspace project, or {@code null} when it is not an EDT project. */
     private static IDtProject resolveDtProject(IProject project)
@@ -329,62 +332,33 @@ public final class ProjectStateChecker
      */
     static boolean isModelDataComputed(IDerivedDataManager ddManager)
     {
-        // At most ONE probe per manager may be in flight. BoundedJob's deadline frees the CALLER but
-        // cannot interrupt the platform wait, so a wedged pipeline would otherwise get a fresh stuck
-        // job per metadata write until the pool is exhausted - the same hazard waitForDiskExport
-        // guards with its one-waiter-per-project rule. A probe that finds one already running has
-        // proven nothing and says so.
-        if (!PROBES_IN_FLIGHT.add(ddManager))
-        {
-            return false;
-        }
-        // Who hands the claim back. It starts with this method and moves to the job once the job
-        // owns it; it moves BACK only for the outcomes that prove the job never ran and never will,
-        // because otherwise the manager would stay claimed forever and every later create/modify
-        // would report the model as building until the server restarts.
-        boolean releaseHere = true;
         try
         {
+            // An ACTIVE model synchronisation is tracked separately from the pipeline, so its model
+            // contexts may not be enqueued yet and the segments below would still read as computed
+            // for the PREVIOUS model.
             if (isModelSyncActive(ddManager))
             {
                 return false;
             }
-            // Written by the job thread and read here only after BoundedJob reports the job finished -
-            // that report is the happens-before edge, the same one the .mdo export barrier relies on.
-            boolean[] computed = { false };
-            releaseHere = false;
-            BoundedJob.Result result = BoundedJob.run("Probing model-data readiness", //$NON-NLS-1$
-                MODEL_PROBE_TIMEOUT_MS, monitor -> {
-                    try
-                    {
-                        computed[0] = ddManager.waitImportantDataComputations(MODEL_PROBE_TIMEOUT_MS);
-                    }
-                    finally
-                    {
-                        PROBES_IN_FLIGHT.remove(ddManager);
-                    }
-                });
-            BoundedJob.Outcome outcome = result.getOutcome();
-            // TIMED_OUT and INTERRUPTED both mean the work MAY still be running, so the job keeps the
-            // claim and releases it when it exits. These two mean it never entered the work at all.
-            releaseHere = outcome == BoundedJob.Outcome.TIMED_OUT_BEFORE_START
-                || outcome == BoundedJob.Outcome.NOT_RUN;
-            if (outcome != BoundedJob.Outcome.COMPLETED || result.getFailure() != null || !computed[0])
+            // A PURE query: isComputed takes the pipeline read lock and returns, with no wait, no
+            // job and no claim to hand back. This replaces a waitImportantDataComputations probe
+            // that had to be wrapped in a BoundedJob (the platform call is not bounded by its own
+            // timeout) and guarded against accumulating stuck jobs - machinery whose ownership rules
+            // produced a defect on every attempt. Asking a question that cannot block removes that
+            // whole class instead of patching it again.
+            if (!ddManager.isComputed(MODEL_SEGMENTS))
             {
                 return false;
             }
-            // Re-read AFTER the wait: a synchronisation that STARTS between the first read and the
-            // wait has not enqueued its contexts yet, so the drain sees an empty queue and the
-            // important segments still look complete for the PREVIOUS model. One observation before
-            // and one after is the only pair that excludes that window.
             return !isModelSyncActive(ddManager);
         }
-        finally
+        catch (RuntimeException e)
         {
-            if (releaseHere)
-            {
-                PROBES_IN_FLIGHT.remove(ddManager);
-            }
+            // isSegmentComputed asserts on a segment this EDT does not register, and anything else
+            // here is equally unanswerable. Never proof of readiness.
+            Activator.logError("Cannot probe model-data readiness; treating it as not ready", e); //$NON-NLS-1$
+            return false;
         }
     }
 

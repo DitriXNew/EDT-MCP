@@ -37,6 +37,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 
 import com._1c.g5.v8.derived.DerivedDataStatus;
 import com._1c.g5.v8.derived.IDerivedDataManager;
@@ -830,54 +831,38 @@ public class ProjectStateCheckerTest
     /**
      * Issue #495: the validation checks run for HOURS on a large configuration and keep both
      * isIdle() and isAllComputed() false, which used to switch metadata editing off for that whole
-     * time. What a metadata edit needs answered is whether the MODEL and the index are computed, and
-     * only the platform's own important-data wait answers it - it drains the accumulated contexts
-     * first, so QUEUED model work counts, which no snapshot of the active pipeline stage can see.
+     * time. What a create or a modify needs answered is narrower - whether the metadata and form
+     * models are computed - and isComputed answers exactly that, as a pure query that cannot block.
      */
     @Test
-    public void modelDataIsComputedWhenTheImportantWaitSaysSo() throws Exception
+    public void modelDataIsComputedWhenItsSegmentsAre()
     {
         assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, false)));
     }
 
-    /** Validation still running is irrelevant; unfinished MODEL work is not. */
+    /** Validation still running is irrelevant; an uncomputed model segment is not. */
     @Test
-    public void pendingModelDataIsNotReady() throws Exception
+    public void pendingModelSegmentsAreNotReady()
     {
         assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, false)));
     }
 
     /**
-     * An ACTIVE model synchronisation is tracked separately from the pipeline, so the important-data
-     * wait can drain what has accumulated so far and answer "complete" while the model is still
-     * moving. Admitting a write there would run it against a stale model and index.
+     * An ACTIVE model synchronisation is tracked separately from the pipeline, so its contexts may
+     * not be enqueued yet and the segments would still read as computed for the PREVIOUS model.
      */
     @Test
-    public void activeModelSynchronisationIsNeverReady() throws Exception
+    public void activeModelSynchronisationIsNeverReady()
     {
         assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, true)));
     }
 
     /**
-     * The probe must pass a POSITIVE timeout. It is also wrapped in a BoundedJob because the timeout
-     * does NOT bound the platform call: waitImportantDataComputations drains accumulated contexts
-     * first, and that drain waits on its lock without a timeout.
+     * Not being able to ASK is never proof of readiness - including the platform's own assertion for
+     * a segment this EDT does not register.
      */
     @Test
-    public void theProbeIsBoundedByAPositiveTimeout() throws Exception
-    {
-        IDerivedDataManager manager = managerThatAnswers(true, false);
-
-        ProjectStateChecker.isModelDataComputed(manager);
-
-        ArgumentCaptor<Long> timeout = ArgumentCaptor.forClass(Long.class);
-        verify(manager).waitImportantDataComputations(timeout.capture());
-        assertTrue("probe timeout must be positive", timeout.getValue().longValue() > 0L); //$NON-NLS-1$
-    }
-
-    /** Not being able to ASK is never proof of readiness. */
-    @Test
-    public void anUnanswerableProbeIsNotReady() throws Exception
+    public void anUnanswerableProbeIsNotReady()
     {
         IDerivedDataManager noStatus = mock(IDerivedDataManager.class);
         when(noStatus.getDerivedDataStatus()).thenReturn(null);
@@ -887,37 +872,37 @@ public class ProjectStateCheckerTest
         when(throwing.getDerivedDataStatus()).thenThrow(new IllegalStateException("no pipeline")); //$NON-NLS-1$
         assertFalse(ProjectStateChecker.isModelDataComputed(throwing));
 
-        IDerivedDataManager failing = managerThatAnswers(true, false);
-        when(failing.waitImportantDataComputations(anyLong()))
-            .thenThrow(new InterruptedException("stopped")); //$NON-NLS-1$
-        assertFalse(ProjectStateChecker.isModelDataComputed(failing));
-        Thread.interrupted();
+        IDerivedDataManager unsupported = managerThatAnswers(true, false);
+        when(unsupported.isComputed(ArgumentMatchers.<java.util.Collection<String>> any()))
+            .thenThrow(new IllegalArgumentException("Unsupported segment is specified")); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.isModelDataComputed(unsupported));
     }
 
-    private static IDerivedDataManager managerThatAnswers(boolean important, boolean syncActive)
-        throws InterruptedException
-    {
-        DerivedDataStatus status = mock(DerivedDataStatus.class);
-        when(status.isModelSyncActive()).thenReturn(Boolean.valueOf(syncActive).booleanValue());
-        IDerivedDataManager manager = mock(IDerivedDataManager.class);
-        when(manager.getDerivedDataStatus()).thenReturn(status);
-        when(manager.waitImportantDataComputations(anyLong()))
-            .thenReturn(Boolean.valueOf(important).booleanValue());
-        return manager;
-    }
-
-    /**
-     * The one-probe-per-manager claim must be handed back after a normal probe, or the FIRST write
-     * would claim the manager forever and every later create/modify would report the model as
-     * building until the server restarts.
-     */
+    /** The probe asks about the MODEL segments by name, never about validation. */
     @Test
-    public void aCompletedProbeReleasesItsClaim() throws Exception
+    public void theProbeAsksOnlyForTheModelSegments()
     {
         IDerivedDataManager manager = managerThatAnswers(true, false);
 
-        assertTrue(ProjectStateChecker.isModelDataComputed(manager));
-        assertTrue("the claim must be free for the next write", //$NON-NLS-1$
-            ProjectStateChecker.isModelDataComputed(manager));
+        ProjectStateChecker.isModelDataComputed(manager);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Collection<String>> asked =
+            ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(manager).isComputed(asked.capture());
+        assertTrue("must ask for the metadata model", asked.getValue().contains("MD")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("must not wait for validation", //$NON-NLS-1$
+            asked.getValue().contains("L_CHECKS_SEGMENT")); //$NON-NLS-1$
+    }
+
+    private static IDerivedDataManager managerThatAnswers(boolean computed, boolean syncActive)
+    {
+        DerivedDataStatus status = mock(DerivedDataStatus.class);
+        when(status.isModelSyncActive()).thenReturn(syncActive);
+        IDerivedDataManager manager = mock(IDerivedDataManager.class);
+        when(manager.getDerivedDataStatus()).thenReturn(status);
+        when(manager.isComputed(ArgumentMatchers.<java.util.Collection<String>> any()))
+            .thenReturn(computed);
+        return manager;
     }
 }
