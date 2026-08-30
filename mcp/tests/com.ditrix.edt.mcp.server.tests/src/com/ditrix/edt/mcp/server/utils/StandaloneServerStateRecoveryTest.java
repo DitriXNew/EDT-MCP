@@ -10,12 +10,16 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+
+import java.lang.reflect.Proxy;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.debug.core.ILaunch;
 import org.junit.Test;
 
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -154,5 +158,150 @@ public class StandaloneServerStateRecoveryTest
     public void testStateNameFallsBackToTheNumberForAStateWstDoesNotDefine()
     {
         assertEquals("9", StandaloneServerStateRecovery.stateName(9));
+    }
+
+    // ==================== pre-flight (ensureStartable) ====================
+
+    @Test
+    public void testAStartedServerWithALiveLaunchIsLeftAlone()
+    {
+        // EDT's own shortcut: state STARTED + a live launch = already running, nothing to do.
+        // Stopping it here would kill a server somebody is using.
+        assertSame(StandaloneServerStateRecovery.Preflight.PROCEED,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(2), Boolean.TRUE));
+    }
+
+    @Test
+    public void testAStartedServerWhoseLaunchIsGoneIsTheStuckOne()
+    {
+        assertSame(StandaloneServerStateRecovery.Preflight.STOP_STALE,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(2), Boolean.FALSE));
+    }
+
+    @Test
+    public void testAnUnreadableLaunchIsNotTreatedAsADeadOne()
+    {
+        // The whole risk of a pre-flight is stopping a HEALTHY server. "Could not tell" must
+        // therefore mean "leave it", never "stop it".
+        assertSame(StandaloneServerStateRecovery.Preflight.PROCEED,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(2), null));
+    }
+
+    @Test
+    public void testATransitionalStateIsWaitedForRatherThanStopped()
+    {
+        assertSame("a server somebody else is starting must not be stopped",
+            StandaloneServerStateRecovery.Preflight.WAIT_SETTLE,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(1), Boolean.FALSE));
+        assertSame(StandaloneServerStateRecovery.Preflight.WAIT_SETTLE,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(3), Boolean.FALSE));
+    }
+
+    @Test
+    public void testAStoppedOrUnknownServerNeedsNothing()
+    {
+        assertSame(StandaloneServerStateRecovery.Preflight.PROCEED,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(4), Boolean.FALSE));
+        assertSame(StandaloneServerStateRecovery.Preflight.PROCEED,
+            StandaloneServerStateRecovery.decide(Integer.valueOf(0), Boolean.FALSE));
+    }
+
+    @Test
+    public void testAnUnreadableStateNeverActs()
+    {
+        assertSame(StandaloneServerStateRecovery.Preflight.PROCEED,
+            StandaloneServerStateRecovery.decide(null, Boolean.FALSE));
+    }
+
+    @Test
+    public void testTheServerStateIsReadReflectively()
+    {
+        assertEquals(Integer.valueOf(2),
+            StandaloneServerStateRecovery.serverState(new FakeServer(2, null)));
+        assertNull("an object that is not a WST server reads as unknown, not as a state",
+            StandaloneServerStateRecovery.serverState(new Object()));
+    }
+
+    @Test
+    public void testAMissingLaunchIsReportedAsNoLaunchAndAnUnknownOneAsUnknown()
+    {
+        assertSame(Boolean.FALSE,
+            StandaloneServerStateRecovery.hasLiveLaunch(new FakeServer(2, null)));
+        assertNull("a launch of an unexpected type must not be read as terminated",
+            StandaloneServerStateRecovery.hasLiveLaunch(new FakeServer(2, "not a launch")));
+        assertNull(StandaloneServerStateRecovery.hasLiveLaunch(new Object()));
+    }
+
+    @Test
+    public void testALiveLaunchIsDistinguishedFromATerminatedOne()
+    {
+        assertSame(Boolean.TRUE,
+            StandaloneServerStateRecovery.hasLiveLaunch(new FakeServer(2, launch(false))));
+        assertSame(Boolean.FALSE,
+            StandaloneServerStateRecovery.hasLiveLaunch(new FakeServer(2, launch(true))));
+    }
+
+    @Test
+    public void testThePreflightIsANoOpForAnythingButAStandaloneServer()
+    {
+        // Every launch goes through it, so a client launch must pay nothing and risk nothing.
+        StandaloneServerStateRecovery.ensureStartable(null, null, "InfobaseApplication.Test");
+        StandaloneServerStateRecovery.ensureStartable(null, null, "ServerApplication.Test");
+        StandaloneServerStateRecovery.ensureStartable(null, null, null);
+    }
+
+    /** A WST server as the pre-flight addresses it: by the two public accessors it reads. */
+    public static final class FakeServer
+    {
+        private final int state;
+        private final Object launch;
+
+        FakeServer(int state, Object launch)
+        {
+            this.state = state;
+            this.launch = launch;
+        }
+
+        public int getServerState()
+        {
+            return state;
+        }
+
+        public Object getLaunch()
+        {
+            return launch;
+        }
+    }
+
+    /**
+     * An {@link ILaunch} that only answers {@code isTerminated()} — the one thing the pre-flight
+     * asks of it. A dynamic proxy rather than a stub subclass: the interface carries two dozen
+     * methods none of which this decision touches.
+     *
+     * @param terminated what the launch reports
+     * @return the launch
+     */
+    private static ILaunch launch(boolean terminated)
+    {
+        return (ILaunch)Proxy.newProxyInstance(ILaunch.class.getClassLoader(),
+            new Class<?>[] { ILaunch.class }, (proxy, method, args) -> {
+                if ("isTerminated".equals(method.getName()))
+                {
+                    return Boolean.valueOf(terminated);
+                }
+                if ("hashCode".equals(method.getName()))
+                {
+                    return Integer.valueOf(System.identityHashCode(proxy));
+                }
+                if ("equals".equals(method.getName()))
+                {
+                    return Boolean.valueOf(proxy == args[0]);
+                }
+                if ("toString".equals(method.getName()))
+                {
+                    return "ILaunch(terminated=" + terminated + ")";
+                }
+                return null;
+            });
     }
 }

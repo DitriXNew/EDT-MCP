@@ -124,9 +124,8 @@ public final class InfobaseAccessSupport
      *   {@code Infobase.getId()}. Storing credentials against THAT SAME adapted reference is
      *   exactly what the launch resolves later, so this method tries the adapter on the
      *   application first, then — if that misses — on its module (see
-     *   {@link #moduleOfApplication(IApplication)}, a small local mirror of
-     *   {@code StandaloneServerSupport.moduleOfApplication}; that class is package-private in
-     *   {@code tools.impl}, so it is mirrored here rather than widened just for this one call).</li>
+     *   {@link #moduleOfApplication(IApplication)}, which delegates to the shared
+     *   {@link StandaloneServerSupport#moduleOfApplication(IApplication)}).</li>
      * </ul>
      *
      * @param application the target application
@@ -224,27 +223,19 @@ public final class InfobaseAccessSupport
     }
 
     /**
-     * Reflective {@code IServerApplication.getModule()} — a small local mirror of
-     * {@code StandaloneServerSupport.moduleOfApplication} (tools.impl). That class (and the
-     * method) is package-private there; rather than widening its visibility for this one call
-     * (issue #275), the same tiny reflective probe is duplicated here. Returns {@code null} on any
-     * failure — in particular for a plain {@link IInfobaseApplication} (already handled by the fast
-     * path above) or any other application with no {@code getModule()}.
+     * Reflective {@code IServerApplication.getModule()}, delegated to the shared
+     * {@link StandaloneServerSupport#moduleOfApplication(IApplication)} — the probe used to live
+     * here as a copy only because that class was package-private in {@code tools.impl} (issue
+     * #275); it is shared now. Returns {@code null} on any failure — in particular for a plain
+     * {@link IInfobaseApplication} (already handled by the fast path above) or any other
+     * application with no {@code getModule()}.
      *
      * @param application the target application
      * @return the module object (typically a {@code StandaloneServerInfobase}), or {@code null}
      */
     static Object moduleOfApplication(IApplication application)
     {
-        try
-        {
-            Method m = application.getClass().getMethod("getModule"); //$NON-NLS-1$
-            return m.invoke(application);
-        }
-        catch (Exception e) // NOSONAR reflective probe — an application with no module returns null here
-        {
-            return null;
-        }
+        return StandaloneServerSupport.moduleOfApplication(application);
     }
 
     /**

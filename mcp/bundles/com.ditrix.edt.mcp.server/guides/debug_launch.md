@@ -126,17 +126,17 @@ reason — with the busy ports named — appears in `debug_status` under `recent
 `reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
 changes the address its clients connect to. See the `update_database` guide for the full table.
 
-## Standalone server stuck in STARTED (recovered automatically)
+## Standalone server: "can only start server that is stopped" (handled for you)
 
-EDT starts a standalone server only from the STOPPED state, and it returns the server to STOPPED
-only once it has confirmed the `ibsrv` process is gone — a confirmation it waits a few seconds for.
-When the process takes longer to disappear, or the wait is interrupted by a cancelled operation,
-EDT keeps the server marked STARTED while the launch that owned it is already dead, and then
-refuses every further start with *"Can only start server that is stopped but current server state
-is 2"*. Nothing clears that by itself: from then on every launch of that application fails the same
-way, and the failure reaches you through `debug_status` (`recentLaunchFailures`).
+EDT starts a standalone server only from the STOPPED state, and treats it as "already running,
+nothing to do" only when it is STARTED **and** still holds a live launch. So both a server left
+STARTED with a dead launch (EDT waits only a few seconds to confirm the `ibsrv` process died) and a
+server that is still STARTING because another operation just launched it end in the platform's
+*"Can only start server that is stopped but current server state is 2"* — a failure that would
+reach you through `debug_status` (`recentLaunchFailures`).
 
-The refusal is detected and repaired: the server is stopped through EDT's own application lifecycle
-and the launch is retried ONCE. Only STARTED is touched — a STARTING/STOPPING server belongs to an
-operation still in flight and is reported rather than stopped. See the `update_database` guide for
-the full description.
+The state is therefore settled BEFORE the launch: a STARTED server with a live launch is left
+alone, one whose launch is gone is stopped through EDT's own application lifecycle, and a
+STARTING/STOPPING one is waited for (bounded, 30s) rather than stopped underneath the operation
+holding it. A refusal that still arrives is repaired the same way and the launch retried ONCE. See
+the `update_database` guide for the full description.
