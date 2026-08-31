@@ -404,6 +404,10 @@ public final class StandaloneServerStateRecovery
      *
      * @param project the project owning the application (may be {@code null})
      * @param applicationId the application id (may be {@code null})
+     * <p>Nothing is stopped on state that cannot be re-read: a server that will not resolve gives
+     * no evidence that stopping it is right NOW, and the refusal (or the earlier read) that sent
+     * us here describes a moment that has passed.
+     *
      * @return the outcome, never {@code null}; {@link Recovery#recovered()} is also true when the
      *     server stopped being stale on its own, because the caller's next step - proceed, or
      *     retry what EDT refused - is then exactly the same
@@ -418,8 +422,20 @@ public final class StandaloneServerStateRecovery
         synchronized (stopLockFor(project, applicationId))
         {
             Object server = resolveServer(project, null, applicationId);
-            if (server != null
-                && decide(serverState(server), hasLiveLaunch(server)) != Preflight.STOP_STALE)
+            if (server == null)
+            {
+                // No server to read means no evidence that stopping is the right thing to do NOW.
+                // The refusal that sent us here (or the state the pre-flight read) is a statement
+                // about a moment that has passed, and somebody else may have recovered and
+                // restarted the server since. Stopping on unverifiable state would take theirs
+                // down, so this reports instead - the caller already turns it into a message that
+                // names the manual way out.
+                Activator.logError("Standalone server: its state could not be re-read, so it was " //$NON-NLS-1$
+                    + "NOT stopped: " + applicationId, null); //$NON-NLS-1$
+                return Recovery.failed("its server could not be resolved, so stopping it would " //$NON-NLS-1$
+                    + "have acted on a state nothing could confirm"); //$NON-NLS-1$
+            }
+            if (decide(serverState(server), hasLiveLaunch(server)) != Preflight.STOP_STALE)
             {
                 Activator.logInfo("Standalone server: it is no longer stale (somebody else " //$NON-NLS-1$
                     + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
