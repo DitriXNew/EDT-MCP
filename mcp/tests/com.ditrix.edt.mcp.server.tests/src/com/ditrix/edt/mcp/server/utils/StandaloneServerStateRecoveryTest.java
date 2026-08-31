@@ -250,6 +250,21 @@ public class StandaloneServerStateRecoveryTest
         StandaloneServerStateRecovery.ensureStartable(null, null, null);
     }
 
+    @Test
+    public void testAStopThatMayStillBeRunningIsNotTheSameAsOneThatNeverRan()
+    {
+        // The distinction the pre-flight turns on: after a stop that was merely ASKED to stop,
+        // starting the server can be undone by it, so the operation must not proceed. After one
+        // that never ran, nothing is in flight and the operation still may.
+        assertFalse(StandaloneServerStateRecovery.Recovery.stopped().stopStillInFlight());
+        assertFalse(StandaloneServerStateRecovery.Recovery.failed("it was refused outright")
+            .stopStillInFlight());
+        assertTrue(StandaloneServerStateRecovery.Recovery.failedInFlight("did not finish within 60s")
+            .stopStillInFlight());
+        assertFalse("an in-flight stop is still a failed recovery",
+            StandaloneServerStateRecovery.Recovery.failedInFlight("x").recovered());
+    }
+
     /** A WST server as the pre-flight addresses it: by the two public accessors it reads. */
     public static final class FakeServer
     {
