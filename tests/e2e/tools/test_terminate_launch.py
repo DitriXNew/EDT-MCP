@@ -43,7 +43,7 @@ DIFF: terminate_launch operates on the running infobase / Eclipse launch manager
 NEVER on the git-tracked project tree. EVERY test asserts assert_no_diff() — a
 debug/runtime tool that mutated TestConfiguration source would be a bug.
 
-We deliberately do NOT start a real infobase / debug_launch (heavy, not configured
+We deliberately do NOT start a real infobase / launch (heavy, not configured
 in this EDT); the sentinel + the full validation negative matrix IS the coverage.
 
 Fixture inventory used (TestConfiguration, English Names): the project itself

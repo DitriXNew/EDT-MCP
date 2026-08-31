@@ -40,7 +40,7 @@ public class ToolSettingsServiceTest
 
     /* Independent first-release fixtures: never derive these from the production constants. */
     private static final Set<String> FIRST_RELEASE_ANALYSIS_ONLY_SHAPE = Set.of(
-        "debug_launch", //$NON-NLS-1$
+        "launch", //$NON-NLS-1$
         "debug_status", //$NON-NLS-1$
         "debug_yaxunit_tests", //$NON-NLS-1$
         "evaluate_expression", //$NON-NLS-1$
@@ -70,7 +70,7 @@ public class ToolSettingsServiceTest
         "write_module_source"); //$NON-NLS-1$
 
     private static final Set<String> FIRST_RELEASE_CODE_REVIEW_SHAPE = Set.of(
-        "debug_launch", //$NON-NLS-1$
+        "launch", //$NON-NLS-1$
         "debug_status", //$NON-NLS-1$
         "debug_yaxunit_tests", //$NON-NLS-1$
         "evaluate_expression", //$NON-NLS-1$
@@ -239,14 +239,14 @@ public class ToolSettingsServiceTest
     public void testMigrationAddsTheDefaultOffToolToAnExistingStoredList()
     {
         PreferenceStore store = storedDisabledToolsWithoutMigrationKey(
-            Set.of("debug_launch", "run_yaxunit_tests")); //$NON-NLS-1$ //$NON-NLS-2$
+            Set.of("launch", "run_yaxunit_tests")); //$NON-NLS-1$ //$NON-NLS-2$
 
         ToolSettingsService.ensureMigratedForTest(store);
 
         Set<String> disabled = disabledTools(store);
         assertTrue("the migration must add git: " + disabled, disabled.contains("git")); //$NON-NLS-1$
         assertTrue("it must keep what the user chose: " + disabled,
-            disabled.contains("debug_launch") && disabled.contains("run_yaxunit_tests")); //$NON-NLS-1$ //$NON-NLS-2$
+            disabled.contains("launch") && disabled.contains("run_yaxunit_tests")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
             store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
@@ -258,7 +258,7 @@ public class ToolSettingsServiceTest
             ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS)
                 .contains("ask_workmate")); //$NON-NLS-1$
 
-        PreferenceStore store = storedDisabledTools(Set.of("debug_launch"), 2); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(Set.of("launch"), 2); //$NON-NLS-1$
 
         ToolSettingsService.ensureMigratedForTest(store);
 
@@ -272,7 +272,7 @@ public class ToolSettingsServiceTest
     @Test
     public void testMigrationToVersion2DoesNotReAddGitRemovedAfterVersion1()
     {
-        PreferenceStore store = storedDisabledTools(Set.of("debug_launch"), 1); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(Set.of("launch"), 1); //$NON-NLS-1$
 
         ToolSettingsService.ensureMigratedForTest(store);
 
@@ -286,7 +286,7 @@ public class ToolSettingsServiceTest
     @Test
     public void testMigrationDoesNotTouchAStoreAlreadyAtCurrentVersion()
     {
-        Set<String> selection = Set.of("debug_launch"); //$NON-NLS-1$
+        Set<String> selection = Set.of("launch"); //$NON-NLS-1$
         PreferenceStore store = storedDisabledTools(selection,
             PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
 
@@ -299,7 +299,7 @@ public class ToolSettingsServiceTest
     public void testVersion2MigrationLeavesAnOverlappingCustomSelectionWithoutQuickFix()
     {
         PreferenceStore store = storedDisabledTools(
-            Set.of("debug_launch", "run_yaxunit_tests"), 1); //$NON-NLS-1$ //$NON-NLS-2$
+            Set.of("launch", "run_yaxunit_tests"), 1); //$NON-NLS-1$ //$NON-NLS-2$
 
         ToolSettingsService.ensureMigratedForTest(store);
 

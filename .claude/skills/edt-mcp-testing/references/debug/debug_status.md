@@ -13,7 +13,7 @@ debug_status()
 ```json
 {"registry":{"liveFrames":0,"liveThreads":0,"activeApplications":0},"success":true,"count":0,"launches":[]}
 ```
-**Stopped at a breakpoint (after debug_launch + OnStart):**
+**Stopped at a breakpoint (after launch + OnStart):**
 ```json
 {"registry":{"liveFrames":0,"liveThreads":1,"activeApplications":1},"success":true,"count":1,
  "launches":[{"applicationId":"attach:1C Enterprise debug process","mode":"debug","debug":true,

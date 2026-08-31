@@ -37,7 +37,7 @@ therefore fully exercised UP TO the thread lookup, and for any input we can supp
 the REAL, CORRECT contract is the stale-threadId SENTINEL — a clear message that
 names the missing precondition (a live threadId) AND the recovery step (call
 wait_for_break again). That sentinel IS the coverage. We deliberately do NOT start
-a real infobase/debug_launch (heavy, not configured for this fixture); the sentinel
+a real infobase/launch (heavy, not configured for this fixture); the sentinel
 + the negative matrix are the coverage.
 
 NOTE THE ORDER: threadId is validated FIRST, then kind, then the thread lookup. So
@@ -281,7 +281,7 @@ def test_unknown_kind_with_stale_threadid_short_circuits_to_stale_sentinel():
     # after getThread() returns non-null). It also means a non-enum kind is NOT
     # validated against the schema enum at the wire boundary — a richly-shaped but
     # invalid kind is only diagnosable once a real thread exists. Reaching/asserting
-    # that branch needs a real debug_launch + wait_for_break against a running
+    # that branch needs a real launch + wait_for_break against a running
     # infobase, which this fixture does not provide. Deferred to a live-session run;
     # flagged here so the gap is explicit rather than silently skipped.
     """

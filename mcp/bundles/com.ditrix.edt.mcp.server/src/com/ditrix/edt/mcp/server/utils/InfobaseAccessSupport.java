@@ -23,7 +23,7 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 /**
  * Shared backend for storing/reading an application's <em>infobase connection
  * credentials</em> — the user/password EDT uses to authenticate the designer
- * agent that performs a pre-launch DB update or a {@code debug_launch}.
+ * agent that performs a pre-launch DB update or a {@code launch}.
  *
  * <p>Fixes issue #194: when an infobase has a user list, the update agent is
  * started without the infobase user and fails to authenticate (an

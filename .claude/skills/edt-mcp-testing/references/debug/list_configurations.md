@@ -21,6 +21,6 @@ list_configurations(projectName="TestConfiguration")
 `applicationId` is present for every EDT config: the configuration's real id when it has a readable application binding, otherwise a SYNTHETIC one minted from the name (`launch:<name>`, or `attach:<name>` for Attach configs). The synthetic forms exist for debug tracking — they are not application ids and `update_database`/`get_applications` cannot resolve them. Note `getApplicationIdFor` reads the attribute leniently, so an UNREADABLE binding also surfaces as the synthetic form.
 
 **Gotchas.**
-- The `name` field is what is passed as `launchConfigurationName` to `debug_launch`/`run_yaxunit_tests`/`debug_yaxunit_tests`.
+- The `name` field is what is passed as `launchConfigurationName` to `launch`/`run_yaxunit_tests`/`debug_yaxunit_tests`.
 - `type='attach'` — server-side debugging (HTTP services, background jobs); `type='client'` — client; `type='all'` (default).
-- After `debug_launch` of a running runtime-client, EDT may show the attached **attach-launch** `1C Enterprise debug process` (LocalRuntime) — this is a normal client-debug state.
+- After `launch` of a running runtime-client, EDT may show the attached **attach-launch** `1C Enterprise debug process` (LocalRuntime) — this is a normal client-debug state.

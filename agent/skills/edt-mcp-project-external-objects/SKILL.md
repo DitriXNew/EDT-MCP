@@ -45,7 +45,7 @@ prebuilt `.epf`/`.erf` outside an EDT project.
    authorized. If a matching live client exists, use it only as an explicitly
    authorized target; stop when the external object requires a fresh launch.
    Otherwise call `set_breakpoint` before launching the resolved external-object
-   target according to the current `debug_launch` help/schema. Retain task-owned
+   target according to the current `launch` help/schema. Retain task-owned
    IDs and verify that the returned target identity matches the resolved target.
    If a preflight race returns `alreadyRunning=true`, refresh the uniquely
    identified target, resume only a task-caused suspension, remove task-owned

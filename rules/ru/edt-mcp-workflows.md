@@ -75,11 +75,11 @@
 
 ## 7. Отладка
 
-`debug_launch` принимает либо **`launchConfigurationName`** (готовая launch-конфигурация из EDT, в т.ч. Attach), либо пару **`projectName` + `applicationId`** (без существующей конфигурации). Запоминай `applicationId` из ответа — дальше он нужен для `wait_for_break`, `start_profiling`, `get_applications`.
+`launch` принимает либо **`launchConfigurationName`** (готовая launch-конфигурация из EDT, в т.ч. Attach), либо пару **`projectName` + `applicationId`** (без существующей конфигурации). Запоминай `applicationId` из ответа — дальше он нужен для `wait_for_break`, `start_profiling`, `get_applications`.
 
 1. `list_configurations` или `get_applications` — узнать, что запускать.
 2. `set_breakpoint` с `projectName`+`module`+`lineNumber` — точки останова.
-3. `debug_launch` — запуск. Сохрани `applicationId` из ответа.
+3. `launch` — запуск. Сохрани `applicationId` из ответа.
 4. Пользователь выполняет действие в 1С:Предприятии.
 5. `wait_for_break` с `applicationId` — ждёшь suspend. В ответе будет `threadId` и `frameRef`.
 6. `debug_status` → `get_variables` (`frameRef` или `threadId`+`frameIndex`) → `evaluate_expression` → `step` (`threadId` + `kind`: `over`|`into`|`out`) → `resume`.
@@ -87,7 +87,7 @@
 
 ## 8. Запуск приложения и обновление ИБ
 
-- Запуск в режиме предприятия (через дебаг или просто проверить): `debug_launch` по `launchConfigurationName` или `projectName`+`applicationId`.
+- Запуск в режиме предприятия (через дебаг или просто проверить): `launch` по `launchConfigurationName` или `projectName`+`applicationId`.
 - Обновление информационной базы: `update_database` с `launchConfigurationName` или `projectName`+`applicationId`. Используй после правок метаданных.
 
 ## 9. Прогон тестов YAxUnit

@@ -32,7 +32,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client).
  *
  * <p>The same configuration is usable for BOTH run and debug: run vs debug is the launch
- * <em>mode string</em> passed to {@code debug_launch} / {@code run_yaxunit_tests}, never a
+ * <em>mode string</em> passed to {@code launch} / {@code run_yaxunit_tests}, never a
  * different config type or attribute. There is therefore no separate "debug configuration" type —
  * this one tool covers all launch / debug use-cases for runtime clients. (Attach-to-server configs
  * such as RemoteRuntime / LocalRuntime are a separate feature and are out of scope v1.)
@@ -40,7 +40,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * <p>The created config carries a real {@code ATTR_APPLICATION_ID} (resolved from
  * {@link IApplicationManager} if the caller omits it) so it round-trips through
  * {@link ListConfigurationsTool} and is addressable by both name and
- * {@code projectName + applicationId} in {@code debug_launch} / {@code run_yaxunit_tests}.
+ * {@code projectName + applicationId} in {@code launch} / {@code run_yaxunit_tests}.
  *
  * <p>Mirrors the recipe used by EDT's own
  * {@code AbstractRuntimeClientLaunchShortcut.createLaunchConfiguration} (decompiled from
@@ -253,7 +253,7 @@ public class CreateLaunchConfigTool implements IMcpTool
                 .put(McpKeys.APPLICATION_ID, effectiveApplicationId)
                 .put("type", LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID) //$NON-NLS-1$
                 .put("message", "Created '" + saved.getName() + "' (" + clientLabel //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + ") for project '" + projectName + "'. Use debug_launch or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ") for project '" + projectName + "'. Use launch or " //$NON-NLS-1$ //$NON-NLS-2$
                     + "run_yaxunit_tests with launchConfigurationName='" + saved.getName() //$NON-NLS-1$
                     + "' to launch it.") //$NON-NLS-1$
                 .toJson();

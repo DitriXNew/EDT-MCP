@@ -15,7 +15,7 @@ Retrieve the accumulated 1C performance-measurement (profiling) readout: which B
 
 ## When to use
 - After a profiled debug run, to see which code was exercised and where time went.
-- Typical sequence: `debug_launch` (or `debug_yaxunit_tests`) -> `start_profiling` -> run the scenario/test -> `stop_profiling` (finalizes collection) -> `get_profiling_results`.
+- Typical sequence: `launch` (or `debug_yaxunit_tests`) -> `start_profiling` -> run the scenario/test -> `stop_profiling` (finalizes collection) -> `get_profiling_results`.
 - You can also call it just to check whether profiling is currently active (see `applicationId` below) without having results yet.
 
 ## Parameter details

@@ -25,11 +25,11 @@ How to **run each MCP tool live against a working EDT** and confirm it actually 
 
 ## Index — debug (`references/debug/`)
 - [SETUP](references/debug/SETUP.md) — bring up a debuggable scenario (executable code + trigger + stop).
-- Configs/launch: `list_configurations`, `debug_launch`, `debug_status`, `terminate_launch`.
+- Configs/launch: `list_configurations`, `launch`, `debug_status`, `terminate_launch`.
 - Breakpoints: `set_breakpoint`, `list_breakpoints`, `remove_breakpoint`.
 - Break and inspect: `wait_for_break`, `get_variables`, `evaluate_expression`, `step`, `resume`.
 
-> Full debug flow: set_breakpoint → debug_launch(update) → wait_for_break(hit) → get_variables → step over → get_variables → evaluate_expression → resume → remove_breakpoint. Details per tool in its reference.
+> Full debug flow: set_breakpoint → launch(update) → wait_for_break(hit) → get_variables → step over → get_variables → evaluate_expression → resume → remove_breakpoint. Details per tool in its reference.
 
 ## Index — navigation / read (`references/navigation/`)
 

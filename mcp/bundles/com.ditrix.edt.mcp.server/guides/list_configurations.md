@@ -1,12 +1,12 @@
 Lists EDT launch configurations — runtime client, Attach (RemoteRuntime / LocalRuntime), and any other config in the 1C/EDT namespace — together with their current running state. Once the client knows the exact `name`, it can target that configuration by name without juggling applicationId/project pairs.
 
 ## When to use
-- Discovery step before `debug_launch`, `run_yaxunit_tests`, `debug_yaxunit_tests` and `update_database` — copy the returned `name` into their `launchConfigurationName`.
+- Discovery step before `launch`, `run_yaxunit_tests`, `debug_yaxunit_tests` and `update_database` — copy the returned `name` into their `launchConfigurationName`.
 - See whether a configuration is already running (and whether it is paused on a breakpoint) before launching a second client.
 
 ## Server-side debug workflow
 1. `list_configurations({type: "attach"})` — see available Attach configs, their infobase aliases, and whether any is already running.
-2. `debug_launch({launchConfigurationName: ...})` — attach to it.
+2. `launch({launchConfigurationName: ...})` — attach to it.
 3. `set_breakpoint` → `wait_for_break` → standard debug flow.
 
 ## Parameter details
@@ -26,4 +26,4 @@ Lists EDT launch configurations — runtime client, Attach (RemoteRuntime / Loca
 
 ## Notes
 - Returns JSON: a `configurations` array plus a `count`.
-- Only the `launchConfigurationName` mode of `debug_launch` can start an Attach session — the `projectName + applicationId` mode reaches runtime-client configs only.
+- Only the `launchConfigurationName` mode of `launch` can start an Attach session — the `projectName + applicationId` mode reaches runtime-client configs only.

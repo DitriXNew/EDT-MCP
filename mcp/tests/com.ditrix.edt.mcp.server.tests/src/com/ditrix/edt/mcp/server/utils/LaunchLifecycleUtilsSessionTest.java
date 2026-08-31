@@ -31,7 +31,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSessio
 /**
  * Tests for the existing-CLIENT-session layer of {@link LaunchLifecycleUtils}
  * — moved here alongside the helpers, which moved
- * from {@code DebugLaunchTool} so {@code debug_launch} AND the YAXUnit debug path
+ * from {@code LaunchTool} so {@code launch} AND the YAXUnit debug path
  * share one detect+terminate policy.
  * <p>
  * These headless tests exercise the unified decision point directly: the
@@ -345,7 +345,7 @@ public class LaunchLifecycleUtilsSessionTest
     @Test
     public void testTerminateExistingSessionAndWaitTerminatesAndReturns() throws Exception
     {
-        // The shared terminate-half debug_launch's restartIfRunning AND the YAXUnit
+        // The shared terminate-half launch's restartIfRunning AND the YAXUnit
         // fresh-run sweep both use: terminate + wait for death (here immediate).
         IDebugTarget client = targetWithThreads(liveThread());
         when(client.canTerminate()).thenReturn(true);

@@ -38,7 +38,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 /**
  * Stores the <em>infobase connection credentials</em> (user/password) EDT uses
  * to authenticate the designer agent for {@code update_database} and
- * {@code debug_launch} against an infobase that requires user authentication
+ * {@code launch} against an infobase that requires user authentication
  * (issue #194) — including a standalone-server ({@code wst-server}) application
  * wrapping an already-registered infobase (issue #275).
  *
@@ -58,7 +58,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * {@link #configureClient}. A target given as {@code projectName} + {@code applicationId}
  * names no launch configuration, so only the agent is configured and the success message
  * says so: otherwise a caller reads {@code success:true} and is surprised by the
- * platform's login dialog on the next {@code run_yaxunit_tests} / {@code debug_launch}.
+ * platform's login dialog on the next {@code run_yaxunit_tests} / {@code launch}.
  *
  * <p><strong>Unattended-safety:</strong> the model work (resolve application -&gt;
  * {@link InfobaseAccessSupport#storeCredentials(IApplication, String, String, InfobaseAccess)}
@@ -123,7 +123,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     public String getDescription()
     {
         return "STORE infobase credentials (user/password) in EDT settings so update_database and " //$NON-NLS-1$
-            + "debug_launch can authenticate. The secret PERSISTS beyond this call, and addressing a " //$NON-NLS-1$
+            + "launch can authenticate. The secret PERSISTS beyond this call, and addressing a " //$NON-NLS-1$
             + "launch configuration also rewrites that configuration's client authentication. " //$NON-NLS-1$
             + "Parameters and examples: get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
@@ -567,7 +567,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .put(McpKeys.MESSAGE, "Stored infobase access credentials for application '" //$NON-NLS-1$
                 + displayName + "' (user '" + storedUser + "', access " //$NON-NLS-1$ //$NON-NLS-2$
                 + accessKind.getName() + "). The update agent used by update_database / " //$NON-NLS-1$
-                + "debug_launch will now authenticate with them. " //$NON-NLS-1$
+                + "launch will now authenticate with them. " //$NON-NLS-1$
                 + clientNote(clientConfigName, clientError))
             .toJson();
     }

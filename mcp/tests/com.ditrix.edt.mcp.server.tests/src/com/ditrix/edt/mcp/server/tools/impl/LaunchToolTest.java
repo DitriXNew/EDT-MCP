@@ -40,7 +40,7 @@ import org.junit.Test;
 import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
-import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool.AlreadyRunningContext;
+import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -52,7 +52,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * Tests for {@link DebugLaunchTool}.
+ * Tests for {@link LaunchTool}.
  * <p>
  * Covers tool metadata, the input schema, and the two headless-reachable
  * required-argument validations in the project+application launch mode
@@ -60,7 +60,7 @@ import com.google.gson.JsonParser;
  * {@code ProjectStateChecker}/launch-manager access. NOTE: these checks are
  * only reachable when {@code launchConfigurationName} is absent — supplying it
  * enters the by-name launch mode whose first statement touches the live launch
- * manager. The headless E2E suite (test_debug_launch.py) covers only the
+ * manager. The headless E2E suite (test_launch.py) covers only the
  * sentinel/negative matrix; an ACTUAL launch needs a live workbench plus a
  * running infobase and is not automated. The launch-path decision logic is
  * therefore unit-covered through seams instead: handleExistingClientSession
@@ -68,24 +68,24 @@ import com.google.gson.JsonParser;
  * runPreLaunchUpdateStep and performLaunch here, and the session
  * detect/terminate helpers in LaunchLifecycleUtilsSessionTest.
  */
-public class DebugLaunchToolTest
+public class LaunchToolTest
 {
     @Test
     public void testName()
     {
-        assertEquals("debug_launch", new DebugLaunchTool().getName()); //$NON-NLS-1$
+        assertEquals("launch", new LaunchTool().getName()); //$NON-NLS-1$
     }
 
     @Test
     public void testNameConstant()
     {
-        assertEquals(DebugLaunchTool.NAME, new DebugLaunchTool().getName());
+        assertEquals(LaunchTool.NAME, new LaunchTool().getName());
     }
 
     @Test
     public void testResponseTypeJson()
     {
-        assertEquals(ResponseType.JSON, new DebugLaunchTool().getResponseType());
+        assertEquals(ResponseType.JSON, new LaunchTool().getResponseType());
     }
 
     @Test
@@ -93,13 +93,13 @@ public class DebugLaunchToolTest
     {
         // #270: config.launch(...) connects a runtime client to the infobase — it must arm
         // the auth-dialog suppressor's activity window.
-        assertTrue(new DebugLaunchTool().connectsToInfobase());
+        assertTrue(new LaunchTool().connectsToInfobase());
     }
 
     @Test
     public void testDescriptionNotEmpty()
     {
-        String desc = new DebugLaunchTool().getDescription();
+        String desc = new LaunchTool().getDescription();
         assertNotNull(desc);
         assertTrue(desc.length() > 0);
     }
@@ -107,11 +107,46 @@ public class DebugLaunchToolTest
     @Test
     public void testSchemaDeclaresParameters()
     {
-        String schema = new DebugLaunchTool().getInputSchema();
+        String schema = new LaunchTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"applicationId\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"launchConfigurationName\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSchemaDeclaresDebugAndRunModes()
+    {
+        JsonObject mode = JsonParser.parseString(new LaunchTool().getInputSchema())
+            .getAsJsonObject().getAsJsonObject("properties").getAsJsonObject("mode"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("string", mode.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(2, mode.getAsJsonArray("enum").size()); //$NON-NLS-1$
+        assertTrue(mode.getAsJsonArray("enum").contains(JsonParser.parseString("\"debug\""))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(mode.getAsJsonArray("enum").contains(JsonParser.parseString("\"run\""))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testModeDefaultsToDebug()
+    {
+        assertEquals(LaunchTool.MODE_DEBUG, LaunchTool.extractLaunchMode(new HashMap<>()));
+
+        Map<String, String> params = new HashMap<>();
+        params.put("mode", "run"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(LaunchTool.MODE_RUN, LaunchTool.extractLaunchMode(params));
+    }
+
+    @Test
+    public void testUnknownModeNamesValueAndAcceptedModes()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("mode", "profile"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject result = JsonParser.parseString(new LaunchTool().execute(params)).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue(error.contains("profile")); //$NON-NLS-1$
+        assertTrue(error.contains("debug")); //$NON-NLS-1$
+        assertTrue(error.contains("run")); //$NON-NLS-1$
     }
 
     @Test
@@ -120,7 +155,7 @@ public class DebugLaunchToolTest
         // restartIfRunning must be a declared input so the
         // schema<->execute parity test passes and clients can discover it. Its
         // read in execute() is enforced by SchemaExecuteParamParityTest.
-        String schema = new DebugLaunchTool().getInputSchema();
+        String schema = new LaunchTool().getInputSchema();
         assertNotNull(schema);
         assertTrue("schema must declare restartIfRunning",
             schema.contains("\"restartIfRunning\"")); //$NON-NLS-1$
@@ -135,7 +170,7 @@ public class DebugLaunchToolTest
         // client cannot pass what it cannot see) and their prose must carry the two facts the
         // schema itself cannot: that nothing is persisted, and that an external object is named
         // inside a project rather than pathed to a built file.
-        String schema = new DebugLaunchTool().getInputSchema();
+        String schema = new LaunchTool().getInputSchema();
         assertNotNull(schema);
         assertTrue("schema must declare startupOption",
             schema.contains("\"startupOption\"")); //$NON-NLS-1$
@@ -155,7 +190,7 @@ public class DebugLaunchToolTest
         // The guide is where the platform reasoning lives: WHY a path cannot work, and why a
         // misconfigured request is refused instead of launched (the delegate only logs and
         // starts a session that runs nothing).
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertTrue("guide must document the external-object launch",
             guide.contains("## Debugging an external data processor")); //$NON-NLS-1$
         assertTrue("guide must state that the object is named, not pathed",
@@ -176,11 +211,11 @@ public class DebugLaunchToolTest
         // terminate+relaunch) is unit-covered by the handleExistingClientSession
         // tests below.
         assertFalse("absent restartIfRunning must default to false",
-            DebugLaunchTool.extractRestartIfRunning(new HashMap<>()));
+            LaunchTool.extractRestartIfRunning(new HashMap<>()));
         Map<String, String> params = new HashMap<>();
         params.put("restartIfRunning", "true"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("explicit restartIfRunning=true must override the default",
-            DebugLaunchTool.extractRestartIfRunning(params));
+            LaunchTool.extractRestartIfRunning(params));
     }
 
     @Test
@@ -190,7 +225,7 @@ public class DebugLaunchToolTest
         // restartIfRunning switch and that the already-running guard now also catches
         // a session EDT tracks only through its debug target manager (the code-1003
         // "Debug session already exists" modal source). Ratchet so it can't drift.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document restartIfRunning",
             guide.contains("restartIfRunning")); //$NON-NLS-1$
@@ -211,8 +246,9 @@ public class DebugLaunchToolTest
         // performLaunch seam tests below (the dispatch that precedes the emission).
         // The coherence check below ties the metadata (schema + guide) together so the
         // promise can't silently drift in one place only.
-        String schema = new DebugLaunchTool().getOutputSchema();
+        String schema = new LaunchTool().getOutputSchema();
         assertNotNull(schema);
+        assertTrue(schema.contains("\"mode\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"status\"")); //$NON-NLS-1$
         assertTrue(schema.contains("launching")); //$NON-NLS-1$
     }
@@ -225,7 +261,7 @@ public class DebugLaunchToolTest
         // can advertise it while the other forgets to. The actual result emission
         // needs a real launch (live workbench + infobase) and is not automated; the
         // dispatch it sits on is unit-covered by the runLaunchJobBody seam tests.
-        DebugLaunchTool tool = new DebugLaunchTool();
+        LaunchTool tool = new LaunchTool();
         String schema = tool.getOutputSchema();
         String guide = tool.getGuide();
         assertNotNull(schema);
@@ -240,7 +276,7 @@ public class DebugLaunchToolTest
         // The launch dispatch is non-blocking (a background Job): the guide
         // must tell the caller it returns status:"launching" immediately and to poll
         // debug_status for readiness rather than expecting a running session synchronously.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue(guide.contains("launching")); //$NON-NLS-1$
         assertTrue(guide.contains("debug_status")); //$NON-NLS-1$
@@ -254,7 +290,7 @@ public class DebugLaunchToolTest
         // then run" would perform the very update the caller disabled). Both
         // metadata halves must keep documenting that the platform may then show
         // the modal, so the contract can't silently drift in one place only.
-        DebugLaunchTool tool = new DebugLaunchTool();
+        LaunchTool tool = new LaunchTool();
         String schema = tool.getInputSchema();
         String guide = tool.getGuide();
         assertNotNull(schema);
@@ -273,7 +309,7 @@ public class DebugLaunchToolTest
         // The already-running guard covers RUN-mode launches (no debug
         // target) in BOTH selection modes (by-name and project+application); the
         // guide documents that promise — keep it ratcheted.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document the RUN-mode already-running guard",
             guide.contains("RUN mode")); //$NON-NLS-1$
@@ -285,7 +321,7 @@ public class DebugLaunchToolTest
         // The exhaustive detail (Attach mode, the alreadyRunning short-circuit and
         // updateBeforeLaunch nuances) moved out of the slimmed description/schema
         // into getGuide(); assert it survived there rather than vanishing.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
         assertTrue(guide.contains("Attach")); //$NON-NLS-1$
@@ -300,7 +336,7 @@ public class DebugLaunchToolTest
     {
         // No launchConfigurationName -> project+application mode -> projectName required.
         Map<String, String> params = new HashMap<>();
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
     }
 
@@ -310,7 +346,7 @@ public class DebugLaunchToolTest
         // projectName present, no launchConfigurationName, applicationId omitted.
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue(result.contains("applicationId is required")); //$NON-NLS-1$
     }
 
@@ -328,9 +364,22 @@ public class DebugLaunchToolTest
         // probe, this headless test JVM takes the SYNCHRONOUS path: the launch
         // really executes on the calling thread.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
-        String error = new DebugLaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
+        String error = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNull("successful headless launch must return null", error);
         Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, null);
+    }
+
+    @Test
+    public void testPerformLaunchHeadlessUsesRunMode() throws Exception
+    {
+        ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
+
+        String error = new LaunchTool().performLaunch(config, false,
+            ExternalInfobaseChangesPolicy.DEFAULT, null, ILaunchManager.RUN_MODE);
+
+        assertNull("successful headless run launch must return null", error);
+        Mockito.verify(config).launch(ILaunchManager.RUN_MODE, null);
+        Mockito.verify(config, never()).launch(eq(ILaunchManager.DEBUG_MODE), any());
     }
 
     @Test
@@ -341,7 +390,7 @@ public class DebugLaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         Mockito.when(config.launch(ILaunchManager.DEBUG_MODE, null)).thenThrow(
             new CoreException(new Status(IStatus.ERROR, "test", "launch refused"))); //$NON-NLS-1$ //$NON-NLS-2$
-        String error = new DebugLaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
+        String error = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNotNull("headless launch failure must be surfaced synchronously", error);
         assertTrue(error.contains("launch refused")); //$NON-NLS-1$
     }
@@ -369,7 +418,7 @@ public class DebugLaunchToolTest
         // completes cleanly.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         IProgressMonitor monitor = new NullProgressMonitor();
-        IStatus status = DebugLaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, monitor);
+        IStatus status = LaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, monitor);
         assertNotNull(status);
         assertTrue("successful launch must report OK", status.isOK());
         Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, monitor);
@@ -385,7 +434,7 @@ public class DebugLaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         Mockito.when(config.launch(eq(ILaunchManager.DEBUG_MODE), any()))
             .thenThrow(new CoreException(refusal));
-        IStatus status = DebugLaunchTool.runLaunchJobBody(config, false, ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
+        IStatus status = LaunchTool.runLaunchJobBody(config, false, ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
         assertNotNull(status);
         assertSame("the CoreException's own status must be the Job result", refusal, status);
     }
@@ -399,7 +448,7 @@ public class DebugLaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         IllegalStateException boom = new IllegalStateException("boom"); //$NON-NLS-1$
         Mockito.when(config.launch(eq(ILaunchManager.DEBUG_MODE), any())).thenThrow(boom);
-        IStatus status = DebugLaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
+        IStatus status = LaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
         assertNotNull(status);
         assertEquals("a runtime failure must be an ERROR status", IStatus.ERROR, status.getSeverity());
         assertSame("the status must carry the original exception", boom, status.getException());
@@ -413,7 +462,7 @@ public class DebugLaunchToolTest
         // Ratchet: the guide must document that the launch runs as a
         // background EDT Job — the workbench stays responsive even through a minutes-long
         // standalone-server mode-switch restart, with progress in the Progress view.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document the background-Job dispatch",
             guide.contains("background EDT Job")); //$NON-NLS-1$
@@ -434,7 +483,7 @@ public class DebugLaunchToolTest
         // such ids (isSyntheticApplicationId) instead of failing the launch with
         // 'Application not found: launch:<name>'. Ratchet the guide half of that
         // contract so the documented behavior can't silently drift.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document the synthetic-id preflight skip",
             guide.contains("launch:<configName>")); //$NON-NLS-1$
@@ -451,7 +500,7 @@ public class DebugLaunchToolTest
         // the confirmer arm/disarm is a no-op in this no-workbench harness and must
         // not break the launch or its finally chain.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
-        String error = new DebugLaunchTool().performLaunch(config, true, ExternalInfobaseChangesPolicy.DEFAULT);
+        String error = new LaunchTool().performLaunch(config, true, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNull("successful headless launch must return null even with update auto-confirm", error);
         Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, null);
     }
@@ -466,7 +515,7 @@ public class DebugLaunchToolTest
         // blocks the client launch, and launching a client WHILE a debug-server is up
         // is allowed (it attaches). Ratchet the guide so this can't silently drift back
         // to the earlier over-broad app-id-only detect.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document that already-running is scoped to a live CLIENT session",
             guide.contains("live CLIENT session")); //$NON-NLS-1$
@@ -479,7 +528,7 @@ public class DebugLaunchToolTest
     {
         // restartIfRunning only ever terminates a live CLIENT session, never the
         // debug server (a server target has no live thread, so it is not the duplicate).
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document restartIfRunning never terminates the debug server",
             guide.contains("NEVER a debug server")); //$NON-NLS-1$
@@ -491,7 +540,7 @@ public class DebugLaunchToolTest
         // The 1003 safety-net now presses 'Keep existing and start new'
         // (LAUNCH_ANYWAY) so an already-running session survives — not the default
         // 'Stop existing and start new' that would terminate it.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document the 1003 confirmer presses 'Keep existing and start new'",
             guide.contains("Keep existing and start new")); //$NON-NLS-1$
@@ -505,7 +554,7 @@ public class DebugLaunchToolTest
         // performs no DB update, so it does not undo the updateBeforeLaunch=false
         // opt-out). Only the separate 'Application update' modal stays gated on
         // updateBeforeLaunch. Ratchet the guide so this can't drift.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document the 1003 confirmer fires regardless of updateBeforeLaunch",
             guide.contains("regardless of `updateBeforeLaunch`")); //$NON-NLS-1$
@@ -519,7 +568,7 @@ public class DebugLaunchToolTest
     // decision/terminate helpers to LaunchLifecycleUtils (shared with the YAXUnit debug
     // path) and made the discriminator thread-TYPE-aware — their unit tests moved
     // alongside (see LaunchLifecycleUtilsSessionTest). What stays here is the part
-    // DebugLaunchTool keeps: handleExistingClientSession honoring restartIfRunning in
+    // LaunchTool keeps: handleExistingClientSession honoring restartIfRunning in
     // BOTH directions, and the alreadyRunning JSON shaping (AlreadyRunningContext).
 
     private static IThread liveThread()
@@ -548,7 +597,7 @@ public class DebugLaunchToolTest
         AlreadyRunningContext ctx = new AlreadyRunningContext("already running msg"); //$NON-NLS-1$
         ctx.launchConfiguration = "MyApp / Client"; //$NON-NLS-1$
         ctx.project = "MyProject"; //$NON-NLS-1$
-        String json = new DebugLaunchTool()
+        String json = new LaunchTool()
             .handleExistingClientSession(session, "app-1", false, ctx); //$NON-NLS-1$
         assertNotNull("restartIfRunning=false must short-circuit (non-null JSON)", json);
         JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
@@ -575,7 +624,7 @@ public class DebugLaunchToolTest
         when(client.isTerminated()).thenReturn(false, true); // dies right after terminate()
         ExistingClientSession session = new ExistingClientSession(null, client, "debug"); //$NON-NLS-1$
         AlreadyRunningContext ctx = new AlreadyRunningContext("msg"); //$NON-NLS-1$
-        String result = new DebugLaunchTool()
+        String result = new LaunchTool()
             .handleExistingClientSession(session, "app-2", true, ctx); //$NON-NLS-1$
         assertNull("restartIfRunning=true must proceed to relaunch (null), not short-circuit",
             result);
@@ -594,7 +643,7 @@ public class DebugLaunchToolTest
         when(runLaunch.isTerminated()).thenReturn(false, true);
         ExistingClientSession session = new ExistingClientSession(runLaunch, null, "run"); //$NON-NLS-1$
         AlreadyRunningContext ctx = new AlreadyRunningContext("msg"); //$NON-NLS-1$
-        String result = new DebugLaunchTool()
+        String result = new LaunchTool()
             .handleExistingClientSession(session, "app-3", true, ctx); //$NON-NLS-1$
         assertNull(result);
         verify(runLaunch, times(1)).terminate();
@@ -609,7 +658,7 @@ public class DebugLaunchToolTest
         ILaunch runLaunch = mock(ILaunch.class);
         ExistingClientSession session = new ExistingClientSession(runLaunch, null, "run"); //$NON-NLS-1$
         AlreadyRunningContext ctx = new AlreadyRunningContext("msg"); //$NON-NLS-1$
-        String json = new DebugLaunchTool()
+        String json = new LaunchTool()
             .handleExistingClientSession(session, "app-4", false, ctx); //$NON-NLS-1$
         JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
         assertTrue(obj.get("alreadyRunning").getAsBoolean()); //$NON-NLS-1$
@@ -668,7 +717,7 @@ public class DebugLaunchToolTest
         // debug-mode standalone server carries a LIVE thread typed SERVER («Сервер»)
         // and must never be detected as the client duplicate. Ratchet the guide so
         // the contract can't drift back to the liveness-only detect.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document the thread-TYPE discriminator",
             guide.contains("getType()")); //$NON-NLS-1$
@@ -683,7 +732,7 @@ public class DebugLaunchToolTest
     {
         // A debug-mode standalone server never blocks a client launch and is
         // never restarted/terminated by restartIfRunning.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must say the server is never restarted or terminated",
             guide.contains("never restarted or terminated")); //$NON-NLS-1$
@@ -695,7 +744,7 @@ public class DebugLaunchToolTest
         // The guide must keep documenting that restartIfRunning=true terminates the
         // existing CLIENT session and relaunches (now honored in every path). Ratchet so
         // the unified-policy promise can't drift out of the docs.
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must document restartIfRunning terminate+relaunch",
             guide.contains("terminate the existing CLIENT session")); //$NON-NLS-1$
@@ -729,7 +778,7 @@ public class DebugLaunchToolTest
         // the armed confirmer covers the delegate's coordinated update dialog) WITHOUT
         // touching the application manager at all.
         IApplicationManager mgr = mock(IApplicationManager.class);
-        String error = DebugLaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
+        String error = LaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
             "ServerApplication.MyServer", mgr, true, ExternalInfobaseChangesPolicy.DEFAULT); //$NON-NLS-1$
         assertNull("server application must proceed without a programmatic update", error);
         verify(mgr, never()).update(any(), any(), any(), any());
@@ -753,7 +802,7 @@ public class DebugLaunchToolTest
         when(mgr.update(eq(app), eq(ApplicationUpdateType.INCREMENTAL),
             any(ExecutionContext.class), any())).thenReturn(ApplicationUpdateState.UPDATED);
 
-        String error = DebugLaunchTool.runPreLaunchUpdateStep(project,
+        String error = LaunchTool.runPreLaunchUpdateStep(project,
             "infobase-app-uuid", mgr, true, ExternalInfobaseChangesPolicy.DEFAULT); //$NON-NLS-1$
         assertNull("a successful non-server update must proceed", error);
         verify(mgr, times(1)).update(eq(app), eq(ApplicationUpdateType.INCREMENTAL),
@@ -768,9 +817,9 @@ public class DebugLaunchToolTest
         // the application manager (performLaunch then leaves the update confirmer
         // unarmed, so the platform's modal — if any — is a human's).
         IApplicationManager mgr = mock(IApplicationManager.class);
-        assertNull(DebugLaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
+        assertNull(LaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
             "ServerApplication.MyServer", mgr, false, ExternalInfobaseChangesPolicy.DEFAULT)); //$NON-NLS-1$
-        assertNull(DebugLaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
+        assertNull(LaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
             "infobase-app-uuid", mgr, false, ExternalInfobaseChangesPolicy.DEFAULT)); //$NON-NLS-1$
         verify(mgr, never()).update(any(), any(), any(), any());
         verify(mgr, never()).getUpdateState(any());
@@ -784,7 +833,7 @@ public class DebugLaunchToolTest
         // DB update is performed by EDT's coordinated launch flow (auto-confirmed), not
         // by an out-of-band pre-update (which started the server in RUN mode and wedged
         // the debug restart).
-        String guide = new DebugLaunchTool().getGuide();
+        String guide = new LaunchTool().getGuide();
         assertNotNull(guide);
         assertTrue("guide must name the ServerApplication. id prefix gate",
             guide.contains("ServerApplication.")); //$NON-NLS-1$
@@ -810,11 +859,11 @@ public class DebugLaunchToolTest
         Map<String, String> one = new HashMap<>();
         one.put("restartIfRunning", "1"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("restartIfRunning=1 must be true",
-            DebugLaunchTool.extractRestartIfRunning(one));
+            LaunchTool.extractRestartIfRunning(one));
         Map<String, String> yes = new HashMap<>();
         yes.put("restartIfRunning", "YES"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("restartIfRunning=YES (case-insensitive) must be true",
-            DebugLaunchTool.extractRestartIfRunning(yes));
+            LaunchTool.extractRestartIfRunning(yes));
     }
 
     @Test
@@ -824,15 +873,15 @@ public class DebugLaunchToolTest
         Map<String, String> f = new HashMap<>();
         f.put("restartIfRunning", "false"); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("restartIfRunning=false must be false",
-            DebugLaunchTool.extractRestartIfRunning(f));
+            LaunchTool.extractRestartIfRunning(f));
         Map<String, String> zero = new HashMap<>();
         zero.put("restartIfRunning", "0"); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("restartIfRunning=0 must be false",
-            DebugLaunchTool.extractRestartIfRunning(zero));
+            LaunchTool.extractRestartIfRunning(zero));
         Map<String, String> no = new HashMap<>();
         no.put("restartIfRunning", "no"); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("restartIfRunning=no must be false",
-            DebugLaunchTool.extractRestartIfRunning(no));
+            LaunchTool.extractRestartIfRunning(no));
     }
 
     @Test
@@ -843,11 +892,11 @@ public class DebugLaunchToolTest
         Map<String, String> empty = new HashMap<>();
         empty.put("restartIfRunning", ""); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("empty restartIfRunning must fall back to the false default",
-            DebugLaunchTool.extractRestartIfRunning(empty));
+            LaunchTool.extractRestartIfRunning(empty));
         Map<String, String> garbage = new HashMap<>();
         garbage.put("restartIfRunning", "maybe"); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("unrecognized restartIfRunning token must fall back to the false default",
-            DebugLaunchTool.extractRestartIfRunning(garbage));
+            LaunchTool.extractRestartIfRunning(garbage));
     }
 
     // ==================== execute() early-validation — empty-value branches ====================
@@ -866,7 +915,7 @@ public class DebugLaunchToolTest
         // "projectName is required" guard as a missing key, not slip past it.
         Map<String, String> params = new HashMap<>();
         params.put("projectName", ""); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue("empty projectName must produce 'projectName is required'",
             result.contains("projectName is required")); //$NON-NLS-1$
     }
@@ -879,7 +928,7 @@ public class DebugLaunchToolTest
         // through to the project+application guard and reports projectName required.
         Map<String, String> params = new HashMap<>();
         params.put("launchConfigurationName", ""); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue("empty launchConfigurationName must fall through to the projectName guard",
             result.contains("projectName is required")); //$NON-NLS-1$
     }
@@ -893,7 +942,7 @@ public class DebugLaunchToolTest
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("applicationId", ""); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue("empty applicationId must produce 'applicationId is required'",
             result.contains("applicationId is required")); //$NON-NLS-1$
     }
@@ -904,7 +953,7 @@ public class DebugLaunchToolTest
         // The projectName-required error must keep advertising the alternative
         // (launchConfigurationName) so the caller can recover without guessing.
         Map<String, String> params = new HashMap<>();
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue("projectName error must mention the launchConfigurationName alternative",
             result.contains("launchConfigurationName")); //$NON-NLS-1$
     }
@@ -916,7 +965,7 @@ public class DebugLaunchToolTest
         // (the discovery source) and at the launchConfigurationName alternative.
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = new DebugLaunchTool().execute(params);
+        String result = new LaunchTool().execute(params);
         assertTrue("applicationId error must steer to get_applications",
             result.contains("get_applications")); //$NON-NLS-1$
         assertTrue("applicationId error must mention the launchConfigurationName alternative",
@@ -928,7 +977,7 @@ public class DebugLaunchToolTest
     {
         // The early-validation errors are well-formed error JSON: parseable and
         // success:false — the wire shape every MCP client keys off.
-        JsonObject obj = JsonParser.parseString(new DebugLaunchTool().execute(new HashMap<>()))
+        JsonObject obj = JsonParser.parseString(new LaunchTool().execute(new HashMap<>()))
             .getAsJsonObject();
         assertTrue("error result must carry success:false", obj.has("success")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("a validation failure must be success:false", obj.get("success").getAsBoolean()); //$NON-NLS-1$

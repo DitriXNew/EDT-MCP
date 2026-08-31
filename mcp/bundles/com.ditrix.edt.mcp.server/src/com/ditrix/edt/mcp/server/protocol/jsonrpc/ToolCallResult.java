@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -93,7 +93,7 @@ public class ToolCallResult
     {
         ToolCallResult result = new ToolCallResult();
         // The WHOLE payload, not just its 'error' string: a failed JSON tool attaches the fields that
-        // say what to do next (debug_launch lists the available configurations, update_database names
+        // say what to do next (launch lists the available configurations, update_database names
         // the project, application and termination state, and a userSignal may be attached), and a
         // client that cannot read structuredContent would otherwise lose exactly those. Capped like
         // the normal text path, so suppressing the structured channel cannot let a huge payload

@@ -1,12 +1,12 @@
-# debug_launch — how to test
+# launch — how to test
 
-**Purpose.** Start an EDT debug session: by `launchConfigurationName` (any config, incl. Attach) or by `projectName+applicationId` (runtime-client).
+**Purpose.** Start an EDT session: by `launchConfigurationName` (any config, incl. Attach) or by `projectName+applicationId` (runtime-client). `mode` picks the Eclipse launch mode - `debug` (default) or `run`; Attach configs are debug-only. The legacy name `debug_launch` still resolves on a call but is not listed in `tools/list`.
 
 **Precondition.** The scenario from [SETUP](SETUP.md) is in place (code in `OnStart` + breakpoint), and the infobase is available exclusively for the update.
 
 **Call (real):**
 ```
-debug_launch(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=true)
+launch(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=true)
 ```
 
 **Expected result (no update, fast path):**

@@ -143,7 +143,7 @@ public final class Toolsets
             "get_content_assist", "validate_query"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assign(DEBUG,
-            "debug_launch", "debug_status", "set_breakpoint", "remove_breakpoint", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "launch", "debug_status", "set_breakpoint", "remove_breakpoint", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "list_breakpoints", "wait_for_break", "get_variables", "set_variable", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "step", "resume", "evaluate_expression", "get_applications", "terminate_launch"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 

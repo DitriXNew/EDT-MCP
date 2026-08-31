@@ -117,6 +117,19 @@ public class McpToolRegistryTest
         assertNull(registry.getTool("nonexistent"));
     }
 
+    @Test
+    public void testLegacyDebugLaunchAliasIsCallableButNotVisible()
+    {
+        IMcpTool launch = new StubTool("launch"); //$NON-NLS-1$
+        registry.register(launch);
+
+        assertSame(launch, registry.getTool("launch")); //$NON-NLS-1$
+        assertSame(launch, registry.getTool("debug_launch")); //$NON-NLS-1$
+        Collection<IMcpTool> visible = registry.getVisibleTools();
+        assertEquals(1, visible.size());
+        assertEquals("launch", visible.iterator().next().getName()); //$NON-NLS-1$
+    }
+
     @Test(expected = NullPointerException.class)
     public void testGetToolNull()
     {

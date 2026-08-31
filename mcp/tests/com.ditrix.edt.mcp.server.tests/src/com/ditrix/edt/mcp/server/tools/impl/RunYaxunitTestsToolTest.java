@@ -341,7 +341,7 @@ public class RunYaxunitTestsToolTest
     public void testDebugPathArmFlagsGateUpdateMatcherOnly()
     {
         // DEBUG path: the update matcher follows updateBeforeLaunch (same opt-out
-        // contract as the RUN path, mirroring DebugLaunchTool); the 1003 session
+        // contract as the RUN path, mirroring LaunchTool); the 1003 session
         // matcher stays armed UNCONDITIONALLY as the race net behind the sweep —
         // its auto-press is the non-destructive keep-button, so it never undoes
         // the opt-out.
@@ -1172,7 +1172,7 @@ public class RunYaxunitTestsToolTest
         // Settings" dialog) in a fire-and-forget background Job. execute() only blocks on it for
         // the 25s budget and then returns "pending", so the trailing grace window alone would NOT
         // cover a minutes-long prep — the in-flight COUNTER must span the whole body, exactly like
-        // DebugLaunchTool.runLaunchJobBody. This drives the extracted body seam headlessly and
+        // LaunchTool.runLaunchJobBody. This drives the extracted body seam headlessly and
         // asserts it holds the counter up for its whole duration and never leaks it.
         AtomicInteger inFlight = inFlightCounter();
         int original = inFlight.get();

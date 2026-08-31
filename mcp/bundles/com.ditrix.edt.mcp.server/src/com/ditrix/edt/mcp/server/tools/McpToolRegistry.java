@@ -22,6 +22,10 @@ import com.ditrix.edt.mcp.server.preferences.ToolSettingsService;
  */
 public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
+    /** Legacy call names accepted by {@link #getTool(String)} but never advertised. */
+    private static final Map<String, String> LEGACY_TOOL_NAMES = Map.of(
+        "debug_launch", "launch"); //$NON-NLS-1$ //$NON-NLS-2$
+
     private static final McpToolRegistry INSTANCE = new McpToolRegistry();
 
     /**
@@ -103,7 +107,13 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
      */
     public IMcpTool getTool(String name)
     {
-        return tools.get(name);
+        IMcpTool tool = tools.get(name);
+        if (tool != null)
+        {
+            return tool;
+        }
+        String currentName = LEGACY_TOOL_NAMES.get(name);
+        return currentName == null ? null : tools.get(currentName);
     }
     
     /**
@@ -186,8 +196,9 @@ public class McpToolRegistry // NOSONAR intentional singleton (Eclipse service /
         {
             return false;
         }
-        return tools.containsKey(name)
-            && ToolSettingsService.getInstance().isToolEnabled(name);
+        IMcpTool tool = getTool(name);
+        return tool != null
+            && ToolSettingsService.getInstance().isToolEnabled(tool.getName());
     }
     
     /**

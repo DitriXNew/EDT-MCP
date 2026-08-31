@@ -50,7 +50,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * so version 4 still recognizes a read-only store whose user deliberately re-enabled it.
      */
     static final Set<String> ANALYSIS_ONLY_RECOGNITION_SHAPE = Set.of(
-        "debug_launch", //$NON-NLS-1$
+        "launch", //$NON-NLS-1$
         "debug_status", //$NON-NLS-1$
         "debug_yaxunit_tests", //$NON-NLS-1$
         "evaluate_expression", //$NON-NLS-1$
@@ -80,7 +80,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "write_module_source"); //$NON-NLS-1$
 
     static final Set<String> CODE_REVIEW_RECOGNITION_SHAPE = Set.of(
-        "debug_launch", //$NON-NLS-1$
+        "launch", //$NON-NLS-1$
         "debug_status", //$NON-NLS-1$
         "debug_yaxunit_tests", //$NON-NLS-1$
         "evaluate_expression", //$NON-NLS-1$

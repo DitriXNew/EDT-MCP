@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -379,7 +379,7 @@ public class UpdateDatabaseTool implements IMcpTool
     /**
      * Derives the update target for a runtime-client launch configuration that carries no
      * {@code ATTR_APPLICATION_ID} binding — the case {@code run_yaxunit_tests} and
-     * {@code debug_launch} already survive (they fall back to the project's default
+     * {@code launch} already survive (they fall back to the project's default
      * application through {@link LaunchLifecycleUtils#resolveDefaultApplicationId}) and this
      * tool used to refuse outright.
      *
@@ -713,7 +713,7 @@ public class UpdateDatabaseTool implements IMcpTool
             IProgressMonitor monitor = new NullProgressMonitor();
 
             // Free the infobase and apply the update under the SAME per-IB lock the launch path
-            // uses (LaunchLifecycleUtils.lockFor), so a concurrent run_yaxunit_tests / debug_launch
+            // uses (LaunchLifecycleUtils.lockFor), so a concurrent run_yaxunit_tests / launch
             // on this infobase cannot interleave its own terminate+update (two updates racing, or a
             // freshly-freed IB grabbed by a new client between the sweep and update()). A 1C client
             // THIS EDT launched holds the IB in exclusive use (the update fails) and caches the old

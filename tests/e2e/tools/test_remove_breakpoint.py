@@ -13,7 +13,7 @@ payload lands in r.structured:
 ENVIRONMENT NOTE — this is a DEBUG tool, but it does NOT need a running session.
 Eclipse line breakpoints live in the EDT WORKSPACE (the org.eclipse.debug
 breakpoint manager / project markers), NOT in the git-tracked TestConfiguration
-source tree. So remove_breakpoint genuinely WORKS here without any debug_launch /
+source tree. So remove_breakpoint genuinely WORKS here without any launch /
 infobase: we set a real breakpoint on CommonModules/Calc/Module.bsl via the sibling
 set_breakpoint tool, then remove it and assert the REAL success contract. Because
 breakpoints are workspace markers, NONE of this touches the project source —

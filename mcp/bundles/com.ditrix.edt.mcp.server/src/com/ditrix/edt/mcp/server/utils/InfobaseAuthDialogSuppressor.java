@@ -79,7 +79,7 @@ import com.ditrix.edt.mcp.server.Activator;
  * {@link com.ditrix.edt.mcp.server.tools.IMcpTool#connectsToInfobase()} — those whose
  * execution (sync or via an async read-back Job) can actually reach an infobase
  * connection and thus raise this dialog (e.g. {@code update_database}, {@code
- * debug_launch}, {@code run_yaxunit_tests}, {@code build_external_objects}, {@code
+ * launch}, {@code run_yaxunit_tests}, {@code build_external_objects}, {@code
  * get_applications}, {@code delete_infobase}, {@code create_infobase}). A pure model/read
  * tool no longer arms the window at all, so constant polling by those tools leaves the
  * server genuinely idle between connection-reaching calls. <b>Residual (by design):</b> a
@@ -200,7 +200,7 @@ public final class InfobaseAuthDialogSuppressor
      * dispatch {@code finally} ({@code McpProtocolHandler.executeToolTimed}), where the pair is now
      * called only for a tool flagged {@code connectsToInfobase()} (issue #270) — a plain read/model
      * tool never arms this counter. Also armed around the <em>fire-and-forget</em> launch in
-     * {@code DebugLaunchTool} (whose infobase connect happens in a background Job after
+     * {@code LaunchTool} (whose infobase connect happens in a background Job after
      * {@code execute()} has returned, so the trailing grace alone would not cover a minutes-long launch
      * — see issue #230).
      */

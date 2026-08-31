@@ -187,8 +187,8 @@ public final class InputSchemaCompactor
         // external work. A launch that looks routine silently overwrites someone's changes.
         // restartIfRunning=true TERMINATES the live session before relaunching, on a tool
         // whose destructiveHint is false - nothing else in the always-loaded contract says so.
-        keep.put("debug_launch", //$NON-NLS-1$
-            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT,
+        keep.put("launch", //$NON-NLS-1$
+            asSet("mode", "updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT, //$NON-NLS-1$
                 "restartIfRunning")); //$NON-NLS-1$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$

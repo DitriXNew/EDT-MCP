@@ -133,11 +133,11 @@ public class LaunchLifecycleUtilsUpdateTest
     @Test
     public void testUpdatedWithoutRecomputeReturnsImmediatelyNoOp() throws ApplicationException
     {
-        // The plain debug_launch / update_database path (the 3-arg overload,
+        // The plain launch / update_database path (the 3-arg overload,
         // settleAfterPossibleRecompute=false) must NOT wait the settle window on an
         // already-synced IB. A single entry read of UPDATED short-circuits to a no-op
         // with no further getUpdateState polling and no update() — restoring the fast
-        // debug_launch on a synced IB undercut by the unconditional settle wait.
+        // launch on a synced IB undercut by the unconditional settle wait.
         IApplication app = mock(IApplication.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         when(mgr.getApplication(any(IProject.class), eq(APP_ID)))

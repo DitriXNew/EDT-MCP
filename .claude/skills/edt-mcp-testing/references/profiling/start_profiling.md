@@ -6,8 +6,8 @@ This is **quasi-mutating**: it does not change the model or any file on disk, bu
 
 **Preconditions.**
 - Running MCP server (:8765), live EDT workbench, workspace `D:\WS\EDT`. Do **not** run this live unattended — it requires a running app and a deliberate "exercise then read results" sequence.
-- **An active debug session must already exist** for the `applicationId` you pass. Start one first with `debug_launch` (or `debug_yaxunit_tests`). The tool calls `DebugSessionRegistry.findActiveTarget(applicationId)`; if there is no non-terminated `IDebugTarget` for that id, it errors. A plain RUN-mode launch will not work — `findActiveTarget` only resolves debug-mode launches that carry a debug target.
-- **`applicationId` is required** and must match the debug session's id exactly. This is **not** the `get_applications` GUID; it is the id surfaced by `debug_status` / the `applicationId` echoed by `debug_launch` / `debug_yaxunit_tests` — the real `ATTR_APPLICATION_ID` for a runtime-client launch, or the synthetic `attach:<configName>` id for an attach launch (e.g. `attach:1C Enterprise debug process`). Discover it with `debug_status` first.
+- **An active debug session must already exist** for the `applicationId` you pass. Start one first with `launch` (or `debug_yaxunit_tests`). The tool calls `DebugSessionRegistry.findActiveTarget(applicationId)`; if there is no non-terminated `IDebugTarget` for that id, it errors. A plain RUN-mode launch will not work — `findActiveTarget` only resolves debug-mode launches that carry a debug target.
+- **`applicationId` is required** and must match the debug session's id exactly. This is **not** the `get_applications` GUID; it is the id surfaced by `debug_status` / the `applicationId` echoed by `launch` / `debug_yaxunit_tests` — the real `ATTR_APPLICATION_ID` for a runtime-client launch, or the synthetic `attach:<configName>` id for an attach launch (e.g. `attach:1C Enterprise debug process`). Discover it with `debug_status` first.
 - The debug target must support profiling, i.e. it must be (or adapt to) `IProfileTarget`. A standard 1C `LocalRuntime` debug target does; if it cannot adapt you get a "does not support profiling" error.
 - The profiling and wiring OSGi bundles must be present in the runtime: `com._1c.g5.v8.dt.profiling.core`, `com._1c.g5.v8.dt.debug.core`, and `com._1c.g5.wiring` (they are, in a normal EDT runtime).
 
@@ -21,7 +21,7 @@ This is **quasi-mutating**: it does not change the model or any file on disk, bu
    ```
 2. **Start a debug session** so a debug target exists:
    ```
-   debug_launch(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=true)
+   launch(launchConfigurationName="TestConfiguration Thin Client", updateBeforeLaunch=true)
    ```
    (Needs exclusive infobase access for the update — see Gotchas.)
 3. **Discover the applicationId** of the live session:
@@ -61,7 +61,7 @@ Field meaning (exact keys from source):
 
 **Error contract.** Genuine failures use `ToolResult.error(...)` → `{success:false,error:"…"}` with `isError:true`. From source, the distinct error messages are:
 - `"applicationId is required"` — missing/empty `applicationId`.
-- `"No active debug target for applicationId: <id>. Start a debug session first (debug_launch or debug_yaxunit_tests)."` — `findActiveTarget` returned null (no live debug session for that id, or you passed the wrong id, e.g. the `get_applications` GUID instead of the `debug_status` id).
+- `"No active debug target for applicationId: <id>. Start a debug session first (launch or debug_yaxunit_tests)."` — `findActiveTarget` returned null (no live debug session for that id, or you passed the wrong id, e.g. the `get_applications` GUID instead of the `debug_status` id).
 - `"Debug core bundle not found"` / `"Profiling core bundle not found"` / `"Wiring bundle not found"` — the respective OSGi bundle is absent.
 - `"Debug target does not support profiling. Target class: <className>"` — the target is not and cannot adapt to `IProfileTarget`.
 - `"IProfilingService not available"` — `ServiceAccess.get(IProfilingService.class)` returned null.
@@ -69,10 +69,10 @@ Field meaning (exact keys from source):
 
 **Gotchas.**
 - **It is a toggle, not "start".** Despite the name, the underlying `IProfilingService.toggleProfiling(...)` flips on↔off. `toggled:true` does **not** mean "now ON". If you call it twice you turn profiling **off**. To be sure of the state: toggle once, run a test, then `get_profiling_results` — a non-empty result confirms it was ON; an empty result (`count:0`, "No profiling results available") means either it was toggled off, nothing executed, or you forgot to start profiling before the run.
-- **Needs a running debug session, not just a project.** An empty/idle `TestConfiguration` executes nothing. You must have a live debug target (via `debug_launch`/`debug_yaxunit_tests`) AND code that actually runs while profiling is ON, or `get_profiling_results` comes back empty — that is not a code bug.
-- **`applicationId` source matters.** Use the id from `debug_status` (or echoed by `debug_launch`/`debug_yaxunit_tests`), e.g. `attach:1C Enterprise debug process`. Do **not** pass the `get_applications` infobase GUID — that will not match a debug target and yields the "No active debug target" error.
+- **Needs a running debug session, not just a project.** An empty/idle `TestConfiguration` executes nothing. You must have a live debug target (via `launch`/`debug_yaxunit_tests`) AND code that actually runs while profiling is ON, or `get_profiling_results` comes back empty — that is not a code bug.
+- **`applicationId` source matters.** Use the id from `debug_status` (or echoed by `launch`/`debug_yaxunit_tests`), e.g. `attach:1C Enterprise debug process`. Do **not** pass the `get_applications` infobase GUID — that will not match a debug target and yields the "No active debug target" error.
 - **Quasi-mutating, no repo revert.** This tool changes live debug/runtime state, not files. The only `git`-level cleanup is undoing any `write_module_source` you did to set up the scenario. Always toggle profiling back off and/or terminate the session when done so a later test does not inherit a profiling-ON target. After a `-clean` redeploy EDT loses unsaved in-memory edits, so do scenario edits THROUGH MCP (model + disk stay in sync) — and a `-clean` redeploy also drops the running debug session, so you must re-launch before profiling again.
-- **Infobase exclusivity (setup step).** Step 2's `debug_launch(updateBeforeLaunch=true)` needs **exclusive** access to the file infobase to update it. If another 1C client holds the base, the update hangs on `Connecting to designer agent for infobase <name>` and times out (visible in the EDT log). Close clients (`Stop-Process -Name 1cv8,1cv8c`); an elevated 1C process cannot be killed from a non-elevated shell (Access denied) — only the user can close it.
+- **Infobase exclusivity (setup step).** Step 2's `launch(updateBeforeLaunch=true)` needs **exclusive** access to the file infobase to update it. If another 1C client holds the base, the update hangs on `Connecting to designer agent for infobase <name>` and times out (visible in the EDT log). Close clients (`Stop-Process -Name 1cv8,1cv8c`); an elevated 1C process cannot be killed from a non-elevated shell (Access denied) — only the user can close it.
 - **No JVM flag here.** This tool does **not** depend on the `nativeFormBufferedLayoutRender` form-rendering flag (that is only for the form-screenshot tools); a blank/empty profiling result is about timing/scope (profiling not on, or no code ran), not a render-mode flag.
 - **JSON output is not HTML-escaped.** `GsonProvider` uses `disableHtmlEscaping()`, so `ToolResult.toJson()` keeps `>`, `<`, `&`, `=`, the apostrophe `'`, and non-ASCII like the `↔` arrow and the `—` dash RAW UTF-8 (not `\uXXXX`). If you assert on the `message`, match a delimiter-free substring (e.g. `"toggled"`) for robustness, never the raw `↔`/`—` text.
 - **Flaky output channel.** If the result comes back garbled/empty (a bare `Error`/`Done` instead of the JSON envelope), do **not** retry-spam (re-toggling would flip profiling off). Re-verify independently via the EDT log at `D:\WS\EDT\.metadata\.log` — `StartProfilingTool` logs `Profiling toggled via IProfilingService for applicationId=<id>` on success, and the full request/response is recorded there.

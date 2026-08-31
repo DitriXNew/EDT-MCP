@@ -15,7 +15,7 @@ ENVIRONMENT (the realistic happy contract here):
   snapshots/threads/frames. get_variables therefore CANNOT return real variables;
   the REAL, CORRECT contract for every input we can supply is a CLEAR, ACTIONABLE
   SENTINEL naming the missing precondition + the next step (wait_for_break). That
-  sentinel IS the coverage — we deliberately do NOT start an infobase/debug_launch
+  sentinel IS the coverage — we deliberately do NOT start an infobase/launch
   (heavy, not configured for this fixture).
 
   The exact sentinels (read straight from GetVariablesTool.execute, in branch order):
@@ -185,7 +185,7 @@ def test_threadid_with_frameindex_still_reports_stale_threadid():
 
     # AUDIT: the genuine "frameIndex out of range (0..N)" sentinel is NOT reachable
     # in a no-session environment (it requires a live suspended thread whose frames
-    # can be counted). Exercising it would need a real debug_launch + wait_for_break
+    # can be counted). Exercising it would need a real launch + wait_for_break
     # against a running infobase, which this fixture does not provide. Coverage of
     # that branch is deferred to a live-session run; documented here so the gap is
     # explicit rather than silently skipped.
@@ -218,7 +218,7 @@ def test_expandpath_without_session_falls_through_to_no_session_sentinel():
     # AUDIT: the dedicated "expandPath not found: <path>" sentinel (a *resolved*
     # frame whose dot-path has no such child) is unreachable without a live
     # suspended frame, so it is not exercised here. Reaching it requires a real
-    # debug_launch + a breakpoint hit (e.g. inside CommonModule.Calc) and a frame
+    # launch + a breakpoint hit (e.g. inside CommonModule.Calc) and a frame
     # with structured locals. Deferred to a live-session run; flagged, not skipped.
     """
     r = call("get_variables", {"expandPath": "SomeStruct.Field.Missing"})

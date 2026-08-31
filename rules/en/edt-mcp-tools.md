@@ -36,7 +36,7 @@ This section matters more than any table below. Use it to pick the right tool, t
 | "Validate a 1C query" | `validate_query` (DCS query -> `dcsMode: true`) | Before pasting a query text into code |
 | "What's in this form?" | `get_form_layout_snapshot` with `mode: compact` (YAML); `get_form_screenshot` for visuals | YAML is cheaper than PNG |
 | "What does the platform expose for type X?" | `get_platform_documentation` | Do not guess signatures |
-| "Run / debug / update an infobase" | `list_configurations` -> `debug_launch` / `update_database` | First learn the launch configuration name |
+| "Run / debug / update an infobase" | `list_configurations` -> `launch` / `update_database` | First learn the launch configuration name |
 | "Run tests" | `run_yaxunit_tests`; to debug failing ones — `set_breakpoint` then `run_yaxunit_tests(debug=true)` | |
 | "What does check Z mean?" | `get_check_description` | |
 
@@ -113,9 +113,9 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_applications` | Project infobases with update state | For debugging/updating |
-| `list_configurations` | Launch configurations (runtime-client + Attach) with current running/suspended state | Before `debug_launch` |
+| `list_configurations` | Launch configurations (runtime-client + Attach) with current running/suspended state | Before `launch` |
 | `update_database` | Update an infobase. Two ways to identify: `launchConfigurationName` **or** `projectName + applicationId`. Mode full/incremental | On request |
-| `debug_launch` | Launch in debug mode. Same identification: `launchConfigurationName` (incl. Attach to 1C:Enterprise Debug Server) **or** `projectName + applicationId` | On request |
+| `launch` | Launch in debug (default) or run mode. Same identification: `launchConfigurationName` (incl. debug-only Attach) **or** `projectName + applicationId` | On request |
 | `run_yaxunit_tests` | Run YAxUnit tests, parse JUnit XML, Markdown report | After edits, if the project has tests |
 
 ### 6. Debugging (13 non-deprecated tools)

@@ -40,7 +40,7 @@ After changing metadata/configuration, to push those changes into the running in
 
 A runtime-client configuration can be created without being bound to an application (its `applicationId` attribute is empty) — the same case the launch tools cover by falling back to the project's default application. Here the fallback is deliberately narrower, because this call WRITES to a database and cannot be undone:
 
-- the project has **exactly one** application → that application is the target, and it is the same one `run_yaxunit_tests` / `debug_launch` would have used for this configuration;
+- the project has **exactly one** application → that application is the target, and it is the same one `run_yaxunit_tests` / `launch` would have used for this configuration;
 - the project has **several** → the call is REFUSED and lists the candidates. Pick one and re-call with `projectName` + `applicationId`; updating the wrong database is not something this tool will guess at;
 - the project has **none of its own** → refused. For an extension project the applications belong to its base configuration project, and `update_database` must target THAT project (an application id is only resolvable through the project that owns it).
 
@@ -102,7 +102,7 @@ Workaround: update via the platform CLI instead — `export_configuration_to_xml
 - With `terminateRunningClients=false`, most failures are the exclusive lock above — terminate the running launch first (the default frees it automatically).
 - `launchConfigurationName` must reference a runtime-client config; an Attach config is rejected.
 - The project must exist and be open; a closed project returns an error.
-- Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `debug_launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `debug_launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.
+- Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.
 
 ## Infobase changed outside EDT
 
@@ -151,8 +151,8 @@ The usual holder of a busy port is an `ibsrv` process left over from an earlier 
 survives EDT being killed. Stopping it (or stopping the server in EDT's *Servers* view) is
 usually preferable to re-addressing the server.
 
-The same parameter exists on `debug_launch` and `run_yaxunit_tests`, which start the server too.
-Where the refusal shows up differs: `debug_launch` is fire-and-forget, so it reports through
+The same parameter exists on `launch` and `run_yaxunit_tests`, which start the server too.
+Where the refusal shows up differs: `launch` is fire-and-forget, so it reports through
 `debug_status` under `recentLaunchFailures`; `run_yaxunit_tests` reports through its own named job -
 in the initial response, or from `get_job_status(jobId)`.
 

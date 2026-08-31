@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
  * The few most recent failures of a FIRE-AND-FORGET launch, so a caller can still learn about
  * them.
  *
- * <p>{@code debug_launch} dispatches the launch as a background {@code Job} and returns
+ * <p>{@code launch} dispatches the launch as a background {@code Job} and returns
  * {@code status: "launching"} immediately. Anything that goes wrong after that — a launch
  * exception, or an external-changes conflict dialog that the call's
  * {@link ExternalInfobaseChangesPolicy} declined to resolve while EDT performed the DB update

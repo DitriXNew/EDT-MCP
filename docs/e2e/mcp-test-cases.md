@@ -352,7 +352,7 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
 - **Note:** CLAUDE.md restricts this to explicit user request; the Claude Code auto‑mode classifier **blocks** it even on the error path. A test agent must treat it as `SKIPPED (needs approval + infobase)`.
 - **Validated 2026‑06‑01:** not run — blocked by safety classifier (expected).
 
-### debug_launch
+### launch
 - **Type:** app/launch · **Runnable on IRP:** error‑only here
 - **Cases:** `{projectName:"IRP"}` (no app) → error; (sandbox) `{launchConfigurationName:"…"}` or `{projectName,applicationId}`; Attach config → `applicationId:"attach:<name>"`.
 - **Assert:** missing app → `success:false`, error mentions `applicationId is required` / lists configs.

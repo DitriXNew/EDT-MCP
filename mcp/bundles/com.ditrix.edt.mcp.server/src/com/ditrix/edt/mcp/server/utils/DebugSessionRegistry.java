@@ -568,7 +568,7 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
      * <p>
      * Unlike {@link #findActiveTarget}, this does not require a debug target, so it
      * also detects a RUN-mode session (which carries no debug target). Used by
-     * debug_launch to avoid starting a second client over an already-running one.
+     * launch to avoid starting a second client over an already-running one.
      * (audit A12)
      *
      * @param applicationId the application id (real or synthetic)

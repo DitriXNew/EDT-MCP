@@ -244,7 +244,7 @@ public class CreateInfobaseTool implements IMcpTool
                 + "EDT and reported back as 'port'/'webUrl' in the result.", //$NON-NLS-1$
                 KIND_INFOBASE, KIND_STANDALONE_SERVER)
             .stringProperty(KEY_USER,
-                "Infobase connection user to store so update_database / debug_launch can authenticate " //$NON-NLS-1$
+                "Infobase connection user to store so update_database / launch can authenticate " //$NON-NLS-1$
                 + "the update agent (issue #194). Selects an EXISTING user; most useful with " //$NON-NLS-1$
                 + "mode='register' (the existing base already has users). Omit to store no credentials. " //$NON-NLS-1$
                 + "Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' " //$NON-NLS-1$
@@ -2173,7 +2173,7 @@ public class CreateInfobaseTool implements IMcpTool
         return lead
             + (actualPort > 0 ? " (web port " + actualPort + ")" : "") + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + (webUrl != null ? " Web URL for HTTP testing: " + webUrl + "." : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + " To load the configuration, use the coordinated launch flow (debug_launch or " //$NON-NLS-1$
+            + " To load the configuration, use the coordinated launch flow (launch or " //$NON-NLS-1$
             + "run_yaxunit_tests with updateBeforeLaunch=true) rather than a bare update_database, " //$NON-NLS-1$
             + "which would start the server in RUN mode." //$NON-NLS-1$
             + (note != null ? note : ""); //$NON-NLS-1$
@@ -2642,7 +2642,7 @@ public class CreateInfobaseTool implements IMcpTool
                 ? "The existing database is untouched. " //$NON-NLS-1$
                 : "The database files were created and are intact - do NOT create them again. ") //$NON-NLS-1$
             + "Nothing can target this infobase until its application appears: update_database / " //$NON-NLS-1$
-            + "create_launch_config / debug_launch address an application by applicationId, and " //$NON-NLS-1$
+            + "create_launch_config / launch address an application by applicationId, and " //$NON-NLS-1$
             + "this infobase has none. Call " //$NON-NLS-1$
             + "get_applications('" + projectName //$NON-NLS-1$
             + "') to re-check (applications surface asynchronously); if it stays absent, check the " //$NON-NLS-1$
@@ -2663,7 +2663,7 @@ public class CreateInfobaseTool implements IMcpTool
             + ", so the binding is UNVERIFIED - this call did not establish whether the application " //$NON-NLS-1$
             + "is there. Call get_applications('" + projectName //$NON-NLS-1$
             + "') to confirm it before chaining into update_database / create_launch_config / " //$NON-NLS-1$
-            + "debug_launch."; //$NON-NLS-1$
+            + "launch."; //$NON-NLS-1$
     }
 
     /** Joins the two optional message notes, either of which may be {@code null}. */

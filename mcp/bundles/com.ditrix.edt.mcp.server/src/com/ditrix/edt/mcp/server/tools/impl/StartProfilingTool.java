@@ -172,7 +172,7 @@ public class StartProfilingTool implements IMcpTool
             if (target == null)
             {
                 return ToolResult.error("No active debug target for applicationId: " + applicationId //$NON-NLS-1$
-                    + ". Start a debug session first (debug_launch or debug_yaxunit_tests).").toJson(); //$NON-NLS-1$
+                    + ". Start a debug session first (launch or debug_yaxunit_tests).").toJson(); //$NON-NLS-1$
             }
 
             // Resolve the profiling service + profile target and flip profiling on.

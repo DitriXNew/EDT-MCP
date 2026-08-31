@@ -35,7 +35,7 @@ A green build proves Java logic; only a redeploy proves a tool's schema, descrip
 - **Redeploy without a `-Build` flag only swaps the LAST built jar** — run `compile.sh` first (or pass `-Build`), else you ship stale code and validate the previous build.
 - **Kill the whole stand before swapping**: `taskkill /IM 1cedt.exe /T /F`, plus `1cv8.exe` if an infobase is running. Terminate both again when done.
 - **Inspect payloads with `Invoke-RestMethod`** (PowerShell), not `curl` — curl mangles nested JSON. Tools with a JSON responseType put the data in `result.structuredContent`; `content[0].text` is only a `Done`/`Error` placeholder.
-- **Infobase-dependent tools** (debug / run / YAXUnit / profiling) need the infobase (or a `debug_launch`) started first.
+- **Infobase-dependent tools** (debug / run / YAXUnit / profiling) need the infobase (or a `launch`) started first.
 
 ## Unit tests — conventions
 

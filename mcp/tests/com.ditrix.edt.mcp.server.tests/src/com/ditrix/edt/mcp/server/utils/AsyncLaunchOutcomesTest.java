@@ -17,7 +17,7 @@ import org.junit.Test;
 
 /**
  * Tests for {@link AsyncLaunchOutcomes} — the registry that lets a FIRE-AND-FORGET launch report
- * what happened after {@code debug_launch} already answered {@code status: "launching"}.
+ * what happened after {@code launch} already answered {@code status: "launching"}.
  *
  * <p>What matters here is that the registry stays a small, bounded window into the recent past: it
  * must never grow into a log, and it must never swallow the newest failure — that is the one the

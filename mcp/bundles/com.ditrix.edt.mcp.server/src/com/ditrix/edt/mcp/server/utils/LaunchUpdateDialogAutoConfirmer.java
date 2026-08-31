@@ -399,7 +399,7 @@ public final class LaunchUpdateDialogAutoConfirmer
      * separately from {@link #sessionArmCount} so a caller can opt out of the DB
      * update (and thus the auto-press of its modal) while still suppressing the
      * code-1003 "debug session already exists" modal — see the class header and
-     * {@code DebugLaunchTool.performLaunch}.
+     * {@code LaunchTool.performLaunch}.
      */
     private static int updateArmCount;
 

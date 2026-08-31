@@ -29,7 +29,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
  * Lists EDT launch configurations — runtime-client, Attach (RemoteRuntime /
  * LocalRuntime), and any other config in the 1C/EDT namespace — together with
  * their current running state. This is the discovery step that precedes
- * {@code debug_launch}, {@code run_yaxunit_tests}, {@code debug_yaxunit_tests}
+ * {@code launch}, {@code run_yaxunit_tests}, {@code debug_yaxunit_tests}
  * and {@code update_database}: once the MCP client knows the exact
  * {@code name}, it can target that configuration by name without having to
  * juggle applicationId/project pairs.
@@ -38,7 +38,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
  * <ol>
  *   <li>{@code list_configurations({type: "attach"})} — see available Attach
  *       configs, their infobase aliases, and whether any is already running.</li>
- *   <li>{@code debug_launch({launchConfigurationName: ...})} — attach to it.</li>
+ *   <li>{@code launch({launchConfigurationName: ...})} — attach to it.</li>
  *   <li>{@code set_breakpoint} → {@code wait_for_break} → standard debug flow.</li>
  * </ol>
  */

@@ -524,7 +524,7 @@ public class LaunchLifecycleUtilsPrepareTest
     @Test
     public void testPhaseSinkIsOptionalForCallersThatDoNotReportProgress() throws Exception
     {
-        // The 7-argument overload (debug_launch and friends) must keep working unchanged.
+        // The 7-argument overload (launch and friends) must keep working unchanged.
         ILaunchManager launchManager = mock(ILaunchManager.class);
         when(launchManager.getLaunches()).thenReturn(new ILaunch[0]);
 

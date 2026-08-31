@@ -75,11 +75,11 @@ Short form:
 
 ## 7. Debugging
 
-`debug_launch` accepts either **`launchConfigurationName`** (an existing EDT launch configuration, including Attach) or a pair **`projectName` + `applicationId`** (when no configuration exists). Remember the `applicationId` from the response — you will need it for `wait_for_break`, `start_profiling`, `get_applications`.
+`launch` accepts either **`launchConfigurationName`** (an existing EDT launch configuration, including Attach) or a pair **`projectName` + `applicationId`** (when no configuration exists). Remember the `applicationId` from the response — you will need it for `wait_for_break`, `start_profiling`, `get_applications`.
 
 1. `list_configurations` or `get_applications` — figure out what to launch.
 2. `set_breakpoint` with `projectName` + `module` + `lineNumber` — set breakpoints.
-3. `debug_launch` — launch. Save the `applicationId` from the response.
+3. `launch` — launch. Save the `applicationId` from the response.
 4. The user performs an action in 1C:Enterprise.
 5. `wait_for_break` with `applicationId` — wait for suspend. The response contains `threadId` and `frameRef`.
 6. `debug_status` -> `get_variables` (`frameRef` or `threadId` + `frameIndex`) -> `evaluate_expression` -> `step` (`threadId` + `kind`: `over` | `into` | `out`) -> `resume`.
@@ -87,7 +87,7 @@ Short form:
 
 ## 8. Running the application and updating the infobase
 
-- Run in enterprise mode (with debugger attached or just to test): `debug_launch` by `launchConfigurationName` or `projectName` + `applicationId`.
+- Run in enterprise mode (with debugger attached or just to test): `launch` by `launchConfigurationName` or `projectName` + `applicationId`.
 - Update the infobase: `update_database` with `launchConfigurationName` or `projectName` + `applicationId`. Use after metadata changes.
 
 ## 9. Running YAxUnit tests
