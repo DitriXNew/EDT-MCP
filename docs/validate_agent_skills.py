@@ -34,7 +34,7 @@ REGISTRAR = (
 PROXY_TOOLS = {"router_status"}
 # Independent ratchet for tool names that lack the usual underscore signal.
 # Keep historical names until every agent-pack reference is deliberately gone.
-SINGLE_WORD_TOOL_NAMES = {"dcs", "git", "resume", "step"}
+SINGLE_WORD_TOOL_NAMES = {"dcs", "git", "launch", "resume", "step"}
 
 BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 SKILL_NAME = re.compile(r"edt-mcp-project-[a-z0-9]+(?:-[a-z0-9]+)*")
