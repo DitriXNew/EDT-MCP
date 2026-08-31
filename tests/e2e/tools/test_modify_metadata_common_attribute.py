@@ -12,8 +12,7 @@ Adding is idempotent (an already-listed owner has its `use` UPDATED, counted und
 than `added`); removing detaches by the owner FQN. The change goes through a BM write transaction and
 force-exports the CommonAttribute `.mdo`. The success payload carries a `content` counts object
 {added, updated, removed}. Read the current content with get_metadata_details on the CommonAttribute
-FQN (a "Content" section listing CommonAttributeContentItem rows - the generic formatter shows the
-item count, and the OWNER FQN is the load-bearing on-disk proof).
+FQN (a "Content" section whose Metadata / Use rows are round-trippable into this payload).
 
 reset: kind="write-metadata" -> reset_fixture()+reset_model() after each test.
 
@@ -27,6 +26,7 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_contains,
+    assert_not_contains,
     assert_no_diff,
     poll_diff_contains,
     poll_disk_lacks,
@@ -54,10 +54,10 @@ def _details_text(fqn=CA):
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_add_owner_persists_and_reads_back():
+def test_add_owner_persists_and_get_details_renders_content_columns():
     # Precondition (anti-cheat): the owner is NOT already attached, so a no-op would FAIL the diff.
     before = _details_text()
-    assert "CommonAttributeContentItem" not in before, \
+    assert "### Content" not in before, \
         "the fixture common attribute must start with an EMPTY content list:\n%s" % before[:400]
 
     r = call("modify_metadata", {
@@ -74,10 +74,17 @@ def test_add_owner_persists_and_reads_back():
     # (1) ON-DISK structure: the owner FQN lands inside a <content> block in the CommonAttribute .mdo.
     poll_diff_contains(OWNER_MDO_TOKEN,
                        ctx="the attached owner must land in a <content> block on disk")
-    # (2) MODEL read-back: the common attribute now carries a content item (empty -> one row).
+    # (2) MODEL read-back: the Content table exposes the round-trippable owner FQN and its use in
+    # the correct columns. The final assertion is the anti-cheat: the pre-fix generic EObject
+    # formatter emitted "| Use | CommonAttributeContentItem |" instead.
     after = _details_text()
-    assert_contains(after, "CommonAttributeContentItem",
-                    "the model read-back must show the new content item")
+    assert_contains(after, "### Content", "the model read-back must show the Content section")
+    assert_contains(after, "| Metadata | Use |",
+                    "the Content table must name the owner and use columns")
+    assert_contains(after, "| Catalog.Catalog | Use |",
+                    "the attached owner FQN and use must render in the matching columns")
+    assert_not_contains(after, "CommonAttributeContentItem",
+                        "the generic EObject EClass value must not leak into Content")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -127,10 +134,13 @@ def test_readd_is_idempotent_and_updates_use():
     # The use flip landed on disk (Use -> DontUse) for the single, un-duplicated owner.
     poll_diff_contains("<use>DontUse</use>",
                        ctx="the re-add must update the owner's use to DontUse on disk")
-    # anti-cheat: exactly ONE content item exists (no duplicate row in the model read-back).
+    # anti-cheat: exactly ONE owner row exists (no duplicate in the model read-back), and it exposes
+    # the updated use rather than the generic EObject EClass name.
     text = _details_text()
-    assert text.count("CommonAttributeContentItem") == 1, \
+    assert text.count("| Catalog.Catalog | DontUse |") == 1, \
         "the idempotent re-add must NOT duplicate the owner:\n%s" % text[:500]
+    assert_not_contains(text, "CommonAttributeContentItem",
+                        "the content read-back must not use the generic EObject fallback")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -159,9 +169,9 @@ def test_remove_owner_detaches_it():
     # The owner FQN is gone from the content list on disk (the whole <content> block for it is removed).
     poll_disk_lacks(CA_MDO, OWNER_MDO_TOKEN,
                     ctx="the detached owner's <content> block must be gone from the .mdo")
-    # The model read-back no longer lists a content item (back to an empty content list).
+    # The model read-back no longer lists a Content section (back to an empty content list).
     after = _details_text()
-    assert "CommonAttributeContentItem" not in after, \
+    assert "### Content" not in after, \
         "the model read-back must show the content item removed:\n%s" % after[:500]
 
 

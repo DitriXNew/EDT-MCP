@@ -20,9 +20,14 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogTabularSection;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeContentItem;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeUse;
 import com._1c.g5.v8.dt.metadata.mdclass.FormType;
 import com._1c.g5.v8.dt.metadata.mdclass.Indexing;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.TabularSectionAttribute;
 
 /**
@@ -86,6 +91,17 @@ public class UniversalMetadataFormatterTest
         attr.getSynonym().put(EN, synonymEn);
         attr.setType(typeOf(typeName));
         return attr;
+    }
+
+    /** A detached content item suitable for exercising the pure formatter path headlessly. */
+    private static CommonAttributeContentItem newCommonAttributeContentItem(MdObject metadata,
+        CommonAttributeUse use)
+    {
+        CommonAttributeContentItem item = (CommonAttributeContentItem)MdClassFactory.eINSTANCE
+            .create(MdClassPackage.Literals.COMMON_ATTRIBUTE_CONTENT_ITEM);
+        item.setMetadata(metadata);
+        item.setUse(use);
+        return item;
     }
 
     // ==================== format() null / header guards ====================
@@ -238,6 +254,42 @@ public class UniversalMetadataFormatterTest
             md.contains("| Name | Synonym | Group |")); //$NON-NLS-1$
         assertTrue("an unset command group renders as a dash, got:\n" + md, //$NON-NLS-1$
             md.contains("| Refill | Refill | - |")); //$NON-NLS-1$
+    }
+
+    // ==================== CommonAttribute content ====================
+
+    @Test
+    public void testCommonAttributeContentRendersMetadataFqnAndUse()
+    {
+        CommonAttribute commonAttribute = MdClassFactory.eINSTANCE.createCommonAttribute();
+        commonAttribute.setName("Separator"); //$NON-NLS-1$
+        Catalog owner = MdClassFactory.eINSTANCE.createCatalog();
+        owner.setName("Owner|With\nBreak"); //$NON-NLS-1$
+        commonAttribute.getContent().add(
+            newCommonAttributeContentItem(owner, CommonAttributeUse.DONT_USE));
+
+        String md = f.format(commonAttribute, false, EN);
+
+        assertTrue("common-attribute content must use Metadata and Use columns",
+            md.contains("| Metadata | Use |")); //$NON-NLS-1$
+        assertTrue("the owner FQN and use must render in their matching, table-safe cells:\n" + md,
+            md.contains("| Catalog.Owner\\|With Break | DontUse |")); //$NON-NLS-1$
+        assertFalse("the generic EObject fallback must not leak the content-item EClass name",
+            md.contains("CommonAttributeContentItem")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommonAttributeContentRendersUnresolvedOwnerMarker()
+    {
+        CommonAttribute commonAttribute = MdClassFactory.eINSTANCE.createCommonAttribute();
+        commonAttribute.setName("Separator"); //$NON-NLS-1$
+        commonAttribute.getContent().add(
+            newCommonAttributeContentItem(null, CommonAttributeUse.AUTO));
+
+        String md = f.format(commonAttribute, false, EN);
+
+        assertTrue("a dangling owner must render an explicit marker instead of a blank cell:\n" + md,
+            md.contains("| [unresolved metadata] | Auto |")); //$NON-NLS-1$
     }
 
     // ==================== formatType direct (single + composite + empty) ====================
