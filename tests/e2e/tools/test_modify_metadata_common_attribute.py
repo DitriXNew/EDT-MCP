@@ -162,6 +162,70 @@ def test_separator_accepts_constant_owner():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Happy — remove remains a cleanup operation after the target kind makes the row illegal
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_remove_owner_illegal_for_current_target_kind_succeeds():
+    attribute_name = "E2EIllegalOwnerCleanup507"
+    constant_name = "E2EIllegalOwnerCleanupConstant507"
+    attribute_fqn = "CommonAttribute." + attribute_name
+    constant_fqn = "Constant." + constant_name
+    owner_token = "<metadata>%s</metadata>" % constant_fqn
+    attribute_mdo = _common_attribute_mdo(attribute_name)
+
+    _create_ok(constant_fqn, "create the separator-only Constant owner")
+    _create_ok(attribute_fqn, "create the common attribute for the cleanup case")
+
+    make_separator = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+        "properties": [{"name": "dataSeparation", "value": "Separate"}],
+    })
+    assert_ok(make_separator, "make the target a separator before attaching the Constant")
+    wait_for_project_ready()
+
+    attach = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+        "content": [{"op": "add", "metadata": constant_fqn, "use": "Use"}],
+    })
+    assert_ok(attach, "attach the Constant while its class is legal for the target")
+    assert (attach.structured.get("content") or {}).get("added") == 1, \
+        "the setup must attach exactly one Constant owner: %r" % (attach.structured,)
+
+    make_simple = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+        "properties": [{"name": "dataSeparation", "value": "DontUse"}],
+    })
+    assert_ok(make_simple, "change the populated target to the simple common-attribute kind")
+    wait_for_project_ready()
+
+    before_remove = read_disk(attribute_mdo)
+    assert "<dataSeparation>DontUse</dataSeparation>" in before_remove, \
+        "the target must now be simple before exercising the cleanup path:\n%s" % before_remove[:700]
+    assert owner_token in before_remove, \
+        "the now-illegal Constant row must still exist before the removal call"
+
+    # WHY: an add must reject this Constant for a simple target, but applying that same predicate to
+    # remove creates a dead end: the only operation that can repair the invalid row would reject it.
+    # Removal therefore still resolves the real owner and listed row, while deliberately skipping
+    # the owner-class rule selected by the target's CURRENT dataSeparation.
+    remove = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+        "content": [{"op": "remove", "metadata": constant_fqn}],
+    })
+    assert_ok(remove, "remove the Constant that is illegal for the target's current simple kind")
+    counts = remove.structured.get("content") or {}
+    assert counts.get("removed") == 1 and counts.get("added") == 0 and counts.get("updated") == 0, \
+        "the cleanup call must remove exactly the obsolete row: %r" % (remove.structured,)
+    poll_disk_lacks(attribute_mdo, owner_token,
+                    ctx="the now-illegal Constant owner row must be removable from disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Happy — op defaults to 'add' when omitted (the doc's default), owner still attached
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -312,12 +376,28 @@ def test_add_non_owner_kind_is_error():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Negative — remove an owner that is not attached is a clean error (nothing written)
+# Negative — remove still requires a real owner and a row that is actually attached
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_remove_unresolvable_owner_is_error():
+    missing = "Catalog.NoSuchOwnerToRemove_e2e"
+    # Removal skips only the class predicate; it must still name a real metadata object so a typo
+    # cannot masquerade as a successful cleanup.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": CA,
+        "content": [{"op": "remove", "metadata": missing}],
+    })
+    e = assert_error(r, "detach an owner object that does not exist")
+    assert_error_quality(e, names=[missing],
+                         ctx="removing a non-existent owner still names the unresolved FQN")
+    assert_no_diff("a rejected removal of a non-existent owner must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_remove_not_attached_owner_is_error():
-    # The fixture common attribute has no content, so removing any owner is a clean, actionable error.
+    # Removal skips only the class predicate; a real owner must still have an attached row. This
+    # preserves the existing typo/stale-state signal instead of turning remove into a silent no-op.
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": CA,
         "content": [{"op": "remove", "metadata": OWNER}],

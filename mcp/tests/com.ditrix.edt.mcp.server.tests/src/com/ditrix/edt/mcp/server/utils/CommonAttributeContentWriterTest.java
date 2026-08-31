@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -103,6 +104,36 @@ public class CommonAttributeContentWriterTest
     }
 
     // ---- owner predicate selected by the target's dataSeparation ----------------------------
+
+    @Test
+    public void testNullDataSeparationIsRefusedWithActionableError()
+    {
+        // A detached / unresolved target proves neither supported kind. In particular, null must
+        // not fall through to the simple predicate and silently admit a DocumentJournal.
+        assertFalse(CommonAttributeContentWriter.isOwnerClassAllowed(
+            MdClassPackage.Literals.DOCUMENT_JOURNAL, null));
+
+        String error = CommonAttributeContentWriter.ownerClassValidationError(false,
+            "DocumentJournal.Events", MdClassPackage.Literals.DOCUMENT_JOURNAL, null); //$NON-NLS-1$
+        assertNotNull(error);
+        assertTrue(error.contains("data-separation could not be established")); //$NON-NLS-1$
+        assertTrue(error.contains("'null'")); //$NON-NLS-1$
+        assertTrue(error.contains("get_metadata_details")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRemoveSkipsOwnerClassCheckForCurrentTargetKind()
+    {
+        // WHY: after a separator with a Constant is changed to simple, the Constant row is illegal.
+        // Reusing the add predicate for remove would make the invalid row impossible to clean up.
+        assertNull(CommonAttributeContentWriter.ownerClassValidationError(true, "Constant.Company", //$NON-NLS-1$
+            MdClassPackage.Literals.CONSTANT, CommonAttributeDataSeparation.DONT_USE));
+
+        // The inverse transition must stay cleanable for the same reason.
+        assertNull(CommonAttributeContentWriter.ownerClassValidationError(true,
+            "DocumentJournal.Events", MdClassPackage.Literals.DOCUMENT_JOURNAL, //$NON-NLS-1$
+            CommonAttributeDataSeparation.SEPARATE));
+    }
 
     @Test
     public void testConstantAcceptedOnlyForSeparator()

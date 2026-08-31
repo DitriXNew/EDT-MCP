@@ -51,13 +51,16 @@ import com.google.gson.JsonObject;
  *
  * <p>The whole payload is validated UP FRONT, BEFORE the write transaction (op recognized; a
  * metadata FQN required; the owner resolves via the shared bilingual
- * {@link MetadataNodeResolver#resolveExisting}; the owner's {@link EClass} passes the platform
- * predicate selected by the target's live {@link CommonAttribute#getDataSeparation() dataSeparation};
- * the {@code use} token is recognized), so a shape / resolution error leaves NOTHING written. The
- * target value and every owner are read inside one {@link BmTransactions#read read} boundary. The
- * mutation then runs entirely inside a single {@link BmTransactions#write write} boundary on the
- * re-fetched common attribute, with every owner re-resolved from the IN-TRANSACTION configuration so
- * {@code getMetadata() == owner} identity holds. New content items come ONLY from the MdPlugin
+ * {@link MetadataNodeResolver#resolveExisting}; for an add, the owner's {@link EClass} passes the
+ * platform predicate selected by the target's live
+ * {@link CommonAttribute#getDataSeparation() dataSeparation}; the {@code use} token is recognized),
+ * so a shape / resolution error leaves NOTHING written. The target value and every owner are read
+ * inside one {@link BmTransactions#read read} boundary. The mutation then runs entirely inside a
+ * single {@link BmTransactions#write write} boundary on the re-fetched common attribute, with every
+ * owner re-resolved by BM id so {@code getMetadata() == owner} identity holds. Immediately before
+ * mutation, the target's data-separation is re-read and every planned add is re-validated against it;
+ * removals deliberately skip the owner-class rule so an obsolete illegal row can be cleaned up. New
+ * content items come ONLY from the MdPlugin
  * {@link IModelObjectFactory} (never {@code new} / {@code EcoreUtil}). The writer does NOT
  * force-export; the caller ({@code ModifyMetadataTool}) does that once, outside any boundary, after
  * the commit.</p>
@@ -200,12 +203,29 @@ public final class CommonAttributeContentWriter
                     throw new ContentWriteException(ToolResult.error("The common attribute could not " //$NON-NLS-1$
                         + "be resolved inside the transaction.").toJson());
                 }
+
+                // Resolve every task input first. The target may have changed since the read-plan
+                // boundary, so make the owner-class decision again from its in-transaction value at
+                // the last safe point before any content row is mutated. A failure therefore rolls
+                // back an untouched list, and removals remain available to clean up now-illegal rows.
+                List<ResolvedEntry> resolvedPlan = resolveOwnersInTx(tx, plan);
+                CommonAttributeDataSeparation liveDataSeparation = inTx.getDataSeparation();
+                for (ResolvedEntry resolved : resolvedPlan)
+                {
+                    String validationError = ownerClassValidationError(resolved.planned.remove,
+                        resolved.planned.fqn, resolved.owner.eClass(), liveDataSeparation);
+                    if (validationError != null)
+                    {
+                        throw new ContentWriteException(ToolResult.error(validationError).toJson());
+                    }
+                }
+
                 int added = 0;
                 int updated = 0;
                 int removed = 0;
-                for (PlannedEntry planned : plan)
+                for (ResolvedEntry resolved : resolvedPlan)
                 {
-                    int[] delta = applyPlannedEntry(tx, inTx, planned, services);
+                    int[] delta = applyResolvedEntry(inTx, resolved, services);
                     added += delta[0];
                     updated += delta[1];
                     removed += delta[2];
@@ -229,22 +249,18 @@ public final class CommonAttributeContentWriter
     // ---- mutation (inside the write boundary) -------------------------------------------------
 
     /**
-     * Applies a single validated {@link PlannedEntry} to the in-transaction common attribute: re-fetches
-     * the owner by its stable BM id, then either removes it from the content (a remove that finds nothing
-     * is a clean error that rolls the whole write back) or adds / updates it via {@link #addOwner}. MUST
-     * run inside the write boundary.
+     * Applies one fully resolved entry to the in-transaction common attribute: either removes it from
+     * the content (a remove that finds nothing is a clean error that rolls the whole write back) or
+     * adds / updates it via {@link #addOwner}. MUST run inside the write boundary, after the caller has
+     * re-validated every add against the target's current data-separation.
      *
      * @return a three-slot delta {@code [added, updated, removed]}
      */
-    private static int[] applyPlannedEntry(IBmTransaction tx, CommonAttribute inTx, PlannedEntry planned,
+    private static int[] applyResolvedEntry(CommonAttribute inTx, ResolvedEntry resolved,
         Services services)
     {
-        MdObject owner = resolveOwnerInTx(tx, planned.ownerBmId);
-        if (owner == null)
-        {
-            throw new ContentWriteException(ToolResult.error("Owner '" + planned.fqn //$NON-NLS-1$
-                + "' could not be resolved inside the transaction.").toJson()); //$NON-NLS-1$
-        }
+        PlannedEntry planned = resolved.planned;
+        MdObject owner = resolved.owner;
         if (planned.remove)
         {
             if (removeOwner(inTx, owner) == 0)
@@ -337,6 +353,23 @@ public final class CommonAttributeContentWriter
         return obj instanceof MdObject ? (MdObject)obj : null;
     }
 
+    /** Resolves all planned owner ids before validation or mutation inside the write transaction. */
+    private static List<ResolvedEntry> resolveOwnersInTx(IBmTransaction tx, List<PlannedEntry> plan)
+    {
+        List<ResolvedEntry> resolved = new ArrayList<>(plan.size());
+        for (PlannedEntry planned : plan)
+        {
+            MdObject owner = resolveOwnerInTx(tx, planned.ownerBmId);
+            if (owner == null)
+            {
+                throw new ContentWriteException(ToolResult.error("Owner '" + planned.fqn //$NON-NLS-1$
+                    + "' could not be resolved inside the transaction.").toJson()); //$NON-NLS-1$
+            }
+            resolved.add(new ResolvedEntry(planned, owner));
+        }
+        return resolved;
+    }
+
     // ---- up-front planning / validation (pure aside from the shared resolver) -----------------
 
     /** A validated + resolved entry ready to apply inside the tx. */
@@ -357,6 +390,19 @@ public final class CommonAttributeContentWriter
             this.fqn = fqn;
             this.ownerBmId = ownerBmId;
             this.use = use;
+        }
+    }
+
+    /** A plan entry paired with the owner identity re-fetched inside the write transaction. */
+    private static final class ResolvedEntry
+    {
+        final PlannedEntry planned;
+        final MdObject owner;
+
+        ResolvedEntry(PlannedEntry planned, MdObject owner)
+        {
+            this.planned = planned;
+            this.owner = owner;
         }
     }
 
@@ -386,10 +432,12 @@ public final class CommonAttributeContentWriter
     /**
      * Validates + resolves a single {@code content[]} entry up front (BEFORE the tx): the op is
      * recognized (default {@code add}), a metadata FQN is present, the owner resolves via the shared
-     * bilingual {@link MetadataNodeResolver#resolveExisting}, the owner's {@link EClass} is a legal
-     * owner under the predicate selected by the target's live {@code dataSeparation}, and (for an add)
-     * the {@code use} token maps to a literal. MUST run inside the caller's read boundary. Returns a
-     * ready {@link PlannedEntry} or a ready JSON error.
+     * bilingual {@link MetadataNodeResolver#resolveExisting}, and (for an add only) the owner's
+     * {@link EClass} is legal under the predicate selected by the target's live
+     * {@code dataSeparation} and the {@code use} token maps to a literal. A remove still resolves a
+     * real owner, but deliberately skips the class rule so a row made illegal by a target-kind change
+     * can be removed. MUST run inside the caller's read boundary. Returns a ready
+     * {@link PlannedEntry} or a ready JSON error.
      */
     private static EntryPlan planEntry(Configuration config, JsonObject entry,
         CommonAttributeDataSeparation dataSeparation)
@@ -417,14 +465,15 @@ public final class CommonAttributeContentWriter
             return EntryPlan.failed(ownerNotFound(config, fqn));
         }
         MdObject owner = node.object;
-        if (!isOwnerClassAllowed(owner.eClass(), dataSeparation))
+        boolean remove = OP_REMOVE.equals(op);
+        String validationError = ownerClassValidationError(remove, fqn, owner.eClass(), dataSeparation);
+        if (validationError != null)
         {
-            return EntryPlan.failed(ToolResult.error(ownerClassError(fqn, owner.eClass(), dataSeparation))
-                .toJson());
+            return EntryPlan.failed(ToolResult.error(validationError).toJson());
         }
 
         CommonAttributeUse use = null;
-        if (!OP_REMOVE.equals(op))
+        if (!remove)
         {
             JsonElement useEl = entry.get("use"); //$NON-NLS-1$
             String useToken = str(useEl);
@@ -440,16 +489,17 @@ public final class CommonAttributeContentWriter
         // identity inside the write transaction (tx.getObjectById) rather than re-resolved by FQN from
         // a container walk - a top object's eContainer() does not reliably climb to the Configuration.
         long ownerBmId = ((IBmObject)owner).bmGetId();
-        return EntryPlan.ok(new PlannedEntry(OP_REMOVE.equals(op), fqn, ownerBmId, use));
+        return EntryPlan.ok(new PlannedEntry(remove, fqn, ownerBmId, use));
     }
 
     // ---- pure helpers (unit-testable) ---------------------------------------------------------
 
     /**
-     * Applies EDT's category discriminator to an owner class: a separator target uses the
-     * data-separable predicate; every other live value uses the simple-common-attribute predicate.
-     * The platform sets are intentionally NOT unioned: {@code Constant} / {@code ScheduledJob} are
-     * separator-only, while {@code DocumentJournal} is simple-only.
+     * Applies EDT's category discriminator to an owner class: a {@code Separate} target uses the
+     * data-separable predicate and a {@code DontUse} target uses the simple-common-attribute
+     * predicate. Any other value is refused. The platform sets are intentionally NOT unioned:
+     * {@code Constant} / {@code ScheduledJob} are separator-only, while {@code DocumentJournal} is
+     * simple-only.
      *
      * @param ownerClass the resolved owner's metadata class (may be {@code null})
      * @param dataSeparation the target common attribute's live data-separation value
@@ -461,13 +511,60 @@ public final class CommonAttributeContentWriter
         {
             return CommonAttributeUtil.isDataSeparatableCommonAttributeOwnerClass(ownerClass);
         }
-        return CommonAttributeUtil.isCommonAttributeOwnerClass(ownerClass);
+        if (dataSeparation == CommonAttributeDataSeparation.DONT_USE)
+        {
+            return CommonAttributeUtil.isCommonAttributeOwnerClass(ownerClass);
+        }
+        return false;
+    }
+
+    /**
+     * Validates an add's owner class against an established target kind. A remove returns immediately
+     * without consulting either the target kind or owner class, because it must remain able to clean up
+     * a row made illegal by a target-kind change. Package-visible so the same decision used during
+     * planning and immediately before mutation stays headless-testable.
+     *
+     * @param remove whether this is a removal rather than an add
+     * @return actionable refusal text, or {@code null} when the operation is legal
+     */
+    static String ownerClassValidationError(boolean remove, String fqn, EClass ownerClass,
+        CommonAttributeDataSeparation dataSeparation)
+    {
+        if (remove)
+        {
+            return null;
+        }
+        String separationError = dataSeparationError(dataSeparation);
+        if (separationError != null)
+        {
+            return separationError;
+        }
+        return isOwnerClassAllowed(ownerClass, dataSeparation)
+            ? null : ownerClassError(fqn, ownerClass, dataSeparation);
+    }
+
+    /** Returns an actionable error unless the target kind is one of the two platform literals. */
+    static String dataSeparationError(CommonAttributeDataSeparation dataSeparation)
+    {
+        if (dataSeparation == CommonAttributeDataSeparation.SEPARATE
+            || dataSeparation == CommonAttributeDataSeparation.DONT_USE)
+        {
+            return null;
+        }
+        return "The target common attribute's data-separation could not be established: got '" //$NON-NLS-1$
+            + String.valueOf(dataSeparation) + "'. Re-read the target with get_metadata_details " //$NON-NLS-1$
+            + "after its model reference is resolved, then retry."; //$NON-NLS-1$
     }
 
     /** Builds the actionable refusal text for the exact owner rule selected by the target. */
     static String ownerClassError(String fqn, EClass ownerClass,
         CommonAttributeDataSeparation dataSeparation)
     {
+        String separationError = dataSeparationError(dataSeparation);
+        if (separationError != null)
+        {
+            return separationError;
+        }
         boolean separator = dataSeparation == CommonAttributeDataSeparation.SEPARATE;
         String ownerKind = ownerClass == null ? "unknown" : ownerClass.getName(); //$NON-NLS-1$
         String targetKind = separator ? "SEPARATOR" : "simple"; //$NON-NLS-1$ //$NON-NLS-2$
