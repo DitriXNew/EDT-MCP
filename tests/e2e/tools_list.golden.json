@@ -2146,9 +2146,14 @@
           "type": "string"
         },
         "nameFilter": {
+          "description": "Case-insensitive substring matched against Name only (not Synonym)",
           "type": "string"
         },
         "projectName": {
+          "type": "string"
+        },
+        "textFilter": {
+          "description": "Case-insensitive substring matched against Name or Synonym selected by language; mutually exclusive with nameFilter",
           "type": "string"
         }
       },

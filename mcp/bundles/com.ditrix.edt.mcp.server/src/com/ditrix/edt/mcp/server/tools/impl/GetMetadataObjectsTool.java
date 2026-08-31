@@ -68,6 +68,16 @@ public class GetMetadataObjectsTool implements IMcpTool
 
     private static final String LIMIT = "limit"; //$NON-NLS-1$
 
+    private static final String NAME_FILTER = "nameFilter"; //$NON-NLS-1$
+    private static final String TEXT_FILTER = "textFilter"; //$NON-NLS-1$
+
+    /** The two deliberately separate filtering contracts exposed by this tool. */
+    enum FilterMode
+    {
+        NAME,
+        TEXT
+    }
+
     @Override
     public String getName()
     {
@@ -96,8 +106,11 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "In an EXTERNAL-OBJECTS project the vocabulary is " + //$NON-NLS-1$
                 "all / externalDataProcessors / externalReports instead - that project holds its " + //$NON-NLS-1$
                 "own roots, not a configuration.") //$NON-NLS-1$
-            .stringProperty("nameFilter", //$NON-NLS-1$
+            .stringProperty(NAME_FILTER,
                 "Case-insensitive substring matched against Name only (not Synonym)") //$NON-NLS-1$
+            .stringProperty(TEXT_FILTER,
+                "Case-insensitive substring matched against Name or Synonym selected by language; " + //$NON-NLS-1$
+                "mutually exclusive with nameFilter") //$NON-NLS-1$
             .integerProperty(LIMIT,
                 "Max rows (default from preferences: 100, max 1000)") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
@@ -127,7 +140,8 @@ public class GetMetadataObjectsTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String metadataType = JsonUtils.extractStringArgument(params, "metadataType"); //$NON-NLS-1$
-        String nameFilter = JsonUtils.extractStringArgument(params, "nameFilter"); //$NON-NLS-1$
+        String nameFilter = JsonUtils.extractStringArgument(params, NAME_FILTER);
+        String textFilter = JsonUtils.extractStringArgument(params, TEXT_FILTER);
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
 
         // Validate required parameter
@@ -135,6 +149,15 @@ public class GetMetadataObjectsTool implements IMcpTool
         if (err != null)
         {
             return err;
+        }
+
+        if (hasFilter(nameFilter) && hasFilter(textFilter))
+        {
+            return ToolResult.error("Use either nameFilter or textFilter, not both. Received " //$NON-NLS-1$
+                + "nameFilter='" + nameFilter + "' and " //$NON-NLS-1$ //$NON-NLS-2$
+                + "textFilter='" + textFilter + "'. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "nameFilter matches only the programmatic Name; textFilter matches Name or " //$NON-NLS-1$
+                + "Synonym in the effective language selected by language.").toJson(); //$NON-NLS-1$
         }
 
         // Set defaults
@@ -152,7 +175,9 @@ public class GetMetadataObjectsTool implements IMcpTool
         // Execute on UI thread
         AtomicReference<String> resultRef = new AtomicReference<>();
         final String mdType = metadataType;
-        final String filter = nameFilter;
+        final boolean useTextFilter = hasFilter(textFilter);
+        final String filter = useTextFilter ? textFilter : nameFilter;
+        final FilterMode filterMode = useTextFilter ? FilterMode.TEXT : FilterMode.NAME;
         final int maxResults = limit;
         final String lang = language; // null means use config default
         
@@ -160,7 +185,8 @@ public class GetMetadataObjectsTool implements IMcpTool
         display.syncExec(() -> {
             try
             {
-                String result = getMetadataObjectsInternal(projectName, mdType, filter, maxResults, lang);
+                String result = getMetadataObjectsInternal(projectName, mdType, filter, filterMode,
+                    maxResults, lang);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -185,7 +211,7 @@ public class GetMetadataObjectsTool implements IMcpTool
      * Internal implementation that runs on UI thread.
      */
     private String getMetadataObjectsInternal(String projectName, String metadataType,
-                                               String nameFilter, int limit, String language)
+        String filter, FilterMode filterMode, int limit, String language)
     {
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveMetadataRoot(projectName);
@@ -208,8 +234,8 @@ public class GetMetadataObjectsTool implements IMcpTool
         // and unrelated configuration objects took their place.
         if (scope.isExternalObjects())
         {
-            return externalObjectsOutput(projectName, scope, metadataType, nameFilter, limit,
-                effectiveLanguage);
+            return externalObjectsOutput(projectName, scope, metadataType, filter, filterMode,
+                limit, effectiveLanguage);
         }
 
         // Normalize the caller's bilingual type spelling to the canonical English FQN token.
@@ -235,14 +261,16 @@ public class GetMetadataObjectsTool implements IMcpTool
             {
                 if (!info.isStandalone())
                 {
-                    total += collectMetadataObjects(config, info, objects, nameFilter, limit);
+                    total += collectMetadataObjects(config, info, objects, filter, filterMode,
+                        limit, effectiveLanguage);
                 }
             }
         }
         else
         {
             MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(normalizedType);
-            total = collectMetadataObjects(config, info, objects, nameFilter, limit);
+            total = collectMetadataObjects(config, info, objects, filter, filterMode, limit,
+                effectiveLanguage);
         }
 
         // An object's ORIGIN (core vs extension-adopted vs extension-own) is only
@@ -269,13 +297,14 @@ public class GetMetadataObjectsTool implements IMcpTool
      * @param projectName the project the caller named
      * @param scope the external-objects resolution root
      * @param metadataType the caller's raw type filter
-     * @param nameFilter the caller's case-insensitive Name substring, or {@code null}
+     * @param filter the caller's case-insensitive substring, or {@code null}
+     * @param filterMode whether the substring matches Name only or Name / effective Synonym
      * @param limit max rows
      * @param language the resolved synonym language code (may be {@code null})
      * @return the Markdown listing, or a JSON error for a type this project cannot hold
      */
     private String externalObjectsOutput(String projectName, MetadataScope scope, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-        String metadataType, String nameFilter, int limit, String language)
+        String metadataType, String filter, FilterMode filterMode, int limit, String language)
     {
         String category = normalizeExternalMetadataType(metadataType);
         if (category == null)
@@ -292,12 +321,12 @@ public class GetMetadataObjectsTool implements IMcpTool
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_DATA_PROCESSORS.equals(category))
         {
             total += collectExternalObjects(scope, TOKEN_EXTERNAL_DATA_PROCESSOR, objects,
-                nameFilter, limit);
+                filter, filterMode, limit, language);
         }
         if (TYPE_ALL.equals(category) || TYPE_EXTERNAL_REPORTS.equals(category))
         {
-            total += collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, objects, nameFilter,
-                limit);
+            total += collectExternalObjects(scope, TOKEN_EXTERNAL_REPORT, objects, filter,
+                filterMode, limit, language);
         }
         // An external-objects project holds no adopted objects, so it has no Origin column.
         return formatOutput(projectName, objects, total, limit, language, metadataType, false, true);
@@ -344,10 +373,11 @@ public class GetMetadataObjectsTool implements IMcpTool
     }
 
     /**
-     * Appends the external objects of one TYPE, honouring the Name substring filter.
+     * Appends the external objects of one TYPE, honouring the selected substring filter.
      */
     private int collectExternalObjects(MetadataScope scope, String typeToken,
-        List<MetadataInfo> objects, String filter, int limit)
+        List<MetadataInfo> objects, String filter, FilterMode filterMode, int limit,
+        String language)
     {
         List<? extends MdObject> found = scope.objects(typeToken);
         if (found == null)
@@ -358,7 +388,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         int total = 0;
         for (MdObject object : found)
         {
-            if (!matchesFilter(object.getName(), filter))
+            if (!matches(object, filter, filterMode, language))
             {
                 continue;
             }
@@ -552,9 +582,13 @@ public class GetMetadataObjectsTool implements IMcpTool
             managerModule);
     }
     
-    /** Counts one configuration collection and materializes only rows that can be displayed. */
-    private int collectMetadataObjects(Configuration config, MetadataTypeUtils.MetadataTypeInfo typeInfo,
-        List<MetadataInfo> objects, String filter, int limit)
+    /**
+     * Counts one configuration collection and materializes only rows that can be displayed.
+     * Package-private so pure model filtering can be unit-tested without the workbench.
+     */
+    int collectMetadataObjects(Configuration config, MetadataTypeUtils.MetadataTypeInfo typeInfo,
+        List<MetadataInfo> objects, String filter, FilterMode filterMode, int limit,
+        String language)
     {
         if (typeInfo == null)
         {
@@ -571,7 +605,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         int total = 0;
         for (MdObject object : found)
         {
-            if (!matchesFilter(object.getName(), filter))
+            if (!matches(object, filter, filterMode, language))
             {
                 continue;
             }
@@ -623,13 +657,32 @@ public class GetMetadataObjectsTool implements IMcpTool
         return info;
     }
     
-    private boolean matchesFilter(String name, String filter)
+    /** One filtering decision shared by configuration and external-object collection. */
+    boolean matches(MdObject mdObject, String filter, FilterMode filterMode, String language)
     {
         if (filter == null || filter.isEmpty())
         {
             return true;
         }
-        return name != null && name.toLowerCase().contains(filter.toLowerCase());
+        String lowerFilter = filter.toLowerCase();
+        String name = mdObject == null ? null : mdObject.getName();
+        if (name != null && name.toLowerCase().contains(lowerFilter))
+        {
+            return true;
+        }
+        if (mdObject == null || filterMode != FilterMode.TEXT)
+        {
+            return false;
+        }
+        EMap<String, String> synonyms = mdObject.getSynonym();
+        String synonym = MetadataLanguageUtils.getSynonymForLanguage(
+            synonyms == null ? null : synonyms.map(), language);
+        return synonym.toLowerCase().contains(lowerFilter);
+    }
+
+    private static boolean hasFilter(String filter)
+    {
+        return filter != null && !filter.isEmpty();
     }
     
     private boolean hasModule(Module module)
@@ -656,7 +709,7 @@ public class GetMetadataObjectsTool implements IMcpTool
     /**
      * Holds metadata object information.
      */
-    private static class MetadataInfo
+    static class MetadataInfo
     {
         String name;
         java.util.Map<String, String> synonyms = new java.util.HashMap<>();
