@@ -93,6 +93,8 @@ public class GetFormLayoutSnapshotToolTest
         assertTrue(warning.contains("C++ visualizer")); //$NON-NLS-1$
         assertTrue(warning.contains("structural rather than transient")); //$NON-NLS-1$
         assertTrue(warning.contains("will not help")); //$NON-NLS-1$
+        assertTrue(warning.contains("relaunching EDT with -DnativeFormLayoutRender=false")); //$NON-NLS-1$
+        assertTrue(warning.contains("get_form_screenshot's image path uses")); //$NON-NLS-1$
         assertTrue(warning.contains("get_metadata_details")); //$NON-NLS-1$
         assertFalse("native-render diagnosis must not tell the caller to retry", //$NON-NLS-1$
             warning.contains("Retry the call")); //$NON-NLS-1$
@@ -115,10 +117,15 @@ public class GetFormLayoutSnapshotToolTest
     {
         String warning = FormLayoutSnapshotService.buildNoBoundsWarning(0, NativeRenderMode.UNKNOWN);
 
-        assertTrue(warning.contains("could not be determined")); //$NON-NLS-1$
+        assertTrue(warning.contains("effective native render mode could not be read")); //$NON-NLS-1$
         assertTrue(warning.contains("when native render mode is on")); //$NON-NLS-1$
         assertTrue(warning.contains("when native render mode is off")); //$NON-NLS-1$
-        assertTrue(warning.contains("get_server_status formRenderFlags")); //$NON-NLS-1$
+        assertTrue(warning.contains("get_metadata_details with the form FQN")); //$NON-NLS-1$
+        assertTrue(warning.contains("regardless of render mode")); //$NON-NLS-1$
+        assertTrue(warning.contains("native render by default")); //$NON-NLS-1$
+        assertTrue(warning.contains("-DnativeFormLayoutRender is not set explicitly")); //$NON-NLS-1$
+        assertFalse("unknown diagnosis must not use get_server_status as an effective-mode oracle", //$NON-NLS-1$
+            warning.contains("get_server_status")); //$NON-NLS-1$
         assertFalse("unknown diagnosis must not assert that a retry will work", //$NON-NLS-1$
             warning.contains("Retry the call")); //$NON-NLS-1$
         assertFalse("unknown diagnosis must not assert that retries cannot work", //$NON-NLS-1$

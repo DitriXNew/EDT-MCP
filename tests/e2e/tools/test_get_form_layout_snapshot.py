@@ -152,7 +152,7 @@ def _assert_zero_bounds_warning_is_a_real_diagnosis(body):
 
     native = "does not produce Java-side per-element bounds in native render mode" in normalized
     java = "Native render mode is off" in normalized
-    unknown = "native render mode could not be determined" in normalized
+    unknown = "effective native render mode could not be read" in normalized
     assert sum((native, java, unknown)) == 1, (
         "the zero-bounds warning must be exactly one of the three render-mode "
         "diagnoses:\n%s" % body[:1200])
@@ -177,12 +177,19 @@ def _assert_zero_bounds_warning_is_a_real_diagnosis(body):
             "Java-render warning must not claim retries are structurally useless:\n%s"
             % body[:1200])
     else:
-        # Unknown: it must name both causes and commit to neither.
+        # Unknown: it must name both causes, commit to neither, and offer a
+        # render-mode-independent way to inspect the element tree.
         assert ("when native render mode is on" in normalized
                 and "when native render mode is off" in normalized), (
             "unknown-mode warning must name both possible causes:\n%s" % body[:1200])
         assert "Retry the call" not in normalized and "will not help" not in normalized, (
             "unknown-mode warning must not assert either cause:\n%s" % body[:1200])
+        assert "get_metadata_details" in normalized and "form FQN" in normalized, (
+            "unknown-mode warning must offer render-independent element-tree advice:\n%s"
+            % body[:1200])
+        assert "get_server_status" not in normalized, (
+            "unknown-mode warning must not use requested render flags as an effective-mode oracle:\n%s"
+            % body[:1200])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
