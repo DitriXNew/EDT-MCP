@@ -48,6 +48,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * These are deliberately per-preset rather than a shared union. They omit the default-disabled
      * tools, so a user who enabled git is still recognized, and apply_quick_fix is in none of them,
      * so version 4 still recognizes a read-only store whose user deliberately re-enabled it.
+     *
+     * They name {@code launch}, not the historical {@code debug_launch}, ONLY because the version 5
+     * rename step runs before every shape check, so a store reaching one already spells the new
+     * name. A RENAMED tool must be handled that way - by migrating the stored list first - never by
+     * editing a shape to match the live preset.
      */
     static final Set<String> ANALYSIS_ONLY_RECOGNITION_SHAPE = Set.of(
         "launch", //$NON-NLS-1$
@@ -208,6 +213,15 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             // re-run an EARLIER one an installation already passed through.
             // The tool names are used as literals here on purpose: the preferences layer must not
             // depend on tools/impl (see the architecture rules).
+            // FIRST, before any shape-based step: the rename debug_launch -> launch. Every stored
+            // list predating this build spells the tool the old way, while the frozen recognition
+            // shapes below and every later lookup spell it the new way, so renaming here is what
+            // keeps both a deliberate disable AND preset recognition working across the rename.
+            if (storedVersion < 5 && disabled.remove("debug_launch")) //$NON-NLS-1$
+            {
+                disabled.add("launch"); //$NON-NLS-1$
+                changed = true;
+            }
             if (storedVersion < 1)
             {
                 changed |= disabled.add("git"); //$NON-NLS-1$

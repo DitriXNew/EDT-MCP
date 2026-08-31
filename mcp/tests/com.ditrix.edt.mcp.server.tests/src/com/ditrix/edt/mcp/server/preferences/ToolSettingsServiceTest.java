@@ -40,7 +40,7 @@ public class ToolSettingsServiceTest
 
     /* Independent first-release fixtures: never derive these from the production constants. */
     private static final Set<String> FIRST_RELEASE_ANALYSIS_ONLY_SHAPE = Set.of(
-        "launch", //$NON-NLS-1$
+        "debug_launch", //$NON-NLS-1$
         "debug_status", //$NON-NLS-1$
         "debug_yaxunit_tests", //$NON-NLS-1$
         "evaluate_expression", //$NON-NLS-1$
@@ -70,7 +70,7 @@ public class ToolSettingsServiceTest
         "write_module_source"); //$NON-NLS-1$
 
     private static final Set<String> FIRST_RELEASE_CODE_REVIEW_SHAPE = Set.of(
-        "launch", //$NON-NLS-1$
+        "debug_launch", //$NON-NLS-1$
         "debug_status", //$NON-NLS-1$
         "debug_yaxunit_tests", //$NON-NLS-1$
         "evaluate_expression", //$NON-NLS-1$
@@ -509,7 +509,13 @@ public class ToolSettingsServiceTest
 
         ToolSettingsService.ensureMigratedForTest(store);
 
-        assertEquals(overlap, disabledTools(store));
+        // The version 5 rename is orthogonal to shape recognition and applies to any stored list,
+        // so the expectation is the SAME selection spelled with the current tool name - not a free
+        // pass for version 4 to add anything.
+        Set<String> expected = new HashSet<>(overlap);
+        expected.remove("debug_launch"); //$NON-NLS-1$
+        expected.add("launch"); //$NON-NLS-2$
+        assertEquals(expected, disabledTools(store));
     }
 
     @Test
@@ -591,6 +597,60 @@ public class ToolSettingsServiceTest
         assertTrue("frozen recognition shape for " + preset
             + " contains tools the current preset no longer disables: " + offending,
             offending.isEmpty());
+    }
+
+    /*
+     * Version 5 - the debug_launch -> launch rename. A deliberate disable is a user decision, so it
+     * has to survive a rename of the tool it names; without the migration the stored old name stops
+     * matching any lookup and the tool silently comes back ON.
+     */
+
+    @Test
+    public void testVersion5RenamesADeliberatelyDisabledDebugLaunch()
+    {
+        PreferenceStore store = storedDisabledTools(
+            Set.of("debug_launch", "git", "ask_workmate"), 4); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("the disable must follow the rename: " + disabled,
+            disabled.contains("launch")); //$NON-NLS-1$
+        assertFalse("the stale name must not survive: " + disabled,
+            disabled.contains("debug_launch")); //$NON-NLS-1$
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testVersion5RenameKeepsAHistoricalCodeReviewStoreRecognized()
+    {
+        // A first-release store spells the tool the old way, and the frozen recognition shape spells
+        // it the new way. This passes only because the rename runs BEFORE the shape check.
+        Set<String> historical = new HashSet<>(FIRST_RELEASE_CODE_REVIEW_SHAPE);
+        historical.add("git"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(historical, 1);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("the renamed entry must be present: " + disabled,
+            disabled.contains("launch")); //$NON-NLS-1$
+        assertFalse("the stale name must not survive: " + disabled,
+            disabled.contains("debug_launch")); //$NON-NLS-1$
+        assertTrue("the store must still be recognized as Code Review: " + disabled,
+            disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
+    }
+
+    @Test
+    public void testVersion5DoesNotDisableLaunchForAStoreThatNeverDisabledIt()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 4); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertFalse("the rename must not invent a disable: " + disabledTools(store),
+            disabledTools(store).contains("launch")); //$NON-NLS-1$
     }
 
     private static PreferenceStore storedDisabledTools(Set<String> disabled, int migrationVersion)
