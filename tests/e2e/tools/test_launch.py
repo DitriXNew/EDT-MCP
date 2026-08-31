@@ -490,7 +490,10 @@ def _assert_object_resolved(err, ctx):
     * on a bare CI runner the object still resolves, but EDT reports it cannot generate dumps
       at all ("parent project must have a developing application with an infobase") - the
       pre-launch gate firing exactly as designed, because a launch there really would start a
-      session with no /Execute.
+      session with no /Execute;
+    * on a runner whose external-objects project has dump generation switched OFF, the same
+      gate refuses for that reason instead. Which of the two gate refusals appears is a
+      property of the project's settings, not of the code under test.
 
     Pinning either one alone would make the test a statement about the environment. What must
     hold everywhere is the negative: the failure is NOT the object failing to resolve.
@@ -503,7 +506,9 @@ def _assert_object_resolved(err, ctx):
             raise AssertionError(
                 "%s: the external object must resolve, but the call failed on %r: %s"
                 % (ctx, resolution_failure, err))
-    for expected in ("Launch configuration not found", "cannot build the external object"):
+    for expected in ("Launch configuration not found",
+                     "cannot build the external object",
+                     "dump generation is switched OFF"):
         if expected in err:
             return
     raise AssertionError(
