@@ -151,10 +151,37 @@ public class GetServerStatusToolTest
     }
 
     @Test
-    public void testFormRenderFlagsReflectSystemProperties()
+    public void testFormRenderFlagsContainEffectiveModesWithoutRequestedProperties()
     {
-        // The two form-render flags are read from System properties via Boolean.parseBoolean:
-        // set => true, absent => false. Restore the prior values to keep the test isolated.
+        String bufferedKey = "nativeFormBufferedLayoutRender"; //$NON-NLS-1$
+        String nativeKey = "nativeFormLayoutRender"; //$NON-NLS-1$
+        String savedBuffered = System.getProperty(bufferedKey);
+        String savedNative = System.getProperty(nativeKey);
+        try
+        {
+            System.clearProperty(bufferedKey);
+            System.clearProperty(nativeKey);
+
+            JsonObject flags = JsonParser
+                .parseString(new GetServerStatusTool().execute(java.util.Collections.emptyMap()))
+                .getAsJsonObject().getAsJsonObject("formRenderFlags"); //$NON-NLS-1$
+            assertEffectiveState(flags, nativeKey);
+            assertEffectiveState(flags, bufferedKey);
+            assertFalse("native requested must be absent when unset", //$NON-NLS-1$
+                flags.getAsJsonObject(nativeKey).has("requested")); //$NON-NLS-1$
+            assertFalse("buffered requested must be absent when unset", //$NON-NLS-1$
+                flags.getAsJsonObject(bufferedKey).has("requested")); //$NON-NLS-1$
+        }
+        finally
+        {
+            restoreProperty(bufferedKey, savedBuffered);
+            restoreProperty(nativeKey, savedNative);
+        }
+    }
+
+    @Test
+    public void testFormRenderFlagsKeepRequestedPropertiesAsStrings()
+    {
         String bufferedKey = "nativeFormBufferedLayoutRender"; //$NON-NLS-1$
         String nativeKey = "nativeFormLayoutRender"; //$NON-NLS-1$
         String savedBuffered = System.getProperty(bufferedKey);
@@ -162,19 +189,42 @@ public class GetServerStatusToolTest
         try
         {
             System.setProperty(bufferedKey, "true"); //$NON-NLS-1$
-            System.clearProperty(nativeKey);
+            System.setProperty(nativeKey, "false"); //$NON-NLS-1$
 
             JsonObject flags = JsonParser
                 .parseString(new GetServerStatusTool().execute(java.util.Collections.emptyMap()))
                 .getAsJsonObject().getAsJsonObject("formRenderFlags"); //$NON-NLS-1$
-            assertTrue("buffered flag set => true", flags.get(bufferedKey).getAsBoolean()); //$NON-NLS-1$
-            assertFalse("native flag absent => false", flags.get(nativeKey).getAsBoolean()); //$NON-NLS-1$
+            assertRequestedString(flags, nativeKey, "false"); //$NON-NLS-1$
+            assertRequestedString(flags, bufferedKey, "true"); //$NON-NLS-1$
         }
         finally
         {
             restoreProperty(bufferedKey, savedBuffered);
             restoreProperty(nativeKey, savedNative);
         }
+    }
+
+    private static void assertEffectiveState(JsonObject flags, String key)
+    {
+        assertTrue(key + " must be present", flags.has(key)); //$NON-NLS-1$
+        assertTrue(key + " must be an object", flags.get(key).isJsonObject()); //$NON-NLS-1$
+        JsonObject state = flags.getAsJsonObject(key);
+        assertTrue(key + " must contain effective", state.has("effective")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(key + " effective must be a string", //$NON-NLS-1$
+            state.get("effective").getAsJsonPrimitive().isString()); //$NON-NLS-1$
+        String effective = state.get("effective").getAsString(); //$NON-NLS-1$
+        boolean valid = "on".equals(effective) || "off".equals(effective) //$NON-NLS-1$ //$NON-NLS-2$
+            || "unknown".equals(effective); //$NON-NLS-1$
+        assertTrue(key + " effective must be on, off, or unknown", valid); //$NON-NLS-1$
+    }
+
+    private static void assertRequestedString(JsonObject flags, String key, String expected)
+    {
+        JsonObject state = flags.getAsJsonObject(key);
+        assertTrue(key + " must contain requested", state.has("requested")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(key + " requested must be a string", //$NON-NLS-1$
+            state.get("requested").getAsJsonPrimitive().isString()); //$NON-NLS-1$
+        assertEquals(expected, state.get("requested").getAsString()); //$NON-NLS-1$
     }
 
     private static void restoreProperty(String key, String saved)

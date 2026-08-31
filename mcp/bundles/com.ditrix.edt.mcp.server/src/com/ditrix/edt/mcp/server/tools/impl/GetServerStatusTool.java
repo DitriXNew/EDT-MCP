@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import org.eclipse.jface.preference.IPreferenceStore;
@@ -19,6 +20,8 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 
 /**
  * Self-diagnosis tool: returns the running MCP server's introspection snapshot
@@ -27,7 +30,7 @@ import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
  * <p>
  * Reports: listening port, MCP protocol version, plugin and EDT version, the
  * enabled/total tool counts, the {@code plainTextMode} and {@code checksFolder}
- * preference flags, the two form-render JVM flags
+ * preference flags, the effective and requested states of the two form-render modes
  * ({@code -DnativeFormBufferedLayoutRender} / {@code -DnativeFormLayoutRender}),
  * and whether authentication is enabled.
  * <p>
@@ -95,7 +98,8 @@ public class GetServerStatusTool implements IMcpTool
             .booleanProperty("plainTextMode", "Whether JSON responses are forced to plain text") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("checksFolderConfigured", "Whether a checks folder path is configured") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("authEnabled", "Whether bearer-token authentication is enabled") //$NON-NLS-1$ //$NON-NLS-2$
-            .objectProperty("formRenderFlags", "Form-render JVM flag states keyed by flag name") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectProperty("formRenderFlags", //$NON-NLS-1$
+                "effective is actual EDT mode; requested is a system property this plugin may overwrite") //$NON-NLS-1$
             .build();
     }
 
@@ -159,13 +163,15 @@ public class GetServerStatusTool implements IMcpTool
             result.put("checksFolderConfigured", checksFolderConfigured); //$NON-NLS-1$
             result.put("authEnabled", authEnabled); //$NON-NLS-1$
 
-            // Form-render JVM flags (System properties), the diagnostic for a
-            // blank get_form_screenshot / get_form_layout_snapshot.
+            // Effective EDT render modes plus their raw requested System properties, the
+            // diagnostic for a blank get_form_screenshot / get_form_layout_snapshot.
             Map<String, Object> formRenderFlags = new LinkedHashMap<>();
-            formRenderFlags.put(FLAG_BUFFERED_LAYOUT_RENDER,
-                Boolean.parseBoolean(System.getProperty(FLAG_BUFFERED_LAYOUT_RENDER)));
             formRenderFlags.put(FLAG_NATIVE_LAYOUT_RENDER,
-                Boolean.parseBoolean(System.getProperty(FLAG_NATIVE_LAYOUT_RENDER)));
+                createRenderFlagState(NativeRenderModeProbe.getNativeRenderMode(),
+                    System.getProperty(FLAG_NATIVE_LAYOUT_RENDER)));
+            formRenderFlags.put(FLAG_BUFFERED_LAYOUT_RENDER,
+                createRenderFlagState(NativeRenderModeProbe.getBufferedRenderMode(),
+                    System.getProperty(FLAG_BUFFERED_LAYOUT_RENDER)));
             result.put("formRenderFlags", formRenderFlags); //$NON-NLS-1$
 
             return result.toJson();
@@ -175,5 +181,16 @@ public class GetServerStatusTool implements IMcpTool
             Activator.logError("Error in get_server_status", e); //$NON-NLS-1$
             return ToolResult.error(e.getMessage()).toJson();
         }
+    }
+
+    private static Map<String, Object> createRenderFlagState(NativeRenderMode effective, String requested)
+    {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("effective", effective.name().toLowerCase(Locale.ROOT)); //$NON-NLS-1$
+        if (requested != null)
+        {
+            state.put("requested", requested); //$NON-NLS-1$
+        }
+        return state;
     }
 }

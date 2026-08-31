@@ -59,6 +59,29 @@ public final class NativeRenderModeProbe
     }
 
     /**
+     * Returns EDT's effective buffered form render mode. Reflection failures are logged once and
+     * reported as {@link NativeRenderMode#UNKNOWN}; they never escape into a caller.
+     *
+     * @return the effective buffered render mode, or {@code UNKNOWN} when EDT's internal API changed
+     */
+    public static NativeRenderMode getBufferedRenderMode()
+    {
+        try
+        {
+            return createAccessor().isBufferedRender() ? NativeRenderMode.ON : NativeRenderMode.OFF;
+        }
+        catch (Exception | LinkageError e)
+        {
+            if (PROBE_FAILURE_LOGGED.compareAndSet(false, true))
+            {
+                Activator.logWarning("Could not determine EDT buffered form render mode via NativeRenderService: " //$NON-NLS-1$
+                    + e.getClass().getSimpleName() + ": " + e.getMessage()); //$NON-NLS-1$
+            }
+            return NativeRenderMode.UNKNOWN;
+        }
+    }
+
+    /**
      * Preserves the screenshot helper's existing buffered-native-render setup using the same
      * reflective accessor as {@link #getNativeRenderMode()}.
      */
