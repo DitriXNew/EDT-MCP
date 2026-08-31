@@ -205,6 +205,53 @@ def test_role_rights_first_write_on_a_freshly_created_role_lands_on_disk():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# #471 — every rights entry, including its RLS fields, resolves before any commit
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_role_rights_bad_rls_field_refuses_without_granting_the_right():
+    """#471: an RLS-field resolution refusal must not leave the right value committed.
+
+    The object, right and RLS condition are valid; only the requested field name is bogus. Before
+    the fix the value task committed first, then field resolution refused the call, so the caller saw
+    an error while get_metadata_details exposed a silently widened `allowed` right. The read-back is
+    therefore the central assertion: this test must fail if the writer merely preserves the error
+    message while still granting the right."""
+    name = "E2ERoleRightsBadRlsField"
+    fqn = _seed_role(name)
+    bogus_field = "E2EFieldThatDoesNotExist"
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "rights": [{
+            "object": GUARDED_OBJECT,
+            "right": "Read",
+            "value": "set",
+            "rls": "WHERE TRUE",
+            "rlsFields": [bogus_field],
+        }],
+    })
+    e = assert_error(r, "an unknown RLS field on an otherwise valid rights entry")
+    assert_error_quality(e, names=[bogus_field], suggests=["rlsFields"],
+                         ctx="the refusal must name the bad field and explain how to request a "
+                             "whole-object restriction instead")
+
+    assert _rights_file_text(name) is None, (
+        "the refusal must not bootstrap or export %s when rights resolution failed before the first "
+        "commit" % _rights_file(name))
+    after = _details(fqn)
+    assert (GUARDED_OBJECT, "Read", "allowed") not in _matrix_rows(after), (
+        "the refused call must NOT leave Read granted on %s; get_metadata_details is the semantic "
+        "truth the caller relies on:\n%s" % (GUARDED_OBJECT, after))
+    assert_contains(after, NO_MATRIX_NOTE,
+                    "a rights-resolution refusal on a fresh role must not even bootstrap an empty "
+                    "rights model")
+    assert_tree_unchanged(before,
+                          "the RLS-field refusal must leave the seeded role byte-for-byte unchanged")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Round trip — grant, then deny the SAME object+right; each proven in the reader
 # AND in the file on disk
 # ──────────────────────────────────────────────────────────────────────────────
