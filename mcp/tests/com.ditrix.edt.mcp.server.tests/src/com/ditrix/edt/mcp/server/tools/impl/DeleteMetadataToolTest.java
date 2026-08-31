@@ -53,10 +53,13 @@ import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings.ParameterDef;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -167,6 +170,161 @@ public class DeleteMetadataToolTest
         assertTrue(schema.contains("\"confirm\"")); //$NON-NLS-1$
         assertTrue("schema must declare the force override", //$NON-NLS-1$
             schema.contains("\"force\"")); //$NON-NLS-1$
+        assertTrue("schema must declare the caller-side delete bound", //$NON-NLS-1$
+            schema.contains("\"timeout\"")); //$NON-NLS-1$
+        assertTrue("schema must say the timeout is clamped rather than rejected", //$NON-NLS-1$
+            schema.contains("clamped")); //$NON-NLS-1$
+        assertTrue("schema must keep the pre-flight cascade settle outside the new bound", //$NON-NLS-1$
+            schema.contains("separate 60s bound")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDeleteTimeoutClampBelowMinimum()
+    {
+        ParameterDef timeout = deleteTimeoutDef();
+
+        assertEquals("a delete timeout below the range must be raised to its minimum", //$NON-NLS-1$
+            timeout.getMinValue(), DeleteMetadataTool.clampTimeoutSeconds(timeout.getMinValue() - 1));
+    }
+
+    @Test
+    public void testDeleteTimeoutClampAboveMaximum()
+    {
+        ParameterDef timeout = deleteTimeoutDef();
+
+        assertEquals("a delete timeout above the range must be lowered to its maximum", //$NON-NLS-1$
+            timeout.getMaxValue(), DeleteMetadataTool.clampTimeoutSeconds(timeout.getMaxValue() + 1));
+    }
+
+    @Test
+    public void testDeleteTimeoutClampPreservesInRangeValue()
+    {
+        assertEquals("an in-range delete timeout must pass through unchanged", //$NON-NLS-1$
+            600, DeleteMetadataTool.clampTimeoutSeconds(600));
+        Map<String, String> params = new HashMap<>();
+        params.put(DeleteMetadataTool.KEY_TIMEOUT, "600"); //$NON-NLS-1$
+        assertEquals("the explicit wire value must be the bound the delete resolves", //$NON-NLS-1$
+            600_000L, DeleteMetadataTool.resolveDeleteTimeoutMs(params));
+    }
+
+    @Test
+    public void testDeleteTimeoutDefaultsToConfiguredValueWhenAbsent()
+    {
+        ParameterDef timeout = deleteTimeoutDef();
+
+        assertEquals("the settings UI must use the delete tool's own default", //$NON-NLS-1$
+            DeleteMetadataTool.DEFAULT_DELETE_TIMEOUT_SECONDS, timeout.getDefaultValue());
+        assertEquals("an absent wire argument must resolve to that configured default", //$NON-NLS-1$
+            timeout.getDefaultValue() * 1000L,
+            DeleteMetadataTool.resolveDeleteTimeoutMs(Collections.emptyMap()));
+        assertTrue("the default must clear the measured 301s legitimate refactoring", //$NON-NLS-1$
+            timeout.getDefaultValue() > 301);
+    }
+
+    @Test
+    public void testTimedOutConfirmedDeleteWarnsThatEdtMayStillFinishAndNamesInspectors()
+    {
+        String error = boundedError(true, BoundedJob.Outcome.TIMED_OUT);
+
+        assertTrue("the error must name the delete target: " + error, //$NON-NLS-1$
+            error.contains("Catalog.Products")); //$NON-NLS-1$
+        assertTrue("the error must name the elapsed bound: " + error, //$NON-NLS-1$
+            error.contains("420 seconds")); //$NON-NLS-1$
+        assertTrue("a running UI delete is not stopped by the caller deadline: " + error, //$NON-NLS-1$
+            error.contains("may still finish deleting")); //$NON-NLS-1$
+        assertTrue("the caller must be told the model may already have changed: " + error, //$NON-NLS-1$
+            error.contains("model may already have changed")); //$NON-NLS-1$
+        assertTrue("a top-level target must name its collection inspector: " + error, //$NON-NLS-1$
+            error.contains("get_metadata_objects")); //$NON-NLS-1$
+        assertTrue("every target must name the FQN-capable inspector: " + error, //$NON-NLS-1$
+            error.contains("get_metadata_details on 'Catalog.Products'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTimedOutPreviewSaysModelIsUnchangedWithoutVerificationAdvice()
+    {
+        String error = boundedError(false, BoundedJob.Outcome.TIMED_OUT);
+
+        assertTrue("the error must identify the harmless preview branch: " + error, //$NON-NLS-1$
+            error.contains("PREVIEW (confirm=false)")); //$NON-NLS-1$
+        assertTrue("a preview timeout must say nothing was deleted: " + error, //$NON-NLS-1$
+            error.contains("nothing was deleted")); //$NON-NLS-1$
+        assertTrue("a preview timeout must say the model is unchanged: " + error, //$NON-NLS-1$
+            error.contains("model is unchanged")); //$NON-NLS-1$
+        assertFalse("a preview must not send the caller checking a model it cannot mutate: " + error, //$NON-NLS-1$
+            error.contains("get_metadata_")); //$NON-NLS-1$
+        assertFalse("a preview must not be described as a deletion that may still land: " + error, //$NON-NLS-1$
+            error.contains("may still finish deleting")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTimedOutBeforeStartSaysNothingWasDeletedAndNoCleanupNeeded()
+    {
+        String error = boundedError(true, BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
+
+        assertTrue("the queued outcome must say the delete did not START: " + error, //$NON-NLS-1$
+            error.contains("did not START")); //$NON-NLS-1$
+        assertTrue("our cancellation must be named as what kept it from starting: " + error, //$NON-NLS-1$
+            error.contains("cancelling it kept it from starting")); //$NON-NLS-1$
+        assertTrue("a never-started delete must say nothing was deleted: " + error, //$NON-NLS-1$
+            error.contains("NOTHING was deleted")); //$NON-NLS-1$
+        assertTrue("a never-started delete must say the model is untouched: " + error, //$NON-NLS-1$
+            error.contains("model is untouched")); //$NON-NLS-1$
+        assertTrue("a never-started delete needs no cleanup: " + error, //$NON-NLS-1$
+            error.contains("no check or cleanup is needed")); //$NON-NLS-1$
+        assertFalse("a never-started delete must not be advertised as still running: " + error, //$NON-NLS-1$
+            error.contains("may still finish")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInterruptedConfirmedDeleteWarnsThatEdtMayStillFinish()
+    {
+        String error = boundedError(true, BoundedJob.Outcome.INTERRUPTED);
+
+        assertTrue("the interrupted outcome must name what happened: " + error, //$NON-NLS-1$
+            error.contains("was interrupted")); //$NON-NLS-1$
+        assertTrue("the interrupted outcome must name the configured bound: " + error, //$NON-NLS-1$
+            error.contains("420 seconds")); //$NON-NLS-1$
+        assertTrue("interrupting the waiter cannot preempt the UI delete: " + error, //$NON-NLS-1$
+            error.contains("may still finish deleting")); //$NON-NLS-1$
+        assertTrue("the interrupted execute must name the FQN-capable inspector: " + error, //$NON-NLS-1$
+            error.contains("get_metadata_details on 'Catalog.Products'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotRunDeleteSaysNothingWasDeleted()
+    {
+        String error = boundedError(true, BoundedJob.Outcome.NOT_RUN);
+
+        assertTrue("NOT_RUN must say the UI work never started: " + error, //$NON-NLS-1$
+            error.contains("cancelled before its UI-thread work started")); //$NON-NLS-1$
+        assertTrue("NOT_RUN must say nothing was deleted: " + error, //$NON-NLS-1$
+            error.contains("NOTHING was deleted")); //$NON-NLS-1$
+        assertTrue("NOT_RUN must say the model is untouched: " + error, //$NON-NLS-1$
+            error.contains("model is untouched")); //$NON-NLS-1$
+        assertFalse("NOT_RUN must not be described as work that may still finish: " + error, //$NON-NLS-1$
+            error.contains("may still finish")); //$NON-NLS-1$
+    }
+
+    private static ParameterDef deleteTimeoutDef()
+    {
+        List<ParameterDef> parameters =
+            ToolParameterSettings.getInstance().getParametersForTool(DeleteMetadataTool.NAME);
+        assertEquals("delete_metadata must publish exactly one configurable parameter", //$NON-NLS-1$
+            1, parameters.size());
+        ParameterDef timeout = parameters.get(0);
+        assertEquals(DeleteMetadataTool.KEY_TIMEOUT, timeout.getName());
+        return timeout;
+    }
+
+    private static String boundedError(boolean confirm, BoundedJob.Outcome outcome)
+    {
+        String json = DeleteMetadataTool.boundedOutcomeError("Catalog.Products", confirm, //$NON-NLS-1$
+            DeleteMetadataTool.DEFAULT_DELETE_TIMEOUT_SECONDS * 1000L, outcome);
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse("every non-completed bounded outcome must be an error", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        return result.get("error").getAsString(); //$NON-NLS-1$
     }
 
     @Test
@@ -292,6 +450,12 @@ public class DeleteMetadataToolTest
         assertTrue("guide should warn it is a cascading delete", guide.contains("Think twice")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("guide should document the two-phase workflow", guide.contains("confirm=true")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("guide should list member kinds", guide.contains("enum value")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must document the timeout parameter and accepted range", //$NON-NLS-1$
+            guide.contains("timeout") && guide.contains("60..3600")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must distinguish a delete that never started", //$NON-NLS-1$
+            guide.contains("NOTHING was deleted, the model is untouched")); //$NON-NLS-1$
+        assertTrue("guide must say a timed-out confirmed delete may still finish", //$NON-NLS-1$
+            guide.contains("EDT may still finish the delete")); //$NON-NLS-1$
     }
 
     // ---- the 4-part form-object FQN is recognized by the delete dispatch --------------------------

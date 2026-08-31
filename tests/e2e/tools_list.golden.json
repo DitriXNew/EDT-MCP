@@ -1252,6 +1252,9 @@
         },
         "projectName": {
           "type": "string"
+        },
+        "timeout": {
+          "type": "integer"
         }
       },
       "required": [
