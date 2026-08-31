@@ -7,7 +7,9 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
@@ -16,6 +18,8 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.form.FormLayoutSnapshotService;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 
 /**
  * Tests for {@link GetFormLayoutSnapshotTool}.
@@ -72,8 +76,59 @@ public class GetFormLayoutSnapshotToolTest
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
         assertTrue(guide.contains("nativeFormBufferedLayoutRender")); //$NON-NLS-1$
+        assertTrue(guide.contains("nativeFormLayoutRender")); //$NON-NLS-1$
+        assertTrue(guide.contains("get_server_status")); //$NON-NLS-1$
         assertTrue(guide.contains("compact")); //$NON-NLS-1$
         assertTrue(guide.contains("full")); //$NON-NLS-1$
+    }
+
+    // ==================== No-bounds diagnosis (pure/headless) ====================
+
+    @Test
+    public void testNoBoundsWarningForNativeRenderExplainsStructuralLimitation()
+    {
+        String warning = FormLayoutSnapshotService.buildNoBoundsWarning(0, NativeRenderMode.ON);
+
+        assertTrue(warning.contains("does not produce Java-side per-element bounds")); //$NON-NLS-1$
+        assertTrue(warning.contains("C++ visualizer")); //$NON-NLS-1$
+        assertTrue(warning.contains("structural rather than transient")); //$NON-NLS-1$
+        assertTrue(warning.contains("will not help")); //$NON-NLS-1$
+        assertTrue(warning.contains("get_metadata_details")); //$NON-NLS-1$
+        assertFalse("native-render diagnosis must not tell the caller to retry", //$NON-NLS-1$
+            warning.contains("Retry the call")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoBoundsWarningForJavaRenderSuggestsRetry()
+    {
+        String warning = FormLayoutSnapshotService.buildNoBoundsWarning(0, NativeRenderMode.OFF);
+
+        assertTrue(warning.contains("Native render mode is off")); //$NON-NLS-1$
+        assertTrue(warning.contains("may not have finished rendering")); //$NON-NLS-1$
+        assertTrue(warning.contains("Retry the call")); //$NON-NLS-1$
+        assertTrue(warning.contains("refresh is true")); //$NON-NLS-1$
+        assertFalse(warning.contains("will not help")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoBoundsWarningForUnknownRenderModeAssertsNeitherCause()
+    {
+        String warning = FormLayoutSnapshotService.buildNoBoundsWarning(0, NativeRenderMode.UNKNOWN);
+
+        assertTrue(warning.contains("could not be determined")); //$NON-NLS-1$
+        assertTrue(warning.contains("when native render mode is on")); //$NON-NLS-1$
+        assertTrue(warning.contains("when native render mode is off")); //$NON-NLS-1$
+        assertTrue(warning.contains("get_server_status formRenderFlags")); //$NON-NLS-1$
+        assertFalse("unknown diagnosis must not assert that a retry will work", //$NON-NLS-1$
+            warning.contains("Retry the call")); //$NON-NLS-1$
+        assertFalse("unknown diagnosis must not assert that retries cannot work", //$NON-NLS-1$
+            warning.contains("will not help")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoBoundsWarningOmittedWhenBoundsExist()
+    {
+        assertNull(FormLayoutSnapshotService.buildNoBoundsWarning(1, NativeRenderMode.ON));
     }
 
     // ==================== Argument validation (no live workbench needed) ====================

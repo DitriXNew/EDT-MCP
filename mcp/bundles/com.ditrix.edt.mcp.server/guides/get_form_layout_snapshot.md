@@ -5,8 +5,12 @@ Returns a YAML snapshot of a form's **calculated WYSIWYG layout**: per-element b
 - Verify a layout change took effect, or diff two states of the same form.
 - For a rendered PNG instead of layout data, use `get_form_screenshot`.
 
-## Required JVM flag (read this first)
-EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.ini` `-vmargs` section. Without it the layout service is constructed without an offscreen handler and the snapshot comes back **blank/empty**. A blank result almost always means the flag is missing - it is NOT a bad call or a code bug. (The default native render mode also yields only form-level metrics for some elements; per-element bounds populate when buffered layout render is active.)
+## Render-mode flags (read this first)
+No buffered-render JVM flag is required for this tool's element tree or form-level size. Per-element bounds are governed by EDT's **native form layout render mode**, exposed as `nativeFormLayoutRender`:
+- Native render **on** (`-DnativeFormLayoutRender=true`, also EDT's default when the property is absent): EDT computes the layout in its C++ visualizer. It does not return per-element rectangles to the Java `modelProjection` / `layoutProjection` / `viewProjection` chain used by this tool, so `elementsWithBounds: 0` is structural rather than a rendering delay. Retrying or using `refresh: true` cannot populate those bounds.
+- Native render **off** (`-DnativeFormLayoutRender=false`): EDT populates the Java projections. A zero-bounds result can then mean that the form has not finished rendering; retry or use `refresh: true`.
+
+`-DnativeFormBufferedLayoutRender=true` is a different knob. It enables the offscreen buffered image used by `get_form_screenshot`; it does not make `get_form_layout_snapshot` produce per-element bounds. Use `get_server_status` and inspect `formRenderFlags` for the caller-facing state of both flags. If native rendering is on and you need the form's element hierarchy rather than pixel rectangles, call `get_metadata_details` with the form FQN to inspect the element tree and its nesting.
 
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns an error. Ignored when targeting the active editor.
@@ -30,7 +34,9 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 - Full tree, no refresh: `{formPath: "CommonForm.MyForm", projectName: "MyProj", mode: "full", refresh: false}`.
 
 ## Notes & gotchas
-- Blank result => the `-DnativeFormBufferedLayoutRender=true` flag is missing (see above), not a failure of this call.
 - `formPath` without `projectName` is rejected: "projectName is required when formPath is specified".
 - Needs a live workbench Display; runs on the UI thread.
-- A "No calculated element bounds were found" warning means the form had not finished rendering yet - retry, or ensure `refresh` is `true`.
+- Read a "No calculated element bounds were found" warning according to its render-mode diagnosis:
+  - Native render on: Java-side per-element bounds are not produced. This is structural; do not retry. Relaunching EDT with `-DnativeFormLayoutRender=false` is what produces bounds, but it is a trade-off - native render is the mode `get_form_screenshot`'s image path uses. If you only need the element tree and nesting, use `get_metadata_details` instead.
+  - Native render off: the form may not have finished rendering. Retry or ensure `refresh` is `true`.
+  - Render mode unknown: the probe could not determine EDT's internal state, so the warning names both possibilities without choosing one. Check `get_server_status` → `formRenderFlags` before deciding whether to relaunch or retry.
