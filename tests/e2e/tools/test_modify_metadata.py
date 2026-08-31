@@ -80,6 +80,7 @@ def test_report_main_data_composition_schema_accepts_owned_template_member_refer
 
 # The fixture form every form-member test writes to.
 _ITEM_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+_COMMON_FORM_MDO = "src/CommonForms/Form/Form.mdo"
 
 
 def _assignable_text(fqn):
@@ -514,6 +515,62 @@ def test_set_web_service_xdto_packages_mixes_reference_and_namespace_on_disk():
                     "the platform namespace must round-trip in the current array")
     assert row.index(package_fqn) < row.index(namespace), \
         "the current array must preserve caller order: %s" % row
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_common_form_use_purposes_array_and_scalar_replace_the_whole_list():
+    fqn = "CommonForm.Form"
+    array_value = ["MobileDevice"]
+
+    array_result = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "usePurposes", "value": array_value}],
+    })
+    assert_ok(array_result, "replace CommonForm.usePurposes from a JSON array")
+    assert "usePurposes" in (array_result.structured.get("applied") or []), \
+        "the many-enum property must be reported as applied: %r" % (array_result.structured,)
+
+    # DISK FIRST: the fixture starts with both literals, so seeing exactly one proves replacement.
+    root = ET.fromstring(read_disk(_COMMON_FORM_MDO))
+    stored = [element.text for element in root.iter()
+              if element.tag.rsplit("}", 1)[-1] == "usePurposes"]
+    assert stored == array_value, \
+        "the array form must replace the persisted usePurposes list: %r" % (stored,)
+
+    row = _assignable_row(fqn, "usePurposes")
+    assert row is not None, "usePurposes must be listed by assignable:true after the array write"
+    assert_contains(row, "MANY_ENUM", "usePurposes must expose the many-enum value kind")
+    assert_contains(row, '["MobileDevice"]',
+                    "get_metadata_details must read back the array replacement")
+    assert_contains(row, "PersonalComputer, MobileDevice",
+                    "get_metadata_details must list every allowed enum literal")
+
+    scalar_value = "PersonalComputer"
+    scalar_result = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "usePurposes", "value": scalar_value}],
+    })
+    # Before #510 this exact scalar call leaked a raw ClassCastException from EMF.
+    assert_ok(scalar_result, "replace CommonForm.usePurposes from the scalar shorthand")
+    assert_not_contains(scalar_result.text, "ClassCastException",
+                        "the former raw EMF failure must not reach the caller")
+    assert "usePurposes" in (scalar_result.structured.get("applied") or []), \
+        "the scalar shorthand must be reported as applied: %r" % (scalar_result.structured,)
+
+    root = ET.fromstring(read_disk(_COMMON_FORM_MDO))
+    stored = [element.text for element in root.iter()
+              if element.tag.rsplit("}", 1)[-1] == "usePurposes"]
+    assert stored == [scalar_value], \
+        "the scalar shorthand must replace, not append to, the persisted list: %r" % (stored,)
+
+    row = _assignable_row(fqn, "usePurposes")
+    assert row is not None, "usePurposes must be listed by assignable:true after the scalar write"
+    assert_contains(row, '["PersonalComputer"]',
+                    "get_metadata_details must show only the scalar replacement")
+    assert_not_contains(row, '["MobileDevice"]',
+                        "the earlier value must not survive as an appended entry")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

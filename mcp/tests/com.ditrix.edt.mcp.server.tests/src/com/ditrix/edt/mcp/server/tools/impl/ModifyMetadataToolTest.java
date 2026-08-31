@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EDataType;
@@ -67,6 +68,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
@@ -368,6 +370,103 @@ public class ModifyMetadataToolTest
         Mockito.verify(livePackage).bmGetId();
     }
 
+    @Test
+    public void testManyEnumArrayPreparesListReplacement() throws Exception
+    {
+        Object change = preparedManyEnumChange(
+            JsonParser.parseString("[\"personalcomputer\",\"MobileDevice\"]")); //$NON-NLS-1$
+
+        assertEquals("MANY_ENUM", preparedChangeKind(change)); //$NON-NLS-1$
+        List<?> values = preparedChangeValues(change);
+        assertEquals(2, values.size());
+        assertEquals("PersonalComputer", ((Enumerator)values.get(0)).getName()); //$NON-NLS-1$
+        assertEquals("MobileDevice", ((Enumerator)values.get(1)).getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testManyEnumScalarPreparesOneElementListReplacement() throws Exception
+    {
+        Object change = preparedManyEnumChange(new JsonPrimitive("MobileDevice")); //$NON-NLS-1$
+
+        assertEquals("MANY_ENUM", preparedChangeKind(change)); //$NON-NLS-1$
+        List<?> values = preparedChangeValues(change);
+        assertEquals(1, values.size());
+        assertEquals("MobileDevice", ((Enumerator)values.get(0)).getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testManyEnumUnknownLiteralNamesElementAndAllowedValues()
+    {
+        String bad = "DesktopComputer"; //$NON-NLS-1$
+        String error = errorText(manyEnumVerdict(
+            JsonParser.parseString("[\"PersonalComputer\",\"" + bad + "\"]"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(error.contains("index 1")); //$NON-NLS-1$
+        assertTrue(error.contains(bad));
+        assertTrue(error.contains("PersonalComputer")); //$NON-NLS-1$
+        assertTrue(error.contains("MobileDevice")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testManyEnumObjectAndNestedArrayAreCleanShapeRefusals()
+    {
+        JsonElement object = JsonParser.parseString("{\"literal\":\"PersonalComputer\"}"); //$NON-NLS-1$
+        JsonElement nested = JsonParser.parseString("[[\"PersonalComputer\"]]"); //$NON-NLS-1$
+        for (JsonElement[] refusal : new JsonElement[][] {
+            {object, object}, {nested, nested.getAsJsonArray().get(0)}})
+        {
+            String error = errorText(manyEnumVerdict(refusal[0]));
+
+            assertTrue("the refusal must name the bad JSON value: " + error, //$NON-NLS-1$
+                error.contains(refusal[1].toString()));
+            assertTrue(error.contains("Expected a JSON array of enum literal strings")); //$NON-NLS-1$
+            assertTrue(error.contains("bare enum literal string")); //$NON-NLS-1$
+        }
+    }
+
+    private static Object preparedManyEnumChange(JsonElement value) throws Exception
+    {
+        Method prepare = ModifyMetadataTool.class.getDeclaredMethod("prepareFormMemberChanges", //$NON-NLS-1$
+            MetadataScope.class, Version.class, EObject.class, List.class, MdNameNormalizer.Report.class);
+        prepare.setAccessible(true);
+        List<?> changes = (List<?>)prepare.invoke(new ModifyMetadataTool(), null, null,
+            MdClassFactory.eINSTANCE.createCommonForm(),
+            Collections.singletonList(manyEnumProperty(value)), report());
+        Object holderChange = changes.get(0);
+        Field changeField = holderChange.getClass().getDeclaredField("change"); //$NON-NLS-1$
+        changeField.setAccessible(true);
+        return changeField.get(holderChange);
+    }
+
+    private static String preparedChangeKind(Object change) throws Exception
+    {
+        Field kind = change.getClass().getDeclaredField("kind"); //$NON-NLS-1$
+        kind.setAccessible(true);
+        return kind.get(change).toString();
+    }
+
+    private static List<?> preparedChangeValues(Object change) throws Exception
+    {
+        Field scalarValue = change.getClass().getDeclaredField("scalarValue"); //$NON-NLS-1$
+        scalarValue.setAccessible(true);
+        return (List<?>)scalarValue.get(change);
+    }
+
+    private static String manyEnumVerdict(JsonElement value)
+    {
+        return neverAsking().formRetypeVerdict(null, null,
+            MdClassFactory.eINSTANCE.createCommonForm(),
+            Collections.singletonList(manyEnumProperty(value)), report());
+    }
+
+    private static JsonObject manyEnumProperty(JsonElement value)
+    {
+        JsonObject property = new JsonObject();
+        property.addProperty("name", "usePurposes"); //$NON-NLS-1$ //$NON-NLS-2$
+        property.add("value", value); //$NON-NLS-1$
+        return property;
+    }
+
     private static String errorText(String errorJson)
     {
         assertNotNull(errorJson);
@@ -417,6 +516,18 @@ public class ModifyMetadataToolTest
         // renaming is refused with a pointer to rename_metadata_object
         assertTrue("guide should point a rename at rename_metadata_object", //$NON-NLS-1$
             guide.contains("rename_metadata_object")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideExplainsManyEnumReplacementShapes()
+    {
+        String guide = new ModifyMetadataTool().getGuide();
+
+        assertTrue(guide.contains("MANY_ENUM")); //$NON-NLS-1$
+        assertTrue(guide.contains("FULL-REPLACE")); //$NON-NLS-1$
+        assertTrue(guide.contains("CommonForm.Main")); //$NON-NLS-1$
+        assertTrue(guide.contains("bare scalar literal")); //$NON-NLS-1$
+        assertTrue(guide.contains("does not append")); //$NON-NLS-1$
     }
 
     // ---- a handler rebind must not be mixed with other property changes ---------------------------
