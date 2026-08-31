@@ -536,6 +536,14 @@ public class BuildExternalObjectsTool implements IMcpTool
                     StandaloneServerStateRecovery.ensureDefaultApplicationStartable(bc.project);
                     for (Target target : bc.targets)
                     {
+                        // The caller stops waiting at BUILD_TIMEOUT_MS and cancels this job, but
+                        // cancellation is cooperative: without this check the job would keep
+                        // deleting outputs and stamping Comments long after the tool reported the
+                        // timeout. Each object is a mutation, so the check belongs per object.
+                        if (monitor.isCanceled())
+                        {
+                            break;
+                        }
                         results.add(dumpOne(bc, target, buildStamp, monitor));
                     }
                 }
