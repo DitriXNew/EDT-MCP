@@ -258,6 +258,48 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    public void testTimedOutPreviewDoesNotRequestAMutationMarker()
+    {
+        DeleteMetadataTool tool = new DeleteMetadataTool();
+        Map<String, String> preview = new HashMap<>();
+        preview.put("confirm", "false"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject result = boundedJson(false, BoundedJob.Outcome.TIMED_OUT);
+
+        // A preview cannot write on any branch. Marking it uncertain would make the harness reset a
+        // provably unchanged model merely because it reads markers instead of the message text.
+        assertFalse(tool.uiThreadBoundOutcomeMayHaveMutated(preview,
+            BoundedJob.Outcome.TIMED_OUT));
+        assertFalse(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertFalse(result.has("mutationCommitted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmedBoundedOutcomeMarksOnlyWorkThatMayHaveStarted()
+    {
+        DeleteMetadataTool tool = new DeleteMetadataTool();
+        Map<String, String> confirmed = new HashMap<>();
+        confirmed.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<String, String> preview = new HashMap<>();
+        preview.put("confirm", "false"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(tool.uiThreadBoundOutcomeMayHaveMutated(confirmed,
+            BoundedJob.Outcome.TIMED_OUT));
+        assertTrue(tool.uiThreadBoundOutcomeMayHaveMutated(confirmed,
+            BoundedJob.Outcome.INTERRUPTED));
+        for (BoundedJob.Outcome outcome : new BoundedJob.Outcome[] {
+            BoundedJob.Outcome.TIMED_OUT_BEFORE_START, BoundedJob.Outcome.NOT_RUN })
+        {
+            // Both outcomes prove the UI work never started, so a structural marker would force a
+            // pointless reset and contradict the result's explicit "nothing was deleted" contract.
+            assertFalse(tool.uiThreadBoundOutcomeMayHaveMutated(confirmed, outcome));
+            assertFalse(tool.uiThreadBoundOutcomeMayHaveMutated(preview, outcome));
+            JsonObject confirmedResult = boundedJson(true, outcome);
+            assertFalse(confirmedResult.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+            assertFalse(confirmedResult.has("mutationCommitted")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testTimedOutBeforeStartSaysNothingWasDeletedAndNoCleanupNeeded()
     {
         String error = boundedError(true, BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
@@ -319,12 +361,17 @@ public class DeleteMetadataToolTest
 
     private static String boundedError(boolean confirm, BoundedJob.Outcome outcome)
     {
-        String json = DeleteMetadataTool.boundedOutcomeError("Catalog.Products", confirm, //$NON-NLS-1$
-            DeleteMetadataTool.DEFAULT_DELETE_TIMEOUT_SECONDS * 1000L, outcome);
-        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        JsonObject result = boundedJson(confirm, outcome);
         assertFalse("every non-completed bounded outcome must be an error", //$NON-NLS-1$
             result.get("success").getAsBoolean()); //$NON-NLS-1$
         return result.get("error").getAsString(); //$NON-NLS-1$
+    }
+
+    private static JsonObject boundedJson(boolean confirm, BoundedJob.Outcome outcome)
+    {
+        String json = DeleteMetadataTool.boundedOutcomeError("Catalog.Products", confirm, //$NON-NLS-1$
+            DeleteMetadataTool.DEFAULT_DELETE_TIMEOUT_SECONDS * 1000L, outcome);
+        return JsonParser.parseString(json).getAsJsonObject();
     }
 
     @Test

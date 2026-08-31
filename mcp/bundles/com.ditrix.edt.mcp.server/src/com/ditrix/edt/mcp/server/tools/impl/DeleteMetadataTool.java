@@ -424,6 +424,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return resolveDeleteTimeoutMs(params);
     }
 
+    /** A preview cannot mutate, even when its non-preemptible UI work remains in flight. */
+    @Override
+    protected boolean uiThreadBoundOutcomeMayHaveMutated(Map<String, String> params,
+        BoundedJob.Outcome outcome)
+    {
+        boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        return confirm && super.uiThreadBoundOutcomeMayHaveMutated(params, outcome);
+    }
+
     @Override
     protected String uiThreadBoundError(Map<String, String> params, long timeoutMs,
         BoundedJob.Outcome outcome)

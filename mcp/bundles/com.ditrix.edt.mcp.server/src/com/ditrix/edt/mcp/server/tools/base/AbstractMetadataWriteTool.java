@@ -87,12 +87,41 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
+     * Whether an unfinished bounded UI-thread hand-off may have mutated the model.
+     * <p>
+     * The default fails closed for work that started and cannot be preempted: a timeout or an
+     * interrupted wait is uncertain even when this request's {@link WriteScope} has not yet observed
+     * a commit. It returns {@code false} only when the bounded job proves the work never ran. This
+     * deliberately favours uncertainty because under-reporting can hide a mutation from a structured
+     * caller, whereas over-reporting costs only a redundant re-read.
+     *
+     * @param params the raw tool arguments
+     * @param outcome how the bounded job stopped waiting
+     * @return {@code true} when the returned error must conservatively report a possible mutation
+     */
+    protected boolean uiThreadBoundOutcomeMayHaveMutated(Map<String, String> params,
+        BoundedJob.Outcome outcome)
+    {
+        switch (outcome)
+        {
+        case TIMED_OUT_BEFORE_START:
+        case NOT_RUN:
+        case COMPLETED:
+            return false;
+        case TIMED_OUT:
+        case INTERRUPTED:
+        default:
+            return true;
+        }
+    }
+
+    /**
      * Translates a bounded UI hand-off that did not complete into an error result.
      * <p>
-     * The final executor passes this result through
-     * {@link WriteScope#markErrorAfterRecordedWrite(String)}, so an already-recorded commit remains
-     * declared structurally. A queued job that our deadline kept from starting is reported
-     * separately because no UI work can later appear in that case.
+     * The final executor marks this result according to
+     * {@link #uiThreadBoundOutcomeMayHaveMutated(Map, BoundedJob.Outcome)}, preserving a recorded
+     * commit as the strongest known state. A queued job that our deadline kept from starting is
+     * reported separately because no UI work can later appear in that case.
      *
      * @param params the raw tool arguments
      * @param timeoutMs the configured caller-side bound
@@ -127,6 +156,31 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 + "unrecognised bounded state (" + outcome + "). Inspect the tool's target before " //$NON-NLS-1$ //$NON-NLS-2$
                 + "retrying.").toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Applies the structural mutation contract to an unfinished bounded hand-off.
+     * <p>
+     * Package-visible and independent of SWT so headless tests can drive the return-path decision.
+     * The scope stamp runs first: {@link ToolResult#markErrorWithUnknownMutationOutcome(String)}
+     * preserves an existing {@code mutationCommitted:true}, so a recorded write outranks the
+     * conservative uncertainty required for in-flight work. When the work provably never ran, the
+     * original error is returned without either marker.
+     *
+     * @param scope the request's write scope
+     * @param error the bounded-outcome error JSON
+     * @param outcomeMayHaveMutated whether the unfinished work may have mutated the model
+     * @return the structurally marked error JSON
+     */
+    static String markUiThreadBoundOutcomeError(WriteScope scope, String error,
+        boolean outcomeMayHaveMutated)
+    {
+        if (!outcomeMayHaveMutated)
+        {
+            return error;
+        }
+        return ToolResult.markErrorWithUnknownMutationOutcome(
+            scope.markErrorAfterRecordedWrite(error));
     }
 
     /**
@@ -211,8 +265,11 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
                 {
                     // The caller is bounded, not SWT. The UI runnable may still record a commit or
                     // finish later, so never proceed to the export barrier and never claim rollback.
-                    return scope.markErrorAfterRecordedWrite(
-                        uiThreadBoundError(params, boundMs, bounded.getOutcome()));
+                    boolean outcomeMayHaveMutated =
+                        uiThreadBoundOutcomeMayHaveMutated(params, bounded.getOutcome());
+                    return markUiThreadBoundOutcomeError(scope,
+                        uiThreadBoundError(params, boundMs, bounded.getOutcome()),
+                        outcomeMayHaveMutated);
                 }
                 if (bounded.getFailure() != null)
                 {
