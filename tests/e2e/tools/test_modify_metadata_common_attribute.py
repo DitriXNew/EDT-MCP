@@ -161,11 +161,15 @@ def test_separator_accepts_constant_owner():
     assert owner_token in on_disk, \
         "the Constant owner must land in the separator's <content> block on disk"
 
-    # MODEL read-back: #505 does not yet render owner names, but a fresh target changing from zero to
-    # one CommonAttributeContentItem still proves get_metadata_details sees the attached content row.
+    # MODEL read-back: the Content table names the attached owner and its use. Written against the
+    # pre-#505 output this asserted one raw "CommonAttributeContentItem" EClass row; #505 replaced
+    # that fallback with the named row, so the anti-cheat is now the reverse - the EClass name must
+    # be gone AND exactly one owner row must carry this Constant.
     after = _details_text(separator_fqn)
-    assert after.count("CommonAttributeContentItem") == 1, \
+    assert after.count("| %s | Use |" % constant_fqn) == 1, \
         "get_metadata_details must read back exactly one attached owner row:\n%s" % after[:700]
+    assert_not_contains(after, "CommonAttributeContentItem",
+                        "the generic EObject EClass value must not leak into Content")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
