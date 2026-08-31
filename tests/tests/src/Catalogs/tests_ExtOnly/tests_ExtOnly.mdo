@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Catalog xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="9dab50dd-10f9-490f-a855-533b8aec603d">
+  <producedTypes>
+    <objectType typeId="f76ded7b-c60e-4ccd-93ec-05c57e799cb6" valueTypeId="a66f6ade-0bae-4c70-915a-2799be9b03bf"/>
+    <refType typeId="d2b56ca5-4396-4306-8810-de56fdbc9ad8" valueTypeId="e257d90d-5641-4e7d-b320-bf292b7f74b9"/>
+    <selectionType typeId="115385fb-db74-4912-a02e-9c8fb793fb5c" valueTypeId="990f76fb-c693-4790-9386-2540b8461972"/>
+    <listType typeId="4dbc2b54-42da-4aa7-9fa6-11035b0aad8b" valueTypeId="af9b8eb5-eaaa-4e08-886c-82864a421f56"/>
+    <managerType typeId="013b7ef7-b84a-4f50-a161-206efb243f2d" valueTypeId="695d533b-18fd-48df-b694-3c1d77b3c0a1"/>
+  </producedTypes>
+  <name>tests_ExtOnly</name>
+  <synonym>
+    <key>en</key>
+    <value>Extension-owned catalog</value>
+  </synonym>
+  <useStandardCommands>true</useStandardCommands>
+  <inputByString>Catalog.tests_ExtOnly.StandardAttribute.Code</inputByString>
+  <inputByString>Catalog.tests_ExtOnly.StandardAttribute.Description</inputByString>
+  <fullTextSearchOnInputByString>DontUse</fullTextSearchOnInputByString>
+  <createOnInput>Use</createOnInput>
+  <fullTextSearch>Use</fullTextSearch>
+  <objectPresentation>
+    <key>en</key>
+    <value>Extension-owned catalog item</value>
+  </objectPresentation>
+  <listPresentation>
+    <key>en</key>
+    <value>Extension-owned catalogs</value>
+  </listPresentation>
+  <levelCount>2</levelCount>
+  <foldersOnTop>true</foldersOnTop>
+  <codeLength>9</codeLength>
+  <descriptionLength>25</descriptionLength>
+  <codeType>String</codeType>
+  <codeAllowedLength>Variable</codeAllowedLength>
+  <checkUnique>true</checkUnique>
+  <autonumbering>true</autonumbering>
+  <defaultPresentation>AsDescription</defaultPresentation>
+  <editType>InDialog</editType>
+  <choiceMode>BothWays</choiceMode>
+  <attributes uuid="72d9e986-5470-4208-9931-e4af37bf52e4">
+    <name>ExtValue</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>50</length>
+      </stringQualifiers>
+    </type>
+  </attributes>
+</mdclass:Catalog>

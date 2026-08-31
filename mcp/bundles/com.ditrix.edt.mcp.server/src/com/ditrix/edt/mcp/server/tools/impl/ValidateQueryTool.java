@@ -205,6 +205,8 @@ public class ValidateQueryTool implements IMcpTool
             if (resource instanceof QlDcsResource)
             {
                 QlDcsResource qlResource = (QlDcsResource) resource;
+                // Match EDT's query editor: use the extension + base model union; regular projects are a no-op.
+                qlResource.setParentScopeAware(true);
                 qlResource.addOptions("DcsValidationModeOption", dcsMode); //$NON-NLS-1$
                 qlResource.setPreComputeAnnounceAlias(dcsMode);
             }

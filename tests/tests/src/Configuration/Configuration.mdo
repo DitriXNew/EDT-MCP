@@ -47,4 +47,5 @@
   <commonModules>CommonModule.tests_MathHelper</commonModules>
   <commonModules>CommonModule.tests_SampleTests</commonModules>
   <catalogs>Catalog.Catalog</catalogs>
+  <catalogs>Catalog.tests_ExtOnly</catalogs>
 </mdclass:Configuration>

@@ -1,4 +1,4 @@
-Validates 1C:Enterprise query language (QL) text in the context of a project, using EDT's Xtext QL infrastructure. It parses the query and runs full semantic validation, so it catches both grammar errors and references to tables/fields that do not exist in the project's metadata. The query is validated only; nothing is written to the model or executed.
+Validates 1C:Enterprise query language (QL) text in the context of a project, using EDT's Xtext QL infrastructure. It parses the query and runs full semantic validation, so it catches both grammar errors and references to tables/fields that do not exist in the project's effective metadata model. For a configuration extension, that model is the union of the extension's own metadata and the base configuration's metadata. The query is validated only; nothing is written to the model or executed.
 
 ## When to use
 - Before pasting a query string into a BSL module, to confirm it parses and all referenced metadata resolves.
@@ -6,7 +6,7 @@ Validates 1C:Enterprise query language (QL) text in the context of a project, us
 - For queries that drive a Data Composition Schema (set `dcsMode=true`).
 
 ## Parameter details
-- `projectName` (required) - EDT project name; the query is resolved against this project's metadata, so table and field names must exist there.
+- `projectName` (required) - EDT project name. A configuration project validates in its own model. A configuration extension validates in a union scope containing its own objects and the base configuration's objects, including inherited fields of borrowed objects.
 - `queryText` (required) - the complete query text. Query parameters (`&SearchString`) are allowed and need not be bound. Example: `SELECT Ref FROM Catalog.Products WHERE Description LIKE &SearchString`.
 - `dcsMode` - default `false`. Set `true` only for queries used inside a Data Composition Schema; this enables DCS-specific syntax (e.g. `{...}` braces, dataset fields) that a plain query would reject, and is echoed back as `dcsMode` in the result.
 
@@ -22,5 +22,5 @@ JSON with `valid` (true when there are zero issues), `dcsMode`, `errorCount`, `w
 
 ## Gotchas
 - `success:true` means the tool ran; check `valid` for whether the query itself is error-free. A successful run can still report `valid:false` with issues.
-- A field/table that exists in the platform but not in THIS project resolves as a semantic error - pass the project that actually owns the metadata.
+- For an extension project, the union scope resolves both extension-owned objects and base-configuration objects, including inherited fields of borrowed objects.
 - If QL language support is unavailable the tool returns an error rather than a validation result.
