@@ -36,7 +36,9 @@ import glob
 import os
 import re
 
-from harness import RUN_STARTED_AT, HARNESS_DIR, E2ESkip, call, e2e_test, _fail
+from harness import (
+    RUN_STARTED_AT, HARNESS_DIR, E2ESkip, e2e_test, _fail, _workspace_dir,
+)
 
 OUR_PLUGIN = "com.ditrix.edt.mcp.server"
 SEVERITY_ERROR = "4"
@@ -69,31 +71,6 @@ def _entry_epoch(stamp):
     import datetime
     parsed = datetime.datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S")
     return parsed.timestamp()
-
-
-def _workspace_dir():
-    """Locate the EDT workspace holding .metadata/.log.
-
-    Explicit env wins. Otherwise infer it: a workspace almost always contains at least one
-    project of its own (the Servers container, for one), so walk each project's ancestors
-    looking for a .metadata/.log. Returns None when it cannot be found - the test SKIPS
-    rather than inventing a pass.
-    """
-    override = os.environ.get("EDT_MCP_EDT_WORKSPACE")
-    if override:
-        return override if os.path.isfile(os.path.join(override, ".metadata", ".log")) else None
-
-    result = call("list_projects", {})
-    text = result.text or ""
-    for raw in re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text):
-        candidate = raw.rstrip("\\/ `")
-        for _ in range(4):
-            candidate = os.path.dirname(candidate)
-            if not candidate:
-                break
-            if os.path.isfile(os.path.join(candidate, ".metadata", ".log")):
-                return candidate
-    return None
 
 
 def _load_baseline():

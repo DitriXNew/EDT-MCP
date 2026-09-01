@@ -62,5 +62,21 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertTrue(HARNESS._model_may_have_moved())
 
 
+class SettleRetryDecisionTest(unittest.TestCase):
+    def test_no_progress_stops_remaining_attempts_and_names_polls_and_seconds(self):
+        stop, reason = HARNESS._settle_retry_decision(False, 287, 600)
+
+        self.assertTrue(stop)
+        self.assertIn("287 polls", reason)
+        self.assertIn("600s", reason)
+        self.assertIn("remaining settle attempts stopped", reason)
+
+    def test_observed_progress_keeps_remaining_attempts(self):
+        stop, reason = HARNESS._settle_retry_decision(True, 287, 600)
+
+        self.assertFalse(stop)
+        self.assertIsNone(reason)
+
+
 if __name__ == "__main__":
     unittest.main()

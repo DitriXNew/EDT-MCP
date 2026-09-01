@@ -791,6 +791,31 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
+def _workspace_dir():
+    """Locate the EDT workspace holding .metadata/.log.
+
+    Explicit env wins. Otherwise infer it: a workspace almost always contains at least one
+    project of its own (the Servers container, for one), so walk each project's ancestors
+    looking for a .metadata/.log. Returns None when it cannot be found - callers decide whether
+    missing diagnostics should be skipped or merely reported as unavailable.
+    """
+    override = os.environ.get("EDT_MCP_EDT_WORKSPACE")
+    if override:
+        return override if os.path.isfile(os.path.join(override, ".metadata", ".log")) else None
+
+    result = call("list_projects", {})
+    text = result.text or ""
+    for raw in re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text):
+        candidate = raw.rstrip("\\/ `")
+        for _ in range(4):
+            candidate = os.path.dirname(candidate)
+            if not candidate:
+                break
+            if os.path.isfile(os.path.join(candidate, ".metadata", ".log")):
+                return candidate
+    return None
+
+
 def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
     """True when every EDT project in the list_projects table reads 'ready'.
 
@@ -851,7 +876,26 @@ def _projects_not_ready_message(timeout, projects):
     return "projects not ready after %ds: %s" % (timeout, states or "states unavailable")
 
 
-def wait_for_project_ready(timeout=None, failure_details=None):
+_PROJECT_READY_OBSERVED_LIMIT = 20
+
+
+def _store_project_ready_progress(progress, changed, observed, polls, start,
+                                  last_list_projects):
+    """Publish one completed wait's observations without leaving stale caller-owned keys."""
+    if progress is None:
+        return
+    progress.clear()
+    progress.update({
+        "changed": changed,
+        "observed": [list(snapshot) for snapshot in observed],
+        "polls": polls,
+        "elapsed": int(time.time() - start),
+        # The reset diagnostic needs the exact final response, not a reconstructed table.
+        "last_list_projects": last_list_projects,
+    })
+
+
+def wait_for_project_ready(timeout=None, failure_details=None, progress=None):
     """Wait until every EDT project is fully indexed (state 'ready') — i.e. none is still
     'building' its derived data AND none is 'not_available' (mid (re)load). Non-EDT projects
     are ignored (see _all_edt_projects_ready): a standalone server's "Servers" container is
@@ -873,8 +917,11 @@ def wait_for_project_ready(timeout=None, failure_details=None):
 
     Best-effort: returns True once ready (or if state cannot be read), False on timeout.
     If `failure_details` is a list, a timeout replaces its contents with one diagnostic naming
-    the last parsed blocking projects and their states. The per-tool ProjectStateChecker guard
-    is the real safety net — this only removes the test-timing flake so a normal run starts on a
+    the last parsed blocking projects and their states. If `progress` is a dict, completion
+    replaces its contents with whether the blocking project/state snapshot ever changed, the
+    observed snapshots (consecutive duplicates removed and capped), the poll count, elapsed
+    seconds, and the final raw list_projects text. The per-tool ProjectStateChecker guard is the
+    real safety net — this only removes the test-timing flake so a normal run starts on a
     fully-indexed workspace.
     """
     if timeout is None:
@@ -890,12 +937,30 @@ def wait_for_project_ready(timeout=None, failure_details=None):
     # long cold-index wait.
     last_log = start
     last_not_ready = []
+    last_snapshot = None
+    observed = []
+    changed = False
+    polls = 0
+    last_list_projects = ""
     while time.time() < deadline:
         try:
+            polls += 1
             text = call("list_projects", {}).text or ""
+            last_list_projects = text
             if text:
                 not_ready = []
-                if _all_edt_projects_ready(text, not_ready=not_ready):
+                ready = _all_edt_projects_ready(text, not_ready=not_ready)
+                snapshot = tuple(sorted(not_ready))
+                if last_snapshot is not None and snapshot != last_snapshot:
+                    changed = True
+                if last_snapshot is None or snapshot != last_snapshot:
+                    observed.append(snapshot)
+                    if len(observed) > _PROJECT_READY_OBSERVED_LIMIT:
+                        observed.pop(0)
+                last_snapshot = snapshot
+                if ready:
+                    _store_project_ready_progress(
+                        progress, changed, observed, polls, start, last_list_projects)
                     return True
                 if not_ready:
                     last_not_ready = not_ready
@@ -914,6 +979,8 @@ def wait_for_project_ready(timeout=None, failure_details=None):
         time.sleep(2)
     if failure_details is not None:
         failure_details[:] = [_projects_not_ready_message(timeout, last_not_ready)]
+    _store_project_ready_progress(
+        progress, changed, observed, polls, start, last_list_projects)
     return False
 
 
@@ -1243,6 +1310,61 @@ def _baseline_mismatch():
     return None
 
 
+_NO_SETTLE_PROGRESS_MARKER = \
+    "remaining settle attempts stopped because no progress was observed"
+
+
+def _settle_retry_decision(changed, polls, elapsed_seconds):
+    """Return whether another identical settle wait is useful, plus an early-stop reason."""
+    if changed:
+        return (False, None)
+    reason = ("project readiness state did not change once in %d polls over %ds; %s"
+              % (polls, int(elapsed_seconds), _NO_SETTLE_PROGRESS_MARKER))
+    return (True, reason)
+
+
+def _failed_settle_evidence(last_list_projects):
+    """Print one best-effort evidence block for the first failed settle in a reset cycle."""
+    sections = [("last list_projects (raw)", last_list_projects or "<empty response>")]
+
+    try:
+        status = call("get_server_status", {}).structured
+        sections.append(("get_server_status structuredContent",
+                         json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True)))
+    except Exception as exc:
+        sections.append(("get_server_status structuredContent",
+                         "<evidence unavailable: %s: %s>" %
+                         (type(exc).__name__, exc)))
+
+    try:
+        workspace = _workspace_dir()
+        if workspace is None:
+            raise RuntimeError(
+                "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
+        log_path = os.path.join(workspace, ".metadata", ".log")
+        with open(log_path, encoding="utf-8", errors="replace") as handle:
+            tail = handle.readlines()[-80:]
+        sections.append(("EDT .metadata/.log tail (last 80 lines)",
+                         "".join(tail).rstrip() or "<empty log>"))
+    except Exception as exc:
+        sections.append(("EDT .metadata/.log tail (last 80 lines)",
+                         "<evidence unavailable: %s: %s>" %
+                         (type(exc).__name__, exc)))
+
+    try:
+        lines = ["\n===== FIRST FAILED MODEL SETTLE EVIDENCE ====="]
+        for heading, body in sections:
+            lines.extend(("--- %s ---" % heading, body))
+        lines.append("===== END FIRST FAILED MODEL SETTLE EVIDENCE =====")
+        print("\n".join(lines), flush=True)
+    except Exception as exc:
+        # Diagnostics must never replace or otherwise alter the reset failure being diagnosed.
+        print("\n===== FIRST FAILED MODEL SETTLE EVIDENCE =====\n"
+              "<evidence unavailable: %s: %s>\n"
+              "===== END FIRST FAILED MODEL SETTLE EVIDENCE ====="
+              % (type(exc).__name__, exc), flush=True)
+
+
 def _revert_and_clean(project, revert):
     """One revert + clean_project cycle for `project`, with SEPARATE budgets for its two failures.
 
@@ -1270,10 +1392,30 @@ def _revert_and_clean(project, revert):
         # would not be the last write: retry the whole cycle instead of building on it. The
         # verification the caller does afterwards is what finally decides.
         failure_details = []
+        progress = {}
         if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                      failure_details=failure_details):
+                                      failure_details=failure_details,
+                                      progress=progress):
             settle_failures += 1
             last_settle_failure = failure_details[0]
+            if settle_failures == 1:
+                try:
+                    _failed_settle_evidence(progress.get("last_list_projects", ""))
+                except Exception as exc:
+                    # Evidence collection must never replace the reset failure under diagnosis.
+                    try:
+                        print("\n===== FIRST FAILED MODEL SETTLE EVIDENCE =====\n"
+                              "<evidence unavailable: %s: %s>\n"
+                              "===== END FIRST FAILED MODEL SETTLE EVIDENCE ====="
+                              % (type(exc).__name__, exc), flush=True)
+                    except Exception:
+                        pass
+            stop, stop_reason = _settle_retry_decision(
+                progress.get("changed", True), progress.get("polls", 0),
+                progress.get("elapsed", MODEL_SETTLE_TIMEOUT))
+            if stop:
+                last_settle_failure = "%s; %s" % (last_settle_failure, stop_reason)
+                break
             continue
         # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
         # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
@@ -1303,18 +1445,21 @@ def _revert_and_clean(project, revert):
 
 def _clean_failure_cause(clean_attempts, settle_failures, last_settle_failure):
     """Name the budget that actually ran out, for the abort message."""
-    exhausted = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or settle_failures >= MODEL_SETTLE_ATTEMPTS)
+    no_progress_stop = (last_settle_failure is not None and
+                        _NO_SETTLE_PROGRESS_MARKER in last_settle_failure)
+    terminal = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or
+                settle_failures >= MODEL_SETTLE_ATTEMPTS or no_progress_stop)
     if clean_attempts == 0:
         return ("%s (%d settle attempts of %ds each%s), so "
                 "clean_project was never even accepted for an attempt"
                 % (last_settle_failure or "projects never reported ready",
                    settle_failures, MODEL_SETTLE_TIMEOUT,
-                   "" if exhausted else "; the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
+                   "" if terminal else "; the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
     return ("clean_project was refused in all %d attempts%s%s"
             % (clean_attempts,
                " (plus %d settle timeouts; %s)" % (settle_failures, last_settle_failure)
                if settle_failures else "",
-               "" if exhausted else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
+               "" if terminal else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
 
 
 def reset_model():

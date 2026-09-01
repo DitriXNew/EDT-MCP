@@ -26,6 +26,18 @@ jobs:
       - name: Validate business-project skills
         run: python3 docs/validate_agent_skills.py
 
+      # The e2e harness carries logic that decides whether a run may continue - isolation,
+      # mutation outcomes, the settle-retry stop. It needs no EDT and no server, so it runs
+      # here rather than inside the hour-long e2e job, where a harness bug would surface as a
+      # confusing suite failure instead of a named one.
+      - name: Harness unit tests
+        run: |
+          set -e
+          for t in tests/e2e/runner_tests/test_*.py; do
+            echo "== $t"
+            python3 "$t"
+          done
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
