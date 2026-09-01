@@ -4945,7 +4945,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * platform version) and, on success, appends the prepared scalar change to {@code out}. Returns a
      * JSON error on failure, or {@code null} on success. Read-only: it only builds and queues the
      * change (no model mutation). {@code isExtensionProject} is forwarded to
-     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean,
+     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, MetadataScope, Version, boolean,
      * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
      * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
      * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295),
@@ -4961,7 +4961,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         MetadataTypeBuilder.TypeTarget typeTarget = typeTargetForFeature(ctx.typeTarget, info.feature);
         MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
-            ctx.version, isExtensionProject, typeTarget);
+            ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$

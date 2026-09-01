@@ -14,6 +14,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Collections;
+
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
@@ -23,6 +25,7 @@ import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 import org.mockito.Mockito;
 
+import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
 import com._1c.g5.v8.dt.mcore.DateFractions;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.Type;
@@ -685,6 +688,57 @@ public class MetadataTypeBuilderTest
         assertSame(abstractObject, td.getTypes().get(0));
     }
 
+    @Test
+    public void testConcreteProducedTypeUsesScopeAndKeepsConfigurationPathsEquivalent()
+    {
+        Configuration linkedParent = MdClassFactory.eINSTANCE.createConfiguration();
+        Type expected = McoreFactory.eINSTANCE.createType();
+        MdObject processor = seedProducedType("ExternalDataProcessor", "Processor", //$NON-NLS-1$ //$NON-NLS-2$
+            "objectType", expected); //$NON-NLS-1$
+        IExternalObjectProject externalProject = Mockito.mock(IExternalObjectProject.class);
+        Mockito.when(externalProject.getExternalObjects())
+            .thenReturn(Collections.singletonList(processor));
+        MetadataScope scope = MetadataScope.ofExternalObjectProject(null, linkedParent,
+            externalProject);
+
+        for (String ref : new String[] {"Processor", "ExternalDataProcessor.Processor"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = json("{\"kind\":\"ExternalDataProcessorObject\",\"ref\":\"" //$NON-NLS-1$
+                + ref + "\"}").getAsJsonObject(); //$NON-NLS-1$
+
+            String error = MetadataTypeBuilder.addType(td, item,
+                "ExternalDataProcessorObject", null, linkedParent, scope, false, //$NON-NLS-1$
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+            assertNull(ref, error);
+            assertEquals(ref, 1, td.getTypes().size());
+            assertSame(ref, expected, td.getTypes().get(0));
+        }
+
+        // A configuration project's explicit scope is the same direct-Configuration resolution the
+        // builder used before scopes existed, and the old signature must derive that exact scope.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Type configurationExpected = McoreFactory.eINSTANCE.createType();
+        seedProducedType(config, "Document", "Invoice", "objectType", configurationExpected); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject item = json(
+            "{\"kind\":\"DocumentObject\",\"ref\":\"Document.Invoice\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        TypeDescription scoped = McoreFactory.eINSTANCE.createTypeDescription();
+        String scopedError = MetadataTypeBuilder.addType(scoped, item, "DocumentObject", null, //$NON-NLS-1$
+            config, MetadataScope.ofConfiguration(config), false,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+        assertNull(scopedError);
+        assertSame(configurationExpected, scoped.getTypes().get(0));
+
+        // This old signature is the path DcsWriter / PredefinedWriter keep using.
+        TypeDescription scopeLess = McoreFactory.eINSTANCE.createTypeDescription();
+        String scopeLessError = MetadataTypeBuilder.addType(scopeLess, item, "DocumentObject", null, //$NON-NLS-1$
+            config, false, MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+        assertNull(scopeLessError);
+        assertSame(configurationExpected, scopeLess.getTypes().get(0));
+    }
+
     private static void assertConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs(
         MetadataTypeBuilder.TypeTarget typeTarget)
     {
@@ -1243,15 +1297,23 @@ public class MetadataTypeBuilderTest
     private static MdObject seedProducedType(Configuration config, String englishMetadataType,
         String name, String producedFeature, Type expectedType)
     {
-        Object classifier = MdClassPackage.eINSTANCE.getEClassifier(englishMetadataType);
-        assertTrue(englishMetadataType, classifier instanceof EClass);
-        MdObject object = (MdObject)EcoreUtil.create((EClass)classifier);
-        object.setName(name);
+        MdObject object = seedProducedType(englishMetadataType, name, producedFeature, expectedType);
 
         String collectionName = MetadataTypeUtils.getConfigReferenceName(englishMetadataType);
         EStructuralFeature collection = config.eClass().getEStructuralFeature(collectionName);
         assertNotNull(collectionName, collection);
         ((java.util.List<MdObject>)config.eGet(collection)).add(object);
+        return object;
+    }
+
+    /** Seeds one standalone top-level object and one generated produced-type wrapper. */
+    private static MdObject seedProducedType(String englishMetadataType, String name,
+        String producedFeature, Type expectedType)
+    {
+        Object classifier = MdClassPackage.eINSTANCE.getEClassifier(englishMetadataType);
+        assertTrue(englishMetadataType, classifier instanceof EClass);
+        MdObject object = (MdObject)EcoreUtil.create((EClass)classifier);
+        object.setName(name);
 
         EObject producedTypes = newContainedValue(object, "producedTypes"); //$NON-NLS-1$
         MdType producedType = (MdType)newContainedValue(producedTypes, producedFeature);

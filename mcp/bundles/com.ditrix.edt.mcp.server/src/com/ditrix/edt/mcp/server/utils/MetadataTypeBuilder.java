@@ -546,6 +546,27 @@ public final class MetadataTypeBuilder
     public static Result build(JsonElement spec, Configuration config, Version version,
         boolean isExtensionProject, TypeTarget typeTarget)
     {
+        return build(spec, config, MetadataScope.ofConfiguration(config), version,
+            isExtensionProject, typeTarget);
+    }
+
+    /**
+     * Builds the {@link TypeDescription} against an explicit metadata resolution scope. This is the
+     * scope-aware counterpart of {@link #build(JsonElement, Configuration, Version, boolean,
+     * TypeTarget)}; callers that only have a {@link Configuration} keep the previous resolution root
+     * through {@link MetadataScope#ofConfiguration(Configuration)}.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param config the configuration (used by the existing reference-type paths)
+     * @param scope the project resolution root; {@code null} falls back to the configuration scope
+     * @param version the platform version (to create primitive type proxies)
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @param typeTarget what the built type description will be attached to
+     * @return the result (type or error)
+     */
+    public static Result build(JsonElement spec, Configuration config, MetadataScope scope,
+        Version version, boolean isExtensionProject, TypeTarget typeTarget)
+    {
         String shapeError = validateShape(spec, typeTarget);
         if (shapeError != null)
         {
@@ -560,12 +581,14 @@ public final class MetadataTypeBuilder
         }
 
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        MetadataScope effectiveScope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
         JsonArray types = spec.getAsJsonObject().getAsJsonArray("types"); //$NON-NLS-1$
         for (JsonElement itemEl : types)
         {
             JsonObject item = itemEl.getAsJsonObject();
             String kind = asString(item.get("kind")).trim(); //$NON-NLS-1$
-            String err = addType(td, item, kind, provider, config, isExtensionProject, typeTarget);
+            String err = addType(td, item, kind, provider, config, effectiveScope,
+                isExtensionProject, typeTarget);
             if (err != null)
             {
                 return error(err);
@@ -840,14 +863,24 @@ public final class MetadataTypeBuilder
     static String addType(TypeDescription td, JsonObject item, String kind,
         IEObjectProvider provider, Configuration config, boolean isExtensionProject, TypeTarget typeTarget)
     {
+        return addType(td, item, kind, provider, config, MetadataScope.ofConfiguration(config),
+            isExtensionProject, typeTarget);
+    }
+
+    /** Scope-aware core used by the explicit-scope build overload. */
+    static String addType(TypeDescription td, JsonObject item, String kind,
+        IEObjectProvider provider, Configuration config, MetadataScope scope,
+        boolean isExtensionProject, TypeTarget typeTarget)
+    {
+        MetadataScope effectiveScope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
         ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
             || typeTarget == TypeTarget.EVENT_SOURCE
             || typeTarget == TypeTarget.FORM_ATTRIBUTE
             ? splitProducedTypeKind(kind) : null;
         if (producedKind != null && producedKind.hasKnownMetadataType() && item.has("ref")) //$NON-NLS-1$
         {
-            return addConcreteProducedType(td, item, kind, producedKind, config, isExtensionProject,
-                typeTarget);
+            return addConcreteProducedType(td, item, kind, producedKind, effectiveScope,
+                isExtensionProject, typeTarget);
         }
 
         if (isInlineDefinedTypeKind(kind))
@@ -975,7 +1008,7 @@ public final class MetadataTypeBuilder
 
     /** Adds one concrete model-owned produced Type to the non-containment type list. */
     private static String addConcreteProducedType(TypeDescription td, JsonObject item, String kind,
-        ProducedTypeKind producedKind, Configuration config, boolean isExtensionProject,
+        ProducedTypeKind producedKind, MetadataScope scope, boolean isExtensionProject,
         TypeTarget typeTarget)
     {
         if (typeTarget != TypeTarget.EVENT_SOURCE && typeTarget != TypeTarget.FORM_ATTRIBUTE)
@@ -1006,7 +1039,7 @@ public final class MetadataTypeBuilder
             }
         }
 
-        MdObject target = resolveProducedTypeTarget(config, producedKind, ref);
+        MdObject target = resolveProducedTypeTarget(scope, producedKind, ref);
         if (target == null)
         {
             return "Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
@@ -1067,14 +1100,14 @@ public final class MetadataTypeBuilder
         return null;
     }
 
-    private static MdObject resolveProducedTypeTarget(Configuration config,
+    private static MdObject resolveProducedTypeTarget(MetadataScope scope,
         ProducedTypeKind producedKind, String ref)
     {
         if (ref.indexOf('.') < 0)
         {
-            return MetadataTypeUtils.findObject(config, producedKind.englishMetadataType, ref);
+            return scope.findObject(producedKind.englishMetadataType, ref);
         }
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, ref);
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, ref);
         return node != null && node.topLevel ? node.object : null;
     }
 
