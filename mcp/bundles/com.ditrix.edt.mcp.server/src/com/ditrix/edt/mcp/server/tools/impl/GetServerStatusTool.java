@@ -100,8 +100,9 @@ public class GetServerStatusTool implements IMcpTool
             .booleanProperty("authEnabled", "Whether bearer-token authentication is enabled") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("formRenderFlags", //$NON-NLS-1$
                 "atStartup is the mode when this plugin activated; requested is the current " //$NON-NLS-1$
-                    + "system property; forcedAtRuntime marks a later live-mode change, which only " //$NON-NLS-1$
-                    + "reaches the renderer if EDT had not rendered a form yet") //$NON-NLS-1$
+                    + "system property; forcedAtRuntime marks a later live-mode change, which " //$NON-NLS-1$
+                    + "reaches the renderer only if it preceded EDT's layout-service init - not " //$NON-NLS-1$
+                    + "observable from here, so none of the three states the effective mode") //$NON-NLS-1$
             .build();
     }
 
