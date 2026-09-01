@@ -474,6 +474,84 @@ class EvidenceLogTailTest(unittest.TestCase):
                       "a talkative current log must not evict the rotated-out failure")
         self.assertIn("noise line 499", out, "the current log's own tail is still reported")
 
+    def test_the_byte_cap_is_passed_to_the_read_not_just_to_the_seek(self):
+        """The seek bounds where the read STARTS; only read(N) bounds where it ends.
+
+        EDT is appending while this runs, so a bare read() returns everything written between the
+        tell() and the read - the cap that justifies calling this cheap would not apply at all.
+        """
+        recorded = []
+
+        class RecordingHandle:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def seek(self, *_args):
+                return 0
+
+            def tell(self):
+                return HARNESS._EVIDENCE_LOG_TAIL_BYTES * 4
+
+            def read(self, *args):
+                recorded.append(args)
+                return b"tail\n"
+
+        HARNESS.open = lambda *_args, **_kwargs: RecordingHandle()
+
+        HARNESS._read_log_tail("any/path/.log")
+
+        self.assertEqual([(HARNESS._EVIDENCE_LOG_TAIL_BYTES,)], recorded,
+                         "the read must be given the byte cap, not called bare")
+
+    def test_the_earliest_rotation_is_decided_by_time_not_by_size_or_inode(self):
+        """The identity tuple DETECTS a replacement; it must not sequence one.
+
+        Sorting by the whole tuple lets a smaller file or a lower inode pass for "earlier", and the
+        earliest is exactly the one the cap keeps.
+        """
+        before = {}
+        # Deliberately adversarial: the EARLIER file is the larger one with the higher inode, so a
+        # tuple sort would order these the other way round.
+        after = {
+            "first.log": (1_000, 9_999, 900),
+            "second.log": (2_000, 1, 1),
+        }
+
+        self.assertEqual(["first.log", "second.log"], HARNESS._backups_covering(before, after))
+
+    def test_backups_that_rotated_before_collection_are_still_reachable(self):
+        """Two rotations completed before the collector started leave nothing in the diff.
+
+        `appeared` is empty then, so reading only the newest pre-existing backup would miss a
+        failure that had already rotated twice.
+        """
+        identical = {
+            "old.log": (1_000, 10, 1),
+            "middle.log": (2_000, 10, 2),
+            "newest.log": (3_000, 10, 3),
+        }
+
+        chosen = HARNESS._backups_covering(identical, dict(identical))
+
+        self.assertEqual(["old.log", "middle.log", "newest.log"], chosen,
+                         "every pre-existing backup within the cap is read, newest first")
+
+    def test_an_unused_share_of_the_line_budget_is_handed_to_a_source_that_wants_it(self):
+        """An equal split drops evidence while the block is still under budget."""
+        short_source = ["only line"]
+        long_source = ["line %d" % i for i in range(500)]
+
+        shares = HARNESS._share_tail_lines([long_source, short_source])
+
+        self.assertEqual(1, len(shares[1]))
+        self.assertGreater(len(shares[0]), HARNESS._EVIDENCE_TAIL_LINES // 2,
+                           "the short source's unused share must go to the one that can use it")
+        self.assertLessEqual(len(shares[0]) + len(shares[1]), HARNESS._EVIDENCE_TAIL_LINES)
+        self.assertEqual(long_source[-len(shares[0]):], shares[0], "each share is a TAIL")
+
     def test_the_backup_is_chosen_by_write_time_not_by_its_number(self):
         """EDT REUSES the backup numbers, so the suffix does not order them.
 
@@ -501,8 +579,15 @@ class EvidenceLogTailTest(unittest.TestCase):
         out = printed.getvalue()
         self.assertIn("NEWEST BACKUP LINE", out)
         self.assertIn("CURRENT LOG LINE", out)
-        self.assertNotIn("STALE BACKUP LINE", out)
         self.assertIn(".bak_7.log", out, "the heading must name the file the tail came from")
+        # The ORDER is what proves mtime decided it. Both backups are collected - a failure that
+        # rotated out before collection began sits in an older one - so "the stale file is absent"
+        # is no longer the claim. By NAME .bak_7 would precede .bak_9; by write time it follows it,
+        # and that is the sequence the block must print.
+        self.assertLess(out.index(".bak_9.log"), out.index(".bak_7.log"),
+                        "sections must be ordered by write time, not by backup number")
+        self.assertLess(out.index(".bak_7.log"), out.index("EDT log tail: .metadata/.log"),
+                        "the current log is the newest and comes last")
 
     def test_a_backup_removed_after_listing_is_skipped_without_losing_the_current_log(self):
         with tempfile.TemporaryDirectory() as tmp:

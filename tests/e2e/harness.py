@@ -1373,7 +1373,11 @@ def _read_log_tail(log_path):
         handle.seek(0, os.SEEK_END)
         size = handle.tell()
         handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
-        blob = handle.read()
+        # read(N), not read(): the seek bounds where the read STARTS, not where it ends, and
+        # EDT is still appending. A bare read() runs to the CURRENT end of file and returns
+        # however much was written meanwhile - so the cap that justifies calling this cheap
+        # was not being applied at all.
+        blob = handle.read(_EVIDENCE_LOG_TAIL_BYTES)
     return blob.decode("utf-8", errors="replace")
 
 
@@ -1462,20 +1466,59 @@ def _backups_covering(before, after):
     """
     appeared = [path for path, identity in after.items() if before.get(path) != identity]
     pre_existing = [path for path in before if path not in appeared]
-    newest_pre = max(pre_existing, key=lambda path: before[path]) if pre_existing else None
 
     def when(path):
-        return after.get(path, before.get(path, (0, 0, 0)))
+        """Only the MTIME orders these files.
+
+        The identity tuple carries size and inode as well, but those exist to DETECT a same-name
+        replacement, not to sequence one. Sorting by the whole tuple means that when two rotations
+        share a coarse timestamp the "earliest" is decided by which file is smaller or which inode
+        the filesystem happened to hand out - and the earliest is exactly the one the cap keeps.
+        """
+        identity = after.get(path, before.get(path, (0, 0, 0)))
+        return identity[0]
 
     appeared.sort(key=when)
-    # The earliest rotations first, then the pre-existing backup only if there is room: a failure
-    # that had ALREADY rotated before collection is the less likely of the two, and the cap has to
-    # spend its budget on the file the evidence most probably sits in.
+    # The earliest rotations first: the failure is at or before the moment collection started, so
+    # among the files that became backups DURING collection it lives in the first of them.
     chosen = appeared[:_EVIDENCE_LOG_MAX_BACKUPS]
-    if newest_pre is not None and len(chosen) < _EVIDENCE_LOG_MAX_BACKUPS:
-        chosen.append(newest_pre)
+    # Then the pre-existing backups, NEWEST first, for whatever room is left. More than one,
+    # because rotations that completed BEFORE the collector started leave nothing in the snapshot
+    # diff to find them by - a failure that had already rotated twice sits behind the newest one.
+    # Newest-first here is not the same rule inverted: among files that predate collection, the
+    # newest is the closest to the failure, while among files created during it, the earliest is.
+    for path in sorted(pre_existing, key=when, reverse=True):
+        if len(chosen) >= _EVIDENCE_LOG_MAX_BACKUPS:
+            break
+        chosen.append(path)
     chosen.sort(key=when)    # oldest first, which is also the display order
     return chosen
+
+
+def _share_tail_lines(sources):
+    """Split the line budget between sources, leaving none of it unspent.
+
+    Each source starts with an equal share; a source with fewer lines than its share releases the
+    difference, and the remainder is dealt round-robin to the ones that can still use it. The floor
+    keeps a share from collapsing to nothing when many files were read.
+
+    @param sources the lines of each source, in the order they will be displayed
+    @return the TAIL of each source, same order, each already cut to its final share
+    """
+    if not sources:
+        return []
+    share = max(_EVIDENCE_TAIL_MIN_LINES, _EVIDENCE_TAIL_LINES // len(sources))
+    wanted = [len(lines) for lines in sources]
+    granted = [min(share, want) for want in wanted]
+    spare = max(0, _EVIDENCE_TAIL_LINES - sum(granted))
+    while spare > 0 and any(g < w for g, w in zip(granted, wanted)):
+        for index, (grant, want) in enumerate(zip(granted, wanted)):
+            if spare <= 0:
+                break
+            if grant < want:
+                granted[index] = grant + 1
+                spare -= 1
+    return [lines[-grant:] if grant else [] for lines, grant in zip(sources, granted)]
 
 
 def _print_failed_settle_evidence_note(message):
@@ -1549,11 +1592,13 @@ def _print_failed_settle_evidence(last_list_projects):
         # heading still names the backup as a source. That would undo the whole reason these files
         # are collected, and present the result as complete. Per-source budgets cannot do it, and
         # a reader can see which lines came from which file.
-        per_source = max(_EVIDENCE_TAIL_MIN_LINES, _EVIDENCE_TAIL_LINES // len(sources))
-        for source, body in zip(sources, texts):
-            lines = body.splitlines()[-per_source:]
+        # An equal split alone still drops evidence while the block is under budget: two sources
+        # get 40 lines each, and a short current log leaves 39 of its share unspent while the
+        # backup holding the failure is cut at 40. So the shares are settled first, giving every
+        # source what it can use and handing the remainder to those that want more.
+        for source, lines in zip(sources, _share_tail_lines([body.splitlines() for body in texts])):
             sections.append(("EDT log tail: %s (last %d lines, last %d bytes at most)"
-                             % (source, per_source, _EVIDENCE_LOG_TAIL_BYTES),
+                             % (source, len(lines), _EVIDENCE_LOG_TAIL_BYTES),
                              "\n".join(lines).rstrip() or "<empty log>"))
         # A PARTIAL tail must say so. A backup that rotation removed before it could be opened is
         # a file that may have held the failure, and reporting only what was read would present an
