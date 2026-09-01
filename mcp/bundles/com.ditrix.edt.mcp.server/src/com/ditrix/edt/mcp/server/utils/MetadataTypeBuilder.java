@@ -264,6 +264,7 @@ public final class MetadataTypeBuilder
         String primitive = normalizePrimitive(kind);
         ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
             || typeTarget == TypeTarget.EVENT_SOURCE
+            || typeTarget == TypeTarget.FORM_ATTRIBUTE
             ? splitProducedTypeKind(kind) : null;
         String[] accepted;
         if ("String".equals(primitive)) //$NON-NLS-1$
@@ -470,6 +471,9 @@ public final class MetadataTypeBuilder
      * #295). EDT itself does NOT validate this - a ValueTable written into a {@code .mdo} attribute
      * passes a full revalidation silently and only breaks later, in the platform - which is exactly why
      * the refusal has to happen here.
+     * Produced runtime object types are accepted only for {@link #FORM_ATTRIBUTE} and
+     * {@link #EVENT_SOURCE}: a form attribute holds a runtime object because a form's data is where the
+     * platform materializes one, while an event subscription's source names the object whose events fire.
      */
     public enum TypeTarget
     {
@@ -838,6 +842,7 @@ public final class MetadataTypeBuilder
     {
         ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
             || typeTarget == TypeTarget.EVENT_SOURCE
+            || typeTarget == TypeTarget.FORM_ATTRIBUTE
             ? splitProducedTypeKind(kind) : null;
         if (producedKind != null && producedKind.hasKnownMetadataType() && item.has("ref")) //$NON-NLS-1$
         {
@@ -973,7 +978,7 @@ public final class MetadataTypeBuilder
         ProducedTypeKind producedKind, Configuration config, boolean isExtensionProject,
         TypeTarget typeTarget)
     {
-        if (typeTarget != TypeTarget.EVENT_SOURCE)
+        if (typeTarget != TypeTarget.EVENT_SOURCE && typeTarget != TypeTarget.FORM_ATTRIBUTE)
         {
             return producedTypeRefusal(kind);
         }

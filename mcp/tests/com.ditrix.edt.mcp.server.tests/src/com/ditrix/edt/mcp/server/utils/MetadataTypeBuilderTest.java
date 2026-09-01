@@ -649,7 +649,44 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testFormAttributeProducedTypeShapeAcceptsRef()
+    {
+        MetadataTypeBuilder.Result result = MetadataTypeBuilder.build(json(
+            "{\"types\":[{\"kind\":\"DocumentObject\",\"ref\":\"Invoice\"}]}"), //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(),
+            Mockito.mock(com._1c.g5.v8.dt.platform.version.Version.class), false,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNotNull(result.error);
+        assertFalse(result.error, result.error.contains("Unknown member 'ref'")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs()
+    {
+        assertConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs(
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+    }
+
+    @Test
+    public void testFormAttributeAcceptsConcreteAndAbstractProducedTypes()
+    {
+        assertConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs(
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        Type abstractObject = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        String error = addKind("ExchangePlanObject", //$NON-NLS-1$
+            providerKnowing("ExchangePlanObject", abstractObject), td, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(error);
+        assertEquals(1, td.getTypes().size());
+        assertSame(abstractObject, td.getTypes().get(0));
+    }
+
+    private static void assertConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs(
+        MetadataTypeBuilder.TypeTarget typeTarget)
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         Type expected = McoreFactory.eINSTANCE.createType();
@@ -670,7 +707,7 @@ public class MetadataTypeBuilderTest
             item.addProperty("ref", one[1]); //$NON-NLS-1$
 
             String error = MetadataTypeBuilder.addType(td, item, one[0], null, config, false,
-                MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+                typeTarget);
 
             assertNull(one[0] + " / " + one[1], error); //$NON-NLS-1$
             assertEquals(1, td.getTypes().size());
@@ -846,6 +883,19 @@ public class MetadataTypeBuilderTest
         assertNotNull(error);
         assertTrue(error, error.contains("data-composition parameter")); //$NON-NLS-1$
         assertTrue(td.getTypes().isEmpty());
+
+        TypeDescription concreteTd = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject concreteItem = json(
+            "{\"kind\":\"ExchangePlanObject\",\"ref\":\"MainExchange\"}") //$NON-NLS-1$
+                .getAsJsonObject();
+        String concreteError = MetadataTypeBuilder.addType(concreteTd, concreteItem,
+            "ExchangePlanObject", providerKnowing("ExchangePlanObject", abstractObject), //$NON-NLS-1$ //$NON-NLS-2$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+
+        assertNotNull(concreteError);
+        assertTrue(concreteError, concreteError.contains("data-composition parameter")); //$NON-NLS-1$
+        assertTrue(concreteTd.getTypes().isEmpty());
     }
 
     // ---- DefinedType model-owned TypeSet (issue #498) -------------------------------------------

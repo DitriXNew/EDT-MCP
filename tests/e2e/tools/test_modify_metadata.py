@@ -1355,6 +1355,23 @@ def test_modify_form_attribute_type():
                        ctx="the form attribute's Number(10,2) type must land in the .form on disk")
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_attribute_concrete_produced_type():
+    attr = "MFProducedCatalogObject"
+    _seed_form_attribute(attr)
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {
+            "types": [{"kind": "CatalogObject", "ref": "Catalog"}]}}],
+    })
+    assert_ok(r, "set a form attribute's type to a concrete CatalogObject")
+    assert "valueType" in (r.structured.get("applied") or []), \
+        "the type alias must apply the concrete produced type to valueType: %r" % (r.structured,)
+    poll_diff_contains("<types>CatalogObject.Catalog</types>",
+                       ctx="the concrete produced type must land in the form's .form on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # In-memory collection types on a FORM attribute, and their refusal elsewhere (issue #295)
 # ──────────────────────────────────────────────────────────────────────────────
