@@ -310,6 +310,32 @@ public class SetInfobaseCredentialsToolTest
             success.contains("project-default application 'app-derived' was derived for project 'B'")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testUnreadableApplicationBindingIsRefusedWithoutDerivation() throws CoreException
+    {
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "B", "app-other"); //$NON-NLS-1$ //$NON-NLS-2$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")) //$NON-NLS-1$
+            .thenThrow(new CoreException(new Status(IStatus.ERROR,
+                "com.ditrix.edt.mcp.server.tests", "attribute store is unreadable"))); //$NON-NLS-1$ //$NON-NLS-2$
+        AtomicBoolean derived = new AtomicBoolean();
+
+        Object resolution = resolveLaunchTarget(config, (cfg, project) ->
+        {
+            derived.set(true);
+            return "app-wrong"; //$NON-NLS-1$
+        });
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertFalse("an unreadable binding must never be treated as an absent one", derived.get()); //$NON-NLS-1$
+        assertNotNull("the credential target must be refused before any write", error); //$NON-NLS-1$
+        assertTrue(error.contains("binding could not be read")); //$NON-NLS-1$
+        assertTrue(error.contains(configName));
+        assertTrue(error.contains("pass projectName + applicationId explicitly")); //$NON-NLS-1$
+        assertNull("a refused resolution exposes no configuration to the client writer", //$NON-NLS-1$
+            resolutionValue(resolution, "config")); //$NON-NLS-1$
+    }
+
     // ==================== Pure storeOutcome seam (no live EDT, no jobs framework) ====================
 
     /** A representative SUCCESS JSON the bounded Job records the instant updateSettings commits. */

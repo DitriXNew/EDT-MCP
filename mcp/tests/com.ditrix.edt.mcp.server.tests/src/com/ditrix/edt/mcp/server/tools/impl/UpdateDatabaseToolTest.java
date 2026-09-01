@@ -506,6 +506,26 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testApplicationFailureIncludesExceptionFreeStatusDetailBelowCauseHop()
+    {
+        MultiStatus status = new MultiStatus(STATUS_PLUGIN_ID, 0,
+            "Infobase authentication error", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID, "Auth fail")); //$NON-NLS-1$
+        ApplicationException failure = new ApplicationException(
+            "Infobase connection runtime session open error", new CoreException(status)); //$NON-NLS-1$
+
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "ProjectB", "app-b", false)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue("the exception-free child below the established cause hop must reach the caller: "
+            + error, error.contains("Infobase connection runtime session open error. " //$NON-NLS-1$
+                + "Caused by: Auth fail.")); //$NON-NLS-1$
+        assertFalse("the copied MultiStatus headline is not the actionable cause: " + error,
+            error.contains("Caused by: Infobase authentication error")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testApplicationFailureDoesNotRepeatFormattedHeadlineAsCause()
     {
         ApplicationException failure =

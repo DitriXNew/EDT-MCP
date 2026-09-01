@@ -41,11 +41,12 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * itself the diagnosis: something aborted the operation rather than failing it.
  *
  * <p>{@link #rootCause(Throwable)} answers a separate, complementary question: after
- * {@code describe} has selected the headline, what is the deepest distinct exception message
- * provably below that exact source? Status messages are not root-cause candidates: their graph
- * structure does not prove that an ancestor or sibling caused the selected headline. Callers that
- * need both compose them explicitly; the root-cause helper does not change {@code describe}'s
- * established selection rule.
+ * {@code describe} has selected the headline, what is the deepest distinct message provably below
+ * that exact position? It tracks whether the headline came from a throwable or a particular status.
+ * Only deeper cause-chain hops, descendants of the selected status, and direct
+ * {@link IStatus#getException()} edges are eligible; status ancestors and unrelated siblings are
+ * not. Callers that need both compose them explicitly; the root-cause helper does not change
+ * {@code describe}'s established selection rule.
  *
  * <p>{@link #withoutObjectIdentity(String)} answers a SEPARATE question and is meant to be
  * COMPOSED with {@code describe}, never substituted for it. {@code describe} selects the most
@@ -144,15 +145,15 @@ public final class PlatformFailures
     }
 
     /**
-     * The deepest exception-owned diagnosis provably below {@link #describe(Throwable)}'s exact
-     * source, when it adds information to that headline.
+     * The deepest diagnosis provably below {@link #describe(Throwable)}'s exact source, when it adds
+     * information to that headline.
      *
      * <p>The source lookup follows {@code describe}'s established preference without changing it.
-     * If the selected text came from a status message, this method returns the empty string: a
-     * status graph cannot prove that another status is its cause. If it came from an exception,
-     * only that exception's bounded {@code getCause()} chain is eligible. Status trees carried by
-     * later exceptions are inspected solely to find exception chains attached below that already
-     * established cause position; status messages themselves never become candidates.
+     * If the selected text came from an exception, only deeper hops in that exception's bounded
+     * {@code getCause()} chain are eligible, including the complete status tree attached at each
+     * established deeper hop. If it came from a status, only that status's descendants and its
+     * direct {@code getException()} edge are eligible. This excludes every status ancestor and
+     * unrelated sibling while retaining exception-free detail below the selected position.
      *
      * <p>Every status identity is visited at most once during that discovery. This makes aliases
      * and cycles linear in the number of stored statuses rather than multiplicative in the number
@@ -183,12 +184,26 @@ public final class PlatformFailures
         String selected = describe(failure);
         FailureMessage described = descriptionMessage(failure,
             new IdentityHashMap<IStatus, Boolean>());
-        if (described == null || described.source == null || !selected.equals(described.message))
+        if (described == null || !selected.equals(described.message))
         {
             return ""; //$NON-NLS-1$
         }
-        FailureMessage deepest = deepestExceptionMessages(described.source, selected,
-            new IdentityHashMap<IStatus, Boolean>());
+        IdentityHashMap<IStatus, Boolean> visitedStatuses =
+            new IdentityHashMap<IStatus, Boolean>();
+        FailureMessage deepest;
+        if (described.statusSource != null)
+        {
+            deepest = deepestBelowSelectedStatus(described.statusSource, described.depth, selected,
+                visitedStatuses);
+        }
+        else if (described.source != null)
+        {
+            deepest = deepestBelowSelectedException(described.source, selected, visitedStatuses);
+        }
+        else
+        {
+            return ""; //$NON-NLS-1$
+        }
         if (deepest == null)
         {
             return ""; //$NON-NLS-1$
@@ -223,7 +238,10 @@ public final class PlatformFailures
             String own = trimToNull(current.getMessage());
             if (own != null)
             {
-                return new FailureMessage(own, current, depth);
+                IStatus sourceStatus = status != null
+                    && own.equals(trimToNull(status.getMessage())) ? status : null;
+                return new FailureMessage(own, sourceStatus == null ? current : null,
+                    sourceStatus, depth);
             }
             FailureMessage fromStatus = descriptionStatusMessage(status, 0, visitedStatuses);
             if (fromStatus != null)
@@ -248,15 +266,16 @@ public final class PlatformFailures
             return null;
         }
         IStatus status = statusOf(failure);
-        Throwable source = status != null && own.equals(trimToNull(status.getMessage()))
-            ? null : failure;
-        return new FailureMessage(own, source, depth);
+        boolean copiedFromStatus = status != null
+            && own.equals(trimToNull(status.getMessage()));
+        return new FailureMessage(own, copiedFromStatus ? null : failure,
+            copiedFromStatus ? status : null, depth);
     }
 
     /**
-     * Locates {@code describe}'s first status message. A status may expose its carried exception's
-     * message as its own; exact equality preserves that exception provenance without attributing
-     * unrelated status prose to it.
+     * Locates {@code describe}'s first status message and records the exact status identity that
+     * supplied it. A carried exception is recorded only when the status itself is blank and
+     * {@code describe} therefore falls through to that exception's own message.
      */
     private static FailureMessage descriptionStatusMessage(IStatus status, int depth,
             IdentityHashMap<IStatus, Boolean> visitedStatuses)
@@ -292,37 +311,62 @@ public final class PlatformFailures
         String own = trimToNull(status.getMessage());
         if (own != null)
         {
-            Throwable source = carried != null
-                && own.equals(trimToNull(carried.getMessage())) ? carried : null;
-            return new FailureMessage(own, source, depth);
+            return new FailureMessage(own, null, status, depth);
         }
         String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
         return carriedMessage == null ? null
-            : new FailureMessage(carriedMessage, carried, depth + 1);
+            : new FailureMessage(carriedMessage, carried, null, depth + 1);
     }
 
-    /** Deepest distinct exception message below the selected exception. */
-    private static FailureMessage deepestExceptionMessages(Throwable selectedSource,
+    /** Deepest distinct message below the selected exception's exact cause-chain position. */
+    private static FailureMessage deepestBelowSelectedException(Throwable selectedSource,
             String selected, IdentityHashMap<IStatus, Boolean> visitedStatuses)
     {
         FailureMessage deepest = null;
         Throwable current = selectedSource;
         for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
         {
-            FailureMessage atHop = ownFailureMessage(current, depth, selected);
-            deepest = deeper(deepest, atHop);
             if (depth > 0)
             {
-                deepest = deeper(deepest, deepestCarriedException(
-                    statusOf(current), 0, depth + 1, selected, visitedStatuses));
+                deepest = deeper(deepest, ownFailureMessage(current, depth, selected));
+                deepest = deeper(deepest, deepestEligibleStatus(statusOf(current), 0,
+                    depth, selected, visitedStatuses));
             }
             current = current.getCause();
         }
         return deepest;
     }
 
-    /** Exception messages carried below a cause-chain hop; status messages are ignored. */
-    private static FailureMessage deepestCarriedException(IStatus status, int statusDepth,
+    /**
+     * Deepest candidate below a selected status. The status itself is only an anchor: its own
+     * message is the headline and is not reconsidered. Its exception and child statuses are direct
+     * downward edges; ancestors and siblings are unreachable from here by construction.
+     */
+    private static FailureMessage deepestBelowSelectedStatus(IStatus selectedStatus,
+            int selectedStatusDepth, String selected,
+            IdentityHashMap<IStatus, Boolean> visitedStatuses)
+    {
+        if (selectedStatus == null || selectedStatusDepth > MAX_STATUS_DEPTH
+            || visitedStatuses.put(selectedStatus, Boolean.TRUE) != null)
+        {
+            return null;
+        }
+        FailureMessage deepest = deepestThrowableChain(selectedStatus.getException(), 1,
+            selected, visitedStatuses);
+        IStatus[] children = selectedStatus.getChildren();
+        if (children != null)
+        {
+            for (IStatus child : children)
+            {
+                deepest = deeper(deepest, deepestEligibleStatus(child,
+                    selectedStatusDepth + 1, 1, selected, visitedStatuses));
+            }
+        }
+        return deepest;
+    }
+
+    /** All status and exception messages below an already established causal position. */
+    private static FailureMessage deepestEligibleStatus(IStatus status, int statusDepth,
             int structuralDepth, String selected,
             IdentityHashMap<IStatus, Boolean> visitedStatuses)
     {
@@ -331,25 +375,46 @@ public final class PlatformFailures
         {
             return null;
         }
-        FailureMessage deepest = null;
-        Throwable carried = status.getException();
-        for (int causeDepth = 0; carried != null && causeDepth < MAX_CAUSE_CHAIN_DEPTH;
-            causeDepth++)
-        {
-            deepest = deeper(deepest,
-                ownFailureMessage(carried, structuralDepth + causeDepth, selected));
-            carried = carried.getCause();
-        }
+        FailureMessage deepest = statusFailureMessage(status, structuralDepth, selected);
+        deepest = deeper(deepest, deepestThrowableChain(status.getException(),
+            structuralDepth + 1, selected, visitedStatuses));
         IStatus[] children = status.getChildren();
         if (children != null)
         {
             for (IStatus child : children)
             {
-                deepest = deeper(deepest, deepestCarriedException(child, statusDepth + 1,
+                deepest = deeper(deepest, deepestEligibleStatus(child, statusDepth + 1,
                     structuralDepth + 1, selected, visitedStatuses));
             }
         }
         return deepest;
+    }
+
+    /** Deepest message in a direct status-exception edge and its bounded cause chain. */
+    private static FailureMessage deepestThrowableChain(Throwable start, int structuralDepth,
+            String selected, IdentityHashMap<IStatus, Boolean> visitedStatuses)
+    {
+        FailureMessage deepest = null;
+        Throwable current = start;
+        for (int causeDepth = 0; current != null && causeDepth < MAX_CAUSE_CHAIN_DEPTH;
+            causeDepth++)
+        {
+            int candidateDepth = structuralDepth + causeDepth;
+            deepest = deeper(deepest,
+                ownFailureMessage(current, candidateDepth, selected));
+            deepest = deeper(deepest, deepestEligibleStatus(statusOf(current), 0,
+                candidateDepth, selected, visitedStatuses));
+            current = current.getCause();
+        }
+        return deepest;
+    }
+
+    /** A status-owned candidate never borrows the type of an exception it happens to carry. */
+    private static FailureMessage statusFailureMessage(IStatus status, int depth, String selected)
+    {
+        String own = trimToNull(status.getMessage());
+        return own == null || selected.equals(own) ? null
+            : new FailureMessage(own, null, status, depth);
     }
 
     /** Greater structural depth wins; the first visited candidate wins a tie. */
@@ -388,12 +453,14 @@ public final class PlatformFailures
     {
         final String message;
         final Throwable source;
+        final IStatus statusSource;
         final int depth;
 
-        FailureMessage(String message, Throwable source, int depth)
+        FailureMessage(String message, Throwable source, IStatus statusSource, int depth)
         {
             this.message = message;
             this.source = source;
+            this.statusSource = statusSource;
             this.depth = depth;
         }
     }

@@ -447,6 +447,20 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testRootCauseFollowsExceptionOfSelectedStatusWithDifferentMessage()
+    {
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, PLUGIN, "Infobase authentication error", //$NON-NLS-1$
+            new JSchException("Auth fail"))); //$NON-NLS-1$
+        ApplicationException failure = new ApplicationException(status);
+
+        assertEquals("the status text remains the selected headline", //$NON-NLS-1$
+            "Infobase authentication error", PlatformFailures.describe(failure)); //$NON-NLS-1$
+        assertEquals("IStatus.getException is a direct causal edge despite different text", //$NON-NLS-1$
+            "com.jcraft.jsch.JSchException: Auth fail", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRootCauseCapsCauseChainCarriedByChildStatus()
     {
         Throwable carried = new RuntimeException("level-11"); //$NON-NLS-1$

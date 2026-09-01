@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
@@ -363,7 +364,21 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             BiFunction<ILaunchConfiguration, String, String> applicationIdResolver)
     {
         String cfgProject = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-        String cfgAppId = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        String cfgAppId;
+        try
+        {
+            // This path selects where a SECRET is written. LaunchConfigUtils.readAttribute is
+            // intentionally lenient and conflates a failed read with an absent attribute, so use
+            // the platform accessor directly here and preserve that distinction.
+            cfgAppId = cfg.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        }
+        catch (CoreException e)
+        {
+            return TargetResolution.error(ToolResult.error("The application binding could not be " //$NON-NLS-1$
+                + "read from launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' — refusing to derive a credential target. Fix the configuration, or pass " //$NON-NLS-1$
+                + "projectName + applicationId explicitly.").toJson()); //$NON-NLS-1$
+        }
         if (cfgProject.isEmpty())
         {
             return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
