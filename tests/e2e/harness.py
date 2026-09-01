@@ -483,7 +483,7 @@ def call(tool, arguments):
             raise
         result = Result(raw)
         if not _is_transient_building(result) or time.time() >= deadline:
-            _record_outcome(tool, result.is_error, result.structured)
+            _record_outcome(tool, arguments, result.is_error, result.structured)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
@@ -539,19 +539,42 @@ MODEL_MUTATION_TOOLS = frozenset({
 
 # Confirmed outcomes from this subset can dirty the committed fixture's in-memory model and
 # therefore require kind="write-metadata". The exclusions are deliberate and kept one-per-line:
+# Tools that never move the FIXTURE's model, whatever arguments they are given.
 NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
     "clean_project",    # Restores the in-memory model FROM the fixture on disk.
-    "resync_to_disk",   # The mirror of it: writes the model OUT to disk ("Direction MODEL ->
-                        # DISK, the opposite of clean_project"). What it dirties is the working
-                        # tree, which reset_fixture already reverts.
-    "build_external_objects",  # Compiles .epf/.erf build artefacts; produces files, not model
-                        # changes.
     "create_project",   # Changes workspace composition, not the fixture's model.
     "delete_project",   # Changes workspace composition, not the fixture's model.
     "update_database",  # Writes to the information base, not the fixture's model.
 })
-FIXTURE_MODEL_DIRTYING_TOOLS = MODEL_MUTATION_TOOLS - NON_FIXTURE_MODEL_MUTATION_TOOLS
 
+
+def _call_moves_the_fixture_model(tool, args, structured):
+    """Did THIS call move the fixture's model? Asked per call, not per tool.
+
+    Two tools are non-mutating in their ordinary mode and mutating in an opt-in one, so a
+    tool-wide exemption is wrong in both directions - it was, and the review caught it:
+
+    * resync_to_disk is "Direction MODEL -> DISK, the opposite of clean_project", but with
+      cleanDanglingReferences=true it removes dangling proxies from the Configuration inside a
+      BM WRITE transaction;
+    * build_external_objects compiles .epf/.erf artefacts, but recordBuildTime defaults to TRUE
+      and then stamps the build time into the object's Comment in a BM write.
+
+    A PREVIEW is the third case, and it is general rather than per-tool: a response whose action
+    is "preview" is a dry run by construction (rename/delete build the refactoring and report it
+    without applying), so it cannot have moved anything.
+    """
+    if tool in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+        return False
+    if isinstance(structured, dict) and structured.get("action") == "preview":
+        return False
+    args = args or {}
+    if tool == "resync_to_disk":
+        return bool(args.get("cleanDanglingReferences"))
+    if tool == "build_external_objects":
+        # Absent means true - the tool's own default.
+        return args.get("recordBuildTime", True) is not False
+    return True
 _CALLED_TOOLS = set()
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
@@ -586,7 +609,7 @@ def _record_attempt(tool):
         _MUTATIONS_UNRESOLVED += 1
 
 
-def _record_outcome(tool, is_error, structured):
+def _record_outcome(tool, args, is_error, structured):
     """Called once the server's answer has actually been read.
 
     Mutation-bearing failures are identified by boolean response fields, never their prose.
@@ -603,7 +626,11 @@ def _record_outcome(tool, is_error, structured):
                         and structured.get("mutationOutcomeUnknown") is True)
     if not is_error or mutation_committed or mutation_unknown:
         _MUTATION_CONFIRMED = True
-        _CONFIRMED_MUTATION_TOOLS.add(tool)
+        # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
+        # stays conservative (any success forfeits it), while accusing a test of a mis-declared
+        # kind has to be right about THIS call actually having moved the fixture's model.
+        if _call_moves_the_fixture_model(tool, args, structured):
+            _CONFIRMED_MUTATION_TOOLS.add(tool)
 
 
 def _mark_model_synced():
@@ -640,7 +667,7 @@ def mutation_kind_violation_tools(kind, confirmed_tools):
     """Confirmed fixture-model writers that require a different declared test kind."""
     if kind == "write-metadata":
         return ()
-    return tuple(sorted(FIXTURE_MODEL_DIRTYING_TOOLS.intersection(confirmed_tools)))
+    return tuple(sorted(confirmed_tools))
 
 
 def begin_test_calls():
@@ -997,6 +1024,9 @@ def _git(*args, timeout=None):
 # EXTENSION and the EXTERNAL-OBJECTS project are touched only by their own files, and the
 # end-of-run cleanup reverts all three.
 ALL_FIXTURE_RELS = [PROJECT_REL, TESTS_PROJECT_REL, EXT_OBJECTS_REL]
+# The same three fixtures addressed as PROJECTS, for callers that must clean a model rather
+# than a path (the kind ratchet cleans all three: an undeclared write names no project).
+ALL_FIXTURE_PROJECTS = [PROJECT, TESTS_PROJECT, EXT_OBJECTS_PROJECT]
 
 
 def _reset_rel(rel):

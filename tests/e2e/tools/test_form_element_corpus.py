@@ -576,7 +576,7 @@ def test_form_corpus_parameter_is_not_an_item_and_not_an_attribute():
     assert_contains(e, "Parameter", "the advice must name the kind that does exist")
 
 
-@e2e_test(tool="create_metadata", kind="error")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_form_corpus_parameter_refuses_properties_it_cannot_store():
     """A parameter has no title and no parent, so a create-time property is refused, not dropped.
 

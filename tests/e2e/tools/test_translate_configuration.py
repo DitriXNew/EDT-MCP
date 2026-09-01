@@ -80,7 +80,7 @@ from harness import (
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATH (env-robust: real success contract OR LanguageTool sentinel)
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="translate_configuration", kind="action")
+@e2e_test(tool="translate_configuration", kind="write-metadata")
 def test_translate_succeeds_or_reports_languagetool_unavailable():
     """Fully valid call (open EDT project + a real target language code).
 

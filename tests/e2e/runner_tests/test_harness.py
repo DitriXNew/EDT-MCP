@@ -32,7 +32,7 @@ class MutationOutcomeTest(unittest.TestCase):
 
     def test_structural_post_commit_marker_confirms_mutation_regardless_of_message(self):
         HARNESS._record_attempt("dcs")
-        HARNESS._record_outcome("dcs", True, {
+        HARNESS._record_outcome("dcs", {}, True, {
             "success": False,
             "error": "wording with no legacy committed phrase at all",
             "mutationCommitted": True,
@@ -44,7 +44,7 @@ class MutationOutcomeTest(unittest.TestCase):
 
     def test_ordinary_dcs_refusal_does_not_confirm_mutation(self):
         HARNESS._record_attempt("dcs")
-        HARNESS._record_outcome("dcs", True, {
+        HARNESS._record_outcome("dcs", {}, True, {
             "success": False,
             "error": "validation refused before commit",
         })
@@ -55,7 +55,7 @@ class MutationOutcomeTest(unittest.TestCase):
 
     def test_unknown_mutation_outcome_forfeits_the_shortcut_without_a_phrase(self):
         HARNESS._record_attempt("apply_quick_fix")
-        HARNESS._record_outcome("apply_quick_fix", True, {
+        HARNESS._record_outcome("apply_quick_fix", {}, True, {
             "success": False,
             "error": "opaque provider failed",
             "mutationOutcomeUnknown": True,
@@ -67,7 +67,7 @@ class MutationOutcomeTest(unittest.TestCase):
 
     def test_kind_ratchet_flags_confirmed_dirtying_mutation_outside_write_metadata(self):
         HARNESS._record_attempt("create_metadata")
-        HARNESS._record_outcome("create_metadata", False, {"success": True})
+        HARNESS._record_outcome("create_metadata", {}, False, {"success": True})
 
         violations = HARNESS.mutation_kind_violation_tools(
             "action", HARNESS.confirmed_mutation_tools())
@@ -76,7 +76,7 @@ class MutationOutcomeTest(unittest.TestCase):
 
     def test_kind_ratchet_allows_confirmed_mutation_for_write_metadata(self):
         HARNESS._record_attempt("modify_metadata")
-        HARNESS._record_outcome("modify_metadata", False, {"success": True})
+        HARNESS._record_outcome("modify_metadata", {}, False, {"success": True})
 
         violations = HARNESS.mutation_kind_violation_tools(
             "write-metadata", HARNESS.confirmed_mutation_tools())
@@ -84,16 +84,54 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertEqual((), violations)
 
     def test_kind_ratchet_ignores_successful_clean_project_for_action(self):
+        """clean_project restores the model FROM disk, so it never enters the set at all."""
         HARNESS._record_attempt("clean_project")
-        HARNESS._record_outcome("clean_project", False, {"success": True})
+        HARNESS._record_outcome("clean_project", {}, False, {"success": True})
 
-        self.assertEqual(frozenset({"clean_project"}), HARNESS.confirmed_mutation_tools())
+        self.assertEqual(frozenset(), HARNESS.confirmed_mutation_tools())
         self.assertEqual((), HARNESS.mutation_kind_violation_tools(
             "action", HARNESS.confirmed_mutation_tools()))
 
+    # The two tools whose ORDINARY mode moves nothing and whose opt-in mode moves the model.
+    # A tool-wide exemption was wrong in both directions; these pin the per-call rule.
+
+    def test_resync_to_disk_is_a_writer_only_when_asked_to_clean_dangling_references(self):
+        HARNESS._record_attempt("resync_to_disk")
+        HARNESS._record_outcome("resync_to_disk", {"projectName": "P"}, False, {"success": True})
+        self.assertEqual(frozenset(), HARNESS.confirmed_mutation_tools())
+
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt("resync_to_disk")
+        HARNESS._record_outcome("resync_to_disk", {"cleanDanglingReferences": True}, False,
+                                {"success": True})
+        self.assertEqual(frozenset({"resync_to_disk"}), HARNESS.confirmed_mutation_tools())
+
+    def test_build_external_objects_stamps_the_model_unless_asked_not_to(self):
+        # recordBuildTime defaults to TRUE in the tool, so an absent argument is a write.
+        HARNESS._record_attempt("build_external_objects")
+        HARNESS._record_outcome("build_external_objects", {"projectName": "P"}, False,
+                                {"success": True})
+        self.assertEqual(frozenset({"build_external_objects"}), HARNESS.confirmed_mutation_tools())
+
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt("build_external_objects")
+        HARNESS._record_outcome("build_external_objects", {"recordBuildTime": False}, False,
+                                {"success": True})
+        self.assertEqual(frozenset(), HARNESS.confirmed_mutation_tools())
+
+    def test_a_preview_is_never_a_mutation(self):
+        """A dry run reports action=preview and applies nothing - true for rename and delete."""
+        HARNESS._record_attempt("rename_metadata_object")
+        HARNESS._record_outcome("rename_metadata_object", {"objectFqn": "CommonModule.Calc"},
+                                False, {"success": True, "action": "preview"})
+
+        self.assertEqual(frozenset(), HARNESS.confirmed_mutation_tools())
+        self.assertEqual((), HARNESS.mutation_kind_violation_tools(
+            "write", HARNESS.confirmed_mutation_tools()))
+
     def test_kind_ratchet_ignores_test_without_confirmed_mutation(self):
         HARNESS._record_attempt("create_metadata")
-        HARNESS._record_outcome("create_metadata", True, {
+        HARNESS._record_outcome("create_metadata", {}, True, {
             "success": False,
             "error": "validation refused before commit",
         })

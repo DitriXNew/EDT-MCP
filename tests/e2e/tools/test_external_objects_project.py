@@ -179,7 +179,7 @@ def test_extobj_create_and_delete_a_form_element():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="create_metadata", kind="write")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_extobj_create_and_delete_an_attribute():
     """A MEMBER of the external object itself — "Cannot resolve a create target" in the report."""
     reset_fixture_rel(EXT_OBJECTS_REL)
@@ -205,7 +205,7 @@ def test_extobj_create_and_delete_an_attribute():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="create_metadata", kind="write")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_extobj_create_a_form_object_with_generated_content():
     """generateContent must SEED the main Object attribute on an external data processor.
 
@@ -268,7 +268,7 @@ def test_extobj_top_level_create_is_refused_with_the_way_to_do_it():
     assert_no_diff_rel(EXT_OBJECTS_REL, "a refused call must not touch the fixture")
 
 
-@e2e_test(tool="modify_metadata", kind="write")
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_extobj_modify_a_form_member_title():
     """modify_metadata reaches a form member of an external data processor (reported broken)."""
     reset_fixture_rel(EXT_OBJECTS_REL)

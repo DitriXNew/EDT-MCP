@@ -257,9 +257,24 @@ def _reset_after_write(harness, t, already_failing=False):
     if kind_violations:
         # Do not let the ratchet itself leak the mutation into the next test. A confirmed fixture
         # write bypasses the pristine shortcut: restore disk and model first, then fail its owner.
-        if not harness.reset_fixture():
+        #
+        # EVERY fixture, not just the base one. reset_fixture()/reset_model() cover PROJECT alone,
+        # and an undeclared write can just as easily land in the extension or the external-objects
+        # fixture - reporting it while leaving that model dirty would cause the very cascade this
+        # ratchet exists to catch. The violating test did not declare its writes, so there is
+        # nothing to narrow the cleanup with; clean all of them.
+        if not harness.reset_all_fixtures():
             return
         harness.reset_model()
+        for project in harness.ALL_FIXTURE_PROJECTS:
+            if project == harness.PROJECT:
+                continue    # reset_model already re-imported the base project
+            try:
+                harness.call("clean_project", {"projectName": project})
+            except Exception:
+                # Best effort: the ratchet's own message is what the author needs, and a
+                # clean_project refusal here must not replace it.
+                pass
         message = ('test "%s" has kind="%s" but confirmed fixture-model mutation by tool(s): %s; '
                    'declare kind="write-metadata"'
                    % (t.get("name", "?"), kind, ", ".join(kind_violations)))
