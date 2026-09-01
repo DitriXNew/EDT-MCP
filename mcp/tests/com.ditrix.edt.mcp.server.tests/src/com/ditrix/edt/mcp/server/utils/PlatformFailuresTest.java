@@ -282,23 +282,24 @@ public class PlatformFailuresTest
     }
 
     @Test
-    public void testRootCauseFindsDistinctStatusMessageWhenHopRepeatsHeadline()
+    public void testRootCauseNeverReportsMultiStatusParentAsCauseOfSelectedChild()
     {
-        String headline = "Database update failed"; //$NON-NLS-1$
-        String detail = "port 8429 is already in use"; //$NON-NLS-1$
-        MultiStatus status = new MultiStatus(PLUGIN, 0, headline, null);
-        status.add(new Status(IStatus.ERROR, PLUGIN, headline));
-        status.add(new Status(IStatus.ERROR, PLUGIN, detail));
+        String parent = "Database update failed"; //$NON-NLS-1$
+        String child = "Auth fail"; //$NON-NLS-1$
+        MultiStatus status = new MultiStatus(PLUGIN, 0, parent, null);
+        status.add(new Status(IStatus.ERROR, PLUGIN, child));
         ApplicationException failure = new ApplicationException(status);
 
-        assertEquals("the fixture must select the repeated headline", headline, //$NON-NLS-1$
+        assertEquals("describe must continue to promote the failing child", child, //$NON-NLS-1$
             PlatformFailures.describe(failure));
-        assertEquals("a headline candidate must not hide a tied distinct status message", //$NON-NLS-1$
-            detail, rootCause(failure));
+        String diagnosis = rootCause(failure);
+        assertEquals("an ancestor status is not a cause of its selected child", "", diagnosis); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the parent text must never be emitted as the child's cause", //$NON-NLS-1$
+            diagnosis.contains(parent));
     }
 
     @Test
-    public void testRootCauseKeepsDistinctStatusWhenDeeperStatusRepeatsHeadline()
+    public void testRootCauseDoesNotTurnASelectedStatusAncestorIntoACause()
     {
         String headline = "Database update failed"; //$NON-NLS-1$
         String detail = "publishing was refused because the infobase is locked"; //$NON-NLS-1$
@@ -310,8 +311,8 @@ public class PlatformFailuresTest
 
         assertEquals("the fixture must select the deeper repeated headline", headline, //$NON-NLS-1$
             PlatformFailures.describe(failure));
-        assertEquals("a deeper repeated headline must not suppress a shallower distinct diagnosis", //$NON-NLS-1$
-            detail, rootCause(failure));
+        assertEquals("a status ancestor cannot be reported as its selected descendant's cause", //$NON-NLS-1$
+            "", rootCause(failure)); //$NON-NLS-1$
     }
 
     @Test
@@ -337,24 +338,53 @@ public class PlatformFailuresTest
             rootCause(failure));
     }
 
-    @Test
-    public void testRootCauseHonoursTheStatusTreeCap()
+    @Test(timeout = 1000)
+    public void testRootCauseVisitsAnAliasedStatusGraphOnlyOncePerIdentity()
     {
-        MultiStatus root = new MultiStatus(PLUGIN, 0, "status-0", null); //$NON-NLS-1$
-        MultiStatus current = root;
-        for (int depth = 1; depth <= 5; depth++)
+        IStatus shared = new Status(IStatus.ERROR, PLUGIN, ""); //$NON-NLS-1$
+        for (int depth = 0; depth < 4; depth++)
         {
-            MultiStatus child = new MultiStatus(PLUGIN, 0, "status-" + depth, null); //$NON-NLS-1$
+            MultiStatus aliases = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+            for (int reference = 0; reference < 100; reference++)
+            {
+                aliases.add(shared);
+            }
+            shared = aliases;
+        }
+        MultiStatus carried = new MultiStatus(PLUGIN, 0, "wrapper detail", null); //$NON-NLS-1$
+        carried.add(shared);
+        Throwable failure = new RuntimeException("headline", new CoreException(carried)); //$NON-NLS-1$
+
+        assertEquals("400 stored aliases must not expand into roughly 100 million visits", //$NON-NLS-1$
+            "wrapper detail", //$NON-NLS-1$
+            rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseStatusDiscoveryStopsAtItsDepthBoundary()
+    {
+        String boundaryMessage = "boundary diagnosis"; //$NON-NLS-1$
+        String beyondMessage = "beyond-depth diagnosis"; //$NON-NLS-1$
+        MultiStatus root = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        MultiStatus current = root;
+        for (int depth = 1; depth < 4; depth++)
+        {
+            MultiStatus child = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
             current.add(child);
             current = child;
         }
-        ApplicationException failure = new ApplicationException(root);
+        MultiStatus boundary = new MultiStatus(PLUGIN, 0, "", //$NON-NLS-1$
+            new RuntimeException(boundaryMessage));
+        current.add(boundary);
+        boundary.add(new Status(IStatus.ERROR, PLUGIN, "", //$NON-NLS-1$
+            new IllegalStateException(beyondMessage)));
+        Throwable failure = new RuntimeException("headline", new CoreException(root)); //$NON-NLS-1$
 
-        assertEquals("describe itself stops at the deepest permitted status", "status-4", //$NON-NLS-1$ //$NON-NLS-2$
-            PlatformFailures.describe(failure));
-        assertEquals("the out-of-cap status must be ignored while the deepest in-cap distinct " //$NON-NLS-1$
-            + "diagnosis survives", "status-3", //$NON-NLS-1$ //$NON-NLS-2$
-            rootCause(failure));
+        String diagnosis = rootCause(failure);
+        assertEquals("a carried exception at status depth four must remain discoverable", //$NON-NLS-1$
+            "java.lang.RuntimeException: " + boundaryMessage, diagnosis); //$NON-NLS-1$
+        assertFalse("a carried exception at status depth five must be outside the walk: " //$NON-NLS-1$
+            + diagnosis, diagnosis.contains(beyondMessage));
     }
 
     @Test

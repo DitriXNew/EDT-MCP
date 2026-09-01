@@ -520,6 +520,24 @@ public class UpdateDatabaseToolTest
             error.contains("Caused by")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testApplicationFailureDoesNotReverseMultiStatusParentAndChild()
+    {
+        MultiStatus status = new MultiStatus(STATUS_PLUGIN_ID, 0,
+            "Database update failed", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID, "Auth fail")); //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException(status), "ProjectB", "app-b", false)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue("the child remains the selected headline: " + error, //$NON-NLS-1$
+            error.startsWith("Database update failed: Auth fail")); //$NON-NLS-1$
+        assertFalse("the parent must never be presented as the child's cause: " + error, //$NON-NLS-1$
+            error.contains("Caused by: Database update failed")); //$NON-NLS-1$
+        assertFalse("there is no proven deeper diagnosis, so there must be no cause clause: " //$NON-NLS-1$
+            + error, error.contains("Caused by")); //$NON-NLS-1$
+    }
+
     // ============ Unexpected (non-ApplicationException) failures, #453 ============
 
     /** Plugin id used for the synthetic statuses below; no live EDT is involved. */

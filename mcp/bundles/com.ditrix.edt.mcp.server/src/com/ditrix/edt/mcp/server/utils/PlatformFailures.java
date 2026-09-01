@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.IdentityHashMap;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,9 +41,11 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * itself the diagnosis: something aborted the operation rather than failing it.
  *
  * <p>{@link #rootCause(Throwable)} answers a separate, complementary question: after
- * {@code describe} has selected the headline, what is the deepest distinct diagnosis in the same
- * bounded failure walk? Callers that need both compose them explicitly; the root-cause helper does
- * not change {@code describe}'s established selection rule.
+ * {@code describe} has selected the headline, what is the deepest distinct exception message
+ * provably below that exact source? Status messages are not root-cause candidates: their graph
+ * structure does not prove that an ancestor or sibling caused the selected headline. Callers that
+ * need both compose them explicitly; the root-cause helper does not change {@code describe}'s
+ * established selection rule.
  *
  * <p>{@link #withoutObjectIdentity(String)} answers a SEPARATE question and is meant to be
  * COMPOSED with {@code describe}, never substituted for it. {@code describe} selects the most
@@ -141,33 +144,29 @@ public final class PlatformFailures
     }
 
     /**
-     * The deepest diagnosis in the bounded failure walk, when it adds information to
-     * {@link #describe(Throwable)}.
+     * The deepest exception-owned diagnosis provably below {@link #describe(Throwable)}'s exact
+     * source, when it adds information to that headline.
      *
-     * <p>The walk uses the same two bounds as {@code describe}: the primary {@code getCause()}
-     * chain is capped at {@link #MAX_CAUSE_CHAIN_DEPTH} throwable hops, and the {@link IStatus}
-     * tree at every primary hop is capped at {@link #MAX_STATUS_DEPTH}. When an exception is
-     * attached anywhere in a status tree, its own {@code getCause()} chain uses that SAME cause
-     * cap, so a child status carrying
-     * {@code RuntimeException("SSH error", new JSchException("Auth fail"))} contributes the
-     * terminal {@code Auth fail} without opening an unbounded walk. Within a status tree, greater
-     * structural depth wins; failing children are visited before informational ones, matching the
-     * preference used by {@link #statusMessage(IStatus, int)}. Cause-chain depth then wins over an
-     * earlier throwable hop. The bounds also stop cyclical throwable/status structures.
+     * <p>The source lookup follows {@code describe}'s established preference without changing it.
+     * If the selected text came from a status message, this method returns the empty string: a
+     * status graph cannot prove that another status is its cause. If it came from an exception,
+     * only that exception's bounded {@code getCause()} chain is eligible. Status trees carried by
+     * later exceptions are inspected solely to find exception chains attached below that already
+     * established cause position; status messages themselves never become candidates.
      *
-     * <p>Messages equal to {@code describe}'s selected headline are excluded as diagnosis
-     * candidates throughout both structures. The deepest message that remains wins, so a repeated
-     * headline cannot displace a distinct diagnosis even when the repetition sits deeper in the
-     * status tree or later in the cause chain. The formatted result is compared with the headline
-     * again, because adding a type prefix can recreate a headline that differed from the raw
-     * candidate. When no distinct result remains, the empty string is returned so a single-message
-     * failure is never repeated. When the deepest distinct message is genuinely owned by a
-     * terminal exception and is short enough to be generic (40 characters or fewer and no more
-     * than four whitespace-separated words), its fully qualified exception type is prefixed. A
-     * platform wrapper's own message that merely copies its status text retains status provenance
-     * and is not attributed to the wrapper type. Thus an exception-owned {@code Auth fail} becomes,
-     * for example, {@code com.jcraft.jsch.JSchException: Auth fail}; longer, self-explanatory
-     * platform prose is returned without a stack-dump-like type prefix.
+     * <p>Every status identity is visited at most once during that discovery. This makes aliases
+     * and cycles linear in the number of stored statuses rather than multiplicative in the number
+     * of paths. Each exception chain remains capped at {@link #MAX_CAUSE_CHAIN_DEPTH}, and status
+     * discovery remains capped at {@link #MAX_STATUS_DEPTH}.
+     *
+     * <p>Messages equal to the selected headline are excluded. The formatted result is compared
+     * with the headline again, because adding a type prefix can recreate a headline that differed
+     * from the raw candidate. When no distinct result remains, the empty string is returned. A
+     * short generic message (40 characters or fewer and no more than four words) is prefixed only
+     * when a terminal exception genuinely owns it. A platform wrapper's message that merely copies
+     * its status text retains status provenance and is not attributed to the wrapper type. Thus a
+     * status-carried {@code RuntimeException("SSH error", new JSchException("Auth fail"))} still
+     * contributes {@code com.jcraft.jsch.JSchException: Auth fail}.
      *
      * <p>This method returns only the diagnosis. A caller that displays both messages should compose
      * English prose such as {@code describe(failure) + " Caused by: " + rootCause(failure)}.
@@ -182,17 +181,14 @@ public final class PlatformFailures
             return ""; //$NON-NLS-1$
         }
         String selected = describe(failure);
-        FailureMessage deepest = null;
-        Throwable current = failure;
-        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        FailureMessage described = descriptionMessage(failure,
+            new IdentityHashMap<IStatus, Boolean>());
+        if (described == null || described.source == null || !selected.equals(described.message))
         {
-            FailureMessage atHop = deepestMessageAt(current, selected);
-            if (atHop != null)
-            {
-                deepest = atHop;
-            }
-            current = current.getCause();
+            return ""; //$NON-NLS-1$
         }
+        FailureMessage deepest = deepestExceptionMessages(described.source, selected,
+            new IdentityHashMap<IStatus, Boolean>());
         if (deepest == null)
         {
             return ""; //$NON-NLS-1$
@@ -207,12 +203,36 @@ public final class PlatformFailures
         return selected.equals(formatted) ? "" : formatted; //$NON-NLS-1$
     }
 
-    /** Deepest distinct message carried by one throwable hop and its bounded status tree. */
-    private static FailureMessage deepestMessageAt(Throwable failure, String selected)
+    /** Finds the exact message source selected by {@link #describe(Throwable)}. */
+    private static FailureMessage descriptionMessage(Throwable failure,
+            IdentityHashMap<IStatus, Boolean> visitedStatuses)
     {
-        FailureMessage deepest = ownFailureMessage(failure, 0, selected);
-        FailureMessage fromStatus = deepestStatusMessage(statusOf(failure), 0, selected);
-        return deeper(deepest, fromStatus);
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        {
+            IStatus status = statusOf(current);
+            if (hasChildren(status))
+            {
+                FailureMessage fromChildren = descriptionStatusMessage(status, 0,
+                    visitedStatuses);
+                if (fromChildren != null)
+                {
+                    return fromChildren;
+                }
+            }
+            String own = trimToNull(current.getMessage());
+            if (own != null)
+            {
+                return new FailureMessage(own, current, depth);
+            }
+            FailureMessage fromStatus = descriptionStatusMessage(status, 0, visitedStatuses);
+            if (fromStatus != null)
+            {
+                return fromStatus;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     /**
@@ -233,61 +253,101 @@ public final class PlatformFailures
         return new FailureMessage(own, source, depth);
     }
 
-    /** Deepest distinct message in a bounded status tree; failing children win equal-depth ties. */
-    private static FailureMessage deepestStatusMessage(IStatus status, int depth, String selected)
+    /**
+     * Locates {@code describe}'s first status message. A status may expose its carried exception's
+     * message as its own; exact equality preserves that exception provenance without attributing
+     * unrelated status prose to it.
+     */
+    private static FailureMessage descriptionStatusMessage(IStatus status, int depth,
+            IdentityHashMap<IStatus, Boolean> visitedStatuses)
     {
-        if (status == null || depth > MAX_STATUS_DEPTH)
+        if (status == null || depth > MAX_STATUS_DEPTH
+            || visitedStatuses.put(status, Boolean.TRUE) != null)
         {
             return null;
         }
-        String own = trimToNull(status.getMessage());
-        FailureMessage deepest = own == null || selected.equals(own) ? null
-            : new FailureMessage(own, null, depth);
         IStatus[] children = status.getChildren();
         if (children != null)
         {
-            deepest = deepestStatusChildren(children, depth, true, deepest, selected);
-            deepest = deepestStatusChildren(children, depth, false, deepest, selected);
+            for (int pass = 0; pass < 2; pass++)
+            {
+                boolean failing = pass == 0;
+                for (IStatus child : children)
+                {
+                    if (child == null
+                        || child.matches(IStatus.ERROR | IStatus.CANCEL) != failing)
+                    {
+                        continue;
+                    }
+                    FailureMessage message = descriptionStatusMessage(child, depth + 1,
+                        visitedStatuses);
+                    if (message != null)
+                    {
+                        return message;
+                    }
+                }
+            }
         }
-        deepest = deeper(deepest,
-            deepestCarriedCauseMessage(status.getException(), depth + 1, selected));
-        return deepest;
+        Throwable carried = status.getException();
+        String own = trimToNull(status.getMessage());
+        if (own != null)
+        {
+            Throwable source = carried != null
+                && own.equals(trimToNull(carried.getMessage())) ? carried : null;
+            return new FailureMessage(own, source, depth);
+        }
+        String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
+        return carriedMessage == null ? null
+            : new FailureMessage(carriedMessage, carried, depth + 1);
     }
 
-    /**
-     * Deepest distinct own message in the cause chain of an exception attached to a status.
-     * Reuses the ordinary cause-chain cap rather than defining a child-specific bound; a cyclical
-     * carried chain therefore terminates under the same contract as the top-level chain.
-     */
-    private static FailureMessage deepestCarriedCauseMessage(Throwable failure, int depth,
-            String selected)
+    /** Deepest distinct exception message below the selected exception. */
+    private static FailureMessage deepestExceptionMessages(Throwable selectedSource,
+            String selected, IdentityHashMap<IStatus, Boolean> visitedStatuses)
     {
         FailureMessage deepest = null;
-        Throwable current = failure;
-        for (int causeDepth = 0; current != null && causeDepth < MAX_CAUSE_CHAIN_DEPTH;
-            causeDepth++)
+        Throwable current = selectedSource;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
         {
-            FailureMessage atHop = ownFailureMessage(current, depth + causeDepth, selected);
-            if (atHop != null)
+            FailureMessage atHop = ownFailureMessage(current, depth, selected);
+            deepest = deeper(deepest, atHop);
+            if (depth > 0)
             {
-                deepest = atHop;
+                deepest = deeper(deepest, deepestCarriedException(
+                    statusOf(current), 0, depth + 1, selected, visitedStatuses));
             }
             current = current.getCause();
         }
         return deepest;
     }
 
-    /** Walks failing or non-failing child statuses without visiting either group twice. */
-    private static FailureMessage deepestStatusChildren(IStatus[] children, int depth,
-            boolean failing, FailureMessage deepest, String selected)
+    /** Exception messages carried below a cause-chain hop; status messages are ignored. */
+    private static FailureMessage deepestCarriedException(IStatus status, int statusDepth,
+            int structuralDepth, String selected,
+            IdentityHashMap<IStatus, Boolean> visitedStatuses)
     {
-        for (IStatus child : children)
+        if (status == null || statusDepth > MAX_STATUS_DEPTH
+            || visitedStatuses.put(status, Boolean.TRUE) != null)
         {
-            if (child == null || child.matches(IStatus.ERROR | IStatus.CANCEL) != failing)
+            return null;
+        }
+        FailureMessage deepest = null;
+        Throwable carried = status.getException();
+        for (int causeDepth = 0; carried != null && causeDepth < MAX_CAUSE_CHAIN_DEPTH;
+            causeDepth++)
+        {
+            deepest = deeper(deepest,
+                ownFailureMessage(carried, structuralDepth + causeDepth, selected));
+            carried = carried.getCause();
+        }
+        IStatus[] children = status.getChildren();
+        if (children != null)
+        {
+            for (IStatus child : children)
             {
-                continue;
+                deepest = deeper(deepest, deepestCarriedException(child, statusDepth + 1,
+                    structuralDepth + 1, selected, visitedStatuses));
             }
-            deepest = deeper(deepest, deepestStatusMessage(child, depth + 1, selected));
         }
         return deepest;
     }
