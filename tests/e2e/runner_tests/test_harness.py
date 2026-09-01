@@ -477,6 +477,60 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn(os.path.join(metadata, ".bak_1.log"), identities,
                       "directory enumeration must include the dot-prefixed backup name")
 
+    def test_a_backup_named_directory_does_not_displace_a_real_log_from_the_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            for name, body, mtime in (
+                    (".bak_2.log", "FAILURE IN REAL BACKUP\n", 1_000_000_000),
+                    (".bak_3.log", "LATER BACKUP THREE\n", 2_000_000_000),
+                    (".bak_4.log", "LATER BACKUP FOUR\n", 3_000_000_000),
+                    (".log", "CURRENT LOG\n", 5_000_000_000)):
+                path = os.path.join(metadata, name)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(body)
+                os.utime(path, (mtime, mtime))
+
+            backup_named_directory = os.path.join(metadata, ".bak_1.log")
+            os.makedirs(backup_named_directory)
+            os.utime(backup_named_directory, (4_000_000_000, 4_000_000_000))
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE IN REAL BACKUP", out,
+                      "a directory must not consume a place in the three-backup cap")
+        self.assertNotIn("INCOMPLETE", out,
+                         "a backup-shaped directory is not an unreadable log source")
+
+    def test_backup_scan_admits_a_file_symlink_but_not_a_backup_named_directory(self):
+        with tempfile.TemporaryDirectory() as metadata:
+            real_log = os.path.join(metadata, "rotated-source")
+            with open(real_log, "w", encoding="utf-8") as handle:
+                handle.write("ROTATED THROUGH SYMLINK\n")
+
+            symlink = os.path.join(metadata, ".bak_symlink.log")
+            try:
+                os.symlink(real_log, symlink)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest("file symlink creation is unavailable: %s" % exc)
+
+            backup_named_directory = os.path.join(metadata, ".bak_directory.log")
+            os.makedirs(backup_named_directory)
+
+            identities, failure = HARNESS._backup_identities(metadata)
+            target_stat = os.stat(real_log)
+
+        self.assertIsNone(failure)
+        self.assertEqual({symlink}, set(identities),
+                         "the scan must follow a file symlink but reject a directory")
+        self.assertEqual(
+            (target_stat.st_mtime_ns, target_stat.st_size, getattr(target_stat, "st_ino", 0)),
+            identities[symlink])
+
     def test_a_backup_vanishing_between_enumeration_and_stat_does_not_mark_the_tail_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")

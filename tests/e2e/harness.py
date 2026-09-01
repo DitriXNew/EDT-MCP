@@ -1445,6 +1445,8 @@ def _backup_identities(metadata):
             for entry in entries:
                 if not fnmatch.fnmatch(entry.name, ".bak_*.log"):
                     continue
+                if not entry.is_file(follow_symlinks=True):
+                    continue
                 path = os.path.join(metadata, entry.name)
                 try:
                     st = os.stat(path)
