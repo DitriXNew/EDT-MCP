@@ -10,6 +10,7 @@ re-implement them. See SKILL.md for the full guide.
 Python stdlib only. No third-party dependencies.
 """
 
+import glob
 import hashlib
 import http.client
 import json
@@ -1328,6 +1329,8 @@ def _settle_progress_note(progress):
     """
     polls = progress.get("polls", 0)
     elapsed = int(progress.get("elapsed", 0))
+    if not progress.get("observed"):
+        return "project state could not be read at all in %d polls over %ds" % (polls, elapsed)
     if progress.get("changed"):
         return "project state changed during the wait (%d polls over %ds)" % (polls, elapsed)
     return ("project state never changed in %d polls over %ds (a coarse state, so this does not "
@@ -1339,12 +1342,19 @@ def _settle_progress_note(progress):
 _EVIDENCE_LOG_TAIL_BYTES = 256 * 1024
 
 # ...and the size cap alone is not enough: open/seek/read on a hung or very slow filesystem do not
-# return, so the bytes are bounded while the WAIT is not. Waiting a BOUNDED time does not fix that
-# either - the runner's per-test timeout is absolute, so any wait at all can be the one that
-# overruns it, and an overrun abandons the worker and arms the global abort latch, killing the
-# remaining reset attempts. The only wait that provably cannot change the outcome is no wait: the
-# whole evidence block is collected and printed by a daemon thread, and the caller returns at once.
-# A read that hangs then costs a thread nobody is waiting for and a block that never prints.
+# return, so the bytes are bounded while the WAIT is not. A BOUNDED wait does not fix it either -
+# the runner's per-test timeout is absolute, so any wait at all can be the one that overruns it,
+# and an overrun abandons the worker and arms the global abort latch, killing the remaining reset
+# attempts. The only wait that provably cannot change the outcome is no wait, so the whole block is
+# collected and printed by a daemon thread and the caller returns at once.
+#
+# Which leaves the threads themselves as the last way to spend the caller's budget: a settle that
+# recovers next attempt means the next reset starts another collector, and once the thread limit is
+# reached Thread.start() raises SYNCHRONOUSLY - the diagnostic replacing the retry it exists to
+# explain. Hence single-flight: at most one collector alive, and a start that fails is reported as
+# unavailable evidence rather than raised.
+_FAILED_SETTLE_EVIDENCE_THREAD = None
+_FAILED_SETTLE_EVIDENCE_LOCK = threading.Lock()
 
 
 def _read_log_tail(log_path):
@@ -1365,22 +1375,66 @@ def _read_log_tail(log_path):
 def _failed_settle_evidence(last_list_projects):
     """Print one best-effort evidence block for the first failed settle in a reset cycle.
 
-    Returns IMMEDIATELY: the work runs on a daemon thread. Three properties have to hold at once,
-    and each one was violated by an earlier revision of this block, in a different channel:
-
-    - it issues NO MCP call. A call() that times out arms the global abort latch, which refuses
-      every later call AND every fixture reset - the exact opposite of what a diagnostic may do;
-    - it reads a BOUNDED number of bytes, so a log that grew large cannot turn it into a delay;
-    - it costs the caller NO TIME. The runner's per-test timeout is absolute, so even a bounded
-      wait can be the one that overruns it, and an overrun abandons the worker and arms that same
-      latch. No wait is the only wait that provably cannot change the outcome.
-
-    The block is self-delimited by its begin/end markers, so printing it a moment late still reads
-    correctly next to the failure it explains.
+    Returns immediately because the work runs on one daemon thread. It issues no MCP call, reads
+    bounded bytes, and never starts another collector while a filesystem read is still in flight.
     """
-    thread = threading.Thread(target=_print_failed_settle_evidence, args=(last_list_projects,),
-                              name="e2e-failed-settle-evidence", daemon=True)
-    thread.start()
+    global _FAILED_SETTLE_EVIDENCE_THREAD
+
+    try:
+        with _FAILED_SETTLE_EVIDENCE_LOCK:
+            current = _FAILED_SETTLE_EVIDENCE_THREAD
+            if current is not None and current.is_alive():
+                _print_failed_settle_evidence_note(
+                    "collection is still in flight from an earlier settle and was skipped")
+                return
+            thread = threading.Thread(
+                target=_print_failed_settle_evidence, args=(last_list_projects,),
+                name="e2e-failed-settle-evidence", daemon=True)
+            _FAILED_SETTLE_EVIDENCE_THREAD = thread
+            try:
+                thread.start()
+            except Exception as exc:
+                _FAILED_SETTLE_EVIDENCE_THREAD = None
+                _print_failed_settle_evidence_note(
+                    "evidence is unavailable because collection could not start and was skipped "
+                    "(%s: %s)" % (type(exc).__name__, exc))
+    except Exception as exc:
+        _print_failed_settle_evidence_note(
+            "evidence is unavailable and collection was skipped (%s: %s)" %
+            (type(exc).__name__, exc))
+
+
+def _newest_backup(metadata):
+    """The most recently WRITTEN `.bak_*.log`, as a one-element list (empty when there is none).
+
+    By modification time, never by name: EDT reuses the backup numbers, so the suffix does not
+    order them - a workspace can hold a .bak_7 written hours after its .bak_8 and .bak_9. Picking
+    the lexicographic last would then read the wrong file and show a tail that predates the
+    failure being diagnosed.
+    """
+    try:
+        backups = glob.glob(os.path.join(metadata, ".bak_*.log"))
+        if not backups:
+            return []
+        # A file can vanish between the glob and the stat (rotation); it is simply not a candidate.
+        dated = []
+        for path in backups:
+            try:
+                dated.append((os.path.getmtime(path), path))
+            except OSError:
+                continue
+        return [max(dated)[1]] if dated else []
+    except Exception:
+        # The current .log alone is still evidence; failing to list backups must not lose it.
+        return []
+
+
+def _print_failed_settle_evidence_note(message):
+    """Print a one-line status without letting diagnostic output alter the reset outcome."""
+    try:
+        print("  [failed settle evidence] %s" % message, flush=True)
+    except Exception:
+        pass
 
 
 def _print_failed_settle_evidence(last_list_projects):
@@ -1392,17 +1446,30 @@ def _print_failed_settle_evidence(last_list_projects):
         if workspace is None:
             raise RuntimeError(
                 "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
-        log_path = os.path.join(workspace, ".metadata", ".log")
-        # Read the TAIL, not the file, and give up on a read that hangs: this block runs inside
-        # the reset budget, so its cost must be bounded by the log's SIZE not mattering AND by the
-        # filesystem's responsiveness not mattering. See _read_log_tail for both bounds.
-        text = _read_log_tail(log_path)
+        metadata = os.path.join(workspace, ".metadata")
+        log_paths = _newest_backup(metadata) + [os.path.join(metadata, ".log")]
+        texts = []
+        sources = []
+        failures = []
+        for log_path in log_paths:
+            try:
+                texts.append(_read_log_tail(log_path))
+                sources.append(".metadata/" + os.path.basename(log_path))
+            except Exception as exc:
+                # Rotation may remove either listed path before it can be opened, so one failed
+                # read must not hide evidence that remains available in the other file.
+                failures.append("%s: %s: %s" %
+                                (os.path.basename(log_path), type(exc).__name__, exc))
+        if not sources:
+            raise RuntimeError("no readable EDT logs (%s)" % "; ".join(failures))
+        text = "\n".join(texts)
         tail = text.splitlines()[-80:]
-        sections.append(("EDT .metadata/.log tail (last 80 lines, last %d bytes at most)"
-                         % _EVIDENCE_LOG_TAIL_BYTES,
+        sections.append(("EDT log tail from %s (last 80 lines, last %d bytes per file at most)"
+                         % (" then ".join(sources), _EVIDENCE_LOG_TAIL_BYTES),
                          "\n".join(tail).rstrip() or "<empty log>"))
     except Exception as exc:
-        sections.append(("EDT .metadata/.log tail (last 80 lines)",
+        sections.append(("EDT log tail (last 80 lines, last %d bytes per file at most)" %
+                         _EVIDENCE_LOG_TAIL_BYTES,
                          "<evidence unavailable: %s: %s>" %
                          (type(exc).__name__, exc)))
 

@@ -77,17 +77,37 @@ class SettleProgressNoteTest(unittest.TestCase):
     """
 
     def test_stalled_snapshot_names_the_polls_and_seconds_and_owns_its_ambiguity(self):
-        note = HARNESS._settle_progress_note({"changed": False, "polls": 287, "elapsed": 600})
+        note = HARNESS._settle_progress_note({
+            "changed": False,
+            "observed": [[("TestConfiguration", "building")]],
+            "polls": 287,
+            "elapsed": 600,
+        })
 
-        self.assertIn("287 polls", note)
-        self.assertIn("600s", note)
-        self.assertIn("does not", note)
+        self.assertEqual(
+            "project state never changed in 287 polls over 600s (a coarse state, so this does "
+            "not by itself distinguish a stalled queue from a slow one)", note)
 
     def test_observed_change_is_reported_as_such(self):
-        note = HARNESS._settle_progress_note({"changed": True, "polls": 287, "elapsed": 600})
+        note = HARNESS._settle_progress_note({
+            "changed": True,
+            "observed": [
+                [("TestConfiguration", "building")],
+                [("TestConfiguration", "not_available")],
+            ],
+            "polls": 287,
+            "elapsed": 600,
+        })
 
-        self.assertIn("changed", note)
-        self.assertIn("287 polls", note)
+        self.assertEqual("project state changed during the wait (287 polls over 600s)", note)
+
+    def test_all_failed_polls_are_reported_as_unreadable_not_unchanged(self):
+        note = HARNESS._settle_progress_note({
+            "changed": False, "observed": [], "polls": 6, "elapsed": 12,
+        })
+
+        self.assertEqual("project state could not be read at all in 6 polls over 12s", note)
+        self.assertNotIn("never changed", note)
 
     def test_missing_progress_keys_do_not_raise(self):
         self.assertIn("0 polls", HARNESS._settle_progress_note({}))
@@ -106,10 +126,15 @@ class EvidenceLogTailTest(unittest.TestCase):
 
     def setUp(self):
         self.released = threading.Event()
+        HARNESS._FAILED_SETTLE_EVIDENCE_THREAD = None
 
     def tearDown(self):
         # Let a blocked reader finish so no test leaves a thread mid-read.
         self.released.set()
+        collector = HARNESS._FAILED_SETTLE_EVIDENCE_THREAD
+        if collector is not None:
+            collector.join(5)
+        HARNESS._FAILED_SETTLE_EVIDENCE_THREAD = None
         HARNESS.__dict__.pop("open", None)
 
     def test_a_read_that_hangs_forever_costs_the_reset_no_time(self):
@@ -153,6 +178,104 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FIRST FAILED MODEL SETTLE EVIDENCE", out)
         self.assertIn("| P | building |", out)
         self.assertIn("something went wrong", out)
+
+    def test_the_tail_combines_the_newest_backup_and_current_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = os.path.join(tmp, ".metadata")
+            os.makedirs(log_dir)
+            with open(os.path.join(log_dir, ".bak_1.log"), "w", encoding="utf-8") as handle:
+                handle.write("failure before rotation\n")
+            with open(os.path.join(log_dir, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("lines after rotation\n")
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("project state")
+
+        out = printed.getvalue()
+        self.assertIn("failure before rotation", out)
+        self.assertIn("lines after rotation", out)
+        self.assertIn(".metadata/.bak_1.log then .metadata/.log", out)
+        self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
+
+    def test_the_backup_is_chosen_by_write_time_not_by_its_number(self):
+        """EDT REUSES the backup numbers, so the suffix does not order them.
+
+        A real workspace held .bak_7 written hours after .bak_8 and .bak_9. Taking the
+        lexicographic last would read a file that predates the failure being diagnosed and show a
+        tail that looks clean.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            for name, body, mtime in (
+                    (".bak_7.log", "NEWEST BACKUP LINE\n", 2_000_000_000),
+                    (".bak_9.log", "STALE BACKUP LINE\n", 1_000_000_000),
+                    (".log", "CURRENT LOG LINE\n", 2_000_000_100)):
+                path = os.path.join(metadata, name)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(body)
+                os.utime(path, (mtime, mtime))
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("NEWEST BACKUP LINE", out)
+        self.assertIn("CURRENT LOG LINE", out)
+        self.assertNotIn("STALE BACKUP LINE", out)
+        self.assertIn(".bak_7.log", out, "the heading must name the file the tail came from")
+
+    def test_a_backup_removed_after_listing_is_skipped_without_losing_the_current_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = os.path.join(tmp, ".metadata")
+            os.makedirs(log_dir)
+            backup_path = os.path.join(log_dir, ".bak_1.log")
+            with open(backup_path, "w", encoding="utf-8") as handle:
+                handle.write("rotated evidence\n")
+            with open(os.path.join(log_dir, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("current evidence\n")
+
+            real_glob = HARNESS.glob.glob
+
+            def list_then_remove(pattern):
+                paths = real_glob(pattern)
+                os.remove(backup_path)
+                return paths
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS.glob, "glob", side_effect=list_then_remove), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("project state")
+
+        out = printed.getvalue()
+        self.assertIn("current evidence", out)
+        self.assertIn("EDT log tail from .metadata/.log", out)
+
+    def test_a_live_collector_makes_the_next_collection_skip_without_starting_a_thread(self):
+        entered = threading.Event()
+        real_thread = threading.Thread
+
+        def blocking_collector(_last_list_projects):
+            entered.set()
+            self.released.wait(30)
+
+        printed = io.StringIO()
+        with mock.patch.object(HARNESS, "_print_failed_settle_evidence",
+                               side_effect=blocking_collector) as collector, \
+                mock.patch.object(HARNESS.threading, "Thread", wraps=real_thread) as thread_type, \
+                contextlib.redirect_stdout(printed):
+            HARNESS._failed_settle_evidence("first state")
+            self.assertTrue(entered.wait(5), "the first collector must be in flight")
+            HARNESS._failed_settle_evidence("second state")
+
+        self.assertEqual(1, thread_type.call_count)
+        self.assertEqual(1, collector.call_count)
+        self.assertIn("still in flight from an earlier settle and was skipped", printed.getvalue())
 
     def test_the_tail_is_the_last_bytes_of_a_large_log(self):
         with tempfile.TemporaryDirectory() as tmp:
