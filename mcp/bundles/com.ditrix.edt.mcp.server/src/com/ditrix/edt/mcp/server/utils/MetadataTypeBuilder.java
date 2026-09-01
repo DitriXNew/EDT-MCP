@@ -132,6 +132,9 @@ public final class MetadataTypeBuilder
         new ProducedTypeSuffix("RecordSet", //$NON-NLS-1$
             "\u041D\u0430\u0431\u043E\u0440\u0417\u0430\u043F\u0438\u0441\u0435\u0439", //$NON-NLS-1$
             "recordSetType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("RecordManager", //$NON-NLS-1$
+            "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0417\u0430\u043F\u0438\u0441\u0438", //$NON-NLS-1$
+            "recordManagerType"), //$NON-NLS-1$
         new ProducedTypeSuffix("ValueManager", //$NON-NLS-1$
             "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0417\u043D\u0430\u0447\u0435\u043D\u0438\u044F", //$NON-NLS-1$
             "valueManagerType"), //$NON-NLS-1$
@@ -260,6 +263,7 @@ public final class MetadataTypeBuilder
     {
         String primitive = normalizePrimitive(kind);
         ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
+            || typeTarget == TypeTarget.EVENT_SOURCE
             ? splitProducedTypeKind(kind) : null;
         String[] accepted;
         if ("String".equals(primitive)) //$NON-NLS-1$
@@ -471,6 +475,12 @@ public final class MetadataTypeBuilder
     {
         /** A persisted metadata feature (an attribute, a resource, a predefined item's value, ...). */
         METADATA,
+        /**
+         * An event subscription's {@code source}: the one stored feature whose value is a runtime
+         * OBJECT type ({@code DocumentObject.X}, {@code InformationRegisterRecordManager.X}, ...)
+         * rather than a persistable value.
+         */
+        EVENT_SOURCE,
         /** A form attribute (or one of its columns) - the only place an in-memory collection lives. */
         FORM_ATTRIBUTE,
         /**
@@ -697,15 +707,26 @@ public final class MetadataTypeBuilder
         return bestLength >= 0 ? best : null;
     }
 
+    /**
+     * The length of the trailing suffix this candidate carries, or {@code -1} when it carries none.
+     * <p>
+     * The comparison is {@code >=}, not {@code >}, so a candidate that IS a bare suffix
+     * ({@code "RecordManager"}, {@code "ValueManager"}) matches at its full length and leaves an empty
+     * prefix, which the caller rejects. A VALID kind is {@code <MetadataType><Suffix>} and is therefore
+     * strictly longer than its suffix, so the two spellings of this test are identical for everything
+     * this tool builds - they part only on a bare suffix, which names no object either way. There the
+     * shorter reading is actively misleading: {@code >} would fall back to {@code Manager} and blame the
+     * phantom prefix {@code "Record"}, a token the caller never typed.
+     */
     private static int matchingSuffixLength(String candidate, ProducedTypeSuffix suffix)
     {
-        if (candidate.length() > suffix.english.length()
+        if (candidate.length() >= suffix.english.length()
             && candidate.regionMatches(true, candidate.length() - suffix.english.length(),
                 suffix.english, 0, suffix.english.length()))
         {
             return suffix.english.length();
         }
-        if (candidate.length() > suffix.russian.length()
+        if (candidate.length() >= suffix.russian.length()
             && candidate.regionMatches(true, candidate.length() - suffix.russian.length(),
                 suffix.russian, 0, suffix.russian.length()))
         {
@@ -816,10 +837,12 @@ public final class MetadataTypeBuilder
         IEObjectProvider provider, Configuration config, boolean isExtensionProject, TypeTarget typeTarget)
     {
         ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
+            || typeTarget == TypeTarget.EVENT_SOURCE
             ? splitProducedTypeKind(kind) : null;
         if (producedKind != null && producedKind.hasKnownMetadataType() && item.has("ref")) //$NON-NLS-1$
         {
-            return addConcreteProducedType(td, item, kind, producedKind, config, isExtensionProject);
+            return addConcreteProducedType(td, item, kind, producedKind, config, isExtensionProject,
+                typeTarget);
         }
 
         if (isInlineDefinedTypeKind(kind))
@@ -912,11 +935,16 @@ public final class MetadataTypeBuilder
             }
             if (typeTarget != TypeTarget.FORM_ATTRIBUTE)
             {
-                if (typeTarget == TypeTarget.METADATA && producedKind != null
+                if (typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
                     && producedKind.hasKnownMetadataType())
                 {
                     td.getTypes().add(platformType);
                     return null;
+                }
+                if (typeTarget == TypeTarget.METADATA && producedKind != null
+                    && producedKind.hasKnownMetadataType())
+                {
+                    return producedTypeRefusal(kind);
                 }
                 return formOnlyTypeRefusal(kind, typeTarget);
             }
@@ -942,8 +970,13 @@ public final class MetadataTypeBuilder
 
     /** Adds one concrete model-owned produced Type to the non-containment type list. */
     private static String addConcreteProducedType(TypeDescription td, JsonObject item, String kind,
-        ProducedTypeKind producedKind, Configuration config, boolean isExtensionProject)
+        ProducedTypeKind producedKind, Configuration config, boolean isExtensionProject,
+        TypeTarget typeTarget)
     {
+        if (typeTarget != TypeTarget.EVENT_SOURCE)
+        {
+            return producedTypeRefusal(kind);
+        }
         String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
         if (rawRef == null || rawRef.trim().isEmpty())
         {
@@ -1063,8 +1096,9 @@ public final class MetadataTypeBuilder
                 }
             }
         }
-        return available.isEmpty() ? "none from the Object / Manager / RecordSet / ValueManager / " //$NON-NLS-1$
-            + "RecordKey / List / Selection / Ref family" : String.join(", ", available); //$NON-NLS-1$ //$NON-NLS-2$
+        return available.isEmpty()
+            ? "none from the Object / Manager / RecordSet / RecordManager / ValueManager / " //$NON-NLS-1$
+                + "RecordKey / List / Selection / Ref family" : String.join(", ", available); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String unknownProducedTypePrefix(String kind, ProducedTypeKind producedKind)
@@ -1193,8 +1227,17 @@ public final class MetadataTypeBuilder
         return "Type kind '" + kind + "' is a platform value this tool builds only for a FORM attribute " //$NON-NLS-1$ //$NON-NLS-2$
             + "(fqn 'Type.Object.Form.FormName.Attribute.Name'), not for a stored metadata feature. Set " //$NON-NLS-1$
             + "it on a form attribute; a stored feature takes String / Number / Boolean / Date / " //$NON-NLS-1$
-            + "ValueStorage / UUID, a reference ({kind:'Ref', ref:'Type.Name'}), or a produced type " //$NON-NLS-1$
-            + "such as {kind:'DocumentObject', ref:'Invoice'}."; //$NON-NLS-1$
+            + "ValueStorage / UUID or a reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+    }
+
+    /** The refusal of a runtime produced type on an ordinary persisted metadata feature. */
+    private static String producedTypeRefusal(String kind)
+    {
+        return "Type kind '" + kind + "' is a runtime object type: it belongs on an event " //$NON-NLS-1$ //$NON-NLS-2$
+            + "subscription's 'source' or on a FORM attribute (fqn " //$NON-NLS-1$
+            + "'Type.Object.Form.FormName.Attribute.Name'). A stored metadata feature takes a " //$NON-NLS-1$
+            + "reference ({kind:'Ref', ref:'Type.Name'}) or a primitive " //$NON-NLS-1$
+            + "(String / Number / Boolean / Date) instead."; //$NON-NLS-1$
     }
 
     /**

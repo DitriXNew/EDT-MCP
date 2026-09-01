@@ -41,6 +41,7 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
@@ -64,6 +65,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -91,6 +93,27 @@ public class ModifyMetadataToolTest
     public void testResponseType()
     {
         assertEquals(ResponseType.JSON, new ModifyMetadataTool().getResponseType());
+    }
+
+    @Test
+    public void testEventSubscriptionSourceSelectsEventSourceTypeTargetOnlyForThatFeature()
+    {
+        EStructuralFeature source = MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE;
+        assertSame(McorePackage.Literals.TYPE_DESCRIPTION, source.getEType());
+        assertSame(MetadataTypeBuilder.TypeTarget.EVENT_SOURCE,
+            ModifyMetadataTool.typeTargetForFeature(
+                MetadataTypeBuilder.TypeTarget.METADATA, source));
+
+        CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        EStructuralFeature attributeType = attribute.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
+        assertNotNull(attributeType);
+        assertSame(McorePackage.Literals.TYPE_DESCRIPTION, attributeType.getEType());
+        assertSame(MetadataTypeBuilder.TypeTarget.METADATA,
+            ModifyMetadataTool.typeTargetForFeature(
+                MetadataTypeBuilder.TypeTarget.METADATA, attributeType));
+        assertSame(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            ModifyMetadataTool.typeTargetForFeature(
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, source));
     }
 
     @Test

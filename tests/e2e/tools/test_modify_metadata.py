@@ -768,6 +768,38 @@ def test_event_subscription_source_accepts_concrete_document_object():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_persisted_catalog_attribute_refuses_concrete_document_object():
+    document_name = "E2EProducedStoredDocument"
+    attribute_name = "E2EProducedStoredAttribute"
+    attribute_fqn = "Catalog.Catalog.Attribute." + attribute_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Document." + document_name,
+    }), "seed the Document whose runtime Object type will be refused")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+    }), "seed the persisted Catalog attribute")
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+        "properties": [{
+            "name": "type",
+            "value": {"types": [{"kind": "DocumentObject", "ref": document_name}]},
+        }],
+    })
+    e = assert_error(r, "a runtime DocumentObject on a persisted Catalog attribute")
+    assert_error_quality(e, names=["DocumentObject"],
+                         suggests=["runtime object type", "event subscription", "source", "Ref"],
+                         ctx="the refusal must name the legal runtime and persisted alternatives")
+    assert_tree_unchanged(before, "a rejected produced type must not touch the persisted attribute")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_valuestorage_type():
     # ValueStorage - a platform simple type with no qualifiers.
     _seed_attr_and_set_type("E2ETypeVSAttr", {"types": [{"kind": "ValueStorage"}]})

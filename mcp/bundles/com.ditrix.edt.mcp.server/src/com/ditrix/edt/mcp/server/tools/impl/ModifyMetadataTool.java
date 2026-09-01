@@ -4948,7 +4948,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean,
      * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
      * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
-     * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295).
+     * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295),
+     * with the one feature-level exception for an event subscription's runtime-object source (#543).
      */
     private String prepareTypeDescription(PrepareContext ctx, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
@@ -4958,14 +4959,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        MetadataTypeBuilder.TypeTarget typeTarget = typeTargetForFeature(ctx.typeTarget, info.feature);
         MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
-            ctx.version, isExtensionProject, ctx.typeTarget);
+            ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;
+    }
+
+    /** Adds the sole feature-level exception on top of the call site's form-vs-mdclass target. */
+    static MetadataTypeBuilder.TypeTarget typeTargetForFeature(
+        MetadataTypeBuilder.TypeTarget contextTarget, EStructuralFeature feature)
+    {
+        return contextTarget == MetadataTypeBuilder.TypeTarget.METADATA
+            && feature == MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE
+                ? MetadataTypeBuilder.TypeTarget.EVENT_SOURCE : contextTarget;
     }
 
     /**
