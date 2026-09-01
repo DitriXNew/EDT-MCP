@@ -1447,19 +1447,38 @@ def _print_failed_settle_evidence(last_list_projects):
             raise RuntimeError(
                 "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
         metadata = os.path.join(workspace, ".metadata")
-        log_paths = _newest_backup(metadata) + [os.path.join(metadata, ".log")]
-        texts = []
+        # READ ORDER IS THE CURRENT FILE FIRST, and it is not the display order - it is what makes
+        # a rotation caught mid-collection cost a duplicate instead of a loss. EDT rotates by
+        # renaming .log to a .bak_N and starting an empty .log. Read the backup first and a
+        # rotation before the second read leaves the failure moment in a NEW backup that neither
+        # of the two chosen paths points at - the tail then looks clean and hides the cause.
+        # Reading .log first, the same rotation only means the newest backup is now the file just
+        # read, so the lines appear twice. Re-scanning afterwards would not fix it either: the
+        # re-scan races the writer exactly the same way. Duplicated lines in an 80-line tail are
+        # harmless; a missing failure is the whole problem.
+        current = os.path.join(metadata, ".log")
+        backup = _newest_backup(metadata)
+        # Two orders, deliberately separate. READ current-first, for the reason above. DISPLAY
+        # chronologically, backup then current. Deriving one from the other by reversal would make
+        # the displayed order silently wrong the moment the read order is touched.
+        read_order = [current] + backup
+        display_order = backup + [current]
+        by_path = {}
         sources = []
         failures = []
-        for log_path in log_paths:
+        for log_path in read_order:
             try:
-                texts.append(_read_log_tail(log_path))
-                sources.append(".metadata/" + os.path.basename(log_path))
+                by_path[log_path] = _read_log_tail(log_path)
             except Exception as exc:
                 # Rotation may remove either listed path before it can be opened, so one failed
                 # read must not hide evidence that remains available in the other file.
                 failures.append("%s: %s: %s" %
                                 (os.path.basename(log_path), type(exc).__name__, exc))
+        texts = []
+        for log_path in display_order:
+            if log_path in by_path:
+                texts.append(by_path[log_path])
+                sources.append(".metadata/" + os.path.basename(log_path))
         if not sources:
             raise RuntimeError("no readable EDT logs (%s)" % "; ".join(failures))
         text = "\n".join(texts)

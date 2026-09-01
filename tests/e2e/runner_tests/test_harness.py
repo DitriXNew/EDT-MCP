@@ -199,6 +199,48 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn(".metadata/.bak_1.log then .metadata/.log", out)
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
 
+    def test_a_rotation_between_the_two_reads_costs_a_duplicate_not_the_failure(self):
+        """The current log is read FIRST, which is why this race cannot lose evidence.
+
+        EDT rotates by renaming .log to a .bak_N and starting an empty .log. Reading the backup
+        first, a rotation before the second read leaves the failure moment in a NEW backup that
+        neither chosen path points at, and the tail looks clean. Reading .log first, the same
+        rotation only duplicates lines. Re-scanning after the reads would race the writer the same
+        way, so the ORDER is the fix.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            older = os.path.join(metadata, ".bak_1.log")
+            current = os.path.join(metadata, ".log")
+            with open(older, "w", encoding="utf-8") as handle:
+                handle.write("OLDER BACKUP LINE\n")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotated = []
+
+            def read_then_rotate(path):
+                text = real_read(path)
+                if not rotated:
+                    # The writer rotates the instant after the first read returns.
+                    rotated.append(True)
+                    os.replace(current, os.path.join(metadata, ".bak_2.log"))
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
+                return text
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_then_rotate), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE MOMENT", out,
+                      "a rotation caught mid-collection must not lose the failure moment")
+
     def test_the_backup_is_chosen_by_write_time_not_by_its_number(self):
         """EDT REUSES the backup numbers, so the suffix does not order them.
 
