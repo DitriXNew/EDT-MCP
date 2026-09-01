@@ -196,7 +196,9 @@ class EvidenceLogTailTest(unittest.TestCase):
         out = printed.getvalue()
         self.assertIn("failure before rotation", out)
         self.assertIn("lines after rotation", out)
-        self.assertIn(".metadata/.bak_1.log then .metadata/.log", out)
+        # One section PER source: a shared budget could drop a whole file silently.
+        self.assertIn("EDT log tail: .metadata/.bak_1.log", out)
+        self.assertIn("EDT log tail: .metadata/.log", out)
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
 
     def test_a_burst_of_rotations_keeps_the_EARLIEST_one_the_failure_went_into(self):
@@ -446,6 +448,32 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FAILURE MOMENT", out,
                       "a rotation caught mid-collection must not lose the failure moment")
 
+    def test_a_noisy_current_log_cannot_crowd_the_rotated_failure_out(self):
+        """The whole reason the backup is collected is that the failure is IN it.
+
+        A single shared line budget looks equivalent and is not: concatenating the files and
+        keeping the last 80 lines means a .log that has since written 80 lines of its own pushes
+        every backup line out - the failure with them - while the heading still names the backup.
+        Complete-looking evidence with the evidence removed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            with open(os.path.join(metadata, ".bak_1.log"), "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("".join("noise line %d\n" % i for i in range(500)))
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE MOMENT", out,
+                      "a talkative current log must not evict the rotated-out failure")
+        self.assertIn("noise line 499", out, "the current log's own tail is still reported")
+
     def test_the_backup_is_chosen_by_write_time_not_by_its_number(self):
         """EDT REUSES the backup numbers, so the suffix does not order them.
 
@@ -501,7 +529,7 @@ class EvidenceLogTailTest(unittest.TestCase):
 
         out = printed.getvalue()
         self.assertIn("current evidence", out)
-        self.assertIn("EDT log tail from .metadata/.log", out)
+        self.assertIn("EDT log tail: .metadata/.log", out)
 
     def test_a_live_collector_makes_the_next_collection_skip_without_starting_a_thread(self):
         entered = threading.Event()

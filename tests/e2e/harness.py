@@ -1341,6 +1341,11 @@ def _settle_progress_note(progress):
 # EDT log run well under this; the cap only decides how much is READ to find them.
 _EVIDENCE_LOG_TAIL_BYTES = 256 * 1024
 
+# The line budget for the whole block, split between the files it ended up reading, and the floor
+# below which a share stops being worth printing. Split rather than shared: see the assembly.
+_EVIDENCE_TAIL_LINES = 80
+_EVIDENCE_TAIL_MIN_LINES = 20
+
 # ...and the size cap alone is not enough: open/seek/read on a hung or very slow filesystem do not
 # return, so the bytes are bounded while the WAIT is not. A BOUNDED wait does not fix it either -
 # the runner's per-test timeout is absolute, so any wait at all can be the one that overruns it,
@@ -1537,16 +1542,26 @@ def _print_failed_settle_evidence(last_list_projects):
                 sources.append(".metadata/" + os.path.basename(log_path))
         if not sources:
             raise RuntimeError("no readable EDT logs (%s)" % "; ".join(failures))
-        text = "\n".join(texts)
-        tail = text.splitlines()[-80:]
+        # ONE SECTION PER SOURCE, each with its OWN share of the line budget. Concatenating the
+        # files and taking the last 80 lines of the result looks equivalent and is not: when the
+        # failure has rotated into a backup and the current .log has since accumulated 80 lines of
+        # its own, the global cut discards every backup line - the failure included - while the
+        # heading still names the backup as a source. That would undo the whole reason these files
+        # are collected, and present the result as complete. Per-source budgets cannot do it, and
+        # a reader can see which lines came from which file.
+        per_source = max(_EVIDENCE_TAIL_MIN_LINES, _EVIDENCE_TAIL_LINES // len(sources))
+        for source, body in zip(sources, texts):
+            lines = body.splitlines()[-per_source:]
+            sections.append(("EDT log tail: %s (last %d lines, last %d bytes at most)"
+                             % (source, per_source, _EVIDENCE_LOG_TAIL_BYTES),
+                             "\n".join(lines).rstrip() or "<empty log>"))
         # A PARTIAL tail must say so. A backup that rotation removed before it could be opened is
-        # a file that may have held the failure, and a heading listing only what was read would
-        # present an incomplete tail as a complete one - the same overclaim this block keeps being
-        # fixed for, in its own output this time.
-        incomplete = (" - INCOMPLETE, could not read %s" % "; ".join(failures)) if failures else ""
-        sections.append(("EDT log tail from %s (last 80 lines, last %d bytes per file at most)%s"
-                         % (" then ".join(sources), _EVIDENCE_LOG_TAIL_BYTES, incomplete),
-                         "\n".join(tail).rstrip() or "<empty log>"))
+        # a file that may have held the failure, and reporting only what was read would present an
+        # incomplete block as a complete one - the same overclaim this block keeps being fixed for,
+        # in its own output this time.
+        if failures:
+            sections.append(("EDT log tail - INCOMPLETE",
+                             "could not read %s" % "; ".join(failures)))
     except Exception as exc:
         sections.append(("EDT log tail (last 80 lines, last %d bytes per file at most)" %
                          _EVIDENCE_LOG_TAIL_BYTES,
