@@ -1,11 +1,14 @@
 """Pure isolation-layer contracts; no EDT server or fixture mutation required."""
 
+import contextlib
 import importlib.util
+import io
 import os
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 
 HARNESS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "harness.py")
@@ -91,44 +94,65 @@ class SettleProgressNoteTest(unittest.TestCase):
 
 
 class EvidenceLogTailTest(unittest.TestCase):
-    """The tail read is bounded in BOTH dimensions, and the bounds are checked by executing them.
+    """The evidence block must not be able to change the reset outcome, and that is EXECUTED here.
 
-    A comment promising "this cannot change the reset outcome" has now been wrong three times, in
-    three different channels (an RPC arming the global latch, a second RPC inside the workspace
-    locator, and unbounded bytes). A hung filesystem is the fourth: the size cap bounds the bytes,
-    not the wait, and an overrun trips the runner's per-test timeout, which abandons the worker and
-    arms the very latch the block must not touch. So both bounds are PROVEN here rather than
-    asserted in prose.
+    A comment promising it has been wrong four times, in four different channels: an RPC arming the
+    global latch, a second RPC inside the workspace locator, unbounded bytes, and unbounded time on
+    a hung filesystem. The fix for the fourth was itself insufficient - a BOUNDED wait is still a
+    wait, and the runner's per-test timeout is absolute, so any wait can be the one that overruns
+    it and gets the worker abandoned. So the block now costs the caller no time at all, and that is
+    what these tests pin.
     """
 
     def setUp(self):
-        self.old_timeout = HARNESS._EVIDENCE_LOG_READ_TIMEOUT
         self.released = threading.Event()
 
     def tearDown(self):
-        HARNESS._EVIDENCE_LOG_READ_TIMEOUT = self.old_timeout
-        # Let the blocked reader finish so the interpreter is not left with a thread mid-test.
+        # Let a blocked reader finish so no test leaves a thread mid-read.
         self.released.set()
         HARNESS.__dict__.pop("open", None)
 
-    def test_a_read_that_hangs_is_abandoned_instead_of_blocking_the_reset(self):
-        HARNESS._EVIDENCE_LOG_READ_TIMEOUT = 1
+    def test_a_read_that_hangs_forever_costs_the_reset_no_time(self):
         released = self.released
+        entered = threading.Event()
 
         def hanging_open(*_args, **_kwargs):
+            entered.set()
             released.wait(30)
-            raise AssertionError("the reader must have been abandoned before this returns")
+            raise AssertionError("the reader must have been left behind, not awaited")
 
         # Module-global 'open' shadows the builtin inside harness, so this reaches the real call.
         HARNESS.open = hanging_open
 
-        started = time.time()
-        with self.assertRaises(RuntimeError) as caught:
-            HARNESS._read_log_tail("any/path/.log")
-        elapsed = time.time() - started
+        # The workspace locator has to succeed, or the block never reaches the read and the test
+        # would pass without exercising anything.
+        with mock.patch.object(HARNESS, "_workspace_dir", return_value="any/workspace"):
+            started = time.time()
+            HARNESS._failed_settle_evidence("last list_projects body")
+            elapsed = time.time() - started
 
-        self.assertLess(elapsed, 10, "the read must return on its own bound, not on the caller's")
-        self.assertIn("abandoned", str(caught.exception))
+            self.assertTrue(entered.wait(5), "the reader thread must actually have started")
+
+        self.assertLess(elapsed, 1.0,
+                        "collecting evidence must not spend the caller's budget at all")
+
+    def test_the_block_still_prints_what_the_caller_already_held(self):
+        """The synchronous half, so 'costs no time' did not become 'reports nothing'."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = os.path.join(tmp, ".metadata")
+            os.makedirs(log_dir)
+            with open(os.path.join(log_dir, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("!ENTRY com.example 4 0\n!MESSAGE something went wrong\n")
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FIRST FAILED MODEL SETTLE EVIDENCE", out)
+        self.assertIn("| P | building |", out)
+        self.assertIn("something went wrong", out)
 
     def test_the_tail_is_the_last_bytes_of_a_large_log(self):
         with tempfile.TemporaryDirectory() as tmp:

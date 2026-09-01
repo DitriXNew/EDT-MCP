@@ -1339,56 +1339,52 @@ def _settle_progress_note(progress):
 _EVIDENCE_LOG_TAIL_BYTES = 256 * 1024
 
 # ...and the size cap alone is not enough: open/seek/read on a hung or very slow filesystem do not
-# return, so the bytes are bounded while the WAIT is not. That is a fourth channel for this block to
-# change the outcome it exists to explain - an overrun trips the runner's per-test timeout, which
-# abandons the worker and arms the global abort latch, killing the remaining reset attempts. Hence a
-# second, independent bound below: the read is abandoned after this many seconds.
-_EVIDENCE_LOG_READ_TIMEOUT = 10
+# return, so the bytes are bounded while the WAIT is not. Waiting a BOUNDED time does not fix that
+# either - the runner's per-test timeout is absolute, so any wait at all can be the one that
+# overruns it, and an overrun abandons the worker and arms the global abort latch, killing the
+# remaining reset attempts. The only wait that provably cannot change the outcome is no wait: the
+# whole evidence block is collected and printed by a daemon thread, and the caller returns at once.
+# A read that hangs then costs a thread nobody is waiting for and a block that never prints.
 
 
 def _read_log_tail(log_path):
-    """Return the last _EVIDENCE_LOG_TAIL_BYTES of `log_path`, abandoning a read that hangs.
+    """Return the last _EVIDENCE_LOG_TAIL_BYTES of `log_path`.
 
-    Bounded in BOTH dimensions, because the two failures are independent: the size cap bounds a
-    log that grew large, this one bounds a filesystem that stopped answering. The read runs in a
-    DAEMON thread that is simply left behind on timeout - a blocked read cannot be interrupted, but
-    a daemon thread neither blocks interpreter exit nor holds anything the caller needs.
-
-    @return the decoded tail
-    @raise RuntimeError when the read did not finish in time; any other read failure propagates as
-           itself, so the caller reports the real cause
+    Reads the TAIL rather than the file: seek back a bounded number of bytes instead of pulling in
+    a log that may have grown to any size. It can still BLOCK on a filesystem that stopped
+    answering, which is safe only because its sole caller runs off the reset thread entirely.
     """
-    outcome = {}
-
-    def _read():
-        try:
-            with open(log_path, "rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
-                outcome["blob"] = handle.read()
-        except BaseException as exc:    # noqa: BLE001 - reported to the caller verbatim
-            outcome["error"] = exc
-
-    worker = threading.Thread(target=_read, name="e2e-evidence-log-tail", daemon=True)
-    worker.start()
-    worker.join(_EVIDENCE_LOG_READ_TIMEOUT)
-    if worker.is_alive():
-        raise RuntimeError("reading %s did not finish within %ds, so it was abandoned (a hung or "
-                           "very slow filesystem)" % (log_path, _EVIDENCE_LOG_READ_TIMEOUT))
-    if "error" in outcome:
-        raise outcome["error"]
-    return outcome["blob"].decode("utf-8", errors="replace")
+    with open(log_path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
+        blob = handle.read()
+    return blob.decode("utf-8", errors="replace")
 
 
 def _failed_settle_evidence(last_list_projects):
     """Print one best-effort evidence block for the first failed settle in a reset cycle.
 
-    Issues NO MCP call. A call() that times out arms the global abort latch, which refuses every
-    later call and every fixture reset - so an RPC here could destroy the remaining settle
-    attempts and the reset itself, which is the exact opposite of what a diagnostic may do.
-    Everything below comes from what the caller already holds or from the local filesystem.
+    Returns IMMEDIATELY: the work runs on a daemon thread. Three properties have to hold at once,
+    and each one was violated by an earlier revision of this block, in a different channel:
+
+    - it issues NO MCP call. A call() that times out arms the global abort latch, which refuses
+      every later call AND every fixture reset - the exact opposite of what a diagnostic may do;
+    - it reads a BOUNDED number of bytes, so a log that grew large cannot turn it into a delay;
+    - it costs the caller NO TIME. The runner's per-test timeout is absolute, so even a bounded
+      wait can be the one that overruns it, and an overrun abandons the worker and arms that same
+      latch. No wait is the only wait that provably cannot change the outcome.
+
+    The block is self-delimited by its begin/end markers, so printing it a moment late still reads
+    correctly next to the failure it explains.
     """
+    thread = threading.Thread(target=_print_failed_settle_evidence, args=(last_list_projects,),
+                              name="e2e-failed-settle-evidence", daemon=True)
+    thread.start()
+
+
+def _print_failed_settle_evidence(last_list_projects):
+    """Build and print the evidence block. Runs on the daemon thread started above."""
     sections = [("last list_projects (raw)", last_list_projects or "<empty response>")]
 
     try:
@@ -1458,22 +1454,9 @@ def _revert_and_clean(project, revert):
             settle_failures += 1
             last_settle_failure = failure_details[0]
             if settle_failures == 1:
-                # Whatever collecting evidence costs is credited back to the deadline: the budget
-                # exists to bound RETRIES, and a diagnostic that ate an attempt would change the
-                # outcome it was added to explain.
-                _evidence_started = time.time()
-                try:
-                    _failed_settle_evidence(progress.get("last_list_projects", ""))
-                except Exception as exc:
-                    # Evidence collection must never replace the reset failure under diagnosis.
-                    try:
-                        print("\n===== FIRST FAILED MODEL SETTLE EVIDENCE =====\n"
-                              "<evidence unavailable: %s: %s>\n"
-                              "===== END FIRST FAILED MODEL SETTLE EVIDENCE ====="
-                              % (type(exc).__name__, exc), flush=True)
-                    except Exception:
-                        pass
-                deadline += time.time() - _evidence_started
+                # No deadline credit-back: the call returns at once (the block is built and
+                # printed on a daemon thread), so there is no diagnostic time to give back.
+                _failed_settle_evidence(progress.get("last_list_projects", ""))
             last_settle_failure = "%s; %s" % (
                 last_settle_failure, _settle_progress_note(progress))
             continue
