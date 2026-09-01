@@ -28,6 +28,7 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.confirmed_mutation_tools.return_value = frozenset({"modify_metadata"})
         harness.mutation_kind_violation_tools.return_value = ("modify_metadata",)
         harness.mutations_unresolved.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset()
         harness.reset_all_fixtures.return_value = True
         return harness
 
@@ -43,12 +44,29 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.call.assert_not_called()
         self.assertIn("[kind-advisory]", output.getvalue())
 
-    def test_kind_violation_skips_unavailable_external_objects_model_reset(self):
+    def test_kind_violation_resets_unsynced_external_objects_when_call_targeted_it(self):
         harness = self._mutation_harness()
         harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
 
         RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
 
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(harness.ALL_FIXTURE_PROJECTS)
+        harness.mutated_fixture_projects.assert_called_once_with()
+
+    def test_kind_violation_skips_unsynced_external_objects_when_call_did_not_target_it(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"Base"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        # This case is deliberately indistinguishable from the pre-fix behaviour: an unsynced
+        # fixture the call never named stays skipped either way. It guards the OPPOSITE direction
+        # from its sibling above - that widening the set to "what the call targeted" did not
+        # quietly become "everything" - so it is a boundary test, not a discriminating one. The
+        # assertion is therefore on the decision, not on which accessor was consulted to reach it.
         harness.reset_all_fixtures.assert_called_once_with()
         harness.reset_model.assert_called_once_with(["Base", "Extension"])
 
