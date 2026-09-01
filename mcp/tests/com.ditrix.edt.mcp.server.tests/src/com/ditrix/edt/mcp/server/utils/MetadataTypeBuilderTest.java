@@ -14,6 +14,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -32,6 +33,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdtype.MdType;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -212,6 +214,9 @@ public class MetadataTypeBuilderTest
     @Test
     public void testReferenceTargetMustBeANonEmptyString()
     {
+        // <Type>Ref keeps its OWN grammar, unchanged by the produced-type family: a ref is required,
+        // and an omitted one is the first case in this list. The family covers the Object / Manager /
+        // RecordSet / ... types a Ref cannot name, and deliberately does not include Ref itself.
         for (String suffix : new String[] { "", ",\"ref\":\"\"", ",\"ref\":\"   \"", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             ",\"ref\":1", ",\"ref\":true", ",\"ref\":{}", ",\"ref\":null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         {
@@ -579,6 +584,158 @@ public class MetadataTypeBuilderTest
         assertNull(MetadataTypeBuilder.objectType(notAnMdObject));
     }
 
+    // ---- model-owned produced types (issue #543) ------------------------------------------------
+
+    @Test
+    public void testProducedTypeKindSplitUsesLongestBilingualMetadataPrefix()
+    {
+        assertProducedTypeSplit("DocumentObject", "Document", "Document", "Object", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "objectType"); //$NON-NLS-1$
+        assertProducedTypeSplit("ChartOfCalculationTypesObject", "ChartOfCalculationTypes", //$NON-NLS-1$ //$NON-NLS-2$
+            "ChartOfCalculationTypes", "Object", "objectType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertProducedTypeSplit("InformationRegisterRecordSet", "InformationRegister", //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegister", "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertProducedTypeSplit("ConstantValueManager", "Constant", "Constant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "ValueManager", "valueManagerType"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String russianDocument = "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442"; //$NON-NLS-1$
+        String russianObject = "\u041E\u0431\u044A\u0435\u043A\u0442"; //$NON-NLS-1$
+        assertProducedTypeSplit(russianDocument + russianObject, russianDocument, "Document", //$NON-NLS-1$
+            "Object", "objectType"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testProducedTypeShapesAcceptConcreteAndAbstractForms()
+    {
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"DocumentObject\",\"ref\":\"Invoice\"}]}"))); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"ExchangePlanObject\"}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Type expected = McoreFactory.eINSTANCE.createType();
+        seedProducedType(config, "Document", "Invoice", "objectType", expected); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String russianDocument = "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442"; //$NON-NLS-1$
+        String russianObject = "\u041E\u0431\u044A\u0435\u043A\u0442"; //$NON-NLS-1$
+        String[][] cases = {
+            {"DocumentObject", "Invoice"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"DocumentObject", "Document.Invoice"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {russianDocument + russianObject, russianDocument + ".Invoice"} }; //$NON-NLS-1$
+
+        for (String[] one : cases)
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = new JsonObject();
+            item.addProperty("kind", one[0]); //$NON-NLS-1$
+            item.addProperty("ref", one[1]); //$NON-NLS-1$
+
+            String error = MetadataTypeBuilder.addType(td, item, one[0], null, config, false,
+                MetadataTypeBuilder.TypeTarget.METADATA);
+
+            assertNull(one[0] + " / " + one[1], error); //$NON-NLS-1$
+            assertEquals(1, td.getTypes().size());
+            assertSame("the owner's model-owned produced Type must be shared", //$NON-NLS-1$
+                expected, td.getTypes().get(0));
+        }
+    }
+
+    @Test
+    public void testConcreteProducedTypeRejectsQualifiedRefWithDifferentMetadataToken()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json(
+            "{\"kind\":\"CatalogObject\",\"ref\":\"Document.Invoice\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String error = MetadataTypeBuilder.addType(td, item, "CatalogObject", null, config, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("CatalogObject")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Document.Invoice")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Catalog")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Document")); //$NON-NLS-1$
+        assertTrue(error, error.contains("match")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testConcreteProducedTypeRejectsUnknownMetadataPrefixActionably()
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json(
+            "{\"kind\":\"DocumentBogusObject\",\"ref\":\"Invoice\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String error = MetadataTypeBuilder.addType(td, item, "DocumentBogusObject", null, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("DocumentBogusObject")); //$NON-NLS-1$
+        assertTrue(error, error.contains("DocumentBogus")); //$NON-NLS-1$
+        assertTrue(error, error.contains("not a known metadata type token")); //$NON-NLS-1$
+        assertTrue(error, error.contains("DocumentObject")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testConcreteProducedTypeRefusesFeatureTheObjectDoesNotOfferAndListsAlternatives()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        seedProducedType(config, "Catalog", "Products", "objectType", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            McoreFactory.eINSTANCE.createType());
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json(
+            "{\"kind\":\"CatalogRecordSet\",\"ref\":\"Products\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String error = MetadataTypeBuilder.addType(td, item, "CatalogRecordSet", null, config, //$NON-NLS-1$
+            false, MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("Catalog.Products")); //$NON-NLS-1$
+        assertTrue(error, error.contains("does not offer")); //$NON-NLS-1$
+        assertTrue(error, error.contains("RecordSet")); //$NON-NLS-1$
+        assertTrue(error, error.contains("CatalogObject")); //$NON-NLS-1$
+        assertTrue(error, error.contains("CatalogManager")); //$NON-NLS-1$
+        assertTrue(error, error.contains("CatalogRef")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testStoredMetadataAcceptsAbstractProducedTypeThePlatformKnows()
+    {
+        Type abstractObject = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String error = addKind("ExchangePlanObject", //$NON-NLS-1$
+            providerKnowing("ExchangePlanObject", abstractObject), td, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNull(error);
+        assertEquals(1, td.getTypes().size());
+        assertSame(abstractObject, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testDcsParameterStillRefusesAbstractProducedType()
+    {
+        Type abstractObject = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String error = addKind("ExchangePlanObject", //$NON-NLS-1$
+            providerKnowing("ExchangePlanObject", abstractObject), td, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("data-composition parameter")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
     // ---- DefinedType model-owned TypeSet (issue #498) -------------------------------------------
 
     @Test
@@ -905,6 +1062,39 @@ public class MetadataTypeBuilderTest
         assertTrue("the collection wording must survive the platform probe", //$NON-NLS-1$
             err.contains("IN-MEMORY collection")); //$NON-NLS-1$
         Mockito.verify(provider, Mockito.never()).createProxy(Mockito.anyString());
+    }
+
+    private static void assertProducedTypeSplit(String kind, String prefix, String englishMetadataType,
+        String producedSuffix, String featureName)
+    {
+        MetadataTypeBuilder.ProducedTypeKind split =
+            MetadataTypeBuilder.splitProducedTypeKind(kind);
+        assertNotNull(kind, split);
+        assertEquals(kind, prefix, split.prefix);
+        assertEquals(kind, englishMetadataType, split.englishMetadataType);
+        assertEquals(kind, producedSuffix, split.producedSuffix);
+        assertEquals(kind, featureName, split.featureName);
+    }
+
+    /** Seeds one top-level object and one generated produced-type wrapper in its model holder. */
+    @SuppressWarnings("unchecked")
+    private static MdObject seedProducedType(Configuration config, String englishMetadataType,
+        String name, String producedFeature, Type expectedType)
+    {
+        Object classifier = MdClassPackage.eINSTANCE.getEClassifier(englishMetadataType);
+        assertTrue(englishMetadataType, classifier instanceof EClass);
+        MdObject object = (MdObject)EcoreUtil.create((EClass)classifier);
+        object.setName(name);
+
+        String collectionName = MetadataTypeUtils.getConfigReferenceName(englishMetadataType);
+        EStructuralFeature collection = config.eClass().getEStructuralFeature(collectionName);
+        assertNotNull(collectionName, collection);
+        ((java.util.List<MdObject>)config.eGet(collection)).add(object);
+
+        EObject producedTypes = newContainedValue(object, "producedTypes"); //$NON-NLS-1$
+        MdType producedType = (MdType)newContainedValue(producedTypes, producedFeature);
+        producedType.setType(expectedType);
+        return object;
     }
 
     private static String russianDefinedTypeToken()
