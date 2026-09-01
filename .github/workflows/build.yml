@@ -27,9 +27,12 @@ jobs:
         run: python3 docs/validate_agent_skills.py
 
       # The e2e RUNNER's own contracts - isolation bookkeeping, the reset decision, fixture
-      # hygiene. They need no EDT and no server, and until now nothing ran them: the harness
-      # could regress with every shard still green, because the shards exercise the tools
-      # through the harness rather than the harness itself.
+      # hygiene. They need no EDT and no server, so they run here rather than inside the
+      # hour-long e2e job, where a harness bug surfaces as a confusing suite failure instead
+      # of a named one. The shards drive the TOOLS through the harness and never the harness
+      # itself, so without this step it can regress with all four of them green.
+      # `discover`, not a loop over the files: a file with no `unittest.main()` block
+      # contributes zero tests to a loop and still exits 0 - a green step proving nothing.
       - name: E2E runner contract tests
         run: python3 -m unittest discover -s tests/e2e/runner_tests -p "test_*.py" -v
 

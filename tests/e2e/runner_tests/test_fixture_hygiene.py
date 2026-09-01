@@ -77,3 +77,7 @@ class FixtureHygieneTest(unittest.TestCase):
                          set(HARNESS.FIXTURE_REL_BY_PROJECT),
                          "every fixture project the runner resets needs a path here")
         self.assertTrue(rels, "the fixture path map must not be empty")
+
+
+if __name__ == "__main__":
+    unittest.main()
