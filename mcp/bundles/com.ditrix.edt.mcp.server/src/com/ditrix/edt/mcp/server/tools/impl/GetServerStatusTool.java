@@ -99,8 +99,9 @@ public class GetServerStatusTool implements IMcpTool
             .booleanProperty("checksFolderConfigured", "Whether a checks folder path is configured") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("authEnabled", "Whether bearer-token authentication is enabled") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("formRenderFlags", //$NON-NLS-1$
-                "effective is the EDT-startup mode; requested is the current system property; " //$NON-NLS-1$
-                    + "forcedAtRuntime marks a later live-mode change") //$NON-NLS-1$
+                "atStartup is the mode when this plugin activated; requested is the current " //$NON-NLS-1$
+                    + "system property; forcedAtRuntime marks a later live-mode change, which only " //$NON-NLS-1$
+                    + "reaches the renderer if EDT had not rendered a form yet") //$NON-NLS-1$
             .build();
     }
 
@@ -186,11 +187,25 @@ public class GetServerStatusTool implements IMcpTool
         }
     }
 
+    /**
+     * Builds one render-flag state: the mode at plugin activation, the raw requested system
+     * property, and whether the live mode has since been forced away from it.
+     *
+     * <p>Deliberately NOT called "effective". EDT binds buffered render ONCE: {@code
+     * HippoLayoutService.INSTANCE} is a static final singleton whose constructor creates its
+     * {@code offscreenHandler} if and only if {@code NativeRenderService.isBufferedRender()} held
+     * at that moment, and every later render branches on that field rather than re-reading the
+     * flag. So a runtime force reaches the renderer only when it precedes that class
+     * initialisation - and this tool cannot find out which happened, because reading the
+     * singleton to ask would itself initialise the class and decide the answer. Reporting the
+     * two states we can actually observe, plus the fact that a force happened, is the whole of
+     * what is provable here.</p>
+     */
     private static Map<String, Object> createRenderFlagState(NativeRenderMode startupMode,
         NativeRenderMode liveMode, String requested)
     {
         Map<String, Object> state = new LinkedHashMap<>();
-        state.put("effective", startupMode.name().toLowerCase(Locale.ROOT)); //$NON-NLS-1$
+        state.put("atStartup", startupMode.name().toLowerCase(Locale.ROOT)); //$NON-NLS-1$
         if (requested != null)
         {
             state.put("requested", requested); //$NON-NLS-1$

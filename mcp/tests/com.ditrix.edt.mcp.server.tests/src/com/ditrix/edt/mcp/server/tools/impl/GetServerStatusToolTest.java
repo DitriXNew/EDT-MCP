@@ -229,10 +229,10 @@ public class GetServerStatusToolTest
         assertTrue(key + " must be present", flags.has(key)); //$NON-NLS-1$
         assertTrue(key + " must be an object", flags.get(key).isJsonObject()); //$NON-NLS-1$
         JsonObject state = flags.getAsJsonObject(key);
-        assertTrue(key + " must contain effective", state.has("effective")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(key + " must contain atStartup", state.has("atStartup")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(key + " effective must be a string", //$NON-NLS-1$
-            state.get("effective").getAsJsonPrimitive().isString()); //$NON-NLS-1$
-        String effective = state.get("effective").getAsString(); //$NON-NLS-1$
+            state.get("atStartup").getAsJsonPrimitive().isString()); //$NON-NLS-1$
+        String effective = state.get("atStartup").getAsString(); //$NON-NLS-1$
         boolean valid = "on".equals(effective) || "off".equals(effective) //$NON-NLS-1$ //$NON-NLS-2$
             || "unknown".equals(effective); //$NON-NLS-1$
         assertTrue(key + " effective must be on, off, or unknown", valid); //$NON-NLS-1$
