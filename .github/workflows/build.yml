@@ -26,17 +26,15 @@ jobs:
       - name: Validate business-project skills
         run: python3 docs/validate_agent_skills.py
 
-      # The e2e harness carries logic that decides whether a run may continue - isolation,
-      # mutation outcomes, the settle-retry stop. It needs no EDT and no server, so it runs
-      # here rather than inside the hour-long e2e job, where a harness bug would surface as a
-      # confusing suite failure instead of a named one.
-      - name: Harness unit tests
-        run: |
-          set -e
-          for t in tests/e2e/runner_tests/test_*.py; do
-            echo "== $t"
-            python3 "$t"
-          done
+      # The e2e RUNNER's own contracts - isolation bookkeeping, the reset decision, fixture
+      # hygiene. They need no EDT and no server, so they run here rather than inside the
+      # hour-long e2e job, where a harness bug surfaces as a confusing suite failure instead
+      # of a named one. The shards drive the TOOLS through the harness and never the harness
+      # itself, so without this step it can regress with all four of them green.
+      # `discover`, not a loop over the files: a file with no `unittest.main()` block
+      # contributes zero tests to a loop and still exits 0 - a green step proving nothing.
+      - name: E2E runner contract tests
+        run: python3 -m unittest discover -s tests/e2e/runner_tests -p "test_*.py" -v
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
