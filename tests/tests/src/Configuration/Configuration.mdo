@@ -48,4 +48,5 @@
   <commonModules>CommonModule.tests_SampleTests</commonModules>
   <catalogs>Catalog.Catalog</catalogs>
   <catalogs>Catalog.tests_ExtOnly</catalogs>
+  <dataProcessors>DataProcessor.E2EMdP4ExtDp</dataProcessors>
 </mdclass:Configuration>

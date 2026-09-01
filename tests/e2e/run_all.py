@@ -221,12 +221,12 @@ def _run_test_unit(harness, t):
         # Any OTHER failure still leaves the write applied, exactly like a passing test does.
         # Skipping the reset there is how ONE real failure became two: the next test read a
         # model that still carried the previous test's rename and reported "object not found".
-        _reset_after_write(harness, t, already_failing=True)
+        _reset_after_write(harness, t)
         raise
     _reset_after_write(harness, t)
 
 
-def _reset_after_write(harness, t, already_failing=False):
+def _reset_after_write(harness, t):
     """Restore after a declared write or an undeclared confirmed fixture-model mutation.
 
     For a declared write, the model reset is SKIPPED when the model provably did not move. It is
@@ -255,8 +255,9 @@ def _reset_after_write(harness, t, already_failing=False):
         # So the kind gate is checked WITH the evidence, never instead of it.
         return
     if kind_violations:
-        # Do not let the ratchet itself leak the mutation into the next test. A confirmed fixture
-        # write bypasses the pristine shortcut: restore disk and model first, then fail its owner.
+        # Reset on EVIDENCE rather than on the test's declaration - this is what actually closes
+        # the hole. A confirmed fixture write bypasses the pristine shortcut, so restore disk and
+        # model here whatever the test called itself.
         #
         # EVERY fixture, not just the base one. reset_fixture()/reset_model() cover PROJECT alone,
         # and an undeclared write can just as easily land in the extension or the external-objects
@@ -272,19 +273,25 @@ def _reset_after_write(harness, t, already_failing=False):
             try:
                 harness.call("clean_project", {"projectName": project})
             except Exception:
-                # Best effort: the ratchet's own message is what the author needs, and a
-                # clean_project refusal here must not replace it.
+                # Best effort: the advisory line is what the author needs, and a clean_project
+                # refusal here must not replace it.
                 pass
-        message = ('test "%s" has kind="%s" but confirmed fixture-model mutation by tool(s): %s; '
-                   'declare kind="write-metadata"'
-                   % (t.get("name", "?"), kind, ", ".join(kind_violations)))
-        if already_failing:
-            # The test is ALREADY unwinding a failure, and that failure is what its author has to
-            # read. Raising here would replace it with this one - the mis-declared kind is real but
-            # secondary, so it is reported and the original exception is left to propagate.
-            print("  [kind-ratchet] %s" % message, flush=True)
-            return
-        raise harness.E2EAssertion(message)
+        # REPORTED, never raised. Enforcing it would mean asserting, from the client side, that a
+        # given call moved the model - and the server does not say so on a SUCCESS response:
+        # mutationCommitted/mutationOutcomeUnknown are emitted on ERROR paths only. Everything else
+        # is inference from tool + arguments + action, and review found four separate ways for that
+        # inference to be wrong (a build with nothing to build, a dcs read action, an
+        # already-adopted no-op, an import-mode update_database). A wrong inference must not turn a
+        # correct test red; here it costs an unnecessary reset, which is safe, plus a line to read.
+        #
+        # The hole the issue is about is closed above regardless: the reset now runs on EVIDENCE of
+        # a mutation rather than on the test's declaration, so an undeclared write no longer rides
+        # into the next test. Making this an actual build failure needs the server to state the
+        # outcome on success too - tracked separately.
+        print('  [kind-advisory] test "%s" has kind="%s" but its call to %s looks like a '
+              'fixture-model write; consider kind="write-metadata"'
+              % (t.get("name", "?"), kind, ", ".join(kind_violations)), flush=True)
+        return
     if harness.model_is_pristine():
         _SKIPPED_RESETS.append(t.get("name", "?"))
         return

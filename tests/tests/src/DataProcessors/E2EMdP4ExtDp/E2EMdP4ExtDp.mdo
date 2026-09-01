@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:DataProcessor xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="48c4dbfb-4ab7-48d1-887f-9dbb9f6c37f1">
+  <producedTypes>
+    <objectType typeId="5f46c897-8d87-498f-84c4-580b9087bc9e" valueTypeId="7d37ae53-4d66-4410-b081-b3d5dd63a20c"/>
+    <managerType typeId="9209161f-e315-4904-9956-1050d0b93286" valueTypeId="3d0c3e8e-97bb-48a6-9af1-f8041927bbbd"/>
+  </producedTypes>
+  <name>E2EMdP4ExtDp</name>
+  <useStandardCommands>true</useStandardCommands>
+  <attributes uuid="95a201b8-cc8a-4477-826d-6d187ea2f0db">
+    <name>Ref1</name>
+  </attributes>
+</mdclass:DataProcessor>
