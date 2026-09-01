@@ -113,6 +113,47 @@ class SettleProgressNoteTest(unittest.TestCase):
         self.assertIn("0 polls", HARNESS._settle_progress_note({}))
 
 
+class ResetSettleEvidenceTest(unittest.TestCase):
+    @staticmethod
+    def _failed_wait(snapshot):
+        def wait(*, timeout, failure_details, progress):
+            failure_details[:] = ["projects not ready after %ds: P=building" % timeout]
+            progress.update({"last_list_projects": snapshot})
+            return False
+        return wait
+
+    def test_reset_model_final_settle_collects_its_last_snapshot_before_raising(self):
+        snapshot = "| P | building | reset final settle |"
+        collected = []
+        with mock.patch.object(HARNESS, "_revert_and_clean",
+                               return_value=(True, 1, 0, None)), \
+                mock.patch.object(HARNESS, "wait_for_project_ready",
+                                  side_effect=self._failed_wait(snapshot)), \
+                mock.patch.object(HARNESS, "_failed_settle_evidence",
+                                  side_effect=collected.append):
+            with self.assertRaises(HARNESS.E2EModelResetFailed):
+                HARNESS.reset_model()
+
+        self.assertEqual([snapshot], collected,
+                         "the final snapshot must be handed off before reset_model raises")
+
+    def test_final_cleanup_final_settle_collects_its_last_snapshot_before_raising(self):
+        snapshot = "| P | building | cleanup final settle |"
+        collected = []
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean",
+                                  return_value=(True, 1, 0, None)), \
+                mock.patch.object(HARNESS, "wait_for_project_ready",
+                                  side_effect=self._failed_wait(snapshot)), \
+                mock.patch.object(HARNESS, "_failed_settle_evidence",
+                                  side_effect=collected.append):
+            with self.assertRaises(HARNESS.E2EModelResetFailed):
+                HARNESS.final_cleanup()
+
+        self.assertEqual([snapshot], collected,
+                         "the final snapshot must be handed off before final_cleanup raises")
+
+
 class EvidenceLogTailTest(unittest.TestCase):
     """The evidence block must not be able to change the reset outcome, and that is EXECUTED here.
 
@@ -311,6 +352,100 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("CURRENT LINE", out, "what could be read must still be reported")
         self.assertIn("INCOMPLETE", out)
         self.assertIn(".bak_1.log", out, "the unread source must be named")
+
+    def test_a_failed_backup_scan_marks_the_tail_incomplete_and_names_the_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            failure_patches = (
+                ("helper raises", mock.patch.object(
+                    HARNESS, "_backup_identities",
+                    side_effect=PermissionError("backup directory denied"))),
+                ("directory scan raises", mock.patch.object(
+                    HARNESS.glob, "glob",
+                    side_effect=PermissionError("backup directory denied"))),
+            )
+            for case, failure_patch in failure_patches:
+                with self.subTest(case=case):
+                    printed = io.StringIO()
+                    with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                            failure_patch, contextlib.redirect_stdout(printed):
+                        HARNESS._print_failed_settle_evidence("| P | building |")
+
+                    out = printed.getvalue()
+                    self.assertIn("CURRENT LINE", out,
+                                  "a failed scan must not hide the readable current log")
+                    self.assertIn("INCOMPLETE", out)
+                    self.assertIn("backup scan", out)
+                    self.assertIn("PermissionError", out)
+
+    def test_a_genuinely_empty_backup_directory_does_not_mark_the_tail_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("ONLY CURRENT LINE\n")
+
+            scan_results = []
+            real_scan = HARNESS._backup_identities
+
+            def record_scan(path):
+                result = real_scan(path)
+                scan_results.append(result)
+                return result
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_backup_identities", side_effect=record_scan), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        self.assertEqual([({}, None), ({}, None)], scan_results,
+                         "an empty successful scan must be distinct from a failed scan")
+        self.assertNotIn("INCOMPLETE", printed.getvalue())
+
+    def test_a_backup_vanishing_between_glob_and_stat_does_not_mark_the_tail_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            backup = os.path.join(metadata, ".bak_1.log")
+            with open(backup, "w", encoding="utf-8") as handle:
+                handle.write("ROTATED LINE\n")
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            real_glob = HARNESS.glob.glob
+            removed = []
+
+            def list_then_remove(pattern):
+                paths = real_glob(pattern)
+                if not removed:
+                    removed.append(True)
+                    os.remove(backup)
+                return paths
+
+            scan_results = []
+            real_scan = HARNESS._backup_identities
+
+            def record_scan(path):
+                result = real_scan(path)
+                scan_results.append(result)
+                return result
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS.glob, "glob", side_effect=list_then_remove), \
+                    mock.patch.object(HARNESS, "_backup_identities", side_effect=record_scan), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        self.assertEqual([({}, None), ({}, None)], scan_results,
+                         "a normal rotation race is still a successful scan")
+        self.assertIn("CURRENT LINE", printed.getvalue())
+        self.assertNotIn("INCOMPLETE", printed.getvalue())
 
     def test_two_rotations_in_a_row_do_not_push_the_failure_out_of_reach(self):
         """The case a single "newest backup" could not survive.
@@ -636,6 +771,33 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertEqual(1, thread_type.call_count)
         self.assertEqual(1, collector.call_count)
         self.assertIn("still in flight from an earlier settle and was skipped", printed.getvalue())
+
+    def test_a_second_final_settle_failure_does_not_replace_a_completed_first_collection(self):
+        def failed_wait(*, timeout, failure_details, progress):
+            failure_details[:] = ["projects not ready after %ds: P=building" % timeout]
+            progress.update({"last_list_projects": "| P | building |"})
+            return False
+
+        printed = io.StringIO()
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean",
+                                  return_value=(True, 1, 0, None)), \
+                mock.patch.object(HARNESS, "wait_for_project_ready", side_effect=failed_wait), \
+                mock.patch.object(HARNESS, "_print_failed_settle_evidence") as collector, \
+                contextlib.redirect_stdout(printed):
+            with self.assertRaises(HARNESS.E2EModelResetFailed):
+                HARNESS.reset_model()
+            first = HARNESS._FAILED_SETTLE_EVIDENCE_THREAD
+            first.join(5)
+            with self.assertRaises(HARNESS.E2EModelResetFailed):
+                HARNESS.final_cleanup()
+            HARNESS._FAILED_SETTLE_EVIDENCE_THREAD.join(5)
+
+        self.assertEqual(1, collector.call_count)
+        self.assertIs(first, HARNESS._FAILED_SETTLE_EVIDENCE_THREAD,
+                      "a later settle failure must not overwrite the first collector")
+        self.assertIn("already collected for an earlier settle and was skipped",
+                      printed.getvalue())
 
     def test_the_tail_is_the_last_bytes_of_a_large_log(self):
         with tempfile.TemporaryDirectory() as tmp:

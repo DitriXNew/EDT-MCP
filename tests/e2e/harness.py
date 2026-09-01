@@ -1353,11 +1353,13 @@ _EVIDENCE_TAIL_MIN_LINES = 20
 # attempts. The only wait that provably cannot change the outcome is no wait, so the whole block is
 # collected and printed by a daemon thread and the caller returns at once.
 #
-# Which leaves the threads themselves as the last way to spend the caller's budget: a settle that
-# recovers next attempt means the next reset starts another collector, and once the thread limit is
-# reached Thread.start() raises SYNCHRONOUSLY - the diagnostic replacing the retry it exists to
-# explain. Hence single-flight: at most one collector alive, and a start that fails is reported as
-# unavailable evidence rather than raised.
+# Which leaves the threads themselves as the last way to spend the caller's budget: a later settle
+# failure must not start another collector, whether the first is still reading or already printed.
+# Apart from duplicating a block titled FIRST, enough overlapping collectors can reach the thread
+# limit and make Thread.start() raise SYNCHRONOUSLY - the diagnostic replacing the retry it exists
+# to explain. Hence single-flight for the whole run: once a collector starts, the stored thread is
+# never replaced. A start that fails is reported as unavailable evidence rather than raised, and
+# clears the slot so a later failure can still try to leave the run's one block.
 _FAILED_SETTLE_EVIDENCE_THREAD = None
 _FAILED_SETTLE_EVIDENCE_LOCK = threading.Lock()
 
@@ -1382,7 +1384,7 @@ def _read_log_tail(log_path):
 
 
 def _failed_settle_evidence(last_list_projects):
-    """Print one best-effort evidence block for the first failed settle in a reset cycle.
+    """Print one best-effort evidence block for the first failed settle in the run.
 
     Returns immediately because the work runs on one daemon thread. It issues no MCP call, reads
     bounded bytes, and never starts another collector while a filesystem read is still in flight.
@@ -1392,9 +1394,12 @@ def _failed_settle_evidence(last_list_projects):
     try:
         with _FAILED_SETTLE_EVIDENCE_LOCK:
             current = _FAILED_SETTLE_EVIDENCE_THREAD
-            if current is not None and current.is_alive():
-                _print_failed_settle_evidence_note(
-                    "collection is still in flight from an earlier settle and was skipped")
+            if current is not None:
+                if current.is_alive():
+                    message = "collection is still in flight from an earlier settle and was skipped"
+                else:
+                    message = "evidence was already collected for an earlier settle and was skipped"
+                _print_failed_settle_evidence_note(message)
                 return
             thread = threading.Thread(
                 target=_print_failed_settle_evidence, args=(last_list_projects,),
@@ -1421,13 +1426,17 @@ _EVIDENCE_LOG_MAX_BACKUPS = 3
 
 
 def _backup_identities(metadata):
-    """`{path: identity}` for every `.bak_*.log`, skipping any that vanishes mid-scan.
+    """Return (`{path: identity}`, scan failure) for every `.bak_*.log`.
 
     The identity is (mtime_ns, size, inode), not the mtime alone. EDT reuses the backup NAMES, so
     a rotation can overwrite .bak_1 rather than add a file - and if the replacement happens to
     carry the same coarse timestamp, an mtime-only comparison calls that "unchanged" and the
     rotation goes unseen. Three independent fields make a same-name replacement essentially
     impossible to miss: the file that replaced it would have to match all three.
+
+    A file vanishing between glob and stat is a normal rotation race and remains a successful
+    scan. A failure of the glob itself is returned separately: an empty dict alone cannot tell the
+    collector whether there really were no backups or whether it failed to look for them.
     """
     seen = {}
     try:
@@ -1437,9 +1446,9 @@ def _backup_identities(metadata):
             except OSError:
                 continue    # rotation removed it between the glob and the stat
             seen[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
-    except Exception:
-        return {}
-    return seen
+    except Exception as exc:
+        return ({}, "%s: %s" % (type(exc).__name__, exc))
+    return (seen, None)
 
 
 def _backups_covering(before, after):
@@ -1544,6 +1553,18 @@ def _print_failed_settle_evidence(last_list_projects):
         sources = []
         failures = []
 
+        def scan_backups(when):
+            try:
+                identities, failure = _backup_identities(metadata)
+            except Exception as exc:
+                # Keep a helper failure local just like a failed log read: .log may still be
+                # readable, but the block must admit that a rotated source may be missing.
+                identities = {}
+                failure = "%s: %s" % (type(exc).__name__, exc)
+            if failure:
+                failures.append("backup scan %s: %s" % (when, failure))
+            return identities
+
         def read_into(log_path):
             try:
                 by_path[log_path] = _read_log_tail(log_path)
@@ -1569,9 +1590,10 @@ def _print_failed_settle_evidence(last_list_projects):
         # the read survived neither of the first two. Re-scanning at the end alone is no fix - it
         # races the writer the same way; the pair of snapshots is what makes the window observable.
         # Duplicated lines in an 80-line tail are harmless; a missing failure is the whole problem.
-        before_rotation = _backup_identities(metadata)
+        before_rotation = scan_backups("before reading .log")
         read_into(current)
-        backups = _backups_covering(before_rotation, _backup_identities(metadata))
+        after_rotation = scan_backups("after reading .log")
+        backups = _backups_covering(before_rotation, after_rotation)
         for log_path in backups:
             read_into(log_path)
         # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
@@ -1749,6 +1771,9 @@ def reset_model():
             # The model still carries the finished test's write, and the next test would read it.
             # That is the cascade this reset exists to prevent, so stop the run instead of
             # continuing on a model we know is stale.
+            # Do not start a "FAILED MODEL SETTLE" collector here: _revert_and_clean already did
+            # so if a settle failed; if only clean_project retries ran out, there is no failed
+            # settle snapshot and that title would overclaim what the evidence represents.
             raise E2EModelResetFailed(
                 "%s, so the in-memory model still carries the last test's write. Continuing would "
                 "hand it to the next test."
@@ -1758,8 +1783,10 @@ def reset_model():
         # A negative result here is the same hazard as the exhausted-retries branch above (the
         # model is not guaranteed to be back in sync) and must not be swallowed either.
         failure_details = []
+        progress = {}
         if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                      failure_details=failure_details):
+                                      failure_details=failure_details, progress=progress):
+            _failed_settle_evidence(progress.get("last_list_projects", ""))
             raise E2EModelResetFailed(
                 "clean_project succeeded, but %s, so the model is not guaranteed to be back in "
                 "sync." % failure_details[0])
@@ -1773,6 +1800,8 @@ def reset_model():
     # Every attempt reported success and the model STILL does not match the baseline. Continuing
     # would hand the previous test's mutation to the next one (exactly the cascade this reset
     # exists to prevent), and the next failure would be reported against an innocent test.
+    # Every settle succeeded here, so a block titled "FAILED MODEL SETTLE" would be misleading;
+    # the baseline mismatch below is the evidence for this semantic post-condition failure.
     raise E2EModelResetFailed(
         "the model did not come back to the committed fixture after %d revert+clean_project "
         "cycles, even though every clean_project reported ok and the project reported ready: %s. "
@@ -1842,13 +1871,17 @@ def final_cleanup():
         cleaned, clean_attempts, settle_failures, settle_failure = \
             _revert_and_clean(proj, reset_all_fixtures)
         if not cleaned:
+            # Any failed settle already started the single-flight collector in _revert_and_clean;
+            # exhausted clean_project retries alone do not provide a failed-settle snapshot.
             raise E2EModelResetFailed(
                 "%s for project %r, so its in-memory model may still carry an unsynchronised "
                 "change - reporting this run clean would be a lie."
                 % (_clean_failure_cause(clean_attempts, settle_failures, settle_failure), proj))
     failure_details = []
+    progress = {}
     if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                  failure_details=failure_details):
+                                  failure_details=failure_details, progress=progress):
+        _failed_settle_evidence(progress.get("last_list_projects", ""))
         raise E2EModelResetFailed(
             "clean_project succeeded for every project, but %s, so the model is not guaranteed "
             "to be back in sync." % failure_details[0])
