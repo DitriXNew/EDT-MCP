@@ -1435,7 +1435,7 @@ def _backup_identities(metadata):
     impossible to miss: the file that replaced it would have to match all three.
 
     A file vanishing between glob and stat is a normal rotation race and remains a successful
-    scan. A failure of the glob itself is returned separately: an empty dict alone cannot tell the
+    scan. A failure of the scan itself is returned separately: an empty dict alone cannot tell the
     collector whether there really were no backups or whether it failed to look for them.
     """
     seen = {}
@@ -1443,7 +1443,7 @@ def _backup_identities(metadata):
         for path in glob.glob(os.path.join(metadata, ".bak_*.log")):
             try:
                 st = os.stat(path)
-            except OSError:
+            except FileNotFoundError:
                 continue    # rotation removed it between the glob and the stat
             seen[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
     except Exception as exc:
@@ -1682,10 +1682,9 @@ def _revert_and_clean(project, revert):
                                       progress=progress):
             settle_failures += 1
             last_settle_failure = failure_details[0]
-            if settle_failures == 1:
-                # No deadline credit-back: the call returns at once (the block is built and
-                # printed on a daemon thread), so there is no diagnostic time to give back.
-                _failed_settle_evidence(progress.get("last_list_projects", ""))
+            # No deadline credit-back: the call returns at once (the block is built and
+            # printed on a daemon thread), so there is no diagnostic time to give back.
+            _failed_settle_evidence(progress.get("last_list_projects", ""))
             last_settle_failure = "%s; %s" % (
                 last_settle_failure, _settle_progress_note(progress))
             continue

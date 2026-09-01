@@ -382,6 +382,36 @@ class EvidenceLogTailTest(unittest.TestCase):
                     self.assertIn("backup scan", out)
                     self.assertIn("PermissionError", out)
 
+    def test_permission_denied_while_stating_a_backup_marks_the_tail_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            backup = os.path.join(metadata, ".bak_1.log")
+            with open(backup, "w", encoding="utf-8") as handle:
+                handle.write("BACKUP LINE\n")
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            real_stat = HARNESS.os.stat
+
+            def deny_backup_stat(path, *args, **kwargs):
+                if path == backup:
+                    raise PermissionError("backup stat denied")
+                return real_stat(path, *args, **kwargs)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS.os, "stat", side_effect=deny_backup_stat), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("CURRENT LINE", out, "the readable current log must still be reported")
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn("backup scan", out)
+        self.assertIn("PermissionError", out)
+        self.assertIn("backup stat denied", out)
+
     def test_a_genuinely_empty_backup_directory_does_not_mark_the_tail_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
@@ -771,6 +801,40 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertEqual(1, thread_type.call_count)
         self.assertEqual(1, collector.call_count)
         self.assertIn("still in flight from an earlier settle and was skipped", printed.getvalue())
+
+    def test_a_failed_collector_start_is_retried_by_a_later_settle_in_the_same_cycle(self):
+        snapshots = iter(("first state", "second state", "third state"))
+
+        def failed_wait(*, timeout, failure_details, progress):
+            failure_details[:] = ["projects not ready after %ds: P=building" % timeout]
+            progress.update({"last_list_projects": next(snapshots)})
+            return False
+
+        real_start = threading.Thread.start
+        start_attempts = []
+
+        def fail_first_start(thread):
+            start_attempts.append(thread)
+            if len(start_attempts) == 1:
+                raise RuntimeError("native thread exhausted")
+            return real_start(thread)
+
+        printed = io.StringIO()
+        with mock.patch.object(HARNESS, "MODEL_SETTLE_ATTEMPTS", 3), \
+                mock.patch.object(HARNESS, "wait_for_project_ready", side_effect=failed_wait), \
+                mock.patch.object(HARNESS.threading.Thread, "start", new=fail_first_start), \
+                mock.patch.object(HARNESS, "_print_failed_settle_evidence") as collector, \
+                contextlib.redirect_stdout(printed):
+            result = HARNESS._revert_and_clean("P", mock.Mock())
+            started = HARNESS._FAILED_SETTLE_EVIDENCE_THREAD
+            self.assertIsNotNone(started, "a later settle must retry the failed thread start")
+            started.join(5)
+
+        self.assertEqual((False, 0, 3), result[:3])
+        self.assertEqual(2, len(start_attempts),
+                         "the failed start is retried, then the successful start suppresses more")
+        collector.assert_called_once_with("second state")
+        self.assertIs(start_attempts[1], HARNESS._FAILED_SETTLE_EVIDENCE_THREAD)
 
     def test_a_second_final_settle_failure_does_not_replace_a_completed_first_collection(self):
         def failed_wait(*, timeout, failure_details, progress):
