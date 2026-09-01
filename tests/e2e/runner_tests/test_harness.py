@@ -1,6 +1,7 @@
 """Pure isolation-layer contracts; no EDT server or fixture mutation required."""
 
 import contextlib
+import glob
 import importlib.util
 import io
 import os
@@ -360,27 +361,43 @@ class EvidenceLogTailTest(unittest.TestCase):
             with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
                 handle.write("CURRENT LINE\n")
 
-            failure_patches = (
-                ("helper raises", mock.patch.object(
-                    HARNESS, "_backup_identities",
-                    side_effect=PermissionError("backup directory denied"))),
-                ("directory scan raises", mock.patch.object(
-                    HARNESS.glob, "glob",
-                    side_effect=PermissionError("backup directory denied"))),
-            )
-            for case, failure_patch in failure_patches:
-                with self.subTest(case=case):
-                    printed = io.StringIO()
-                    with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
-                            failure_patch, contextlib.redirect_stdout(printed):
-                        HARNESS._print_failed_settle_evidence("| P | building |")
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(
+                        HARNESS, "_backup_identities",
+                        side_effect=PermissionError("backup directory denied")), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
 
-                    out = printed.getvalue()
-                    self.assertIn("CURRENT LINE", out,
-                                  "a failed scan must not hide the readable current log")
-                    self.assertIn("INCOMPLETE", out)
-                    self.assertIn("backup scan", out)
-                    self.assertIn("PermissionError", out)
+            out = printed.getvalue()
+            self.assertIn("CURRENT LINE", out,
+                          "a failed scan must not hide the readable current log")
+            self.assertIn("INCOMPLETE", out)
+            self.assertIn("backup scan", out)
+            self.assertIn("PermissionError", out)
+
+    def test_permission_denied_while_enumerating_backups_marks_the_tail_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(
+                        HARNESS.os, "scandir",
+                        side_effect=PermissionError("backup directory enumeration denied")), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("CURRENT LINE", out,
+                      "a failed enumeration must not hide the readable current log")
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn("backup scan", out)
+        self.assertIn("PermissionError", out)
+        self.assertIn("backup directory enumeration denied", out)
 
     def test_permission_denied_while_stating_a_backup_marks_the_tail_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -437,7 +454,30 @@ class EvidenceLogTailTest(unittest.TestCase):
                          "an empty successful scan must be distinct from a failed scan")
         self.assertNotIn("INCOMPLETE", printed.getvalue())
 
-    def test_a_backup_vanishing_between_glob_and_stat_does_not_mark_the_tail_incomplete(self):
+    def test_backup_scan_selects_the_same_dot_prefixed_names_as_glob(self):
+        with tempfile.TemporaryDirectory() as metadata:
+            for name in (
+                    ".bak_.log",
+                    ".bak_1.log",
+                    ".bak_descriptive.log",
+                    ".BAK_PLATFORM_CASE.LOG",
+                    "bak_1.log",
+                    ".bak_1.txt",
+                    ".bak_1.log.extra",
+                    "prefix.bak_1.log"):
+                with open(os.path.join(metadata, name), "w", encoding="utf-8") as handle:
+                    handle.write(name)
+
+            expected = set(glob.glob(os.path.join(metadata, ".bak_*.log")))
+            identities, failure = HARNESS._backup_identities(metadata)
+
+        self.assertIsNone(failure)
+        self.assertEqual(expected, set(identities),
+                         "the direct scan must preserve glob's platform matching semantics")
+        self.assertIn(os.path.join(metadata, ".bak_1.log"), identities,
+                      "directory enumeration must include the dot-prefixed backup name")
+
+    def test_a_backup_vanishing_between_enumeration_and_stat_does_not_mark_the_tail_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
@@ -447,15 +487,12 @@ class EvidenceLogTailTest(unittest.TestCase):
             with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
                 handle.write("CURRENT LINE\n")
 
-            real_glob = HARNESS.glob.glob
-            removed = []
+            real_stat = HARNESS.os.stat
 
-            def list_then_remove(pattern):
-                paths = real_glob(pattern)
-                if not removed:
-                    removed.append(True)
-                    os.remove(backup)
-                return paths
+            def vanish_before_stat(path, *args, **kwargs):
+                if path == backup:
+                    raise FileNotFoundError("rotation removed the backup")
+                return real_stat(path, *args, **kwargs)
 
             scan_results = []
             real_scan = HARNESS._backup_identities
@@ -467,7 +504,7 @@ class EvidenceLogTailTest(unittest.TestCase):
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
-                    mock.patch.object(HARNESS.glob, "glob", side_effect=list_then_remove), \
+                    mock.patch.object(HARNESS.os, "stat", side_effect=vanish_before_stat), \
                     mock.patch.object(HARNESS, "_backup_identities", side_effect=record_scan), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("| P | building |")
@@ -764,16 +801,16 @@ class EvidenceLogTailTest(unittest.TestCase):
             with open(os.path.join(log_dir, ".log"), "w", encoding="utf-8") as handle:
                 handle.write("current evidence\n")
 
-            real_glob = HARNESS.glob.glob
+            real_stat = HARNESS.os.stat
 
-            def list_then_remove(pattern):
-                paths = real_glob(pattern)
-                os.remove(backup_path)
-                return paths
+            def vanish_before_stat(path, *args, **kwargs):
+                if path == backup_path:
+                    raise FileNotFoundError("rotation removed the backup")
+                return real_stat(path, *args, **kwargs)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
-                    mock.patch.object(HARNESS.glob, "glob", side_effect=list_then_remove), \
+                    mock.patch.object(HARNESS.os, "stat", side_effect=vanish_before_stat), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("project state")
 

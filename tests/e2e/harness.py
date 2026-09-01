@@ -10,7 +10,7 @@ re-implement them. See SKILL.md for the full guide.
 Python stdlib only. No third-party dependencies.
 """
 
-import glob
+import fnmatch
 import hashlib
 import http.client
 import json
@@ -1434,18 +1434,23 @@ def _backup_identities(metadata):
     rotation goes unseen. Three independent fields make a same-name replacement essentially
     impossible to miss: the file that replaced it would have to match all three.
 
-    A file vanishing between glob and stat is a normal rotation race and remains a successful
-    scan. A failure of the scan itself is returned separately: an empty dict alone cannot tell the
-    collector whether there really were no backups or whether it failed to look for them.
+    A file vanishing between enumeration and stat is a normal rotation race and remains a
+    successful scan. A failure of the scan itself is returned separately: an empty dict alone
+    cannot tell the collector whether there really were no backups or whether it failed to look
+    for them.
     """
     seen = {}
     try:
-        for path in glob.glob(os.path.join(metadata, ".bak_*.log")):
-            try:
-                st = os.stat(path)
-            except FileNotFoundError:
-                continue    # rotation removed it between the glob and the stat
-            seen[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+        with os.scandir(metadata) as entries:
+            for entry in entries:
+                if not fnmatch.fnmatch(entry.name, ".bak_*.log"):
+                    continue
+                path = os.path.join(metadata, entry.name)
+                try:
+                    st = os.stat(path)
+                except FileNotFoundError:
+                    continue    # rotation removed it between enumeration and stat
+                seen[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
     except Exception as exc:
         return ({}, "%s: %s" % (type(exc).__name__, exc))
     return (seen, None)
