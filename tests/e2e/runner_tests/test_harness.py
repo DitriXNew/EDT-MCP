@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import unittest
+from unittest import mock
 
 
 HARNESS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "harness.py")
@@ -17,10 +18,12 @@ class MutationOutcomeTest(unittest.TestCase):
         self.old_confirmed = HARNESS._MUTATION_CONFIRMED
         self.old_confirmed_tools = set(HARNESS._CONFIRMED_MUTATION_TOOLS)
         self.old_called = set(HARNESS._CALLED_TOOLS)
+        self.old_mutated_projects = set(HARNESS._MUTATED_PROJECTS)
         HARNESS._MUTATIONS_UNRESOLVED = 0
         HARNESS._MUTATION_CONFIRMED = False
         HARNESS._CONFIRMED_MUTATION_TOOLS.clear()
         HARNESS._CALLED_TOOLS.clear()
+        HARNESS._MUTATED_PROJECTS.clear()
 
     def tearDown(self):
         HARNESS._MUTATIONS_UNRESOLVED = self.old_unresolved
@@ -29,6 +32,33 @@ class MutationOutcomeTest(unittest.TestCase):
         HARNESS._CONFIRMED_MUTATION_TOOLS.update(self.old_confirmed_tools)
         HARNESS._CALLED_TOOLS.clear()
         HARNESS._CALLED_TOOLS.update(self.old_called)
+        HARNESS._MUTATED_PROJECTS.clear()
+        HARNESS._MUTATED_PROJECTS.update(self.old_mutated_projects)
+
+    def test_mutating_attempt_tracks_fixture_project_but_read_attempt_does_not(self):
+        HARNESS._record_attempt(
+            "modify_metadata", {"projectName": HARNESS.TESTS_PROJECT})
+
+        self.assertEqual(
+            frozenset({HARNESS.TESTS_PROJECT}), HARNESS.mutated_fixture_projects())
+
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt(
+            "get_metadata_objects", {"projectName": HARNESS.TESTS_PROJECT})
+
+        self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
+
+    def test_mutating_attempt_ignores_project_that_is_not_a_fixture(self):
+        HARNESS._record_attempt("modify_metadata", {"projectName": "UnrelatedProject"})
+
+        self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
+
+    def test_model_is_not_pristine_after_non_base_fixture_mutation(self):
+        HARNESS._MUTATED_PROJECTS.add(HARNESS.TESTS_PROJECT)
+
+        with mock.patch.object(HARNESS, "_BASELINE_INVENTORY", ("baseline",)), \
+                mock.patch.object(HARNESS, "_model_may_have_moved", return_value=False):
+            self.assertFalse(HARNESS.model_is_pristine())
 
     def test_structural_post_commit_marker_confirms_mutation_regardless_of_message(self):
         HARNESS._record_attempt("dcs")
@@ -139,6 +169,50 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertEqual(frozenset(), HARNESS.confirmed_mutation_tools())
         self.assertEqual((), HARNESS.mutation_kind_violation_tools(
             "action", HARNESS.confirmed_mutation_tools()))
+
+
+class FixtureResetTest(unittest.TestCase):
+    # reset_all_fixtures is the revert callable INSIDE _revert_and_clean's retry loop, so the two
+    # halves of its failure condition have to be pinned separately: a dirty tree alone is the race
+    # that loop absorbs, a failed git command alone can be a `clean -fd` complaining about a file
+    # the checkout already restored. Only both together mean the revert could not do its job.
+
+    def _reset_all(self, failed_rels, dirty_rels):
+        """Run reset_all_fixtures with the git layer stubbed to the given outcome."""
+        return mock.patch.object(HARNESS, "_FIXTURES_FROZEN", False), \
+            mock.patch.object(HARNESS, "_reset_rel",
+                              side_effect=lambda rel: (["git checkout -> exit 1: locked index"]
+                                                       if rel in failed_rels else [])), \
+            mock.patch.object(HARNESS, "status_porcelain_rel",
+                              side_effect=lambda rel: (" M %s/Configuration.mdo" % rel
+                                                       if rel in dirty_rels else ""))
+
+    def test_reset_all_fixtures_raises_when_a_failed_git_left_the_path_dirty(self):
+        frozen, reset_rel, status = self._reset_all({HARNESS.TESTS_PROJECT_REL},
+                                                    {HARNESS.TESTS_PROJECT_REL})
+        with frozen, reset_rel as spy, status:
+            with self.assertRaisesRegex(
+                    HARNESS.E2EModelResetFailed, HARNESS.TESTS_PROJECT_REL):
+                HARNESS.reset_all_fixtures()
+
+        self.assertEqual([mock.call(rel) for rel in HARNESS.ALL_FIXTURE_RELS], spy.call_args_list)
+
+    def test_a_dirty_path_alone_is_the_retryable_race_and_not_a_failure(self):
+        frozen, reset_rel, status = self._reset_all(set(), set(HARNESS.ALL_FIXTURE_RELS))
+        with frozen, reset_rel, status:
+            self.assertTrue(HARNESS.reset_all_fixtures())
+
+    def test_a_failed_git_that_left_the_path_clean_is_not_a_failure(self):
+        frozen, reset_rel, status = self._reset_all(set(HARNESS.ALL_FIXTURE_RELS), set())
+        with frozen, reset_rel, status:
+            self.assertTrue(HARNESS.reset_all_fixtures())
+
+    def test_reset_all_fixtures_still_returns_false_when_fixtures_are_frozen(self):
+        with mock.patch.object(HARNESS, "_FIXTURES_FROZEN", True), \
+                mock.patch.object(HARNESS, "_reset_rel") as reset_rel:
+            self.assertFalse(HARNESS.reset_all_fixtures())
+
+        reset_rel.assert_not_called()
 
 
 if __name__ == "__main__":

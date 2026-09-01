@@ -259,23 +259,11 @@ def _reset_after_write(harness, t):
         # the hole. A confirmed fixture write bypasses the pristine shortcut, so restore disk and
         # model here whatever the test called itself.
         #
-        # EVERY fixture, not just the base one. reset_fixture()/reset_model() cover PROJECT alone,
-        # and an undeclared write can just as easily land in the extension or the external-objects
-        # fixture - reporting it while leaving that model dirty would cause the very cascade this
-        # ratchet exists to catch. The violating test did not declare its writes, so there is
-        # nothing to narrow the cleanup with; clean all of them.
+        # The violating test did not declare its writes, so there is nothing trustworthy to narrow
+        # the cleanup with. Reset every fixture through the protected reset cycle.
         if not harness.reset_all_fixtures():
             return
-        harness.reset_model()
-        for project in harness.ALL_FIXTURE_PROJECTS:
-            if project == harness.PROJECT:
-                continue    # reset_model already re-imported the base project
-            try:
-                harness.call("clean_project", {"projectName": project})
-            except Exception:
-                # Best effort: the advisory line is what the author needs, and a clean_project
-                # refusal here must not replace it.
-                pass
+        harness.reset_model(harness.ALL_FIXTURE_PROJECTS)
         # REPORTED, never raised. Enforcing it would mean asserting, from the client side, that a
         # given call moved the model - and the server does not say so on a SUCCESS response:
         # mutationCommitted/mutationOutcomeUnknown are emitted on ERROR paths only. Everything else
@@ -302,7 +290,8 @@ def _reset_after_write(harness, t):
     # when the tree is off limits. Believe that answer instead of racing it.
     if not harness.reset_fixture():
         return
-    harness.reset_model()
+    harness.reset_model(sorted(
+        {harness.PROJECT} | harness.mutated_fixture_projects()))
 
 
 # Names of the tests whose model reset was skipped — reported at the end so the shortcut is
@@ -551,7 +540,12 @@ def main():
         # the workspace is disposable.
         print("!! left the fixtures untouched: %s may still be running server-side" % aborted_after)
     elif aborted_after:
-        harness.reset_all_fixtures()
+        try:
+            harness.reset_all_fixtures()
+        except harness.E2EModelResetFailed as e:
+            # Preserve the summary while making the failed disk restore part of the run result.
+            print("!! abort cleanup could not restore the fixtures: %s" % e)
+            cleanup_failed = True
     else:
         try:
             harness.final_cleanup()

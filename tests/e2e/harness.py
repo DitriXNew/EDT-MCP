@@ -465,7 +465,7 @@ def call(tool, arguments):
     # still have committed the write — recording only on the way out left the shortcut believing
     # nothing happened, so it skipped the reset and the next test inherited the mutation. An
     # unknown outcome counts as a mutation; a REFUSAL that was actually read back takes it back.
-    _record_attempt(tool)
+    _record_attempt(tool, arguments)
     while True:
         try:
             raw = _post("tools/call", {"name": tool, "arguments": arguments})
@@ -576,6 +576,9 @@ def _call_moves_the_fixture_model(tool, args, structured):
         return args.get("recordBuildTime", True) is not False
     return True
 _CALLED_TOOLS = set()
+# Fixture projects named by mutating calls during the current test. This is recorded on the
+# attempt because a request that dies on the wire may already have changed the server-side model.
+_MUTATED_PROJECTS = set()
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
 
@@ -601,10 +604,15 @@ _CONFIRMED_MUTATION_TOOLS = set()
 _MUTATIONS_UNRESOLVED = 0
 
 
-def _record_attempt(tool):
+def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
     global _MUTATIONS_UNRESOLVED
     _CALLED_TOOLS.add(tool)
+    args = args or {}
+    if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
+            and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS
+            and args.get("projectName") in ALL_FIXTURE_PROJECTS):
+        _MUTATED_PROJECTS.add(args["projectName"])
     if tool in MODEL_MUTATION_TOOLS:
         _MUTATIONS_UNRESOLVED += 1
 
@@ -663,6 +671,11 @@ def confirmed_mutation_tools():
     return frozenset(_CONFIRMED_MUTATION_TOOLS)
 
 
+def mutated_fixture_projects():
+    """Fixture projects named by mutating calls attempted during the current test."""
+    return frozenset(_MUTATED_PROJECTS)
+
+
 def mutation_kind_violation_tools(kind, confirmed_tools):
     """Confirmed fixture-model writers that require a different declared test kind."""
     if kind == "write-metadata":
@@ -676,6 +689,7 @@ def begin_test_calls():
     Resets only what is genuinely per-test. _MUTATIONS_UNRESOLVED is not - see its comment."""
     global _MUTATION_CONFIRMED
     _CALLED_TOOLS.clear()
+    _MUTATED_PROJECTS.clear()
     _MUTATION_CONFIRMED = False
     _CONFIRMED_MUTATION_TOOLS.clear()
 
@@ -777,6 +791,10 @@ def model_is_pristine():
     if _BASELINE_INVENTORY is None or _model_may_have_moved():
         return False
     if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
+        return False
+    if _MUTATED_PROJECTS - {PROJECT}:
+        # No baseline fingerprint exists for non-base fixtures, so their in-memory state cannot
+        # provide the positive evidence this shortcut requires.
         return False
     try:
         # Its VERDICT matters, not just that it ran: it returns False on timeout, meaning EDT is
@@ -1027,6 +1045,13 @@ ALL_FIXTURE_RELS = [PROJECT_REL, TESTS_PROJECT_REL, EXT_OBJECTS_REL]
 # The same three fixtures addressed as PROJECTS, for callers that must clean a model rather
 # than a path (the kind ratchet cleans all three: an undeclared write names no project).
 ALL_FIXTURE_PROJECTS = [PROJECT, TESTS_PROJECT, EXT_OBJECTS_PROJECT]
+# Written out rather than zipped from the two lists above, so a project can never be silently
+# paired with another fixture's path if one of them gains an entry and the other does not.
+FIXTURE_REL_BY_PROJECT = {
+    PROJECT: PROJECT_REL,
+    TESTS_PROJECT: TESTS_PROJECT_REL,
+    EXT_OBJECTS_PROJECT: EXT_OBJECTS_REL,
+}
 
 
 def _reset_rel(rel):
@@ -1037,10 +1062,20 @@ def _reset_rel(rel):
     revert therefore: (1) `reset` to UNSTAGE (staged add -> untracked; staged delete ->
     unstaged delete), (2) `checkout HEAD --` to restore tracked files (undo deletions /
     mods / renames-from), (3) `clean -fd` to remove the now-untracked files. Plain
-    `checkout --` (from the index) cannot undo staged changes, so all three are needed."""
-    _git("reset", "-q", "--", rel)
-    _git("checkout", "HEAD", "--", rel)
-    _git("clean", "-fd", rel)
+    `checkout --` (from the index) cannot undo staged changes, so all three are needed.
+
+    @return the git commands that exited non-zero, as readable strings (empty when all three ran).
+            _git never checks a return code, so without this a revert that could not run at all -
+            a locked index, a file the editor still holds open - is indistinguishable from one
+            that had nothing to do."""
+    failures = []
+    for args in (("reset", "-q", "--", rel), ("checkout", "HEAD", "--", rel), ("clean", "-fd", rel)):
+        completed = _git(*args)
+        if completed.returncode != 0:
+            failures.append("git %s -> exit %d: %s"
+                            % (" ".join(args), completed.returncode,
+                               (completed.stderr or "").strip()[:200]))
+    return failures
 
 
 # Held for the duration of a git fixture reset, and by whoever freezes the fixtures. It is what
@@ -1142,15 +1177,32 @@ def read_fixture_file(rel, relpath):
 
 
 def reset_all_fixtures():
-    """Hard reset EVERY fixture path (base + extension) to HEAD — used by the end-of-run
-    cleanup so the whole working tree returns to the committed baseline.
+    """Hard reset and verify every fixture path against HEAD.
 
-    @return True if the reset ran, False if the fixtures are frozen and it was refused."""
+    Both halves of the condition matter, and dropping either one is wrong in a different way.
+    A dirty path ALONE is not a failure: this function is the revert callable INSIDE
+    _revert_and_clean's retry loop, and a late asynchronous export re-dirtying the tree between
+    the revert and the check is the exact race that loop exists to absorb - raising on it would
+    turn a retryable condition into a hard abort. A failed git command alone is not a failure
+    either: `clean -fd` can report a file it could not remove that the checkout had already
+    restored. Together they say the revert could not do its job and nothing later will notice.
+
+    @return True if the reverts ran, False if the fixtures are frozen and it was refused
+    @raise E2EModelResetFailed if a git command failed AND left its path dirty"""
     with _FIXTURE_LOCK:
         if _FIXTURES_FROZEN:
             return False
+        failures = {}
         for rel in ALL_FIXTURE_RELS:
-            _reset_rel(rel)
+            failed = _reset_rel(rel)
+            if failed:
+                failures[rel] = failed
+        for rel, failed in failures.items():
+            status = status_porcelain_rel(rel)
+            if status:
+                raise E2EModelResetFailed(
+                    "the revert of fixture path %r could not run (%s) and the path is still "
+                    "dirty:\n%s" % (rel, "; ".join(failed), status[:500]))
         return True
 
 
@@ -1379,20 +1431,19 @@ def _clean_failure_cause(clean_attempts, settle_failures, last_settle_failure):
                "" if exhausted else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
 
 
-def reset_model():
-    """Re-sync EDT's in-memory BM model to the on-disk baseline after a write-metadata test.
+def _reset_model_project(project, revert, verify):
+    """Re-sync ONE fixture project's in-memory BM model to its on-disk baseline.
 
     Metadata-write tools (create/add/delete/rename metadata) mutate the in-memory BM model
-    but do NOT flush every change to disk, so a git reset alone cannot undo them — the model
+    but do NOT flush every change to disk, so a git reset alone cannot undo them - the model
     would carry the unsaved change into the next test. clean_project re-imports the clean disk
-    + revalidates, discarding the in-memory change. The orchestrator calls this after each
-    kind='write-metadata' test.
+    + revalidates, discarding the in-memory change.
 
     CRITICAL ORDERING (root cause of the rename >300s e2e timeout): a metadata write also
-    SCHEDULES a derived-data recompute, so the project is BUILDING right after the test —
-    and clean_project REFUSES a building project. The old code called clean_project FIRST
-    and swallowed the refusal (it returns an isError result, not an exception), leaving the
-    model UN-reset; the next rename then blocked for minutes inside EDT's still-draining
+    SCHEDULES a derived-data recompute, so the project is BUILDING right after the test -
+    and clean_project REFUSES a building project. An earlier revision called clean_project
+    FIRST and swallowed the refusal (it returns an isError result, not an exception), leaving
+    the model UN-reset; the next rename then blocked for minutes inside EDT's still-draining
     derived-data pipeline (DerivedDataManager.blockAsyncPipeline), tripping the per-test
     timeout. So: wait for the project to SETTLE first (out-waiting that recompute) so the
     clean is accepted, THEN clean_project (which itself blocks on its own derived-data
@@ -1402,18 +1453,23 @@ def reset_model():
     A successful clean_project is NOT that guarantee on its own, which is the second race
     this function has to close. The orchestrator reverts the fixture on disk BEFORE the
     test's model cleanup, but a metadata write's disk export is ASYNC: EDT can flush the
-    MUTATED state back out DURING the settle wait, i.e. AFTER that revert — and then
+    MUTATED state back out DURING the settle wait, i.e. AFTER that revert - and then
     clean_project faithfully re-imports the mutated disk and still reports ok. Observed on
     EDT 2026.2 (a renamed Catalog survived a green clean_project and the next test failed
     on the baseline FQN). Hence, per attempt: settle FIRST so any lagging export has landed,
-    re-revert the disk, THEN clean, and finally VERIFY the baseline is actually back
-    (_baseline_mismatch) instead of assuming it. Verification — not a longer timeout — is
-    what makes this correct: the failure is a lost write-back race, not slowness.
+    re-revert the disk, THEN clean, and finally VERIFY instead of assuming. Verification -
+    not a longer timeout - is what makes this correct: the failure is a lost write-back race,
+    not slowness.
+
+    @param revert the disk revert for THIS project's fixture path
+    @param verify the post-condition, returning a mismatch description or None. The base project
+           can be checked against its in-memory baseline fingerprint; the others only against
+           their disk status - see _disk_mismatch.
     """
     last_mismatch = "the post-condition was never reached"
     for _ in range(MODEL_RESET_ATTEMPTS):
         cleaned, clean_attempts, settle_failures, settle_failure = \
-            _revert_and_clean(PROJECT, reset_fixture)
+            _revert_and_clean(project, revert)
         if not cleaned:
             # The model still carries the finished test's write, and the next test would read it.
             # That is the cascade this reset exists to prevent, so stop the run instead of
@@ -1432,11 +1488,8 @@ def reset_model():
             raise E2EModelResetFailed(
                 "clean_project succeeded, but %s, so the model is not guaranteed to be back in "
                 "sync." % failure_details[0])
-        mismatch = _baseline_mismatch()
+        mismatch = verify()
         if mismatch is None:
-            # The one place entitled to say the model is verifiably home again - which is also
-            # what retires a write whose outcome was never read back. See _mark_model_synced.
-            _mark_model_synced()
             return
         last_mismatch = mismatch
     # Every attempt reported success and the model STILL does not match the baseline. Continuing
@@ -1447,6 +1500,47 @@ def reset_model():
         "cycles, even though every clean_project reported ok and the project reported ready: %s. "
         "The next test would read the last test's write."
         % (MODEL_RESET_ATTEMPTS, last_mismatch))
+
+
+def _disk_mismatch(rel):
+    """Why a non-base fixture is dirty on disk, or None when its path is clean.
+
+    Non-base fixtures have no in-memory baseline fingerprint, so disk status is the strongest
+    post-condition available for them. It is not equivalent to verifying their in-memory model."""
+    status = status_porcelain_rel(rel)
+    if status:
+        return "fixture path %r is still dirty:\n%s" % (rel, status[:500])
+    return None
+
+
+def reset_model(projects=None):
+    """Re-sync the named fixture projects to their on-disk baselines after a write.
+
+    Every project goes through the SAME protected cycle - see _reset_model_project for why its
+    ordering is what it is. They differ only in their post-condition: the base project has an
+    in-memory baseline fingerprint, the others can be verified against their disk status alone.
+
+    @param projects the fixture projects to reset; the base project alone by default, which is
+           what the ~331 base-only write tests pay. A test that addressed another fixture names
+           it, so the reset follows the write instead of assuming where it landed.
+    """
+    requested = (PROJECT,) if projects is None else tuple(projects)
+    for project in requested:
+        if project not in FIXTURE_REL_BY_PROJECT:
+            raise ValueError("not a fixture project: %r" % project)
+        if project == PROJECT:
+            _reset_model_project(project, reset_fixture, _baseline_mismatch)
+        else:
+            rel = FIXTURE_REL_BY_PROJECT[project]
+            _reset_model_project(
+                project,
+                lambda rel=rel: reset_fixture_rel(rel),
+                lambda rel=rel: _disk_mismatch(rel),
+            )
+    if requested:
+        # Retire unresolved mutations only after every requested project has passed its strongest
+        # available post-condition.
+        _mark_model_synced()
 
 
 def _git_checked(*args):
