@@ -29,6 +29,7 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.mutation_kind_violation_tools.return_value = ("modify_metadata",)
         harness.mutations_unresolved.return_value = False
         harness.mutated_fixture_projects.return_value = frozenset()
+        harness.evidenced_mutation_fixture_projects.return_value = frozenset()
         harness.reset_all_fixtures.return_value = True
         return harness
 
@@ -44,16 +45,31 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.call.assert_not_called()
         self.assertIn("[kind-advisory]", output.getvalue())
 
-    def test_kind_violation_resets_unsynced_external_objects_when_call_targeted_it(self):
+    def test_kind_violation_skips_unsynced_external_objects_named_only_by_refused_call(self):
         harness = self._mutation_harness()
         harness.external_objects_model_synced.return_value = False
+        # Another call produced the confirmed mutation that triggered this branch. The refused
+        # call only named ExternalObjects, so it is present in the attempted-target union but not
+        # in the per-call outcome-evidenced set.
         harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
 
         RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
 
         harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_kind_violation_resets_unsynced_external_objects_named_by_evidenced_call(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
+        harness.evidenced_mutation_fixture_projects.return_value = frozenset(
+            {"ExternalObjects"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
         harness.reset_model.assert_called_once_with(harness.ALL_FIXTURE_PROJECTS)
-        harness.mutated_fixture_projects.assert_called_once_with()
+        harness.evidenced_mutation_fixture_projects.assert_called_once_with()
 
     def test_kind_violation_skips_unsynced_external_objects_when_call_did_not_target_it(self):
         harness = self._mutation_harness()

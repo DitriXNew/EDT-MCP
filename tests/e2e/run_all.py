@@ -260,23 +260,22 @@ def _reset_after_write(harness, t):
         # model here whatever the test called itself.
         #
         # The violating test did not declare its writes, so reset every mandatory fixture. The
-        # optional ExternalObjects model is reset when setup synchronized it or call-target
-        # evidence below says that the violating test touched it.
+        # optional ExternalObjects model is reset when setup synchronized it or the outcome of a
+        # call that named it supplied mutation evidence.
         if not harness.reset_all_fixtures():
             return
-        targeted_projects = harness.mutated_fixture_projects()
+        evidenced_projects = harness.evidenced_mutation_fixture_projects()
         reset_projects = [
             project for project in harness.ALL_FIXTURE_PROJECTS
             if project != harness.EXT_OBJECTS_PROJECT
             or harness.external_objects_model_synced()
-            or project in targeted_projects
+            or project in evidenced_projects
         ]
         # A failed optional setup sync does not prove ExternalObjects is absent: clean_project or
-        # its readiness wait may only have failed transiently. A violating call that named the
-        # project is direct evidence that its model needs restoring, so include it above. This
-        # branch requires a confirmed mutation, which a genuinely absent target cannot produce;
-        # resetting an otherwise absent fixture would only abort without restoring any state, so
-        # the setup guard remains when there is no target evidence.
+        # its readiness wait may only have failed transiently. Include it when the SAME call that
+        # named it succeeded, reported a commit/write target, or said its outcome was unknown. A
+        # refusal merely naming an absent project supplies none of that evidence, so the setup
+        # guard keeps the genuinely absent fixture out of reset_model.
         harness.reset_model(reset_projects)
         # The classification is REPORTED, never raised. Cleanup itself is still mandatory: a disk
         # revert failure or a reset failure for any selected fixture propagates and can
@@ -288,7 +287,7 @@ def _reset_after_write(harness, t):
         # inference to be wrong (a build with nothing to build, a dcs read action, an
         # already-adopted no-op, an import-mode update_database). A wrong inference can therefore
         # cost an unnecessary reset of selected fixtures plus a line to read, but an optional
-        # model with neither setup-sync nor call-target evidence is not sent through reset.
+        # model with neither setup-sync nor outcome-correlated mutation evidence is not reset.
         #
         # The hole the issue is about is closed above regardless: the reset now runs on EVIDENCE of
         # a mutation rather than on the test's declaration, so an undeclared write no longer rides

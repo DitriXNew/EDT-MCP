@@ -19,11 +19,13 @@ class MutationOutcomeTest(unittest.TestCase):
         self.old_confirmed_tools = set(HARNESS._CONFIRMED_MUTATION_TOOLS)
         self.old_called = set(HARNESS._CALLED_TOOLS)
         self.old_mutated_projects = set(HARNESS._MUTATED_PROJECTS)
+        self.old_evidenced_projects = set(HARNESS._EVIDENCED_MUTATION_PROJECTS)
         HARNESS._MUTATIONS_UNRESOLVED = 0
         HARNESS._MUTATION_CONFIRMED = False
         HARNESS._CONFIRMED_MUTATION_TOOLS.clear()
         HARNESS._CALLED_TOOLS.clear()
         HARNESS._MUTATED_PROJECTS.clear()
+        HARNESS._EVIDENCED_MUTATION_PROJECTS.clear()
 
     def tearDown(self):
         HARNESS._MUTATIONS_UNRESOLVED = self.old_unresolved
@@ -34,6 +36,8 @@ class MutationOutcomeTest(unittest.TestCase):
         HARNESS._CALLED_TOOLS.update(self.old_called)
         HARNESS._MUTATED_PROJECTS.clear()
         HARNESS._MUTATED_PROJECTS.update(self.old_mutated_projects)
+        HARNESS._EVIDENCED_MUTATION_PROJECTS.clear()
+        HARNESS._EVIDENCED_MUTATION_PROJECTS.update(self.old_evidenced_projects)
 
     def test_mutating_attempt_tracks_fixture_project_but_read_attempt_does_not(self):
         HARNESS._record_attempt(
@@ -87,6 +91,45 @@ class MutationOutcomeTest(unittest.TestCase):
                 HARNESS._record_outcome(
                     "adopt_metadata_object", {}, False, structured)
                 self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
+
+    def test_refused_mutating_call_does_not_evidence_its_named_fixture_project(self):
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt(
+            "modify_metadata", {"projectName": HARNESS.EXT_OBJECTS_PROJECT})
+        HARNESS._record_outcome(
+            "modify_metadata",
+            {"projectName": HARNESS.EXT_OBJECTS_PROJECT},
+            True,
+            {"success": False, "error": "project not found"},
+        )
+
+        self.assertEqual(
+            frozenset(), HARNESS.evidenced_mutation_fixture_projects())
+
+    def test_each_mutation_outcome_signal_evidences_the_call_named_fixture_project(self):
+        outcomes = (
+            (False, {"success": True}),
+            (True, {"success": False, "mutationCommitted": True}),
+            (True, {"success": False, "mutationOutcomeUnknown": True}),
+            (True, {"success": False, "writtenProjects": [HARNESS.PROJECT]}),
+        )
+
+        for is_error, structured in outcomes:
+            with self.subTest(is_error=is_error, structured=structured):
+                HARNESS.begin_test_calls()
+                HARNESS._record_attempt(
+                    "modify_metadata", {"projectName": HARNESS.EXT_OBJECTS_PROJECT})
+                HARNESS._record_outcome(
+                    "modify_metadata",
+                    {"projectName": HARNESS.EXT_OBJECTS_PROJECT},
+                    is_error,
+                    structured,
+                )
+
+                self.assertIn(
+                    HARNESS.EXT_OBJECTS_PROJECT,
+                    HARNESS.evidenced_mutation_fixture_projects(),
+                )
 
     def test_model_is_not_pristine_after_non_base_fixture_mutation(self):
         HARNESS._MUTATED_PROJECTS.add(HARNESS.TESTS_PROJECT)

@@ -579,6 +579,10 @@ _CALLED_TOOLS = set()
 # Fixture projects named by mutating calls during the current test. This is recorded on the
 # attempt because a request that dies on the wire may already have changed the server-side model.
 _MUTATED_PROJECTS = set()
+# Fixture projects tied to a call whose own outcome supplied mutation evidence. Unlike the
+# attempted-target union above, this is safe to use when deciding whether an unsynchronized
+# optional fixture must be reset: a separate successful call cannot confirm a refused target.
+_EVIDENCED_MUTATION_PROJECTS = set()
 # Inventory baselines are captured independently because each fixture has its own model. The
 # single-value name remains the base project's alias: the base-only shortcut and detail-backed
 # verification deliberately continue to read it exactly as before.
@@ -612,6 +616,18 @@ _CONFIRMED_MUTATION_TOOLS = set()
 _MUTATIONS_UNRESOLVED = 0
 
 
+def _fixture_projects_named_in(args):
+    """Fixture-valued string arguments from one call; tracking must never block the call."""
+    try:
+        values = args.values() if isinstance(args, dict) else ()
+        return {
+            value for value in values
+            if isinstance(value, str) and value in ALL_FIXTURE_PROJECTS
+        }
+    except Exception:
+        return set()
+
+
 def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
     global _MUTATIONS_UNRESOLVED
@@ -621,14 +637,7 @@ def _record_attempt(tool, args=None):
         # The write target is not always under projectName: adoption names its destination under
         # extensionProjectName. Record every fixture-valued string on the attempt because a call
         # that dies on the wire may already have committed, leaving no response to narrow it.
-        try:
-            values = args.values() if isinstance(args, dict) else ()
-            _MUTATED_PROJECTS.update(
-                value for value in values
-                if isinstance(value, str) and value in ALL_FIXTURE_PROJECTS)
-        except Exception:
-            # Tracking is safety evidence around the request, never a reason to block the call.
-            pass
+        _MUTATED_PROJECTS.update(_fixture_projects_named_in(args))
     if tool in MODEL_MUTATION_TOOLS:
         _MUTATIONS_UNRESOLVED += 1
 
@@ -641,13 +650,17 @@ def _record_outcome(tool, args, is_error, structured):
     entered opaque/in-flight mutation, so wording changes cannot accidentally re-arm the shortcut.
     """
     global _MUTATIONS_UNRESOLVED, _MUTATION_CONFIRMED
+    written_fixture_projects = set()
     try:
         written_projects = structured.get("writtenProjects") \
             if isinstance(structured, dict) else None
         if isinstance(written_projects, list):
-            _MUTATED_PROJECTS.update(
+            written_fixture_projects.update(
                 project for project in written_projects
                 if isinstance(project, str) and project in ALL_FIXTURE_PROJECTS)
+            _MUTATED_PROJECTS.update(written_fixture_projects)
+            # The server named these as actual write targets, so they need no argument inference.
+            _EVIDENCED_MUTATION_PROJECTS.update(written_fixture_projects)
     except Exception:
         # A malformed or exotic structured response must not escape the call path.
         pass
@@ -658,13 +671,23 @@ def _record_outcome(tool, args, is_error, structured):
                           and structured.get("mutationCommitted") is True)
     mutation_unknown = (isinstance(structured, dict)
                         and structured.get("mutationOutcomeUnknown") is True)
-    if not is_error or mutation_committed or mutation_unknown:
+    mutation_evidenced = not is_error or mutation_committed or mutation_unknown
+    call_moves_fixture = (mutation_evidenced
+                          and _call_moves_the_fixture_model(tool, args, structured))
+    if mutation_evidenced:
         _MUTATION_CONFIRMED = True
         # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
         # stays conservative (any success forfeits it), while accusing a test of a mis-declared
         # kind has to be right about THIS call actually having moved the fixture's model.
-        if _call_moves_the_fixture_model(tool, args, structured):
+        if call_moves_fixture:
             _CONFIRMED_MUTATION_TOOLS.add(tool)
+    # Keep the named targets correlated with THIS outcome. A success counts only when this call
+    # mode moves the fixture; the server's committed/unknown markers are stronger than client
+    # inference, and writtenProjects is independently sufficient even on an error response.
+    if (tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS
+            and (written_fixture_projects or mutation_committed or mutation_unknown
+                 or (not is_error and call_moves_fixture))):
+        _EVIDENCED_MUTATION_PROJECTS.update(_fixture_projects_named_in(args))
 
 
 def _mark_model_synced():
@@ -702,6 +725,11 @@ def mutated_fixture_projects():
     return frozenset(_MUTATED_PROJECTS)
 
 
+def evidenced_mutation_fixture_projects():
+    """Fixture projects tied to mutation evidence from the same call's outcome."""
+    return frozenset(_EVIDENCED_MUTATION_PROJECTS)
+
+
 def external_objects_model_synced():
     """Whether final_cleanup synchronized the optional ExternalObjects model at setup."""
     return _EXT_OBJECTS_MODEL_SYNCED
@@ -721,6 +749,7 @@ def begin_test_calls():
     global _MUTATION_CONFIRMED
     _CALLED_TOOLS.clear()
     _MUTATED_PROJECTS.clear()
+    _EVIDENCED_MUTATION_PROJECTS.clear()
     _MUTATION_CONFIRMED = False
     _CONFIRMED_MUTATION_TOOLS.clear()
 
