@@ -254,6 +254,18 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testRootCauseKeepsTheIssue545JSchExceptionDiagnosis()
+    {
+        Throwable failure = new ApplicationException(
+            "Infobase connection runtime session open error", //$NON-NLS-1$
+            new RuntimeException("Infobase authentication error", //$NON-NLS-1$
+                new JSchException("Auth fail"))); //$NON-NLS-1$
+
+        assertEquals("the issue's terminal SSH diagnosis must keep its honest provenance", //$NON-NLS-1$
+            "com.jcraft.jsch.JSchException: Auth fail", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRootCauseKeepsMiddleDiagnosisWhenTerminalRepeatsHeadline()
     {
         String headline = "Database update failed"; //$NON-NLS-1$
@@ -296,6 +308,53 @@ public class PlatformFailuresTest
         assertEquals("an ancestor status is not a cause of its selected child", "", diagnosis); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("the parent text must never be emitted as the child's cause", //$NON-NLS-1$
             diagnosis.contains(parent));
+    }
+
+    @Test
+    public void testRootCauseDoesNotFollowAChildExceptionBackIntoItsMultiStatusParent()
+    {
+        String parentMessage = "Database update failed"; //$NON-NLS-1$
+        String childMessage = "Auth fail"; //$NON-NLS-1$
+        MultiStatus parent = new MultiStatus(PLUGIN, 0, parentMessage, null);
+        CoreException backEdge = new CoreException(parent);
+        parent.add(new Status(IStatus.ERROR, PLUGIN, childMessage, backEdge));
+        parent.add(new Status(IStatus.ERROR, PLUGIN, "unrelated sibling")); //$NON-NLS-1$
+        ApplicationException failure = new ApplicationException(parent);
+
+        assertEquals("the child remains the headline despite its exception back-edge", //$NON-NLS-1$
+            childMessage, PlatformFailures.describe(failure));
+        assertEquals("the back-edge cannot turn the aggregate parent or sibling into a cause", //$NON-NLS-1$
+            "", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootCauseDoesNotEstablishProvenanceFromAnAliasedStatusPath()
+    {
+        MultiStatus parent = new MultiStatus(PLUGIN, 0, "Database update failed", null); //$NON-NLS-1$
+        MultiStatus alias = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        alias.add(new Status(IStatus.ERROR, PLUGIN, "Auth fail")); //$NON-NLS-1$
+
+        MultiStatus deep = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        MultiStatus current = deep;
+        for (int depth = 1; depth < 3; depth++)
+        {
+            MultiStatus child = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+            current.add(child);
+            current = child;
+        }
+        current.add(alias);
+        parent.add(deep);
+        parent.add(alias);
+
+        CoreException backEdge = new CoreException(parent);
+        parent.add(new Status(IStatus.ERROR, PLUGIN, "Auth fail", backEdge)); //$NON-NLS-1$
+        parent.add(new Status(IStatus.ERROR, PLUGIN, "unrelated sibling")); //$NON-NLS-1$
+        ApplicationException failure = new ApplicationException(parent);
+
+        assertEquals("describe revisits the alias through its shallower in-cap path", //$NON-NLS-1$
+            "Auth fail", PlatformFailures.describe(failure)); //$NON-NLS-1$
+        assertEquals("a later text match cannot stand in for the selected status identity", //$NON-NLS-1$
+            "", rootCause(failure)); //$NON-NLS-1$
     }
 
     @Test
@@ -458,6 +517,23 @@ public class PlatformFailuresTest
             "Infobase authentication error", PlatformFailures.describe(failure)); //$NON-NLS-1$
         assertEquals("IStatus.getException is a direct causal edge despite different text", //$NON-NLS-1$
             "com.jcraft.jsch.JSchException: Auth fail", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootCauseUsesTheFailingChildRuleAtEachCausalHop()
+    {
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "Infobase authentication error", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, PLUGIN, "Auth fail")); //$NON-NLS-1$
+        MultiStatus progress = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        MultiStatus nestedProgress = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        nestedProgress.add(new Status(IStatus.INFO, PLUGIN, "Cleanup completed")); //$NON-NLS-1$
+        progress.add(nestedProgress);
+        status.add(progress);
+        Throwable failure = new ApplicationException(
+            "Infobase connection runtime session open error", new CoreException(status)); //$NON-NLS-1$
+
+        assertEquals("the cause hop must describe its failure, not its deepest progress child", //$NON-NLS-1$
+            "Auth fail", rootCause(failure)); //$NON-NLS-1$
     }
 
     @Test
