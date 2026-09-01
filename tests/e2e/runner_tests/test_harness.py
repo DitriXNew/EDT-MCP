@@ -199,6 +199,51 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn(".metadata/.bak_1.log then .metadata/.log", out)
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
 
+    def test_a_rotation_before_the_first_read_still_reaches_the_failure(self):
+        """The other window: the backup is CHOSEN after the current file has been read.
+
+        Ordering only the two reads is not enough. If the backup is picked first and EDT rotates
+        before .log is read, the selection names the OLD backup while the failure moves into a new
+        one that nothing reads - the reads were in the right order and the tail is still clean.
+        Choosing after the read means the selection sees the post-rotation directory.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            older = os.path.join(metadata, ".bak_1.log")
+            current = os.path.join(metadata, ".log")
+            with open(older, "w", encoding="utf-8") as handle:
+                handle.write("OLDER BACKUP LINE\n")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotated = []
+
+            def rotate_then_read(path):
+                if not rotated:
+                    # The writer rotates before the very first read gets its bytes.
+                    rotated.append(True)
+                    rotated_to = os.path.join(metadata, ".bak_2.log")
+                    os.replace(current, rotated_to)
+                    os.utime(rotated_to, (2_000_000_000, 2_000_000_000))
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
+                return real_read(path)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail", side_effect=rotate_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE MOMENT", out,
+                      "the backup must be chosen after the current read, or the rotated-out "
+                      "failure is never looked at")
+        self.assertNotIn("OLDER BACKUP LINE", out,
+                         "the stale backup must not be the one collected")
+
     def test_a_rotation_between_the_two_reads_costs_a_duplicate_not_the_failure(self):
         """The current log is read FIRST, which is why this race cannot lose evidence.
 

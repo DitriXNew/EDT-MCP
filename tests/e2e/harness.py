@@ -1447,33 +1447,41 @@ def _print_failed_settle_evidence(last_list_projects):
             raise RuntimeError(
                 "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
         metadata = os.path.join(workspace, ".metadata")
-        # READ ORDER IS THE CURRENT FILE FIRST, and it is not the display order - it is what makes
-        # a rotation caught mid-collection cost a duplicate instead of a loss. EDT rotates by
-        # renaming .log to a .bak_N and starting an empty .log. Read the backup first and a
-        # rotation before the second read leaves the failure moment in a NEW backup that neither
-        # of the two chosen paths points at - the tail then looks clean and hides the cause.
-        # Reading .log first, the same rotation only means the newest backup is now the file just
-        # read, so the lines appear twice. Re-scanning afterwards would not fix it either: the
-        # re-scan races the writer exactly the same way. Duplicated lines in an 80-line tail are
-        # harmless; a missing failure is the whole problem.
         current = os.path.join(metadata, ".log")
-        backup = _newest_backup(metadata)
-        # Two orders, deliberately separate. READ current-first, for the reason above. DISPLAY
-        # chronologically, backup then current. Deriving one from the other by reversal would make
-        # the displayed order silently wrong the moment the read order is touched.
-        read_order = [current] + backup
-        display_order = backup + [current]
         by_path = {}
         sources = []
         failures = []
-        for log_path in read_order:
+
+        def read_into(log_path):
             try:
                 by_path[log_path] = _read_log_tail(log_path)
             except Exception as exc:
-                # Rotation may remove either listed path before it can be opened, so one failed
-                # read must not hide evidence that remains available in the other file.
+                # Rotation may remove a path before it can be opened, so one failed read must not
+                # hide evidence that remains available in the other file.
                 failures.append("%s: %s: %s" %
                                 (os.path.basename(log_path), type(exc).__name__, exc))
+
+        # ORDER IS THE WHOLE MECHANISM, and what has to be ordered is the two OPERATIONS, not just
+        # the two reads. EDT rotates by renaming .log to a .bak_N and starting an empty .log. Read
+        # the current file FIRST and CHOOSE the backup only after that read has returned, and both
+        # single-rotation interleavings are covered:
+        #   rotation before the read -> .log comes back empty, but the backup is chosen afterwards
+        #                               and is therefore the NEW .bak_N holding the failure;
+        #   rotation after the read  -> the failure is already in hand, and the backup chosen next
+        #                               is that same content, so the lines simply appear twice.
+        # Choosing the backup first breaks the first case even though the READS are still ordered
+        # correctly: the selection names the OLD backup while the failure moves into a new one that
+        # nothing reads, and the tail looks clean. Re-scanning at the end is no fix either - it
+        # races the writer the same way. Duplicated lines in an 80-line tail are harmless; a
+        # missing failure is the whole problem.
+        read_into(current)
+        backup = _newest_backup(metadata)
+        for log_path in backup:
+            read_into(log_path)
+        # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
+        # than derived from it, which would make the displayed chronology silently wrong the moment
+        # the read order is touched.
+        display_order = backup + [current]
         texts = []
         for log_path in display_order:
             if log_path in by_path:
