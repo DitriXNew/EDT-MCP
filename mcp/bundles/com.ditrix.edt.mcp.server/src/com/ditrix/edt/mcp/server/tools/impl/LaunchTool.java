@@ -341,7 +341,13 @@ public class LaunchTool implements IMcpTool
                 return ToolResult.error("Launch manager is not available").toJson(); //$NON-NLS-1$
             }
 
-            ILaunchConfiguration config = LaunchConfigUtils.findLaunchConfigByName(launchManager, configName);
+            NamedConfigurationResolution named =
+                resolveNamedConfiguration(launchManager, configName);
+            if (named.error() != null)
+            {
+                return named.error();
+            }
+            ILaunchConfiguration config = named.config();
             if (config == null)
             {
                 ToolResult err = ToolResult.error("Launch configuration not found: '" + configName //$NON-NLS-1$
@@ -463,6 +469,84 @@ public class LaunchTool implements IMcpTool
             Activator.logError("Unexpected error during launch by name", e); //$NON-NLS-1$
             return ToolResult.error(
                 "Unexpected error: " + PlatformFailures.describe(e)).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resolves a by-name launch target without changing the supported launch domain.
+     *
+     * <p>The existing runtime-client/Attach lookup runs first and is returned unchanged. Only when
+     * it finds nothing do we inspect the standalone-server type, solely to replace the false
+     * "not found; create it" advice with the real capability boundary and measured workaround.
+     * The standalone type is intentionally not added to
+     * {@link LaunchConfigUtils#ALL_DEBUG_CONFIG_TYPE_IDS}, because the other callers of the shared
+     * lookup do not thereby gain standalone-server support.
+     *
+     * @param launchManager Eclipse launch manager
+     * @param configName exact configuration name
+     * @return the supported configuration, an honest standalone refusal, or neither when absent
+     */
+    static NamedConfigurationResolution resolveNamedConfiguration(ILaunchManager launchManager,
+            String configName)
+    {
+        ILaunchConfiguration config =
+            LaunchConfigUtils.findLaunchConfigByName(launchManager, configName);
+        if (config != null)
+        {
+            return NamedConfigurationResolution.config(config);
+        }
+        ILaunchConfiguration standalone = LaunchConfigUtils.findLaunchConfigByTypeAndName(
+            launchManager, LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID, configName);
+        if (standalone == null)
+        {
+            return NamedConfigurationResolution.notFound();
+        }
+        String typeId = LaunchConfigUtils.getConfigTypeId(standalone);
+        return NamedConfigurationResolution.error(ToolResult.error("Launch configuration '" //$NON-NLS-1$
+            + standalone.getName() + "' has type '" + typeId + "'. debug_launch starts runtime " //$NON-NLS-1$ //$NON-NLS-2$
+            + "CLIENT configurations; it does not start standalone-server configurations " //$NON-NLS-1$
+            + "directly. Try debug_launch with the project's thin-client configuration instead: " //$NON-NLS-1$
+            + "launching that client has been observed to bring its standalone server up with " //$NON-NLS-1$
+            + "it. " //$NON-NLS-1$
+            + "terminate_launch does accept this same standalone-server configuration when it " //$NON-NLS-1$
+            + "is running.").toJson()); //$NON-NLS-1$
+    }
+
+    /** Result of the supported-plus-diagnostic by-name lookup. */
+    private static final class NamedConfigurationResolution
+    {
+        private final ILaunchConfiguration config;
+        private final String error;
+
+        private NamedConfigurationResolution(ILaunchConfiguration config, String error)
+        {
+            this.config = config;
+            this.error = error;
+        }
+
+        static NamedConfigurationResolution config(ILaunchConfiguration config)
+        {
+            return new NamedConfigurationResolution(config, null);
+        }
+
+        static NamedConfigurationResolution error(String error)
+        {
+            return new NamedConfigurationResolution(null, error);
+        }
+
+        static NamedConfigurationResolution notFound()
+        {
+            return new NamedConfigurationResolution(null, null);
+        }
+
+        ILaunchConfiguration config()
+        {
+            return config;
+        }
+
+        String error()
+        {
+            return error;
         }
     }
 

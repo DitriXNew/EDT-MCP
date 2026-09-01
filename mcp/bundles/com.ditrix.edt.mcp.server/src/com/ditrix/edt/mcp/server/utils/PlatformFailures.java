@@ -39,6 +39,11 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * it says so, naming the exception type and the status severity, because "CANCEL, no message" is
  * itself the diagnosis: something aborted the operation rather than failing it.
  *
+ * <p>{@link #rootCause(Throwable)} answers a separate, complementary question: after
+ * {@code describe} has selected the headline, what is the deepest distinct diagnosis in the same
+ * bounded failure walk? Callers that need both compose them explicitly; the root-cause helper does
+ * not change {@code describe}'s established selection rule.
+ *
  * <p>{@link #withoutObjectIdentity(String)} answers a SEPARATE question and is meant to be
  * COMPOSED with {@code describe}, never substituted for it. {@code describe} selects the most
  * informative message the failure carries, and that selection is exactly why it cannot cure a
@@ -133,6 +138,157 @@ public final class PlatformFailures
             current = current.getCause();
         }
         return describeTextless(failure);
+    }
+
+    /**
+     * The deepest diagnosis in the bounded failure walk, when it adds information to
+     * {@link #describe(Throwable)}.
+     *
+     * <p>The walk uses the same two bounded structures as {@code describe}: at most
+     * {@link #MAX_CAUSE_CHAIN_DEPTH} throwable hops, and at every hop the throwable's
+     * {@link IStatus} tree down to {@link #MAX_STATUS_DEPTH}. Within a status tree, greater
+     * structural depth wins; failing children are visited before informational ones, matching the
+     * preference used by {@link #statusMessage(IStatus, int)}. Cause-chain depth then wins over an
+     * earlier throwable hop. The bounds also stop cyclical throwable/status structures.
+     *
+     * <p>The raw deepest message is compared with {@code describe}'s selected message BEFORE any
+     * formatting. Equal text returns the empty string so a single-message failure is never repeated.
+     * When the deepest message is the own message of a terminal exception and is short enough to be
+     * generic (40 characters or fewer and no more than four whitespace-separated words), its fully
+     * qualified exception type is prefixed. Thus {@code Auth fail} becomes, for example,
+     * {@code com.jcraft.jsch.JSchException: Auth fail}; longer, self-explanatory platform prose is
+     * returned without a stack-dump-like type prefix.
+     *
+     * <p>This method returns only the diagnosis. A caller that displays both messages should compose
+     * English prose such as {@code describe(failure) + " Caused by: " + rootCause(failure)}.
+     *
+     * @param failure the exception to inspect (may be {@code null})
+     * @return the deepest distinct diagnosis, or the empty string when there is no additional text
+     */
+    public static String rootCause(Throwable failure)
+    {
+        if (failure == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String selected = describe(failure);
+        FailureMessage deepest = null;
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        {
+            FailureMessage atHop = deepestMessageAt(current);
+            if (atHop != null)
+            {
+                deepest = atHop;
+            }
+            current = current.getCause();
+        }
+        if (deepest == null || selected.equals(deepest.message))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        if (deepest.source != null && deepest.source.getCause() == null
+            && deepest.message.equals(trimToNull(deepest.source.getMessage()))
+            && isShortGenericMessage(deepest.message))
+        {
+            return deepest.source.getClass().getName() + ": " + deepest.message; //$NON-NLS-1$
+        }
+        return deepest.message;
+    }
+
+    /** Deepest message carried by one throwable hop, including its bounded status tree. */
+    private static FailureMessage deepestMessageAt(Throwable failure)
+    {
+        String own = trimToNull(failure.getMessage());
+        FailureMessage deepest = own == null ? null : new FailureMessage(own, failure, 0);
+        FailureMessage fromStatus = deepestStatusMessage(statusOf(failure), 0);
+        return deeper(deepest, fromStatus);
+    }
+
+    /** Deepest message in a bounded status tree; failing children win equal-depth ties. */
+    private static FailureMessage deepestStatusMessage(IStatus status, int depth)
+    {
+        if (status == null || depth > MAX_STATUS_DEPTH)
+        {
+            return null;
+        }
+        String own = trimToNull(status.getMessage());
+        FailureMessage deepest = own == null ? null : new FailureMessage(own, null, depth);
+        IStatus[] children = status.getChildren();
+        if (children != null)
+        {
+            deepest = deepestStatusChildren(children, depth, true, deepest);
+            deepest = deepestStatusChildren(children, depth, false, deepest);
+        }
+        Throwable carried = status.getException();
+        String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
+        if (carriedMessage != null)
+        {
+            deepest = deeper(deepest,
+                new FailureMessage(carriedMessage, carried, depth + 1));
+        }
+        return deepest;
+    }
+
+    /** Walks failing or non-failing child statuses without visiting either group twice. */
+    private static FailureMessage deepestStatusChildren(IStatus[] children, int depth,
+            boolean failing, FailureMessage deepest)
+    {
+        for (IStatus child : children)
+        {
+            if (child == null || child.matches(IStatus.ERROR | IStatus.CANCEL) != failing)
+            {
+                continue;
+            }
+            deepest = deeper(deepest, deepestStatusMessage(child, depth + 1));
+        }
+        return deepest;
+    }
+
+    /** Greater structural depth wins; the first visited candidate wins a tie. */
+    private static FailureMessage deeper(FailureMessage current, FailureMessage candidate)
+    {
+        if (candidate == null)
+        {
+            return current;
+        }
+        return current == null || candidate.depth > current.depth ? candidate : current;
+    }
+
+    /** Deterministic proxy for a terse generic message that benefits from its exception type. */
+    private static boolean isShortGenericMessage(String message)
+    {
+        if (message.length() > 40)
+        {
+            return false;
+        }
+        int words = 0;
+        boolean inWord = false;
+        for (int index = 0; index < message.length(); index++)
+        {
+            boolean whitespace = Character.isWhitespace(message.charAt(index));
+            if (!whitespace && !inWord)
+            {
+                words++;
+            }
+            inWord = !whitespace;
+        }
+        return words <= 4;
+    }
+
+    /** Message plus the source/depth needed for deterministic terminal formatting. */
+    private static final class FailureMessage
+    {
+        final String message;
+        final Throwable source;
+        final int depth;
+
+        FailureMessage(String message, Throwable source, int depth)
+        {
+            this.message = message;
+            this.source = source;
+            this.depth = depth;
+        }
     }
 
     /**

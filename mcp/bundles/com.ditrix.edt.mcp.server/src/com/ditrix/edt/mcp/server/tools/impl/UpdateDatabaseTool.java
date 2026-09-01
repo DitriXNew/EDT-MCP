@@ -927,6 +927,43 @@ public class UpdateDatabaseTool implements IMcpTool
      * @param applicationId the target application (echoed for the caller's context)
      * @return the error payload
      */
+    /**
+     * The {@code Caused by} clause, or nothing when the failure carries no distinct deeper reason.
+     *
+     * <p>Platform messages end in a period only sometimes, and the hint that follows this clause is
+     * a sentence of its own - so without a terminator the three run together into
+     * {@code "... session open error Caused by: ... Auth fail If the infobase requires ..."}, which
+     * is the reading the caller has to do at the exact moment it is already confused. The clause
+     * therefore closes itself, and opens with one only when the selected message did not.
+     *
+     * <p>When there is no deeper reason this returns the empty string, so the message stays
+     * character-for-character what it was before the cause chain was surfaced.
+     *
+     * @param described the message {@code PlatformFailures.describe} selected
+     * @param rootCause the deeper diagnosis, possibly empty
+     * @return the clause to append, possibly empty
+     */
+    private static String causedBySegment(String described, String rootCause)
+    {
+        if (rootCause.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return (endsSentence(described) ? " Caused by: " : ". Caused by: ") + rootCause //$NON-NLS-1$ //$NON-NLS-2$
+            + (endsSentence(rootCause) ? "" : "."); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Whether this text already closes its own sentence. */
+    private static boolean endsSentence(String text)
+    {
+        if (text == null || text.isEmpty())
+        {
+            return true;
+        }
+        char last = text.charAt(text.length() - 1);
+        return last == '.' || last == '!' || last == '?' || last == ':';
+    }
+
     private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
         String projectName, String applicationId, boolean terminatedClient)
     {
@@ -1113,12 +1150,16 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         String internalInfoHint = describeInternalInfoHint(e);
         String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
+        String described = PlatformFailures.describe(e);
+        String rootCause = PlatformFailures.rootCause(e);
         // PlatformFailures, not getMessage(): EDT reports failures as IStatus and only wraps them,
         // so the exception's own message is routinely empty (a cancelled server operation) or
         // generic while the reason sits in the status tree - and "Database update failed: " with
-        // nothing after it tells the caller nothing at all.
+        // nothing after it tells the caller nothing at all. The distinct terminal diagnosis is
+        // composed here rather than changing describe's widely used selection rule.
         ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + PlatformFailures.describe(e) + describeInfobaseHolder(applicationId) + hint
+            + described + causedBySegment(described, rootCause)
+            + describeInfobaseHolder(applicationId) + hint
             + (portsReassigned
                 ? " NOTE: before this failure EDT had already moved the standalone server to free " //$NON-NLS-1$
                     + "ports and rewritten its configuration " //$NON-NLS-1$

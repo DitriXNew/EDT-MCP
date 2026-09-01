@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Method;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.CoreException;
@@ -50,6 +51,44 @@ public class PlatformFailuresTest
      * report a leaked "@abc" as clean.
      */
     private static final Pattern ANY_IDENTITY = Pattern.compile("@[0-9a-fA-F]+");
+
+    /** Invokes the new API reflectively so every regression test runs and fails on the baseline. */
+    private static String rootCause(Throwable failure)
+    {
+        try
+        {
+            Method method = PlatformFailures.class.getMethod("rootCause", Throwable.class); //$NON-NLS-1$
+            return (String)method.invoke(null, failure);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError("PlatformFailures.rootCause(Throwable) is missing or unusable", e); //$NON-NLS-1$
+        }
+    }
+
+    /** Throwable with a deliberately cyclical cause chain. */
+    private static final class CyclicFailure extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        private Throwable next;
+
+        CyclicFailure(String message)
+        {
+            super(message);
+        }
+
+        void setNext(Throwable next)
+        {
+            this.next = next;
+        }
+
+        @Override
+        public synchronized Throwable getCause()
+        {
+            return next;
+        }
+    }
 
     @Test
     public void testOwnMessageWins()
@@ -197,6 +236,84 @@ public class PlatformFailuresTest
     {
         assertEquals("surrounding whitespace is not part of the reason", "boom",
             PlatformFailures.describe(new ApplicationException("  boom  ")));
+    }
+
+    @Test
+    public void testRootCauseReturnsTheDeepestDistinctMessageInAThreeDeepChain()
+    {
+        Throwable terminal = new IllegalStateException(
+            "SSH key authentication was rejected by the remote designer agent"); //$NON-NLS-1$
+        Throwable middle = new RuntimeException("Infobase authentication error", terminal); //$NON-NLS-1$
+        Throwable failure = new ApplicationException(
+            "Infobase connection runtime session open error", middle); //$NON-NLS-1$
+
+        assertEquals("the deepest distinct diagnosis must reach the caller", //$NON-NLS-1$
+            "SSH key authentication was rejected by the remote designer agent", //$NON-NLS-1$
+            rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseAddsNothingWhenTheDeepestMessageEqualsDescribe()
+    {
+        Throwable failure = new RuntimeException("same diagnosis", //$NON-NLS-1$
+            new IllegalStateException("same diagnosis")); //$NON-NLS-1$
+
+        assertEquals("equal selected and terminal messages must not be repeated", "", //$NON-NLS-1$ //$NON-NLS-2$
+            rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseHonoursTheCauseChainCap()
+    {
+        Throwable failure = new RuntimeException("level-11"); //$NON-NLS-1$
+        for (int level = 10; level >= 0; level--)
+        {
+            failure = new RuntimeException("level-" + level, failure); //$NON-NLS-1$
+        }
+
+        assertEquals("only the first ten throwable hops may be inspected", "level-9", //$NON-NLS-1$ //$NON-NLS-2$
+            rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseHonoursTheStatusTreeCap()
+    {
+        MultiStatus root = new MultiStatus(PLUGIN, 0, "status-0", null); //$NON-NLS-1$
+        MultiStatus current = root;
+        for (int depth = 1; depth <= 5; depth++)
+        {
+            MultiStatus child = new MultiStatus(PLUGIN, 0, "status-" + depth, null); //$NON-NLS-1$
+            current.add(child);
+            current = child;
+        }
+        ApplicationException failure = new ApplicationException(root);
+
+        assertEquals("describe itself stops at the deepest permitted status", "status-4", //$NON-NLS-1$ //$NON-NLS-2$
+            PlatformFailures.describe(failure));
+        assertEquals("the out-of-cap status must not become a second diagnosis", "", //$NON-NLS-1$ //$NON-NLS-2$
+            rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseCycleGuardStopsACyclicalCauseChain()
+    {
+        CyclicFailure first = new CyclicFailure("cycle-a"); //$NON-NLS-1$
+        CyclicFailure second = new CyclicFailure("cycle-b"); //$NON-NLS-1$
+        first.setNext(second);
+        second.setNext(first);
+
+        assertEquals("the bounded walk must stop instead of looping forever", "cycle-b", //$NON-NLS-1$ //$NON-NLS-2$
+            rootCause(first));
+    }
+
+    @Test
+    public void testRootCausePrefixesTheTerminalTypeForAShortGenericMessage()
+    {
+        Throwable failure = new RuntimeException("runtime session open error", //$NON-NLS-1$
+            new IllegalStateException("Auth fail")); //$NON-NLS-1$
+
+        assertEquals("a short generic terminal message needs its exception type", //$NON-NLS-1$
+            "java.lang.IllegalStateException: Auth fail", rootCause(failure)); //$NON-NLS-1$
     }
 
     @Test

@@ -21,6 +21,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -33,6 +34,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.eclipse.debug.core.model.IThread;
@@ -42,6 +44,7 @@ import org.mockito.Mockito;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -70,6 +73,40 @@ import com.google.gson.JsonParser;
  */
 public class LaunchToolTest
 {
+    private static final String STANDALONE_SERVER_TYPE_ID =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.launchConfigurationType"; //$NON-NLS-1$
+
+    /** Reflective baseline-safe access to the new by-name resolution seam. */
+    private static Object resolveNamedConfiguration(ILaunchManager launchManager, String name)
+    {
+        try
+        {
+            Method method = LaunchTool.class.getDeclaredMethod(
+                "resolveNamedConfiguration", ILaunchManager.class, String.class); //$NON-NLS-1$
+            method.setAccessible(true);
+            return method.invoke(null, launchManager, name);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError("the by-name configuration resolution seam is missing or unusable", e); //$NON-NLS-1$
+        }
+    }
+
+    /** Reads one no-argument accessor from the by-name resolution result. */
+    private static Object namedResolutionValue(Object resolution, String accessor)
+    {
+        try
+        {
+            Method method = resolution.getClass().getDeclaredMethod(accessor);
+            method.setAccessible(true);
+            return method.invoke(resolution);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError("named-resolution accessor is missing: " + accessor, e); //$NON-NLS-1$
+        }
+    }
+
     @Test
     public void testName()
     {
@@ -348,6 +385,68 @@ public class LaunchToolTest
         params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new LaunchTool().execute(params);
         assertTrue(result.contains("applicationId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerConfigurationGetsAnHonestRefusal() throws Exception
+    {
+        String name = "Standalone server for B"; //$NON-NLS-1$
+        assertEquals(STANDALONE_SERVER_TYPE_ID, LaunchConfigUtils.class
+            .getField("STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID").get(null)); //$NON-NLS-1$
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        ILaunchConfigurationType runtimeType = mock(ILaunchConfigurationType.class);
+        ILaunchConfigurationType standaloneType = mock(ILaunchConfigurationType.class);
+        ILaunchConfiguration standalone = mock(ILaunchConfiguration.class);
+        when(launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID))
+            .thenReturn(runtimeType);
+        when(launchManager.getLaunchConfigurations(runtimeType))
+            .thenReturn(new ILaunchConfiguration[0]);
+        when(launchManager.getLaunchConfigurationType(STANDALONE_SERVER_TYPE_ID))
+            .thenReturn(standaloneType);
+        when(launchManager.getLaunchConfigurations(standaloneType))
+            .thenReturn(new ILaunchConfiguration[] { standalone });
+        when(standalone.getName()).thenReturn(name);
+        when(standalone.getType()).thenReturn(standaloneType);
+        when(standaloneType.getIdentifier()).thenReturn(STANDALONE_SERVER_TYPE_ID);
+
+        Object resolution = resolveNamedConfiguration(launchManager, name);
+        String error = (String)namedResolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue(error.contains(name));
+        assertTrue(error.contains(STANDALONE_SERVER_TYPE_ID));
+        assertTrue(error.contains("debug_launch starts runtime CLIENT configurations")); //$NON-NLS-1$
+        assertTrue(error.contains("thin-client configuration")); //$NON-NLS-1$
+        // The workaround is stated as OBSERVED, not guaranteed: it is the issue reporter's
+        // measurement on one workspace, and the platform sources do not show a client launch
+        // starting the server. Promising it outright would repeat, in the fix, the very defect
+        // this issue is about - a tool asserting more than it knows.
+        assertTrue(error, error.contains("observed to bring its standalone server up")); //$NON-NLS-1$
+        assertFalse("the workaround must not be promised as a guaranteed side effect: " + error, //$NON-NLS-1$
+            error.contains("starts its standalone server as a side effect")); //$NON-NLS-1$
+        assertTrue(error.contains("terminate_launch")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRuntimeClientConfigurationResolutionIsUnaffected() throws Exception
+    {
+        String name = "B Thin Client"; //$NON-NLS-1$
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        ILaunchConfigurationType runtimeType = mock(ILaunchConfigurationType.class);
+        ILaunchConfiguration runtime = mock(ILaunchConfiguration.class);
+        when(launchManager.getLaunchConfigurationType(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID))
+            .thenReturn(runtimeType);
+        when(launchManager.getLaunchConfigurations(runtimeType))
+            .thenReturn(new ILaunchConfiguration[] { runtime });
+        when(runtime.getName()).thenReturn(name);
+
+        Object resolution = resolveNamedConfiguration(launchManager, name);
+
+        assertSame("the existing runtime-client lookup result must flow through unchanged", runtime, //$NON-NLS-1$
+            namedResolutionValue(resolution, "config")); //$NON-NLS-1$
+        assertNull(namedResolutionValue(resolution, "error")); //$NON-NLS-1$
+        verify(launchManager, never()).getLaunchConfigurationType(
+            STANDALONE_SERVER_TYPE_ID);
     }
 
     // ==================== performLaunch headless routing ====================
