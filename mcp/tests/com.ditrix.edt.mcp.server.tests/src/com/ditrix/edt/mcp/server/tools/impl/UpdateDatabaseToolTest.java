@@ -505,6 +505,21 @@ public class UpdateDatabaseToolTest
         }
     }
 
+    @Test
+    public void testApplicationFailureDoesNotRepeatFormattedHeadlineAsCause()
+    {
+        ApplicationException failure =
+            new ApplicationException(new IllegalStateException("Auth fail")); //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "ProjectB", "app-b", false)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue("the selected headline must still be present: " + error, //$NON-NLS-1$
+            error.startsWith("Database update failed: java.lang.IllegalStateException: Auth fail")); //$NON-NLS-1$
+        assertFalse("the formatted headline must not be repeated in a Caused by clause: " + error, //$NON-NLS-1$
+            error.contains("Caused by")); //$NON-NLS-1$
+    }
+
     // ============ Unexpected (non-ApplicationException) failures, #453 ============
 
     /** Plugin id used for the synthetic statuses below; no live EDT is involved. */

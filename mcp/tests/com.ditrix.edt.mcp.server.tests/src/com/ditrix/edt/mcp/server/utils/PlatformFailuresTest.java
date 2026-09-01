@@ -22,6 +22,7 @@ import org.eclipse.core.runtime.Status;
 import org.junit.Test;
 
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.jcraft.jsch.JSchException;
 
 /**
  * Tests for {@link PlatformFailures}: an EDT failure must never reach a caller as an empty
@@ -376,6 +377,76 @@ public class PlatformFailuresTest
 
         assertEquals("a short generic terminal message needs its exception type", //$NON-NLS-1$
             "java.lang.IllegalStateException: Auth fail", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootCauseAddsNothingWhenFormattingRecreatesTheHeadline()
+    {
+        Throwable failure = new RuntimeException(new IllegalStateException("Auth fail")); //$NON-NLS-1$
+
+        assertEquals("the formatted diagnosis must not repeat the selected headline", //$NON-NLS-1$
+            "", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootCauseDoesNotAttributeCopiedStatusTextToApplicationException()
+    {
+        IStatus status = new Status(IStatus.ERROR, PLUGIN, "Auth fail", null); //$NON-NLS-1$
+        Throwable failure = new RuntimeException("Database update failed", //$NON-NLS-1$
+            new ApplicationException(status));
+
+        String diagnosis = rootCause(failure);
+        assertEquals("the status owns the text, so the generic wrapper must add no provenance", //$NON-NLS-1$
+            "Auth fail", diagnosis); //$NON-NLS-1$
+        assertFalse("the wrapper type must be absent from the diagnosis: " + diagnosis, //$NON-NLS-1$
+            diagnosis.contains(ApplicationException.class.getName()));
+    }
+
+    @Test
+    public void testRootCauseFollowsCauseOfExceptionCarriedByChildStatus()
+    {
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, PLUGIN, "", //$NON-NLS-1$
+            new RuntimeException("SSH error", new JSchException("Auth fail")))); //$NON-NLS-1$ //$NON-NLS-2$
+        ApplicationException failure = new ApplicationException(status);
+
+        assertEquals("the fixture headline comes from the child status's carried exception", //$NON-NLS-1$
+            "SSH error", PlatformFailures.describe(failure)); //$NON-NLS-1$
+        assertEquals("the carried exception's terminal cause is the actionable diagnosis", //$NON-NLS-1$
+            "com.jcraft.jsch.JSchException: Auth fail", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootCauseCapsCauseChainCarriedByChildStatus()
+    {
+        Throwable carried = new RuntimeException("level-11"); //$NON-NLS-1$
+        for (int level = 10; level >= 0; level--)
+        {
+            carried = new RuntimeException("level-" + level, carried); //$NON-NLS-1$
+        }
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, PLUGIN, "", carried)); //$NON-NLS-1$
+
+        ApplicationException failure = new ApplicationException(status);
+        assertEquals("the fixture headline is the first carried throwable hop", "level-0", //$NON-NLS-1$ //$NON-NLS-2$
+            PlatformFailures.describe(failure));
+        assertEquals("the carried chain must reuse the ten-hop cause cap", "level-9", //$NON-NLS-1$ //$NON-NLS-2$
+            rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseCycleGuardAppliesToCauseChainCarriedByChildStatus()
+    {
+        CyclicFailure first = new CyclicFailure("cycle-a"); //$NON-NLS-1$
+        CyclicFailure second = new CyclicFailure("cycle-b"); //$NON-NLS-1$
+        first.setNext(second);
+        second.setNext(first);
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, PLUGIN, "", first)); //$NON-NLS-1$
+
+        ApplicationException failure = new ApplicationException(status);
+        assertEquals("the bounded carried walk must stop instead of looping forever", "cycle-b", //$NON-NLS-1$ //$NON-NLS-2$
+            rootCause(failure));
     }
 
     @Test

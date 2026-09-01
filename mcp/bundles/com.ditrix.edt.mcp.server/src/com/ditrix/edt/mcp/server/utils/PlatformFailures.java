@@ -144,9 +144,13 @@ public final class PlatformFailures
      * The deepest diagnosis in the bounded failure walk, when it adds information to
      * {@link #describe(Throwable)}.
      *
-     * <p>The walk uses the same two bounded structures as {@code describe}: at most
-     * {@link #MAX_CAUSE_CHAIN_DEPTH} throwable hops, and at every hop the throwable's
-     * {@link IStatus} tree down to {@link #MAX_STATUS_DEPTH}. Within a status tree, greater
+     * <p>The walk uses the same two bounds as {@code describe}: the primary {@code getCause()}
+     * chain is capped at {@link #MAX_CAUSE_CHAIN_DEPTH} throwable hops, and the {@link IStatus}
+     * tree at every primary hop is capped at {@link #MAX_STATUS_DEPTH}. When an exception is
+     * attached anywhere in a status tree, its own {@code getCause()} chain uses that SAME cause
+     * cap, so a child status carrying
+     * {@code RuntimeException("SSH error", new JSchException("Auth fail"))} contributes the
+     * terminal {@code Auth fail} without opening an unbounded walk. Within a status tree, greater
      * structural depth wins; failing children are visited before informational ones, matching the
      * preference used by {@link #statusMessage(IStatus, int)}. Cause-chain depth then wins over an
      * earlier throwable hop. The bounds also stop cyclical throwable/status structures.
@@ -154,13 +158,16 @@ public final class PlatformFailures
      * <p>Messages equal to {@code describe}'s selected headline are excluded as diagnosis
      * candidates throughout both structures. The deepest message that remains wins, so a repeated
      * headline cannot displace a distinct diagnosis even when the repetition sits deeper in the
-     * status tree or later in the cause chain. When no distinct candidate remains, the empty string
-     * is returned so a single-message failure is never repeated. When the deepest distinct message
-     * is the own message of a terminal exception and is short enough to be generic (40 characters
-     * or fewer and no more than four whitespace-separated words), its fully qualified exception
-     * type is prefixed. Thus {@code Auth fail} becomes, for example,
-     * {@code com.jcraft.jsch.JSchException: Auth fail}; longer, self-explanatory platform prose is
-     * returned without a stack-dump-like type prefix.
+     * status tree or later in the cause chain. The formatted result is compared with the headline
+     * again, because adding a type prefix can recreate a headline that differed from the raw
+     * candidate. When no distinct result remains, the empty string is returned so a single-message
+     * failure is never repeated. When the deepest distinct message is genuinely owned by a
+     * terminal exception and is short enough to be generic (40 characters or fewer and no more
+     * than four whitespace-separated words), its fully qualified exception type is prefixed. A
+     * platform wrapper's own message that merely copies its status text retains status provenance
+     * and is not attributed to the wrapper type. Thus an exception-owned {@code Auth fail} becomes,
+     * for example, {@code com.jcraft.jsch.JSchException: Auth fail}; longer, self-explanatory
+     * platform prose is returned without a stack-dump-like type prefix.
      *
      * <p>This method returns only the diagnosis. A caller that displays both messages should compose
      * English prose such as {@code describe(failure) + " Caused by: " + rootCause(failure)}.
@@ -190,23 +197,40 @@ public final class PlatformFailures
         {
             return ""; //$NON-NLS-1$
         }
+        String formatted = deepest.message;
         if (deepest.source != null && deepest.source.getCause() == null
             && deepest.message.equals(trimToNull(deepest.source.getMessage()))
             && isShortGenericMessage(deepest.message))
         {
-            return deepest.source.getClass().getName() + ": " + deepest.message; //$NON-NLS-1$
+            formatted = deepest.source.getClass().getName() + ": " + deepest.message; //$NON-NLS-1$
         }
-        return deepest.message;
+        return selected.equals(formatted) ? "" : formatted; //$NON-NLS-1$
     }
 
     /** Deepest distinct message carried by one throwable hop and its bounded status tree. */
     private static FailureMessage deepestMessageAt(Throwable failure, String selected)
     {
-        String own = trimToNull(failure.getMessage());
-        FailureMessage deepest = own == null || selected.equals(own) ? null
-            : new FailureMessage(own, failure, 0);
+        FailureMessage deepest = ownFailureMessage(failure, 0, selected);
         FailureMessage fromStatus = deepestStatusMessage(statusOf(failure), 0, selected);
         return deeper(deepest, fromStatus);
+    }
+
+    /**
+     * A throwable's distinct own message with honest provenance. Platform exceptions copy their
+     * status message into {@code getMessage()}; that text belongs to the status, not to the generic
+     * wrapper type, so it must not later acquire the wrapper's type prefix.
+     */
+    private static FailureMessage ownFailureMessage(Throwable failure, int depth, String selected)
+    {
+        String own = trimToNull(failure.getMessage());
+        if (own == null || selected.equals(own))
+        {
+            return null;
+        }
+        IStatus status = statusOf(failure);
+        Throwable source = status != null && own.equals(trimToNull(status.getMessage()))
+            ? null : failure;
+        return new FailureMessage(own, source, depth);
     }
 
     /** Deepest distinct message in a bounded status tree; failing children win equal-depth ties. */
@@ -225,12 +249,30 @@ public final class PlatformFailures
             deepest = deepestStatusChildren(children, depth, true, deepest, selected);
             deepest = deepestStatusChildren(children, depth, false, deepest, selected);
         }
-        Throwable carried = status.getException();
-        String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
-        if (carriedMessage != null && !selected.equals(carriedMessage))
+        deepest = deeper(deepest,
+            deepestCarriedCauseMessage(status.getException(), depth + 1, selected));
+        return deepest;
+    }
+
+    /**
+     * Deepest distinct own message in the cause chain of an exception attached to a status.
+     * Reuses the ordinary cause-chain cap rather than defining a child-specific bound; a cyclical
+     * carried chain therefore terminates under the same contract as the top-level chain.
+     */
+    private static FailureMessage deepestCarriedCauseMessage(Throwable failure, int depth,
+            String selected)
+    {
+        FailureMessage deepest = null;
+        Throwable current = failure;
+        for (int causeDepth = 0; current != null && causeDepth < MAX_CAUSE_CHAIN_DEPTH;
+            causeDepth++)
         {
-            deepest = deeper(deepest,
-                new FailureMessage(carriedMessage, carried, depth + 1));
+            FailureMessage atHop = ownFailureMessage(current, depth + causeDepth, selected);
+            if (atHop != null)
+            {
+                deepest = atHop;
+            }
+            current = current.getCause();
         }
         return deepest;
     }
