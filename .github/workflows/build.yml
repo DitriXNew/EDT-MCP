@@ -26,6 +26,13 @@ jobs:
       - name: Validate business-project skills
         run: python3 docs/validate_agent_skills.py
 
+      # The e2e RUNNER's own contracts - isolation bookkeeping, the reset decision, fixture
+      # hygiene. They need no EDT and no server, and until now nothing ran them: the harness
+      # could regress with every shard still green, because the shards exercise the tools
+      # through the harness rather than the harness itself.
+      - name: E2E runner contract tests
+        run: python3 -m unittest discover -s tests/e2e/runner_tests -p "test_*.py" -v
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
