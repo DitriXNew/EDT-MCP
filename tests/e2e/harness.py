@@ -585,6 +585,10 @@ _MUTATED_PROJECTS = set()
 _BASELINE_INVENTORY_BY_PROJECT = {}
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
+# ExternalObjects is optional, so final_cleanup cannot require its model refresh to succeed. Its
+# inventory is safe to capture only when that refresh DID succeed; False is the fail-closed import
+# default and is reset at the start of every final_cleanup attempt.
+_EXT_OBJECTS_MODEL_SYNCED = False
 
 # A mutating call that succeeded, committed before failing, or entered an opaque mutation whose
 # rollback outcome is unknown. Any one is enough to forfeit the shortcut for the whole test.
@@ -798,6 +802,11 @@ def snapshot_model_baseline():
         _BASELINE_INVENTORY_BY_PROJECT[PROJECT] = _BASELINE_INVENTORY
     _BASELINE_DETAILS = _probe_details()
     for project in (TESTS_PROJECT, EXT_OBJECTS_PROJECT):
+        if project == EXT_OBJECTS_PROJECT and not _EXT_OBJECTS_MODEL_SYNCED:
+            # Its disk was still reverted, but an absent, unloaded or otherwise uncleanable
+            # optional project can retain a stale in-memory model. No baseline is safer than
+            # certifying that stale model; _non_base_mismatch then degrades to its disk check.
+            continue
         try:
             inventory = _top_object_inventory(project)
         except E2ECallTimeout:
@@ -1655,13 +1664,17 @@ def final_cleanup():
     """Leave the working tree verifiably clean ('no diff' == the session passed and left
     nothing behind).
 
-    Reverts BOTH fixtures on disk, then clean_projects BOTH, with the SAME retry-until-synced
-    contract as reset_model() - literally the same code, _revert_and_clean: wait for the project
-    to settle, THEN clean_project, each with its own budget. call() only raises on a TIMEOUT, so a
-    clean_project that came back with isError (e.g. the derived-data pipeline outlived
-    BUILDING_RETRY_TIMEOUT and the server refused it) must not be swallowed by a bare
-    `except Exception: pass` - that silently declares an unsynchronised model clean. The
-    clean_project is the part that defeats the autosave
+    Reverts every fixture on disk, then mandatorily clean_projects the base and test-extension
+    projects with the SAME retry-until-synced contract as reset_model() - literally the same code,
+    _revert_and_clean: wait for the projects to settle, THEN clean_project, each with its own
+    budget. ExternalObjects uses that same path only AFTER the mandatory projects have passed
+    their unchanged clean-and-settle gate, but it is optional: failure is reported and its model
+    baseline is disabled rather than aborting the run.
+
+    call() only raises on a TIMEOUT, so a mandatory clean_project that came back with isError
+    (e.g. the derived-data pipeline outlived BUILDING_RETRY_TIMEOUT and the server refused it) must
+    not be swallowed by a bare `except Exception: pass` - that silently declares an unsynchronised
+    model clean. The clean_project is the part that defeats the autosave
     resurrection: it tears down EDT's in-memory model and re-imports it from the now-clean disk
     (synchronously — the call blocks on the project restart + derived-data rebuild), so a STALE
     model (e.g. a manual edit made in the EDT editor, or a metadata write whose model change was
@@ -1671,6 +1684,8 @@ def final_cleanup():
     E2EModelResetFailed rather than let a run be reported green over a model nobody actually
     verified is back in sync. The final reset_all_fixtures() only mops up any file clean_project
     itself re-touched (e.g. a CRLF/marker touch). Run at startup AND at the end."""
+    global _EXT_OBJECTS_MODEL_SYNCED
+    _EXT_OBJECTS_MODEL_SYNCED = False
     reset_all_fixtures()
     for proj in (PROJECT, TESTS_PROJECT):
         cleaned, clean_attempts, settle_failures, settle_failure = \
@@ -1686,6 +1701,37 @@ def final_cleanup():
         raise E2EModelResetFailed(
             "clean_project succeeded for every project, but %s, so the model is not guaranteed "
             "to be back in sync." % failure_details[0])
+
+    # ExternalObjects is not installed/loaded on every stand. Keep its attempt completely outside
+    # the mandatory projects' outcome above, but retain their full revert+clean+settle contract
+    # before allowing snapshot_model_baseline to read its in-memory inventory.
+    external_skip_reason = None
+    try:
+        cleaned, clean_attempts, settle_failures, settle_failure = \
+            _revert_and_clean(EXT_OBJECTS_PROJECT, reset_all_fixtures)
+        if not cleaned:
+            external_skip_reason = _clean_failure_cause(
+                clean_attempts, settle_failures, settle_failure)
+        else:
+            failure_details = []
+            if wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
+                                      failure_details=failure_details):
+                _EXT_OBJECTS_MODEL_SYNCED = True
+            else:
+                external_skip_reason = (failure_details[0] if failure_details
+                                        else "projects did not become ready after clean_project")
+    except E2ECallTimeout:
+        # NOT best-effort. A timeout means the request may still be running server-side and it has
+        # already armed the global latch, so continuing would carry the whole run on a latched
+        # harness and pin the failure on whichever test trips over it next. The baseline capture
+        # re-raises it for this same reason; "optional fixture" means its model may be absent, not
+        # that the server may be unreachable.
+        raise
+    except Exception as e:
+        external_skip_reason = str(e) or type(e).__name__
+    if not _EXT_OBJECTS_MODEL_SYNCED:
+        print("!! optional project %r model synchronization skipped: %s"
+              % (EXT_OBJECTS_PROJECT, external_skip_reason or "unknown failure"), flush=True)
     reset_all_fixtures()
     # Deliberately NOT _mark_model_synced() here. This function cleans and settles but never
     # VERIFIES the baseline came back (that is reset_model's _baseline_mismatch), and only a

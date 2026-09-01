@@ -249,6 +249,111 @@ class FixtureResetTest(unittest.TestCase):
 
         reset_rel.assert_not_called()
 
+    def test_final_cleanup_synchronizes_external_objects_on_the_happy_path(self):
+        synced = (True, 1, 0, None)
+        with mock.patch.object(HARNESS, "reset_all_fixtures") as reset_all, \
+                mock.patch.object(HARNESS, "_revert_and_clean", return_value=synced) as clean, \
+                mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True):
+            HARNESS.final_cleanup()
+
+        self.assertEqual([
+            mock.call(HARNESS.PROJECT, reset_all),
+            mock.call(HARNESS.TESTS_PROJECT, reset_all),
+            mock.call(HARNESS.EXT_OBJECTS_PROJECT, reset_all),
+        ], clean.call_args_list)
+
+    def test_final_cleanup_does_not_raise_when_external_objects_sync_fails(self):
+        def clean_result(project, _revert):
+            if project == HARNESS.EXT_OBJECTS_PROJECT:
+                raise RuntimeError("fixture is not loaded")
+            return (True, 1, 0, None)
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures") as reset_all, \
+                mock.patch.object(HARNESS, "_revert_and_clean", side_effect=clean_result) as clean, \
+                mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True), \
+                mock.patch("builtins.print") as output:
+            HARNESS.final_cleanup()
+
+        self.assertEqual([
+            mock.call(HARNESS.PROJECT, reset_all),
+            mock.call(HARNESS.TESTS_PROJECT, reset_all),
+            mock.call(HARNESS.EXT_OBJECTS_PROJECT, reset_all),
+        ], clean.call_args_list)
+        self.assertIn("skipped", output.call_args.args[0].lower())
+        self.assertIn("fixture is not loaded", output.call_args.args[0])
+
+    def test_an_external_objects_timeout_is_not_absorbed_by_the_optional_attempt(self):
+        """"Optional" means its model may be absent, not that the server may be unreachable.
+
+        A timeout arms the global latch and may leave the request running server-side, so
+        swallowing it here would carry the whole run on a latched harness and pin the failure on
+        whichever test trips over it next - the same reason the baseline capture re-raises it.
+        """
+        def clean_result(project, _revert):
+            if project == HARNESS.EXT_OBJECTS_PROJECT:
+                raise HARNESS.E2ECallTimeout("clean_project timed out")
+            return (True, 1, 0, None)
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean", side_effect=clean_result), \
+                mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True), \
+                mock.patch("builtins.print"):
+            with self.assertRaises(HARNESS.E2ECallTimeout):
+                HARNESS.final_cleanup()
+
+    def test_baseline_skips_external_objects_after_its_sync_failed(self):
+        def clean_result(project, _revert):
+            return (project != HARNESS.EXT_OBJECTS_PROJECT, 1, 0, None)
+
+        inventories = {
+            HARNESS.PROJECT: "base inventory",
+            HARNESS.TESTS_PROJECT: "tests inventory",
+            HARNESS.EXT_OBJECTS_PROJECT: "stale external inventory",
+        }
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean", side_effect=clean_result), \
+                mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True), \
+                mock.patch("builtins.print"), \
+                mock.patch.object(HARNESS, "_top_object_inventory",
+                                  side_effect=lambda project=HARNESS.PROJECT: inventories[project]), \
+                mock.patch.object(HARNESS, "_probe_details", return_value="base details"), \
+                mock.patch.object(HARNESS, "_BASELINE_INVENTORY", None), \
+                mock.patch.object(HARNESS, "_BASELINE_DETAILS", None), \
+                mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True):
+            HARNESS.final_cleanup()
+            HARNESS.snapshot_model_baseline()
+            captured = dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT)
+
+        self.assertEqual({
+            HARNESS.PROJECT: "base inventory",
+            HARNESS.TESTS_PROJECT: "tests inventory",
+        }, captured)
+
+    def test_baseline_records_external_objects_after_its_sync_succeeded(self):
+        inventories = {
+            HARNESS.PROJECT: "base inventory",
+            HARNESS.TESTS_PROJECT: "tests inventory",
+            HARNESS.EXT_OBJECTS_PROJECT: "external inventory",
+        }
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean",
+                                  return_value=(True, 1, 0, None)) as clean, \
+                mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True), \
+                mock.patch.object(HARNESS, "_top_object_inventory",
+                                  side_effect=lambda project=HARNESS.PROJECT: inventories[project]), \
+                mock.patch.object(HARNESS, "_probe_details", return_value="base details"), \
+                mock.patch.object(HARNESS, "_BASELINE_INVENTORY", None), \
+                mock.patch.object(HARNESS, "_BASELINE_DETAILS", None), \
+                mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True):
+            HARNESS.final_cleanup()
+            HARNESS.snapshot_model_baseline()
+            captured = dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT)
+
+        self.assertIn(mock.call(HARNESS.EXT_OBJECTS_PROJECT, mock.ANY), clean.call_args_list)
+        self.assertEqual(inventories, captured)
+
     def test_non_base_verify_fails_when_clean_disk_inventory_differs(self):
         with mock.patch.dict(
                 HARNESS._BASELINE_INVENTORY_BY_PROJECT,

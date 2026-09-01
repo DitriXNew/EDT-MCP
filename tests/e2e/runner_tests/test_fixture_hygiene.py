@@ -29,6 +29,31 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(HARN
 _SEEDED_COMPONENT = re.compile(r"(?:^|/)e2e", re.IGNORECASE)
 
 
+def _committed_seeded_names():
+    """Tracked fixture lines that DECLARE an E2E-prefixed object name.
+
+    The path scan below cannot see a seeded CHILD. EDT serializes an attribute, a dimension or a
+    tabular section INSIDE its owner's `.mdo`, so committing
+    `Catalog.Catalog.Attribute.E2EDefinedTypeAttr` modifies `Catalogs/Catalog/Catalog.mdo` and adds
+    no path component at all - the leftover is invisible to a filename rule while the test that
+    seeds it still dies with "Node already exists".
+
+    The match is on the NAME element rather than the raw prefix: the fixture legitimately contains
+    the string in cell text (a print template reads "E2E Print Template"), and flagging prose would
+    make this gate cry wolf until someone switched it off.
+    """
+    rels = sorted(HARNESS.FIXTURE_REL_BY_PROJECT.values())
+    out = subprocess.run(["git", "grep", "-I", "-n", "-i", "-E", "--cached", "<name>E2E", "--"]
+                         + rels, cwd=REPO_ROOT,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # git grep exits 1 for "no matches", which is the healthy case; anything else is a real error
+    # and must not be read as a clean fixture.
+    if out.returncode not in (0, 1):
+        raise AssertionError("git grep failed over the fixtures: %s"
+                             % out.stderr.decode("utf-8", "replace").strip())
+    return out.stdout.decode("utf-8", "replace").splitlines()
+
+
 def _tracked_fixture_paths():
     """Every path git TRACKS under the fixture projects the harness itself knows about.
 
@@ -52,6 +77,28 @@ class FixtureHygieneTest(unittest.TestCase):
                          "objects with that prefix itself - the test that seeds one will fail with "
                          "\"Node already exists\". Revert them (git checkout master -- <path>, and "
                          "delete the added directories); the fixture-clean verdict cannot see them.")
+
+    def test_no_seeded_child_object_is_committed_inside_a_fixture_file(self):
+        declared = _committed_seeded_names()
+
+        self.assertEqual([], declared,
+                         "these lines declare an E2E-named object inside a committed fixture file. "
+                         "The suite seeds those at runtime, so the test that creates one will fail "
+                         "with \"Node already exists\". Revert the file "
+                         "(git checkout master -- <path>); neither the fixture-clean verdict nor "
+                         "the path scan above can see a leftover serialized inside its owner.")
+
+    def test_the_name_rule_separates_a_declaration_from_prose(self):
+        """Why the match is on the NAME element and not on the bare prefix.
+
+        The fixture's print template legitimately contains the string in cell text. A rule that
+        flagged it would fail on a clean checkout, and a gate that cries wolf gets disabled.
+        """
+        pattern = re.compile(r"<name>e2e", re.IGNORECASE)
+
+        self.assertTrue(pattern.search("    <name>E2EDefinedTypeAttr</name>"))
+        self.assertIsNone(pattern.search("<v8:content>E2E Print Template</v8:content>"),
+                          "cell text that merely mentions the prefix must not be flagged")
 
     def test_the_guard_flags_a_leftover_and_leaves_the_real_fixture_alone(self):
         """Discrimination, against the paths that actually occur.
