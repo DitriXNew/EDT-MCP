@@ -579,6 +579,10 @@ _CALLED_TOOLS = set()
 # Fixture projects named by mutating calls during the current test. This is recorded on the
 # attempt because a request that dies on the wire may already have changed the server-side model.
 _MUTATED_PROJECTS = set()
+# Inventory baselines are captured independently because each fixture has its own model. The
+# single-value name remains the base project's alias: the base-only shortcut and detail-backed
+# verification deliberately continue to read it exactly as before.
+_BASELINE_INVENTORY_BY_PROJECT = {}
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
 
@@ -608,11 +612,19 @@ def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
     global _MUTATIONS_UNRESOLVED
     _CALLED_TOOLS.add(tool)
-    args = args or {}
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
-            and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS
-            and args.get("projectName") in ALL_FIXTURE_PROJECTS):
-        _MUTATED_PROJECTS.add(args["projectName"])
+            and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS):
+        # The write target is not always under projectName: adoption names its destination under
+        # extensionProjectName. Record every fixture-valued string on the attempt because a call
+        # that dies on the wire may already have committed, leaving no response to narrow it.
+        try:
+            values = args.values() if isinstance(args, dict) else ()
+            _MUTATED_PROJECTS.update(
+                value for value in values
+                if isinstance(value, str) and value in ALL_FIXTURE_PROJECTS)
+        except Exception:
+            # Tracking is safety evidence around the request, never a reason to block the call.
+            pass
     if tool in MODEL_MUTATION_TOOLS:
         _MUTATIONS_UNRESOLVED += 1
 
@@ -625,6 +637,16 @@ def _record_outcome(tool, args, is_error, structured):
     entered opaque/in-flight mutation, so wording changes cannot accidentally re-arm the shortcut.
     """
     global _MUTATIONS_UNRESOLVED, _MUTATION_CONFIRMED
+    try:
+        written_projects = structured.get("writtenProjects") \
+            if isinstance(structured, dict) else None
+        if isinstance(written_projects, list):
+            _MUTATED_PROJECTS.update(
+                project for project in written_projects
+                if isinstance(project, str) and project in ALL_FIXTURE_PROJECTS)
+    except Exception:
+        # A malformed or exotic structured response must not escape the call path.
+        pass
     if tool not in MODEL_MUTATION_TOOLS:
         return
     _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
@@ -694,7 +716,7 @@ def begin_test_calls():
     _CONFIRMED_MUTATION_TOOLS.clear()
 
 
-def _top_object_inventory():
+def _top_object_inventory(project=PROJECT):
     """A stable, cheap fingerprint of the model's top-level metadata objects.
 
     One call. It sees exactly the mutations a git-clean tree can still hide: an object
@@ -706,7 +728,7 @@ def _top_object_inventory():
     let the run continue and pin the latched failure on the next innocent test - or start a git
     reset while EDT is still writing. It propagates, like every other probe's."""
     try:
-        r = call("get_metadata_objects", {"projectName": PROJECT, "limit": 1000})
+        r = call("get_metadata_objects", {"projectName": project, "limit": 1000})
     except E2ECallTimeout:
         raise
     except Exception:
@@ -770,8 +792,27 @@ def snapshot_model_baseline():
 
     @return (inventory_captured, details_captured) so the caller can say which brace it lost."""
     global _BASELINE_INVENTORY, _BASELINE_DETAILS
+    _BASELINE_INVENTORY_BY_PROJECT.clear()
     _BASELINE_INVENTORY = _top_object_inventory()
+    if _BASELINE_INVENTORY is not None:
+        _BASELINE_INVENTORY_BY_PROJECT[PROJECT] = _BASELINE_INVENTORY
     _BASELINE_DETAILS = _probe_details()
+    for project in (TESTS_PROJECT, EXT_OBJECTS_PROJECT):
+        try:
+            inventory = _top_object_inventory(project)
+        except E2ECallTimeout:
+            # NOT swallowed, for the reason _top_object_inventory states: a timeout means the
+            # request may still be running server-side AND it has armed the global latch, so
+            # continuing would let the whole run proceed on a latched harness and pin the failure
+            # on whichever test trips over it next. An absent or unloaded fixture does not reach
+            # here at all - it comes back as an error result, i.e. None.
+            raise
+        except Exception:
+            # Any other failure means this optional fixture simply has no baseline; the reset then
+            # falls back to its disk check, which is exactly the documented degradation.
+            continue
+        if inventory is not None:
+            _BASELINE_INVENTORY_BY_PROJECT[project] = inventory
     return (_BASELINE_INVENTORY is not None, _BASELINE_DETAILS is not None)
 
 
@@ -793,8 +834,8 @@ def model_is_pristine():
     if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
         return False
     if _MUTATED_PROJECTS - {PROJECT}:
-        # No baseline fingerprint exists for non-base fixtures, so their in-memory state cannot
-        # provide the positive evidence this shortcut requires.
+        # This shortcut remains base-only. A named non-base mutation must run its project's full
+        # reset so that project's dedicated disk-and-inventory post-condition is evaluated.
         return False
     try:
         # Its VERDICT matters, not just that it ran: it returns False on timeout, meaning EDT is
@@ -1289,16 +1330,10 @@ def _named(lines):
     return ", ".join(out)
 
 
-def _inventory_difference(current):
-    """The top objects that differ between `current` and the captured baseline, as prose.
-
-    A reset that cannot get the model home aborts the run, and the abort is the only artifact
-    anyone reads afterwards - so it must say WHAT is wrong. "the model still does not resolve
-    Catalog.Catalog" (a name that was never the problem) cost a full investigation to see
-    through; "in the model but not in the baseline: Reckoner / in the baseline but not in the
-    model: CascadeEn" is the same failure, already diagnosed."""
+def _inventory_difference_against(current, baseline):
+    """The top objects that differ between two inventory fingerprints, as prose."""
     have = set(current.splitlines())
-    want = set((_BASELINE_INVENTORY or "").splitlines())
+    want = set((baseline or "").splitlines())
     extra = _named(have - want)
     missing = _named(want - have)
     parts = []
@@ -1310,6 +1345,17 @@ def _inventory_difference(current):
     # only if the listing itself changed shape, which is worth saying rather than swallowing.
     return "; ".join(parts) or "the top-object listing changed without any name appearing or "\
         "disappearing"
+
+
+def _inventory_difference(current):
+    """The top objects that differ between `current` and the captured baseline, as prose.
+
+    A reset that cannot get the model home aborts the run, and the abort is the only artifact
+    anyone reads afterwards - so it must say WHAT is wrong. "the model still does not resolve
+    Catalog.Catalog" (a name that was never the problem) cost a full investigation to see
+    through; "in the model but not in the baseline: Reckoner / in the baseline but not in the
+    model: CascadeEn" is the same failure, already diagnosed."""
+    return _inventory_difference_against(current, _BASELINE_INVENTORY)
 
 
 def _baseline_mismatch():
@@ -1463,8 +1509,8 @@ def _reset_model_project(project, revert, verify):
 
     @param revert the disk revert for THIS project's fixture path
     @param verify the post-condition, returning a mismatch description or None. The base project
-           can be checked against its in-memory baseline fingerprint; the others only against
-           their disk status - see _disk_mismatch.
+           uses its inventory-plus-detail fingerprint; the others use their disk status plus an
+           inventory fingerprint when one was readable before the run.
     """
     last_mismatch = "the post-condition was never reached"
     for _ in range(MODEL_RESET_ATTEMPTS):
@@ -1503,13 +1549,37 @@ def _reset_model_project(project, revert, verify):
 
 
 def _disk_mismatch(rel):
-    """Why a non-base fixture is dirty on disk, or None when its path is clean.
-
-    Non-base fixtures have no in-memory baseline fingerprint, so disk status is the strongest
-    post-condition available for them. It is not equivalent to verifying their in-memory model."""
+    """Why a fixture is dirty on disk, or None when its path is clean."""
     status = status_porcelain_rel(rel)
     if status:
         return "fixture path %r is still dirty:\n%s" % (rel, status[:500])
+    return None
+
+
+def _non_base_mismatch(project, rel):
+    """Why a non-base fixture is not back on its captured disk-and-model baseline.
+
+    The DETAIL half of the base check cannot be reused: BASELINE_PROBE_FQNS are objects of the
+    base fixture and do not exist in the other fixtures. Their INVENTORY is still direct evidence
+    that an in-memory create, delete or rename did not survive clean_project.
+
+    When no inventory baseline was readable before the run, only the disk check remains. That is
+    deliberately weaker: there is no captured in-memory state against which to compare the model.
+    """
+    disk_mismatch = _disk_mismatch(rel)
+    if disk_mismatch is not None:
+        # Disk evidence is checked first, so it is also the reported cause when both checks fail.
+        return disk_mismatch
+    baseline = _BASELINE_INVENTORY_BY_PROJECT.get(project)
+    if baseline is None:
+        # No baseline was readable for this optional fixture, so a clean disk is the only evidence
+        # available. Accepting it preserves the pre-inventory degradation instead of aborting.
+        return None
+    inventory = _top_object_inventory(project)
+    if inventory is None:
+        return "the top-object inventory for %s could not be read" % project
+    if inventory != baseline:
+        return _inventory_difference_against(inventory, baseline)
     return None
 
 
@@ -1517,8 +1587,9 @@ def reset_model(projects=None):
     """Re-sync the named fixture projects to their on-disk baselines after a write.
 
     Every project goes through the SAME protected cycle - see _reset_model_project for why its
-    ordering is what it is. They differ only in their post-condition: the base project has an
-    in-memory baseline fingerprint, the others can be verified against their disk status alone.
+    ordering is what it is. They differ only in their post-condition: the base project keeps its
+    inventory-plus-detail check, while the others use disk status plus a captured inventory when
+    their model was readable before the run.
 
     @param projects the fixture projects to reset; the base project alone by default, which is
            what the ~331 base-only write tests pay. A test that addressed another fixture names
@@ -1535,7 +1606,7 @@ def reset_model(projects=None):
             _reset_model_project(
                 project,
                 lambda rel=rel: reset_fixture_rel(rel),
-                lambda rel=rel: _disk_mismatch(rel),
+                lambda project=project, rel=rel: _non_base_mismatch(project, rel),
             )
     if requested:
         # Retire unresolved mutations only after every requested project has passed its strongest

@@ -53,6 +53,41 @@ class MutationOutcomeTest(unittest.TestCase):
 
         self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
 
+    def test_adoption_attempt_tracks_base_and_extension_projects(self):
+        HARNESS._record_attempt("adopt_metadata_object", {
+            "projectName": HARNESS.PROJECT,
+            "extensionProjectName": HARNESS.TESTS_PROJECT,
+        })
+
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT, HARNESS.TESTS_PROJECT}),
+            HARNESS.mutated_fixture_projects())
+
+    def test_written_projects_outcome_tracks_fixture_missing_from_arguments(self):
+        HARNESS._record_outcome(
+            "adopt_metadata_object",
+            {"projectName": HARNESS.PROJECT},
+            False,
+            {"writtenProjects": [HARNESS.TESTS_PROJECT]},
+        )
+
+        self.assertEqual(
+            frozenset({HARNESS.TESTS_PROJECT}), HARNESS.mutated_fixture_projects())
+
+    def test_invalid_written_projects_values_record_nothing_and_do_not_raise(self):
+        responses = (
+            {},
+            {"writtenProjects": HARNESS.TESTS_PROJECT},
+            {"writtenProjects": [None, 7, "UnrelatedProject"]},
+        )
+
+        for structured in responses:
+            with self.subTest(structured=structured):
+                HARNESS.begin_test_calls()
+                HARNESS._record_outcome(
+                    "adopt_metadata_object", {}, False, structured)
+                self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
+
     def test_model_is_not_pristine_after_non_base_fixture_mutation(self):
         HARNESS._MUTATED_PROJECTS.add(HARNESS.TESTS_PROJECT)
 
@@ -213,6 +248,42 @@ class FixtureResetTest(unittest.TestCase):
             self.assertFalse(HARNESS.reset_all_fixtures())
 
         reset_rel.assert_not_called()
+
+    def test_non_base_verify_fails_when_clean_disk_inventory_differs(self):
+        with mock.patch.dict(
+                HARNESS._BASELINE_INVENTORY_BY_PROJECT,
+                {HARNESS.TESTS_PROJECT: "Catalog.Baseline"}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(
+                    HARNESS, "_top_object_inventory",
+                    return_value="Catalog.Mutated") as inventory:
+            mismatch = HARNESS._non_base_mismatch(
+                HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNotNone(mismatch)
+        inventory.assert_called_once_with(HARNESS.TESTS_PROJECT)
+
+    def test_non_base_verify_passes_when_disk_and_inventory_match(self):
+        baseline = "Catalog.Baseline"
+        with mock.patch.dict(
+                HARNESS._BASELINE_INVENTORY_BY_PROJECT,
+                {HARNESS.TESTS_PROJECT: baseline}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(HARNESS, "_top_object_inventory", return_value=baseline):
+            mismatch = HARNESS._non_base_mismatch(
+                HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNone(mismatch)
+
+    def test_non_base_verify_degrades_to_clean_disk_without_inventory_baseline(self):
+        with mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(HARNESS, "_top_object_inventory") as inventory:
+            mismatch = HARNESS._non_base_mismatch(
+                HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNone(mismatch)
+        inventory.assert_not_called()
 
 
 if __name__ == "__main__":
