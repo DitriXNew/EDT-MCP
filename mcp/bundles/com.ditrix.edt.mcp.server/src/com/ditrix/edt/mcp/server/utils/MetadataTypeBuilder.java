@@ -145,6 +145,15 @@ public final class MetadataTypeBuilder
             "\u0412\u044B\u0431\u043E\u0440\u043A\u0430", "selectionType"), //$NON-NLS-1$ //$NON-NLS-2$
         new ProducedTypeSuffix("Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", "refType") }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
+    /**
+     * EDT's {@code MdTypeProvider} selects event-subscription source candidates through
+     * {@code EventSourceTypeInfoCategory}. That category's exact membership is platform data and is
+     * not available from the checked-in source or plugin declaration, so this is a curated judgement
+     * matching the platform concept, not a list derived from those sources.
+     */
+    private static final String[] EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES = {
+        "Object", "RecordSet", "RecordManager", "ValueManager"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
     /** A parsed {@code <metadata-token><produced-suffix>} kind. Package-visible for pure tests. */
     static final class ProducedTypeKind
     {
@@ -877,6 +886,11 @@ public final class MetadataTypeBuilder
             || typeTarget == TypeTarget.EVENT_SOURCE
             || typeTarget == TypeTarget.FORM_ATTRIBUTE
             ? splitProducedTypeKind(kind) : null;
+        if (typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
+            && producedKind.hasKnownMetadataType() && !isEventSourceProducedType(producedKind))
+        {
+            return eventSourceProducedTypeRefusal(kind);
+        }
         if (producedKind != null && producedKind.hasKnownMetadataType() && item.has("ref")) //$NON-NLS-1$
         {
             return addConcreteProducedType(td, item, kind, producedKind, effectiveScope,
@@ -1004,6 +1018,26 @@ public final class MetadataTypeBuilder
             + "FORM attribute any platform type name " //$NON-NLS-1$
             + "also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., English or " //$NON-NLS-1$
             + "Russian) - this one names no type this platform version knows."; //$NON-NLS-1$
+    }
+
+    private static boolean isEventSourceProducedType(ProducedTypeKind producedKind)
+    {
+        for (String suffix : EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES)
+        {
+            if (suffix.equals(producedKind.producedSuffix))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String eventSourceProducedTypeRefusal(String kind)
+    {
+        return "Type kind '" + kind + "' cannot be used as an event subscription's source: an " //$NON-NLS-1$ //$NON-NLS-2$
+            + "event subscription's source is an object that publishes write events. Accepted " //$NON-NLS-1$
+            + "produced-type suffixes: " + String.join(", ", EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES) //$NON-NLS-1$ //$NON-NLS-2$
+            + "."; //$NON-NLS-1$
     }
 
     /** Adds one concrete model-owned produced Type to the non-containment type list. */

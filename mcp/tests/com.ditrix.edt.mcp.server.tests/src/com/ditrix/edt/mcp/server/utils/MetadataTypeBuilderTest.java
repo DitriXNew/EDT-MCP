@@ -677,6 +677,25 @@ public class MetadataTypeBuilderTest
         assertConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs(
             MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
 
+        for (String[] one : new String[][] {
+            {"CatalogList", "listType"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"CatalogSelection", "selectionType"} }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+            Type expected = McoreFactory.eINSTANCE.createType();
+            seedProducedType(config, "Catalog", "Products", one[1], expected); //$NON-NLS-1$ //$NON-NLS-2$
+            TypeDescription concreteTd = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = json("{\"kind\":\"" + one[0] //$NON-NLS-1$
+                + "\",\"ref\":\"Products\"}").getAsJsonObject(); //$NON-NLS-1$
+
+            String concreteError = MetadataTypeBuilder.addType(concreteTd, item, one[0], null,
+                config, false, MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+            assertNull(one[0], concreteError);
+            assertEquals(one[0], 1, concreteTd.getTypes().size());
+            assertSame(one[0], expected, concreteTd.getTypes().get(0));
+        }
+
         Type abstractObject = McoreFactory.eINSTANCE.createType();
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         String error = addKind("ExchangePlanObject", //$NON-NLS-1$
@@ -951,16 +970,51 @@ public class MetadataTypeBuilderTest
     @Test
     public void testEventSourceAcceptsAbstractProducedTypeThePlatformKnows()
     {
-        Type abstractObject = McoreFactory.eINSTANCE.createType();
-        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String kind : new String[] {"ExchangePlanObject", "InformationRegisterRecordSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegisterRecordManager", "ConstantValueManager"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Type abstractType = McoreFactory.eINSTANCE.createType();
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
 
-        String error = addKind("ExchangePlanObject", //$NON-NLS-1$
-            providerKnowing("ExchangePlanObject", abstractObject), td, //$NON-NLS-1$
-            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+            String error = addKind(kind, providerKnowing(kind, abstractType), td,
+                MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
 
-        assertNull(error);
-        assertEquals(1, td.getTypes().size());
-        assertSame(abstractObject, td.getTypes().get(0));
+            assertNull(kind, error);
+            assertEquals(kind, 1, td.getTypes().size());
+            assertSame(kind, abstractType, td.getTypes().get(0));
+        }
+    }
+
+    @Test
+    public void testEventSourceRefusesListAndSelectionProducedTypesAndListsAcceptedSuffixes()
+    {
+        for (String[] one : new String[][] {
+            {"CatalogList", "listType"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"CatalogSelection", "selectionType"} }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+            seedProducedType(config, "Catalog", "Products", one[1], //$NON-NLS-1$ //$NON-NLS-2$
+                McoreFactory.eINSTANCE.createType());
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = json("{\"kind\":\"" + one[0] //$NON-NLS-1$
+                + "\",\"ref\":\"Products\"}").getAsJsonObject(); //$NON-NLS-1$
+
+            String error = MetadataTypeBuilder.addType(td, item, one[0], null, config, false,
+                MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+
+            String expected = "Type kind '" + one[0] + "' cannot be used as an event " //$NON-NLS-1$ //$NON-NLS-2$
+                + "subscription's source: an event subscription's source is an object that " //$NON-NLS-1$
+                + "publishes write events. Accepted produced-type suffixes: Object, RecordSet, " //$NON-NLS-1$
+                + "RecordManager, ValueManager."; //$NON-NLS-1$
+            assertEquals(one[0], expected, error);
+            for (String suffix : new String[] {"Object", "RecordSet", "RecordManager", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "ValueManager"}) //$NON-NLS-1$
+            {
+                assertTrue(one[0] + " refusal must name accepted suffix " + suffix, //$NON-NLS-1$
+                    error.contains(suffix));
+            }
+            assertTrue(one[0], td.getTypes().isEmpty());
+        }
     }
 
     @Test
