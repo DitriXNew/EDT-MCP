@@ -15,14 +15,18 @@ class MutationOutcomeTest(unittest.TestCase):
     def setUp(self):
         self.old_unresolved = HARNESS._MUTATIONS_UNRESOLVED
         self.old_confirmed = HARNESS._MUTATION_CONFIRMED
+        self.old_confirmed_tools = set(HARNESS._CONFIRMED_MUTATION_TOOLS)
         self.old_called = set(HARNESS._CALLED_TOOLS)
         HARNESS._MUTATIONS_UNRESOLVED = 0
         HARNESS._MUTATION_CONFIRMED = False
+        HARNESS._CONFIRMED_MUTATION_TOOLS.clear()
         HARNESS._CALLED_TOOLS.clear()
 
     def tearDown(self):
         HARNESS._MUTATIONS_UNRESOLVED = self.old_unresolved
         HARNESS._MUTATION_CONFIRMED = self.old_confirmed
+        HARNESS._CONFIRMED_MUTATION_TOOLS.clear()
+        HARNESS._CONFIRMED_MUTATION_TOOLS.update(self.old_confirmed_tools)
         HARNESS._CALLED_TOOLS.clear()
         HARNESS._CALLED_TOOLS.update(self.old_called)
 
@@ -60,6 +64,43 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertEqual(0, HARNESS._MUTATIONS_UNRESOLVED)
         self.assertTrue(HARNESS._MUTATION_CONFIRMED)
         self.assertTrue(HARNESS._model_may_have_moved())
+
+    def test_kind_ratchet_flags_confirmed_dirtying_mutation_outside_write_metadata(self):
+        HARNESS._record_attempt("create_metadata")
+        HARNESS._record_outcome("create_metadata", False, {"success": True})
+
+        violations = HARNESS.mutation_kind_violation_tools(
+            "action", HARNESS.confirmed_mutation_tools())
+
+        self.assertEqual(("create_metadata",), violations)
+
+    def test_kind_ratchet_allows_confirmed_mutation_for_write_metadata(self):
+        HARNESS._record_attempt("modify_metadata")
+        HARNESS._record_outcome("modify_metadata", False, {"success": True})
+
+        violations = HARNESS.mutation_kind_violation_tools(
+            "write-metadata", HARNESS.confirmed_mutation_tools())
+
+        self.assertEqual((), violations)
+
+    def test_kind_ratchet_ignores_successful_clean_project_for_action(self):
+        HARNESS._record_attempt("clean_project")
+        HARNESS._record_outcome("clean_project", False, {"success": True})
+
+        self.assertEqual(frozenset({"clean_project"}), HARNESS.confirmed_mutation_tools())
+        self.assertEqual((), HARNESS.mutation_kind_violation_tools(
+            "action", HARNESS.confirmed_mutation_tools()))
+
+    def test_kind_ratchet_ignores_test_without_confirmed_mutation(self):
+        HARNESS._record_attempt("create_metadata")
+        HARNESS._record_outcome("create_metadata", True, {
+            "success": False,
+            "error": "validation refused before commit",
+        })
+
+        self.assertEqual(frozenset(), HARNESS.confirmed_mutation_tools())
+        self.assertEqual((), HARNESS.mutation_kind_violation_tools(
+            "action", HARNESS.confirmed_mutation_tools()))
 
 
 if __name__ == "__main__":

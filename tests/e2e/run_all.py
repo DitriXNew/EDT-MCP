@@ -221,18 +221,19 @@ def _run_test_unit(harness, t):
         # Any OTHER failure still leaves the write applied, exactly like a passing test does.
         # Skipping the reset there is how ONE real failure became two: the next test read a
         # model that still carried the previous test's rename and reported "object not found".
-        _reset_after_write(harness, t)
+        _reset_after_write(harness, t, already_failing=True)
         raise
     _reset_after_write(harness, t)
 
 
-def _reset_after_write(harness, t):
-    """reset_fixture (disk) + reset_model (in-memory) for a write-metadata test.
+def _reset_after_write(harness, t, already_failing=False):
+    """Restore after a declared write or an undeclared confirmed fixture-model mutation.
 
-    The model reset is SKIPPED when the model provably did not move. It is the single most
-    expensive thing the suite does - 331 write-metadata tests, ~11 s each, ~84% of the whole
-    run - and most of those tests are negative: they hand a write tool a bad argument, assert
-    the refusal, and then pay a full clean_project to re-import a model that never changed.
+    For a declared write, the model reset is SKIPPED when the model provably did not move. It is
+    the single most expensive thing the suite does - 331 write-metadata tests, ~11 s each, ~84%
+    of the whole run - and most of those tests are negative: they hand a write tool a bad
+    argument, assert the refusal, and then pay a full clean_project to re-import a model that
+    never changed.
 
     "Provably" is the operative word: harness.model_is_pristine() answers only on positive
     evidence (git-clean fixtures AND an unchanged top-object inventory, and no deep-mutation
@@ -242,7 +243,10 @@ def _reset_after_write(harness, t):
         # This worker was given up on; the main thread has already decided the fixtures are
         # not safe to touch. Do not undo that decision from a thread nobody is waiting for.
         return
-    if t.get("kind") != "write-metadata" and not harness.mutations_unresolved():
+    kind = t.get("kind")
+    kind_violations = harness.mutation_kind_violation_tools(
+        kind, harness.confirmed_mutation_tools())
+    if kind != "write-metadata" and not harness.mutations_unresolved() and not kind_violations:
         # The declared kind decides the ROUTINE case: a test that means to write says so, and only
         # those pay the cleanup. It cannot decide the accidental one. A mutating request that died
         # on the wire (connection reset, truncated body) may have been committed by the server
@@ -250,6 +254,22 @@ def _reset_after_write(harness, t):
         # kind='action', and every one of them would have carried that unknown into the next test.
         # So the kind gate is checked WITH the evidence, never instead of it.
         return
+    if kind_violations:
+        # Do not let the ratchet itself leak the mutation into the next test. A confirmed fixture
+        # write bypasses the pristine shortcut: restore disk and model first, then fail its owner.
+        if not harness.reset_fixture():
+            return
+        harness.reset_model()
+        message = ('test "%s" has kind="%s" but confirmed fixture-model mutation by tool(s): %s; '
+                   'declare kind="write-metadata"'
+                   % (t.get("name", "?"), kind, ", ".join(kind_violations)))
+        if already_failing:
+            # The test is ALREADY unwinding a failure, and that failure is what its author has to
+            # read. Raising here would replace it with this one - the mis-declared kind is real but
+            # secondary, so it is reported and the original exception is left to propagate.
+            print("  [kind-ratchet] %s" % message, flush=True)
+            return
+        raise harness.E2EAssertion(message)
     if harness.model_is_pristine():
         _SKIPPED_RESETS.append(t.get("name", "?"))
         return

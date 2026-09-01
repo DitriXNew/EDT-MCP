@@ -537,6 +537,21 @@ MODEL_MUTATION_TOOLS = frozenset({
     "generate_translation_strings", "translate_configuration",
 }) | DEEP_MUTATION_TOOLS
 
+# Confirmed outcomes from this subset can dirty the committed fixture's in-memory model and
+# therefore require kind="write-metadata". The exclusions are deliberate and kept one-per-line:
+NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
+    "clean_project",    # Restores the in-memory model FROM the fixture on disk.
+    "resync_to_disk",   # The mirror of it: writes the model OUT to disk ("Direction MODEL ->
+                        # DISK, the opposite of clean_project"). What it dirties is the working
+                        # tree, which reset_fixture already reverts.
+    "build_external_objects",  # Compiles .epf/.erf build artefacts; produces files, not model
+                        # changes.
+    "create_project",   # Changes workspace composition, not the fixture's model.
+    "delete_project",   # Changes workspace composition, not the fixture's model.
+    "update_database",  # Writes to the information base, not the fixture's model.
+})
+FIXTURE_MODEL_DIRTYING_TOOLS = MODEL_MUTATION_TOOLS - NON_FIXTURE_MODEL_MUTATION_TOOLS
+
 _CALLED_TOOLS = set()
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
@@ -544,6 +559,9 @@ _BASELINE_DETAILS = None
 # A mutating call that succeeded, committed before failing, or entered an opaque mutation whose
 # rollback outcome is unknown. Any one is enough to forfeit the shortcut for the whole test.
 _MUTATION_CONFIRMED = False
+# The corresponding tool names, retained separately so the runner can identify a test whose
+# declared kind failed to account for a successful fixture-model mutation.
+_CONFIRMED_MUTATION_TOOLS = set()
 # Mutating calls issued whose outcome was never read back (connection reset, truncated body,
 # timeout). The server may well have committed them, so while this is non-zero the model counts
 # as moved. A call that throws never reaches _record_outcome, so it stays counted - which is
@@ -585,6 +603,7 @@ def _record_outcome(tool, is_error, structured):
                         and structured.get("mutationOutcomeUnknown") is True)
     if not is_error or mutation_committed or mutation_unknown:
         _MUTATION_CONFIRMED = True
+        _CONFIRMED_MUTATION_TOOLS.add(tool)
 
 
 def _mark_model_synced():
@@ -612,6 +631,18 @@ def mutations_unresolved():
     return _MUTATIONS_UNRESOLVED > 0
 
 
+def confirmed_mutation_tools():
+    """Names of tools whose responses confirmed a mutation during the current test."""
+    return frozenset(_CONFIRMED_MUTATION_TOOLS)
+
+
+def mutation_kind_violation_tools(kind, confirmed_tools):
+    """Confirmed fixture-model writers that require a different declared test kind."""
+    if kind == "write-metadata":
+        return ()
+    return tuple(sorted(FIXTURE_MODEL_DIRTYING_TOOLS.intersection(confirmed_tools)))
+
+
 def begin_test_calls():
     """Start recording what a test invokes (the orchestrator calls this per test).
 
@@ -619,6 +650,7 @@ def begin_test_calls():
     global _MUTATION_CONFIRMED
     _CALLED_TOOLS.clear()
     _MUTATION_CONFIRMED = False
+    _CONFIRMED_MUTATION_TOOLS.clear()
 
 
 def _top_object_inventory():

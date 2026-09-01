@@ -144,7 +144,7 @@ def test_extobj_type_on_a_configuration_names_the_project_kind():
     assert_no_diff("a read tool must not touch the base project on disk")
 
 
-@e2e_test(tool="create_metadata", kind="write")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_extobj_create_and_delete_a_form_element():
     """The reported call: create a Group on an external data processor's form.
 
@@ -292,7 +292,7 @@ def test_extobj_modify_a_form_member_title():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="dcs", kind="write")
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_extobj_external_report_owned_dcs_round_trip_uses_inherited_language():
     """An ExternalReport-owned DCS template resolves without any owner-type special case.
 
@@ -360,7 +360,7 @@ def test_extobj_external_report_owned_dcs_round_trip_uses_inherited_language():
     assert_no_diff("the owned-DCS round trip must never touch the base project")
 
 
-@e2e_test(tool="dcs", kind="read")
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_extobj_external_report_main_dcs_root_resolves():
     """The existing ExtReport is a supported main-DCS root even before one is materialized."""
     reset_fixture_rel(EXT_OBJECTS_REL)
