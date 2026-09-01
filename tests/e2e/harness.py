@@ -1338,6 +1338,48 @@ def _settle_progress_note(progress):
 # EDT log run well under this; the cap only decides how much is READ to find them.
 _EVIDENCE_LOG_TAIL_BYTES = 256 * 1024
 
+# ...and the size cap alone is not enough: open/seek/read on a hung or very slow filesystem do not
+# return, so the bytes are bounded while the WAIT is not. That is a fourth channel for this block to
+# change the outcome it exists to explain - an overrun trips the runner's per-test timeout, which
+# abandons the worker and arms the global abort latch, killing the remaining reset attempts. Hence a
+# second, independent bound below: the read is abandoned after this many seconds.
+_EVIDENCE_LOG_READ_TIMEOUT = 10
+
+
+def _read_log_tail(log_path):
+    """Return the last _EVIDENCE_LOG_TAIL_BYTES of `log_path`, abandoning a read that hangs.
+
+    Bounded in BOTH dimensions, because the two failures are independent: the size cap bounds a
+    log that grew large, this one bounds a filesystem that stopped answering. The read runs in a
+    DAEMON thread that is simply left behind on timeout - a blocked read cannot be interrupted, but
+    a daemon thread neither blocks interpreter exit nor holds anything the caller needs.
+
+    @return the decoded tail
+    @raise RuntimeError when the read did not finish in time; any other read failure propagates as
+           itself, so the caller reports the real cause
+    """
+    outcome = {}
+
+    def _read():
+        try:
+            with open(log_path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
+                outcome["blob"] = handle.read()
+        except BaseException as exc:    # noqa: BLE001 - reported to the caller verbatim
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_read, name="e2e-evidence-log-tail", daemon=True)
+    worker.start()
+    worker.join(_EVIDENCE_LOG_READ_TIMEOUT)
+    if worker.is_alive():
+        raise RuntimeError("reading %s did not finish within %ds, so it was abandoned (a hung or "
+                           "very slow filesystem)" % (log_path, _EVIDENCE_LOG_READ_TIMEOUT))
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["blob"].decode("utf-8", errors="replace")
+
 
 def _failed_settle_evidence(last_list_projects):
     """Print one best-effort evidence block for the first failed settle in a reset cycle.
@@ -1355,15 +1397,10 @@ def _failed_settle_evidence(last_list_projects):
             raise RuntimeError(
                 "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
         log_path = os.path.join(workspace, ".metadata", ".log")
-        # Read the TAIL, not the file: seek back a bounded number of bytes rather than pulling
-        # the whole log in to keep 80 lines of it. This block runs inside the reset budget, so
-        # its cost has to be bounded by the file's SIZE not mattering, whatever the log grew to.
-        with open(log_path, "rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
-            blob = handle.read()
-        text = blob.decode("utf-8", errors="replace")
+        # Read the TAIL, not the file, and give up on a read that hangs: this block runs inside
+        # the reset budget, so its cost must be bounded by the log's SIZE not mattering AND by the
+        # filesystem's responsiveness not mattering. See _read_log_tail for both bounds.
+        text = _read_log_tail(log_path)
         tail = text.splitlines()[-80:]
         sections.append(("EDT .metadata/.log tail (last 80 lines, last %d bytes at most)"
                          % _EVIDENCE_LOG_TAIL_BYTES,
