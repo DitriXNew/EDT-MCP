@@ -1404,32 +1404,40 @@ def _failed_settle_evidence(last_list_projects):
             (type(exc).__name__, exc))
 
 
-# At most this many log files are read for one evidence block: the current .log plus up to three
-# backups. Three is not a guess about rotation frequency - it is a ceiling on how much a diagnostic
-# may cost when something pathological is happening (a writer rotating in a loop). Realistically
-# the selection below returns one.
+# At most this many backups are read for one evidence block, on top of the current .log. Not a
+# guess about rotation frequency - a ceiling on what a diagnostic may cost if something
+# pathological is rotating in a loop. Which files the cap KEEPS is the part that matters, and it
+# keeps the earliest rotations; see _backups_covering. Realistically the selection returns one.
 _EVIDENCE_LOG_MAX_BACKUPS = 3
 
 
-def _backup_mtimes(metadata):
-    """`{path: mtime}` for every `.bak_*.log`, skipping any that vanishes mid-scan."""
-    dated = {}
+def _backup_identities(metadata):
+    """`{path: identity}` for every `.bak_*.log`, skipping any that vanishes mid-scan.
+
+    The identity is (mtime_ns, size, inode), not the mtime alone. EDT reuses the backup NAMES, so
+    a rotation can overwrite .bak_1 rather than add a file - and if the replacement happens to
+    carry the same coarse timestamp, an mtime-only comparison calls that "unchanged" and the
+    rotation goes unseen. Three independent fields make a same-name replacement essentially
+    impossible to miss: the file that replaced it would have to match all three.
+    """
+    seen = {}
     try:
         for path in glob.glob(os.path.join(metadata, ".bak_*.log")):
             try:
-                dated[path] = os.path.getmtime(path)
+                st = os.stat(path)
             except OSError:
                 continue    # rotation removed it between the glob and the stat
+            seen[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
     except Exception:
         return {}
-    return dated
+    return seen
 
 
 def _backups_covering(before, after):
     """The backups that can still hold the failure moment, oldest first.
 
-    `before` and `after` are _backup_mtimes snapshots taken around the read of the current log.
-    Two groups qualify, and each answers a different rotation:
+    `before` and `after` are _backup_identities snapshots taken around the read of the current
+    log. Two groups qualify, and each answers a different rotation:
 
     - every backup that APPEARED or CHANGED between the snapshots. Each one is a file that was
       .log moments ago, so a burst of rotations during collection cannot push the failure past us
@@ -1437,20 +1445,31 @@ def _backups_covering(before, after):
       failure in the FIRST rotation's backup while the second becomes the newest;
     - the newest backup that already existed, where an earlier rotation had put it.
 
-    Comparing SNAPSHOTS rather than timestamps against a clock is what makes this exact: EDT
-    reuses the backup numbers, so a rotation can overwrite .bak_1 rather than add a file, and a
-    changed mtime is what identifies it either way. Names never order these files - a workspace
-    can hold a .bak_7 written hours after its .bak_8.
+    Comparing SNAPSHOTS is what makes this exact - no clock, no epsilon - and comparing identities
+    rather than timestamps is what survives EDT reusing a backup name. Names never order these
+    files: a workspace can hold a .bak_7 written hours after its .bak_8.
+
+    THE CAP KEEPS THE EARLIEST ROTATION, not the newest. The failure is at or before the moment
+    collection started, so among the backups created during collection it lives in the FIRST one -
+    the file that was .log when the settle failed. Later ones hold what was written after. Sorting
+    newest-first and truncating would throw away precisely the file being looked for, which is the
+    mistake the previous revision made.
     """
-    appeared = [p for p, mtime in after.items() if before.get(p) != mtime]
-    pre_existing = [p for p in before if p not in appeared]
-    newest_pre = max(pre_existing, key=lambda p: before[p]) if pre_existing else None
-    chosen = list(appeared) + ([newest_pre] if newest_pre else [])
-    # Newest-first for the cap, so a pathological burst keeps the files CLOSEST to the failure...
-    chosen.sort(key=lambda p: after.get(p, before.get(p, 0)), reverse=True)
-    chosen = chosen[:_EVIDENCE_LOG_MAX_BACKUPS]
-    # ...then oldest-first, which is the order they are displayed in.
-    chosen.sort(key=lambda p: after.get(p, before.get(p, 0)))
+    appeared = [path for path, identity in after.items() if before.get(path) != identity]
+    pre_existing = [path for path in before if path not in appeared]
+    newest_pre = max(pre_existing, key=lambda path: before[path]) if pre_existing else None
+
+    def when(path):
+        return after.get(path, before.get(path, (0, 0, 0)))
+
+    appeared.sort(key=when)
+    # The earliest rotations first, then the pre-existing backup only if there is room: a failure
+    # that had ALREADY rotated before collection is the less likely of the two, and the cap has to
+    # spend its budget on the file the evidence most probably sits in.
+    chosen = appeared[:_EVIDENCE_LOG_MAX_BACKUPS]
+    if newest_pre is not None and len(chosen) < _EVIDENCE_LOG_MAX_BACKUPS:
+        chosen.append(newest_pre)
+    chosen.sort(key=when)    # oldest first, which is also the display order
     return chosen
 
 
@@ -1502,9 +1521,9 @@ def _print_failed_settle_evidence(last_list_projects):
         # the read survived neither of the first two. Re-scanning at the end alone is no fix - it
         # races the writer the same way; the pair of snapshots is what makes the window observable.
         # Duplicated lines in an 80-line tail are harmless; a missing failure is the whole problem.
-        before_rotation = _backup_mtimes(metadata)
+        before_rotation = _backup_identities(metadata)
         read_into(current)
-        backups = _backups_covering(before_rotation, _backup_mtimes(metadata))
+        backups = _backups_covering(before_rotation, _backup_identities(metadata))
         for log_path in backups:
             read_into(log_path)
         # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
@@ -1520,8 +1539,13 @@ def _print_failed_settle_evidence(last_list_projects):
             raise RuntimeError("no readable EDT logs (%s)" % "; ".join(failures))
         text = "\n".join(texts)
         tail = text.splitlines()[-80:]
-        sections.append(("EDT log tail from %s (last 80 lines, last %d bytes per file at most)"
-                         % (" then ".join(sources), _EVIDENCE_LOG_TAIL_BYTES),
+        # A PARTIAL tail must say so. A backup that rotation removed before it could be opened is
+        # a file that may have held the failure, and a heading listing only what was read would
+        # present an incomplete tail as a complete one - the same overclaim this block keeps being
+        # fixed for, in its own output this time.
+        incomplete = (" - INCOMPLETE, could not read %s" % "; ".join(failures)) if failures else ""
+        sections.append(("EDT log tail from %s (last 80 lines, last %d bytes per file at most)%s"
+                         % (" then ".join(sources), _EVIDENCE_LOG_TAIL_BYTES, incomplete),
                          "\n".join(tail).rstrip() or "<empty log>"))
     except Exception as exc:
         sections.append(("EDT log tail (last 80 lines, last %d bytes per file at most)" %

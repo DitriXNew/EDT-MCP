@@ -199,6 +199,117 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn(".metadata/.bak_1.log then .metadata/.log", out)
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
 
+    def test_a_burst_of_rotations_keeps_the_EARLIEST_one_the_failure_went_into(self):
+        """The cap must spend its budget on the first rotation, not the last three.
+
+        The failure is at or before the moment collection started, so among the backups created
+        during collection it lives in the FIRST one - the file that was .log when the settle
+        failed. Keeping the newest would discard precisely the file being looked for.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotations = []
+
+            def rotate_four_times_then_read(path):
+                if not rotations:
+                    rotations.append(True)
+                    for index in range(2, 6):
+                        rotated_to = os.path.join(metadata, ".bak_%d.log" % index)
+                        os.replace(current, rotated_to)
+                        stamp = 2_000_000_000 + index
+                        os.utime(rotated_to, (stamp, stamp))
+                        with open(current, "w", encoding="utf-8") as handle:
+                            handle.write("LATER WRITE %d\n" % index)
+                return real_read(path)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=rotate_four_times_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE MOMENT", out,
+                      "the earliest rotation holds the failure and must survive the cap")
+        self.assertIn(".bak_2.log", out)
+
+    def test_a_reused_backup_name_with_an_unchanged_timestamp_is_still_detected(self):
+        """EDT reuses backup NAMES, so a rotation can overwrite one in place.
+
+        If the replacement happens to carry the same coarse timestamp, an mtime-only comparison
+        calls it unchanged and the rotation goes unseen. The identity carries size and inode too.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            reused = os.path.join(metadata, ".bak_1.log")
+            stamp = 2_000_000_000
+            with open(reused, "w", encoding="utf-8") as handle:
+                handle.write("STALE\n")
+            os.utime(reused, (stamp, stamp))
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotations = []
+
+            def rotate_in_place_then_read(path):
+                if not rotations:
+                    rotations.append(True)
+                    os.replace(current, reused)
+                    os.utime(reused, (stamp, stamp))    # the timestamp is deliberately unchanged
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
+                return real_read(path)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=rotate_in_place_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        self.assertIn("FAILURE MOMENT", printed.getvalue(),
+                      "a same-name, same-mtime replacement must still register as a rotation")
+
+    def test_a_tail_missing_one_source_says_so_instead_of_looking_complete(self):
+        """An unread backup may be the file that held the failure; silence would overclaim."""
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            backup = os.path.join(metadata, ".bak_1.log")
+            current = os.path.join(metadata, ".log")
+            with open(backup, "w", encoding="utf-8") as handle:
+                handle.write("BACKUP LINE\n")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            real_read = HARNESS._read_log_tail
+
+            def fail_on_the_backup(path):
+                if path.endswith(".bak_1.log"):
+                    raise OSError("vanished")
+                return real_read(path)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail", side_effect=fail_on_the_backup), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("CURRENT LINE", out, "what could be read must still be reported")
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn(".bak_1.log", out, "the unread source must be named")
+
     def test_two_rotations_in_a_row_do_not_push_the_failure_out_of_reach(self):
         """The case a single "newest backup" could not survive.
 
