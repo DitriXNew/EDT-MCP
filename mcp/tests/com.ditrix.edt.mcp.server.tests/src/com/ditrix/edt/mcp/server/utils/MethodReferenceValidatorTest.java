@@ -340,14 +340,15 @@ public class MethodReferenceValidatorTest
         CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
         module.setName("Calc"); //$NON-NLS-1$
         config.getCommonModules().add(module);
-        // methodName form: no type prefix, resolved metadata casing (findObject is case-insensitive).
-        assertEquals("Calc.Add", MethodReferenceValidator.canonicalReference(config, "CommonModule.Calc.Add", false)); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("Calc.Add", MethodReferenceValidator.canonicalReference(config, "calc.Add", false)); //$NON-NLS-1$ //$NON-NLS-2$
-        // handler form: English CommonModule prefix restored regardless of the input variant.
-        assertEquals("CommonModule.Calc.Add", MethodReferenceValidator.canonicalReference(config, "Calc.Add", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        // methodName form: English CommonModule prefix and resolved metadata casing.
         assertEquals("CommonModule.Calc.Add", //$NON-NLS-1$
-            MethodReferenceValidator.canonicalReference(config, "\u041E\u0431\u0449\u0438\u0439\u041C\u043E\u0434\u0443\u043B\u044C.Calc.Add", true)); //$NON-NLS-1$
+            MethodReferenceValidator.canonicalReference(config, "CommonModule.Calc.Add")); //$NON-NLS-1$
+        assertEquals("CommonModule.Calc.Add", MethodReferenceValidator.canonicalReference(config, "calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
+        // handler form: the same canonical prefix is restored regardless of the input variant.
+        assertEquals("CommonModule.Calc.Add", MethodReferenceValidator.canonicalReference(config, "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonModule.Calc.Add", //$NON-NLS-1$
+            MethodReferenceValidator.canonicalReference(config, "\u041E\u0431\u0449\u0438\u0439\u041C\u043E\u0434\u0443\u043B\u044C.Calc.Add")); //$NON-NLS-1$
         // Defensive: an unresolvable module yields null (caller keeps the raw value).
-        assertNull(MethodReferenceValidator.canonicalReference(config, "NoSuch.Add", false)); //$NON-NLS-1$
+        assertNull(MethodReferenceValidator.canonicalReference(config, "NoSuch.Add")); //$NON-NLS-1$
     }
 }

@@ -4623,10 +4623,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return methodRefErr;
         }
-        // A VALID reference is re-written to its canonical stored form (resolved module casing;
-        // methodName without a type prefix, handler with the English CommonModule prefix) so a
-        // tolerated variant like 'CommonModule.Calc.Add' / 'ОбщийМодуль.Calc.Add' never serializes
-        // verbatim into the model where the platform's own resolution would miss it.
+        // A VALID reference is re-written to its canonical stored form (English CommonModule prefix;
+        // resolved module casing) so a tolerated variant like 'Calc.Add' / 'ОбщийМодуль.Calc.Add'
+        // never serializes verbatim into the model where the platform's own resolution would miss it.
         value = canonicalMethodReference(ctx.config, target, name, value);
 
         // findFeature classifies ONLY the matched feature and skips the current-value rendering
@@ -4705,7 +4704,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
         {
             return MethodReferenceValidator.validate(project, config, value, PROP_METHOD_NAME,
-                "'CommonModuleName.MethodName'", "Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+                "'CommonModule.ModuleName.MethodName'", "CommonModule.Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
         {
@@ -4717,10 +4716,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Canonicalizes an ALREADY-VALIDATED method reference for the two guarded combos (see
-     * {@link #validateMethodReference}): a ScheduledJob's {@code methodName} stores
-     * {@code Module.Method} (no type prefix), an EventSubscription's {@code handler} stores
-     * {@code CommonModule.Module.Method}, both with the RESOLVED module's exact metadata name.
-     * Any other target/property - or a defensive resolution failure - returns the value unchanged.
+     * {@link #validateMethodReference}): both a ScheduledJob's {@code methodName} and an
+     * EventSubscription's {@code handler} store {@code CommonModule.Module.Method}, with the RESOLVED
+     * module's exact metadata name. Any other target/property - or a defensive resolution failure -
+     * returns the value unchanged.
      */
     static String canonicalMethodReference(Configuration config, EObject target, String name, String value)
     {
@@ -4729,13 +4728,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return value;
         }
         String canonical = null;
-        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        if ((target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+            || (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name)))
         {
-            canonical = MethodReferenceValidator.canonicalReference(config, value, false);
-        }
-        else if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
-        {
-            canonical = MethodReferenceValidator.canonicalReference(config, value, true);
+            canonical = MethodReferenceValidator.canonicalReference(config, value);
         }
         return canonical != null ? canonical : value;
     }

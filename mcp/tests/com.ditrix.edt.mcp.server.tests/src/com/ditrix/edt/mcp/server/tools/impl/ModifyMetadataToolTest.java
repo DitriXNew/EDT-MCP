@@ -1512,13 +1512,28 @@ public class ModifyMetadataToolTest
         module.setName("Calc"); //$NON-NLS-1$
         config.getCommonModules().add(module);
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
-        assertEquals("a validated methodName must serialize WITHOUT the type prefix", //$NON-NLS-1$
-            "Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("a validated methodName must serialize with the English CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", //$NON-NLS-1$
+            ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
         EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
         assertEquals("a validated handler must serialize WITH the English CommonModule prefix", //$NON-NLS-1$
             "CommonModule.Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // Unguarded combo: value passes through unchanged.
         assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCanonicalMethodReferencePrefixesShortScheduledJobInput()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setName("Calc"); //$NON-NLS-1$
+        config.getCommonModules().add(module);
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+
+        assertEquals("a short ScheduledJob methodName must be stored with the CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", //$NON-NLS-1$
+            ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ===== XDTO package member payload dispatch guards (issue #183 stream 1) =========================

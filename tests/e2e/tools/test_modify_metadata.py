@@ -2536,7 +2536,14 @@ def test_scheduled_job_method_name_accepts_existing_exported_server_method():
     assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
     assert "methodName" in (r.structured.get("applied") or []), \
         "methodName must be applied: %r" % (r.structured,)
-    poll_diff_contains("Calc.Add", ctx="the methodName must land in the ScheduledJob .mdo on disk")
+    # The EXACT stored form, not a substring of it. A bare "Calc.Add" is accepted as INPUT and
+    # normalized to the platform's three-segment form; the short form serialized verbatim is what
+    # made an extension unloadable ("reference to an unknown method"). Asserting the substring
+    # "Calc.Add" is what let that ship - it matches both spellings.
+    poll_diff_contains("<methodName>CommonModule.Calc.Add</methodName>",
+                       ctx="the methodName must land in the .mdo in the platform's stored form")
+    assert "<methodName>Calc.Add</methodName>" not in diff(), \
+        "the short form must never reach the .mdo: %s" % diff()[:500]
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
