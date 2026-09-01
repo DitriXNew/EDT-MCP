@@ -151,11 +151,14 @@ public final class PlatformFailures
      * preference used by {@link #statusMessage(IStatus, int)}. Cause-chain depth then wins over an
      * earlier throwable hop. The bounds also stop cyclical throwable/status structures.
      *
-     * <p>The raw deepest message is compared with {@code describe}'s selected message BEFORE any
-     * formatting. Equal text returns the empty string so a single-message failure is never repeated.
-     * When the deepest message is the own message of a terminal exception and is short enough to be
-     * generic (40 characters or fewer and no more than four whitespace-separated words), its fully
-     * qualified exception type is prefixed. Thus {@code Auth fail} becomes, for example,
+     * <p>Messages equal to {@code describe}'s selected headline are excluded as diagnosis
+     * candidates throughout both structures. The deepest message that remains wins, so a repeated
+     * headline cannot displace a distinct diagnosis even when the repetition sits deeper in the
+     * status tree or later in the cause chain. When no distinct candidate remains, the empty string
+     * is returned so a single-message failure is never repeated. When the deepest distinct message
+     * is the own message of a terminal exception and is short enough to be generic (40 characters
+     * or fewer and no more than four whitespace-separated words), its fully qualified exception
+     * type is prefixed. Thus {@code Auth fail} becomes, for example,
      * {@code com.jcraft.jsch.JSchException: Auth fail}; longer, self-explanatory platform prose is
      * returned without a stack-dump-like type prefix.
      *
@@ -176,14 +179,14 @@ public final class PlatformFailures
         Throwable current = failure;
         for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
         {
-            FailureMessage atHop = deepestMessageAt(current);
+            FailureMessage atHop = deepestMessageAt(current, selected);
             if (atHop != null)
             {
                 deepest = atHop;
             }
             current = current.getCause();
         }
-        if (deepest == null || selected.equals(deepest.message))
+        if (deepest == null)
         {
             return ""; //$NON-NLS-1$
         }
@@ -196,33 +199,35 @@ public final class PlatformFailures
         return deepest.message;
     }
 
-    /** Deepest message carried by one throwable hop, including its bounded status tree. */
-    private static FailureMessage deepestMessageAt(Throwable failure)
+    /** Deepest distinct message carried by one throwable hop and its bounded status tree. */
+    private static FailureMessage deepestMessageAt(Throwable failure, String selected)
     {
         String own = trimToNull(failure.getMessage());
-        FailureMessage deepest = own == null ? null : new FailureMessage(own, failure, 0);
-        FailureMessage fromStatus = deepestStatusMessage(statusOf(failure), 0);
+        FailureMessage deepest = own == null || selected.equals(own) ? null
+            : new FailureMessage(own, failure, 0);
+        FailureMessage fromStatus = deepestStatusMessage(statusOf(failure), 0, selected);
         return deeper(deepest, fromStatus);
     }
 
-    /** Deepest message in a bounded status tree; failing children win equal-depth ties. */
-    private static FailureMessage deepestStatusMessage(IStatus status, int depth)
+    /** Deepest distinct message in a bounded status tree; failing children win equal-depth ties. */
+    private static FailureMessage deepestStatusMessage(IStatus status, int depth, String selected)
     {
         if (status == null || depth > MAX_STATUS_DEPTH)
         {
             return null;
         }
         String own = trimToNull(status.getMessage());
-        FailureMessage deepest = own == null ? null : new FailureMessage(own, null, depth);
+        FailureMessage deepest = own == null || selected.equals(own) ? null
+            : new FailureMessage(own, null, depth);
         IStatus[] children = status.getChildren();
         if (children != null)
         {
-            deepest = deepestStatusChildren(children, depth, true, deepest);
-            deepest = deepestStatusChildren(children, depth, false, deepest);
+            deepest = deepestStatusChildren(children, depth, true, deepest, selected);
+            deepest = deepestStatusChildren(children, depth, false, deepest, selected);
         }
         Throwable carried = status.getException();
         String carriedMessage = carried == null ? null : trimToNull(carried.getMessage());
-        if (carriedMessage != null)
+        if (carriedMessage != null && !selected.equals(carriedMessage))
         {
             deepest = deeper(deepest,
                 new FailureMessage(carriedMessage, carried, depth + 1));
@@ -232,7 +237,7 @@ public final class PlatformFailures
 
     /** Walks failing or non-failing child statuses without visiting either group twice. */
     private static FailureMessage deepestStatusChildren(IStatus[] children, int depth,
-            boolean failing, FailureMessage deepest)
+            boolean failing, FailureMessage deepest, String selected)
     {
         for (IStatus child : children)
         {
@@ -240,7 +245,7 @@ public final class PlatformFailures
             {
                 continue;
             }
-            deepest = deeper(deepest, deepestStatusMessage(child, depth + 1));
+            deepest = deeper(deepest, deepestStatusMessage(child, depth + 1, selected));
         }
         return deepest;
     }

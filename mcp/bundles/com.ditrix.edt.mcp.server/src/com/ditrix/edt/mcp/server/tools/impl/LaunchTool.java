@@ -503,12 +503,15 @@ public class LaunchTool implements IMcpTool
         }
         String typeId = LaunchConfigUtils.getConfigTypeId(standalone);
         return NamedConfigurationResolution.error(ToolResult.error("Launch configuration '" //$NON-NLS-1$
-            + standalone.getName() + "' has type '" + typeId + "'. debug_launch starts runtime " //$NON-NLS-1$ //$NON-NLS-2$
+            + standalone.getName() + "' has type '" + typeId + "'. " + NAME //$NON-NLS-1$ //$NON-NLS-2$
+            + " starts runtime " //$NON-NLS-1$
             + "CLIENT configurations; it does not start standalone-server configurations " //$NON-NLS-1$
-            + "directly. Try debug_launch with the project's thin-client configuration instead: " //$NON-NLS-1$
+            + "directly. Try " + NAME //$NON-NLS-1$
+            + " with the project's thin-client configuration instead: " //$NON-NLS-1$
             + "launching that client has been observed to bring its standalone server up with " //$NON-NLS-1$
             + "it. " //$NON-NLS-1$
-            + "terminate_launch does accept this same standalone-server configuration when it " //$NON-NLS-1$
+            + TerminateLaunchTool.NAME
+            + " does accept this same standalone-server configuration when it " //$NON-NLS-1$
             + "is running.").toJson()); //$NON-NLS-1$
     }
 

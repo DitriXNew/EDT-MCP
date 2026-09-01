@@ -415,7 +415,12 @@ public class LaunchToolTest
         assertNotNull(error);
         assertTrue(error.contains(name));
         assertTrue(error.contains(STANDALONE_SERVER_TYPE_ID));
-        assertTrue(error.contains("debug_launch starts runtime CLIENT configurations")); //$NON-NLS-1$
+        assertTrue(error.contains(". " + LaunchTool.NAME //$NON-NLS-1$
+            + " starts runtime CLIENT configurations")); //$NON-NLS-1$
+        assertTrue(error.contains("Try " + LaunchTool.NAME //$NON-NLS-1$
+            + " with the project's thin-client configuration")); //$NON-NLS-1$
+        assertFalse("the refusal must not name the unadvertised legacy alias: " + error, //$NON-NLS-1$
+            error.contains("debug_launch")); //$NON-NLS-1$
         assertTrue(error.contains("thin-client configuration")); //$NON-NLS-1$
         // The workaround is stated as OBSERVED, not guaranteed: it is the issue reporter's
         // measurement on one workspace, and the platform sources do not show a client launch
@@ -424,7 +429,7 @@ public class LaunchToolTest
         assertTrue(error, error.contains("observed to bring its standalone server up")); //$NON-NLS-1$
         assertFalse("the workaround must not be promised as a guaranteed side effect: " + error, //$NON-NLS-1$
             error.contains("starts its standalone server as a side effect")); //$NON-NLS-1$
-        assertTrue(error.contains("terminate_launch")); //$NON-NLS-1$
+        assertTrue(error.contains(TerminateLaunchTool.NAME));
     }
 
     @Test

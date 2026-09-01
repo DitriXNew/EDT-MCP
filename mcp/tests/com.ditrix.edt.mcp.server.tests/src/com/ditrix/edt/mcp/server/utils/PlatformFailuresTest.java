@@ -253,6 +253,67 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testRootCauseKeepsMiddleDiagnosisWhenTerminalRepeatsHeadline()
+    {
+        String headline = "Database update failed"; //$NON-NLS-1$
+        String detail = "port 8429 is already in use"; //$NON-NLS-1$
+        Throwable failure = new RuntimeException(headline,
+            new RuntimeException(detail, new IllegalStateException(headline)));
+
+        assertEquals("a repeated terminal headline must not erase the distinct middle diagnosis", //$NON-NLS-1$
+            detail, rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseCycleEndingOnHeadlineKeepsDistinctDiagnosis()
+    {
+        String headline = "Database update failed"; //$NON-NLS-1$
+        String detail = "port 8429 is already in use"; //$NON-NLS-1$
+        CyclicFailure first = new CyclicFailure(headline);
+        CyclicFailure middle = new CyclicFailure(detail);
+        CyclicFailure last = new CyclicFailure(headline);
+        first.setNext(middle);
+        middle.setNext(last);
+        last.setNext(first);
+
+        assertEquals("the final bounded hop must not erase the cycle's distinct diagnosis", //$NON-NLS-1$
+            detail, rootCause(first));
+    }
+
+    @Test
+    public void testRootCauseFindsDistinctStatusMessageWhenHopRepeatsHeadline()
+    {
+        String headline = "Database update failed"; //$NON-NLS-1$
+        String detail = "port 8429 is already in use"; //$NON-NLS-1$
+        MultiStatus status = new MultiStatus(PLUGIN, 0, headline, null);
+        status.add(new Status(IStatus.ERROR, PLUGIN, headline));
+        status.add(new Status(IStatus.ERROR, PLUGIN, detail));
+        ApplicationException failure = new ApplicationException(status);
+
+        assertEquals("the fixture must select the repeated headline", headline, //$NON-NLS-1$
+            PlatformFailures.describe(failure));
+        assertEquals("a headline candidate must not hide a tied distinct status message", //$NON-NLS-1$
+            detail, rootCause(failure));
+    }
+
+    @Test
+    public void testRootCauseKeepsDistinctStatusWhenDeeperStatusRepeatsHeadline()
+    {
+        String headline = "Database update failed"; //$NON-NLS-1$
+        String detail = "publishing was refused because the infobase is locked"; //$NON-NLS-1$
+        MultiStatus status = new MultiStatus(PLUGIN, 0, headline, null);
+        MultiStatus detailStatus = new MultiStatus(PLUGIN, 0, detail, null);
+        detailStatus.add(new Status(IStatus.ERROR, PLUGIN, headline));
+        status.add(detailStatus);
+        ApplicationException failure = new ApplicationException(status);
+
+        assertEquals("the fixture must select the deeper repeated headline", headline, //$NON-NLS-1$
+            PlatformFailures.describe(failure));
+        assertEquals("a deeper repeated headline must not suppress a shallower distinct diagnosis", //$NON-NLS-1$
+            detail, rootCause(failure));
+    }
+
+    @Test
     public void testRootCauseAddsNothingWhenTheDeepestMessageEqualsDescribe()
     {
         Throwable failure = new RuntimeException("same diagnosis", //$NON-NLS-1$
@@ -290,7 +351,8 @@ public class PlatformFailuresTest
 
         assertEquals("describe itself stops at the deepest permitted status", "status-4", //$NON-NLS-1$ //$NON-NLS-2$
             PlatformFailures.describe(failure));
-        assertEquals("the out-of-cap status must not become a second diagnosis", "", //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the out-of-cap status must be ignored while the deepest in-cap distinct " //$NON-NLS-1$
+            + "diagnosis survives", "status-3", //$NON-NLS-1$ //$NON-NLS-2$
             rootCause(failure));
     }
 
