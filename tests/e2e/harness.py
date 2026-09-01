@@ -1334,6 +1334,11 @@ def _settle_progress_note(progress):
             "by itself distinguish a stalled queue from a slow one)" % (polls, elapsed))
 
 
+# The evidence tail is capped so a large log cannot turn a diagnostic into a delay. 80 lines of
+# EDT log run well under this; the cap only decides how much is READ to find them.
+_EVIDENCE_LOG_TAIL_BYTES = 256 * 1024
+
+
 def _failed_settle_evidence(last_list_projects):
     """Print one best-effort evidence block for the first failed settle in a reset cycle.
 
@@ -1350,10 +1355,19 @@ def _failed_settle_evidence(last_list_projects):
             raise RuntimeError(
                 "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
         log_path = os.path.join(workspace, ".metadata", ".log")
-        with open(log_path, encoding="utf-8", errors="replace") as handle:
-            tail = handle.readlines()[-80:]
-        sections.append(("EDT .metadata/.log tail (last 80 lines)",
-                         "".join(tail).rstrip() or "<empty log>"))
+        # Read the TAIL, not the file: seek back a bounded number of bytes rather than pulling
+        # the whole log in to keep 80 lines of it. This block runs inside the reset budget, so
+        # its cost has to be bounded by the file's SIZE not mattering, whatever the log grew to.
+        with open(log_path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
+            blob = handle.read()
+        text = blob.decode("utf-8", errors="replace")
+        tail = text.splitlines()[-80:]
+        sections.append(("EDT .metadata/.log tail (last 80 lines, last %d bytes at most)"
+                         % _EVIDENCE_LOG_TAIL_BYTES,
+                         "\n".join(tail).rstrip() or "<empty log>"))
     except Exception as exc:
         sections.append(("EDT .metadata/.log tail (last 80 lines)",
                          "<evidence unavailable: %s: %s>" %
@@ -1407,6 +1421,10 @@ def _revert_and_clean(project, revert):
             settle_failures += 1
             last_settle_failure = failure_details[0]
             if settle_failures == 1:
+                # Whatever collecting evidence costs is credited back to the deadline: the budget
+                # exists to bound RETRIES, and a diagnostic that ate an attempt would change the
+                # outcome it was added to explain.
+                _evidence_started = time.time()
                 try:
                     _failed_settle_evidence(progress.get("last_list_projects", ""))
                 except Exception as exc:
@@ -1418,6 +1436,7 @@ def _revert_and_clean(project, revert):
                               % (type(exc).__name__, exc), flush=True)
                     except Exception:
                         pass
+                deadline += time.time() - _evidence_started
             last_settle_failure = "%s; %s" % (
                 last_settle_failure, _settle_progress_note(progress))
             continue
