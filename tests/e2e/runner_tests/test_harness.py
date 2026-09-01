@@ -282,6 +282,23 @@ class FixtureResetTest(unittest.TestCase):
         self.assertIn("skipped", output.call_args.args[0].lower())
         self.assertIn("fixture is not loaded", output.call_args.args[0])
 
+    def test_external_objects_model_synced_reports_what_final_cleanup_recorded(self):
+        for external_synced in (True, False):
+            with self.subTest(external_synced=external_synced):
+                def clean_result(project, _revert):
+                    return (project != HARNESS.EXT_OBJECTS_PROJECT or external_synced,
+                            1, 0, None)
+
+                with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                        mock.patch.object(HARNESS, "_revert_and_clean",
+                                          side_effect=clean_result), \
+                        mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True), \
+                        mock.patch("builtins.print"):
+                    HARNESS.final_cleanup()
+
+                self.assertEqual(
+                    external_synced, HARNESS.external_objects_model_synced())
+
     def test_an_external_objects_timeout_is_not_absorbed_by_the_optional_attempt(self):
         """"Optional" means its model may be absent, not that the server may be unreachable.
 

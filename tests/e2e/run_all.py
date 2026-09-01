@@ -260,17 +260,28 @@ def _reset_after_write(harness, t):
         # model here whatever the test called itself.
         #
         # The violating test did not declare its writes, so there is nothing trustworthy to narrow
-        # the cleanup with. Reset every fixture through the protected reset cycle.
+        # the cleanup with. Reset every fixture whose model was synchronized at setup through the
+        # protected reset cycle; ExternalObjects is optional and an unavailable model cannot be
+        # reset, but the mandatory fixtures still close the undeclared-writer hole.
         if not harness.reset_all_fixtures():
             return
-        harness.reset_model(harness.ALL_FIXTURE_PROJECTS)
-        # REPORTED, never raised. Enforcing it would mean asserting, from the client side, that a
-        # given call moved the model - and the server does not say so on a SUCCESS response:
+        reset_projects = [
+            project for project in harness.ALL_FIXTURE_PROJECTS
+            if project != harness.EXT_OBJECTS_PROJECT
+            or harness.external_objects_model_synced()
+        ]
+        harness.reset_model(reset_projects)
+        # The classification is REPORTED, never raised. Cleanup itself is still mandatory: a disk
+        # revert failure or a reset failure for any setup-synchronized fixture propagates and can
+        # abort the run. That is an inability to restore evidence of a write, not enforcement of
+        # the advisory. Enforcing the classification would mean asserting, from the client side,
+        # that a given call moved the model - and the server does not say so on a SUCCESS response:
         # mutationCommitted/mutationOutcomeUnknown are emitted on ERROR paths only. Everything else
         # is inference from tool + arguments + action, and review found four separate ways for that
         # inference to be wrong (a build with nothing to build, a dcs read action, an
-        # already-adopted no-op, an import-mode update_database). A wrong inference must not turn a
-        # correct test red; here it costs an unnecessary reset, which is safe, plus a line to read.
+        # already-adopted no-op, an import-mode update_database). A wrong inference can therefore
+        # cost an unnecessary reset of available fixtures plus a line to read, but an absent
+        # optional model is not sent through a reset that cannot succeed.
         #
         # The hole the issue is about is closed above regardless: the reset now runs on EVIDENCE of
         # a mutation rather than on the test's declaration, so an undeclared write no longer rides

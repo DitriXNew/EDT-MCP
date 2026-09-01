@@ -702,6 +702,11 @@ def mutated_fixture_projects():
     return frozenset(_MUTATED_PROJECTS)
 
 
+def external_objects_model_synced():
+    """Whether final_cleanup synchronized the optional ExternalObjects model at setup."""
+    return _EXT_OBJECTS_MODEL_SYNCED
+
+
 def mutation_kind_violation_tools(kind, confirmed_tools):
     """Confirmed fixture-model writers that require a different declared test kind."""
     if kind == "write-metadata":
