@@ -42,8 +42,15 @@ public final class NativeRenderModeProbe
 
     /**
      * Captures EDT's native and buffered form render modes once, before this plugin can mutate
-     * either mode at runtime. Reflection failures are logged once and leave both snapshots as
-     * {@link NativeRenderMode#UNKNOWN}; they never escape into plugin startup.
+     * either mode at runtime: the only mutator is {@link #ensureBufferedNativeRenderMode()},
+     * reached from a tool call, which cannot run before this bundle has activated.
+     *
+     * <p>The bundle is lazily activated, so this is the state at MCP ACTIVATION rather than at
+     * JVM start. The distinction is only theoretical for these two flags: both are private
+     * static finals initialised from system properties at class-init, and no EDT code writes
+     * them afterwards - the sole reflective writer is ours. Reflection failures are logged once
+     * and leave both snapshots as {@link NativeRenderMode#UNKNOWN}; they never escape into
+     * plugin startup.
      */
     public static void captureStartupModes()
     {
