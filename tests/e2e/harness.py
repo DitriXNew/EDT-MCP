@@ -791,20 +791,27 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
-def _workspace_dir():
+def _workspace_dir(list_projects_markdown=None):
     """Locate the EDT workspace holding .metadata/.log.
 
     Explicit env wins. Otherwise infer it: a workspace almost always contains at least one
     project of its own (the Servers container, for one), so walk each project's ancestors
     looking for a .metadata/.log. Returns None when it cannot be found - callers decide whether
     missing diagnostics should be skipped or merely reported as unavailable.
+
+    @param list_projects_markdown a list_projects table the caller ALREADY holds. Pass it from
+    any path that must not touch the wire: a call() that times out arms the global abort latch
+    (abort_further_calls), which refuses every later MCP call AND every fixture reset - so a
+    diagnostic that issued one could destroy the very reset it was called to explain.
     """
     override = os.environ.get("EDT_MCP_EDT_WORKSPACE")
     if override:
         return override if os.path.isfile(os.path.join(override, ".metadata", ".log")) else None
 
-    result = call("list_projects", {})
-    text = result.text or ""
+    if list_projects_markdown is not None:
+        text = list_projects_markdown
+    else:
+        text = call("list_projects", {}).text or ""
     for raw in re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text):
         candidate = raw.rstrip("\\/ `")
         for _ in range(4):
@@ -1310,34 +1317,35 @@ def _baseline_mismatch():
     return None
 
 
-_NO_SETTLE_PROGRESS_MARKER = \
-    "remaining settle attempts stopped because no progress was observed"
+def _settle_progress_note(progress):
+    """One clause describing what the settle observed, for the failure message.
 
-
-def _settle_retry_decision(changed, polls, elapsed_seconds):
-    """Return whether another identical settle wait is useful, plus an early-stop reason."""
-    if changed:
-        return (False, None)
-    reason = ("project readiness state did not change once in %d polls over %ds; %s"
-              % (polls, int(elapsed_seconds), _NO_SETTLE_PROGRESS_MARKER))
-    return (True, reason)
+    Deliberately NOT a decision. list_projects reports a COARSE categorical state: a project
+    reads `building` for the entire recompute, whether the queue is draining steadily or has
+    stalled, so an unchanged snapshot is not evidence of a stall and must not shorten the
+    retries - a slow-but-healthy runner would start failing. It is still worth SAYING, because
+    the next occurrence is diagnosed from what was printed.
+    """
+    polls = progress.get("polls", 0)
+    elapsed = int(progress.get("elapsed", 0))
+    if progress.get("changed"):
+        return "project state changed during the wait (%d polls over %ds)" % (polls, elapsed)
+    return ("project state never changed in %d polls over %ds (a coarse state, so this does not "
+            "by itself distinguish a stalled queue from a slow one)" % (polls, elapsed))
 
 
 def _failed_settle_evidence(last_list_projects):
-    """Print one best-effort evidence block for the first failed settle in a reset cycle."""
+    """Print one best-effort evidence block for the first failed settle in a reset cycle.
+
+    Issues NO MCP call. A call() that times out arms the global abort latch, which refuses every
+    later call and every fixture reset - so an RPC here could destroy the remaining settle
+    attempts and the reset itself, which is the exact opposite of what a diagnostic may do.
+    Everything below comes from what the caller already holds or from the local filesystem.
+    """
     sections = [("last list_projects (raw)", last_list_projects or "<empty response>")]
 
     try:
-        status = call("get_server_status", {}).structured
-        sections.append(("get_server_status structuredContent",
-                         json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True)))
-    except Exception as exc:
-        sections.append(("get_server_status structuredContent",
-                         "<evidence unavailable: %s: %s>" %
-                         (type(exc).__name__, exc)))
-
-    try:
-        workspace = _workspace_dir()
+        workspace = _workspace_dir(last_list_projects or "")
         if workspace is None:
             raise RuntimeError(
                 "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
@@ -1410,12 +1418,8 @@ def _revert_and_clean(project, revert):
                               % (type(exc).__name__, exc), flush=True)
                     except Exception:
                         pass
-            stop, stop_reason = _settle_retry_decision(
-                progress.get("changed", True), progress.get("polls", 0),
-                progress.get("elapsed", MODEL_SETTLE_TIMEOUT))
-            if stop:
-                last_settle_failure = "%s; %s" % (last_settle_failure, stop_reason)
-                break
+            last_settle_failure = "%s; %s" % (
+                last_settle_failure, _settle_progress_note(progress))
             continue
         # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
         # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
@@ -1445,10 +1449,8 @@ def _revert_and_clean(project, revert):
 
 def _clean_failure_cause(clean_attempts, settle_failures, last_settle_failure):
     """Name the budget that actually ran out, for the abort message."""
-    no_progress_stop = (last_settle_failure is not None and
-                        _NO_SETTLE_PROGRESS_MARKER in last_settle_failure)
     terminal = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or
-                settle_failures >= MODEL_SETTLE_ATTEMPTS or no_progress_stop)
+                settle_failures >= MODEL_SETTLE_ATTEMPTS)
     if clean_attempts == 0:
         return ("%s (%d settle attempts of %ds each%s), so "
                 "clean_project was never even accepted for an attempt"

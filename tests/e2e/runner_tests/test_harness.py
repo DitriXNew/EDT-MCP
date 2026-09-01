@@ -62,20 +62,29 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertTrue(HARNESS._model_may_have_moved())
 
 
-class SettleRetryDecisionTest(unittest.TestCase):
-    def test_no_progress_stops_remaining_attempts_and_names_polls_and_seconds(self):
-        stop, reason = HARNESS._settle_retry_decision(False, 287, 600)
+class SettleProgressNoteTest(unittest.TestCase):
+    """The note REPORTS what a failed settle saw; it must never become a decision.
 
-        self.assertTrue(stop)
-        self.assertIn("287 polls", reason)
-        self.assertIn("600s", reason)
-        self.assertIn("remaining settle attempts stopped", reason)
+    list_projects answers a coarse categorical state, so an unchanged snapshot cannot tell a
+    stalled queue from a slow one. An earlier revision shortened the retries on exactly that
+    signal, which would have failed slow-but-healthy runs.
+    """
 
-    def test_observed_progress_keeps_remaining_attempts(self):
-        stop, reason = HARNESS._settle_retry_decision(True, 287, 600)
+    def test_stalled_snapshot_names_the_polls_and_seconds_and_owns_its_ambiguity(self):
+        note = HARNESS._settle_progress_note({"changed": False, "polls": 287, "elapsed": 600})
 
-        self.assertFalse(stop)
-        self.assertIsNone(reason)
+        self.assertIn("287 polls", note)
+        self.assertIn("600s", note)
+        self.assertIn("does not", note)
+
+    def test_observed_change_is_reported_as_such(self):
+        note = HARNESS._settle_progress_note({"changed": True, "polls": 287, "elapsed": 600})
+
+        self.assertIn("changed", note)
+        self.assertIn("287 polls", note)
+
+    def test_missing_progress_keys_do_not_raise(self):
+        self.assertIn("0 polls", HARNESS._settle_progress_note({}))
 
 
 if __name__ == "__main__":
