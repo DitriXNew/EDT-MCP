@@ -1474,6 +1474,15 @@ def _print_failed_settle_evidence(last_list_projects):
         # nothing reads, and the tail looks clean. Re-scanning at the end is no fix either - it
         # races the writer the same way. Duplicated lines in an 80-line tail are harmless; a
         # missing failure is the whole problem.
+        #
+        # WHAT THIS DOES AND DOES NOT GUARANTEE, stated rather than implied: the tail contains the
+        # failure if it was in .log when that read ran, or in the newest backup when the selection
+        # ran. It is NOT total. Two rotations during collection can move an ALREADY-rotated failure
+        # out of "newest", and covering that means reading N backups against a writer that can
+        # always rotate once more - unbounded work for a diagnostic that must stay cheap. The
+        # boundary is drawn here deliberately: one rotation is the case that actually happens
+        # (the log rotates at ~1 MB, collection takes milliseconds), and a heading naming the files
+        # the tail came from is what lets a reader see when they are looking at the other case.
         read_into(current)
         backup = _newest_backup(metadata)
         for log_path in backup:
