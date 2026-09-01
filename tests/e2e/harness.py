@@ -1404,29 +1404,54 @@ def _failed_settle_evidence(last_list_projects):
             (type(exc).__name__, exc))
 
 
-def _newest_backup(metadata):
-    """The most recently WRITTEN `.bak_*.log`, as a one-element list (empty when there is none).
+# At most this many log files are read for one evidence block: the current .log plus up to three
+# backups. Three is not a guess about rotation frequency - it is a ceiling on how much a diagnostic
+# may cost when something pathological is happening (a writer rotating in a loop). Realistically
+# the selection below returns one.
+_EVIDENCE_LOG_MAX_BACKUPS = 3
 
-    By modification time, never by name: EDT reuses the backup numbers, so the suffix does not
-    order them - a workspace can hold a .bak_7 written hours after its .bak_8 and .bak_9. Picking
-    the lexicographic last would then read the wrong file and show a tail that predates the
-    failure being diagnosed.
-    """
+
+def _backup_mtimes(metadata):
+    """`{path: mtime}` for every `.bak_*.log`, skipping any that vanishes mid-scan."""
+    dated = {}
     try:
-        backups = glob.glob(os.path.join(metadata, ".bak_*.log"))
-        if not backups:
-            return []
-        # A file can vanish between the glob and the stat (rotation); it is simply not a candidate.
-        dated = []
-        for path in backups:
+        for path in glob.glob(os.path.join(metadata, ".bak_*.log")):
             try:
-                dated.append((os.path.getmtime(path), path))
+                dated[path] = os.path.getmtime(path)
             except OSError:
-                continue
-        return [max(dated)[1]] if dated else []
+                continue    # rotation removed it between the glob and the stat
     except Exception:
-        # The current .log alone is still evidence; failing to list backups must not lose it.
-        return []
+        return {}
+    return dated
+
+
+def _backups_covering(before, after):
+    """The backups that can still hold the failure moment, oldest first.
+
+    `before` and `after` are _backup_mtimes snapshots taken around the read of the current log.
+    Two groups qualify, and each answers a different rotation:
+
+    - every backup that APPEARED or CHANGED between the snapshots. Each one is a file that was
+      .log moments ago, so a burst of rotations during collection cannot push the failure past us
+      - which is what one "newest backup" could not survive: two rotations in a row leave the
+      failure in the FIRST rotation's backup while the second becomes the newest;
+    - the newest backup that already existed, where an earlier rotation had put it.
+
+    Comparing SNAPSHOTS rather than timestamps against a clock is what makes this exact: EDT
+    reuses the backup numbers, so a rotation can overwrite .bak_1 rather than add a file, and a
+    changed mtime is what identifies it either way. Names never order these files - a workspace
+    can hold a .bak_7 written hours after its .bak_8.
+    """
+    appeared = [p for p, mtime in after.items() if before.get(p) != mtime]
+    pre_existing = [p for p in before if p not in appeared]
+    newest_pre = max(pre_existing, key=lambda p: before[p]) if pre_existing else None
+    chosen = list(appeared) + ([newest_pre] if newest_pre else [])
+    # Newest-first for the cap, so a pathological burst keeps the files CLOSEST to the failure...
+    chosen.sort(key=lambda p: after.get(p, before.get(p, 0)), reverse=True)
+    chosen = chosen[:_EVIDENCE_LOG_MAX_BACKUPS]
+    # ...then oldest-first, which is the order they are displayed in.
+    chosen.sort(key=lambda p: after.get(p, before.get(p, 0)))
+    return chosen
 
 
 def _print_failed_settle_evidence_note(message):
@@ -1461,36 +1486,31 @@ def _print_failed_settle_evidence(last_list_projects):
                 failures.append("%s: %s: %s" %
                                 (os.path.basename(log_path), type(exc).__name__, exc))
 
-        # ORDER IS THE WHOLE MECHANISM, and what has to be ordered is the two OPERATIONS, not just
-        # the two reads. EDT rotates by renaming .log to a .bak_N and starting an empty .log. Read
-        # the current file FIRST and CHOOSE the backup only after that read has returned, and both
-        # single-rotation interleavings are covered:
-        #   rotation before the read -> .log comes back empty, but the backup is chosen afterwards
-        #                               and is therefore the NEW .bak_N holding the failure;
-        #   rotation after the read  -> the failure is already in hand, and the backup chosen next
-        #                               is that same content, so the lines simply appear twice.
-        # Choosing the backup first breaks the first case even though the READS are still ordered
-        # correctly: the selection names the OLD backup while the failure moves into a new one that
-        # nothing reads, and the tail looks clean. Re-scanning at the end is no fix either - it
-        # races the writer the same way. Duplicated lines in an 80-line tail are harmless; a
-        # missing failure is the whole problem.
-        #
-        # WHAT THIS DOES AND DOES NOT GUARANTEE, stated rather than implied: the tail contains the
-        # failure if it was in .log when that read ran, or in the newest backup when the selection
-        # ran. It is NOT total. Two rotations during collection can move an ALREADY-rotated failure
-        # out of "newest", and covering that means reading N backups against a writer that can
-        # always rotate once more - unbounded work for a diagnostic that must stay cheap. The
-        # boundary is drawn here deliberately: one rotation is the case that actually happens
-        # (the log rotates at ~1 MB, collection takes milliseconds), and a heading naming the files
-        # the tail came from is what lets a reader see when they are looking at the other case.
+        # ORDER IS THE MECHANISM, and what has to be ordered are the OPERATIONS, not just the
+        # reads. EDT rotates by renaming .log to a .bak_N and starting an empty .log, so the file
+        # holding the failure moves while it is being collected. Bracket the read of the current
+        # log with two cheap directory snapshots, and every rotation that happens in that window
+        # shows up as a backup that appeared or changed - which is exactly the set that has to be
+        # read as well:
+        #   rotation before the read -> .log comes back empty, but the rotated-out file is in the
+        #                               `after` snapshot and gets read;
+        #   rotation after the read  -> the failure is already in hand, and the same content is
+        #                               read again from its new backup, so lines appear twice;
+        #   two in a row             -> BOTH new backups are in the snapshot diff, so the failure
+        #                               is not pushed out by the second rotation.
+        # Choosing a single "newest backup" survived none of these fully, and choosing it BEFORE
+        # the read survived neither of the first two. Re-scanning at the end alone is no fix - it
+        # races the writer the same way; the pair of snapshots is what makes the window observable.
+        # Duplicated lines in an 80-line tail are harmless; a missing failure is the whole problem.
+        before_rotation = _backup_mtimes(metadata)
         read_into(current)
-        backup = _newest_backup(metadata)
-        for log_path in backup:
+        backups = _backups_covering(before_rotation, _backup_mtimes(metadata))
+        for log_path in backups:
             read_into(log_path)
         # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
-        display_order = backup + [current]
+        display_order = backups + [current]
         texts = []
         for log_path in display_order:
             if log_path in by_path:

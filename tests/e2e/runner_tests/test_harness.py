@@ -199,6 +199,52 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn(".metadata/.bak_1.log then .metadata/.log", out)
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
 
+    def test_two_rotations_in_a_row_do_not_push_the_failure_out_of_reach(self):
+        """The case a single "newest backup" could not survive.
+
+        The first rotation puts the failure in one backup; the second makes a DIFFERENT backup the
+        newest. Picking one file collects the intermediate log and misses the failure entirely.
+        Bracketing the current read with two directory snapshots makes both rotations observable,
+        so both files are read.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            with open(os.path.join(metadata, ".bak_1.log"), "w", encoding="utf-8") as handle:
+                handle.write("OLDEST BACKUP LINE\n")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotations = []
+
+            def rotate_twice_then_read(path):
+                if not rotations:
+                    rotations.append(True)
+                    for backup_name, next_body, stamp in (
+                            (".bak_2.log", "INTERMEDIATE\n", 2_000_000_000),
+                            (".bak_3.log", "AFTER TWO ROTATIONS\n", 2_000_000_100)):
+                        rotated_to = os.path.join(metadata, backup_name)
+                        os.replace(current, rotated_to)
+                        os.utime(rotated_to, (stamp, stamp))
+                        with open(current, "w", encoding="utf-8") as handle:
+                            handle.write(next_body)
+                return real_read(path)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=rotate_twice_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE MOMENT", out,
+                      "the first rotation's backup must be read too, or two rotations lose it")
+        self.assertIn(".bak_2.log", out)
+        self.assertIn(".bak_3.log", out)
+
     def test_a_rotation_before_the_first_read_still_reaches_the_failure(self):
         """The other window: the backup is CHOSEN after the current file has been read.
 
@@ -241,8 +287,11 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FAILURE MOMENT", out,
                       "the backup must be chosen after the current read, or the rotated-out "
                       "failure is never looked at")
-        self.assertNotIn("OLDER BACKUP LINE", out,
-                         "the stale backup must not be the one collected")
+        # The file the rotation CREATED has to be named, not merely happen to be included: that
+        # is what proves the snapshot diff found it rather than the pre-existing backup being
+        # picked up by luck. The pre-existing one is collected too, deliberately - it is where an
+        # EARLIER rotation would have put a failure.
+        self.assertIn(".bak_2.log", out)
 
     def test_a_rotation_between_the_two_reads_costs_a_duplicate_not_the_failure(self):
         """The current log is read FIRST, which is why this race cannot lose evidence.
