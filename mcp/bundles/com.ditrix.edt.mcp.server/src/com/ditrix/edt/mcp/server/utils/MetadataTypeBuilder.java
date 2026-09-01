@@ -1103,11 +1103,26 @@ public final class MetadataTypeBuilder
     private static MdObject resolveProducedTypeTarget(MetadataScope scope,
         ProducedTypeKind producedKind, String ref)
     {
+        // An external-objects form can name both its project's own objects and objects from the
+        // linked configuration. Consult the scope first: if both roots ever expose the same
+        // type+Name, the object owned by this project wins. Only an external scope gets the linked-
+        // configuration fallback; an ordinary scope already delegates to its Configuration, so its
+        // single-root result (including a miss) remains exactly unchanged.
         if (ref.indexOf('.') < 0)
         {
-            return scope.findObject(producedKind.englishMetadataType, ref);
+            MdObject target = scope.findObject(producedKind.englishMetadataType, ref);
+            if (target != null || !scope.isExternalObjects())
+            {
+                return target;
+            }
+            return MetadataTypeUtils.findObject(scope.configuration(),
+                producedKind.englishMetadataType, ref);
         }
         MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, ref);
+        if ((node == null || !node.topLevel) && scope.isExternalObjects())
+        {
+            node = MetadataNodeResolver.resolveExisting(scope.configuration(), ref);
+        }
         return node != null && node.topLevel ? node.object : null;
     }
 

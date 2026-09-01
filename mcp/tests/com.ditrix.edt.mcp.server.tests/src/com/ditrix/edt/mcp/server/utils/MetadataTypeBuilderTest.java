@@ -737,6 +737,64 @@ public class MetadataTypeBuilderTest
             config, false, MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
         assertNull(scopeLessError);
         assertSame(configurationExpected, scopeLess.getTypes().get(0));
+
+        // A configuration scope already resolves against config. A genuine miss must keep the exact
+        // pre-scope error through both signatures; no linked-configuration fallback applies here.
+        for (String missingRef : new String[] {"Missing", "Document.Missing"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonObject missing = json("{\"kind\":\"DocumentObject\",\"ref\":\"" //$NON-NLS-1$
+                + missingRef + "\"}").getAsJsonObject(); //$NON-NLS-1$
+            TypeDescription scopedMissing = McoreFactory.eINSTANCE.createTypeDescription();
+            String scopedMissingError = MetadataTypeBuilder.addType(scopedMissing, missing,
+                "DocumentObject", null, config, MetadataScope.ofConfiguration(config), false, //$NON-NLS-1$
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+            TypeDescription scopeLessMissing = McoreFactory.eINSTANCE.createTypeDescription();
+            String scopeLessMissingError = MetadataTypeBuilder.addType(scopeLessMissing, missing,
+                "DocumentObject", null, config, false, //$NON-NLS-1$
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+            String expectedError = "Cannot resolve the reference target for kind 'DocumentObject' " //$NON-NLS-1$
+                + "ref '" + missingRef + "'. Use {kind:'DocumentObject', ref:'Name'} or pass " //$NON-NLS-1$ //$NON-NLS-2$
+                + "ref:'Document.Name', and check the object exists."; //$NON-NLS-1$
+            assertEquals(missingRef, expectedError, scopedMissingError);
+            assertEquals(missingRef, expectedError, scopeLessMissingError);
+            assertTrue(scopedMissing.getTypes().isEmpty());
+            assertTrue(scopeLessMissing.getTypes().isEmpty());
+        }
+    }
+
+    @Test
+    public void testExternalScopeResolvesLinkedConfigurationProducedTypeWithBareRef()
+    {
+        assertExternalScopeResolvesLinkedConfigurationProducedType("Products"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExternalScopeResolvesLinkedConfigurationProducedTypeWithQualifiedRef()
+    {
+        assertExternalScopeResolvesLinkedConfigurationProducedType("Catalog.Products"); //$NON-NLS-1$
+    }
+
+    private static void assertExternalScopeResolvesLinkedConfigurationProducedType(String ref)
+    {
+        Configuration linkedConfiguration = MdClassFactory.eINSTANCE.createConfiguration();
+        Type expected = McoreFactory.eINSTANCE.createType();
+        seedProducedType(linkedConfiguration, "Catalog", "Products", "objectType", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            expected);
+        IExternalObjectProject externalProject = Mockito.mock(IExternalObjectProject.class);
+        Mockito.when(externalProject.getExternalObjects()).thenReturn(Collections.emptyList());
+        MetadataScope scope = MetadataScope.ofExternalObjectProject(null, linkedConfiguration,
+            externalProject);
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"CatalogObject\",\"ref\":\"" + ref + "\"}") //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject();
+
+        String error = MetadataTypeBuilder.addType(td, item, "CatalogObject", null, //$NON-NLS-1$
+            linkedConfiguration, scope, false, MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(ref, error);
+        assertEquals(ref, 1, td.getTypes().size());
+        assertSame(ref, expected, td.getTypes().get(0));
     }
 
     private static void assertConcreteProducedTypeSharesModelOwnedTypeForBareQualifiedAndRussianRefs(
