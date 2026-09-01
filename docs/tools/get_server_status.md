@@ -18,12 +18,13 @@ A self-diagnosis snapshot of the running MCP server. Reach for it when something
 None.
 
 ## What you get
-JSON with: `port`, `running`, `protocolVersion`, `pluginVersion`, `edtVersion`, `enabledTools` / `totalTools`, `plainTextMode`, `checksFolderConfigured`, `authEnabled`, and `formRenderFlags`. The latter contains `nativeFormLayoutRender` followed by `nativeFormBufferedLayoutRender`; each has `effective` (`on`, `off`, or `unknown`) and optionally `requested` (the raw system-property string, omitted when unset).
+JSON with: `port`, `running`, `protocolVersion`, `pluginVersion`, `edtVersion`, `enabledTools` / `totalTools`, `plainTextMode`, `checksFolderConfigured`, `authEnabled`, and `formRenderFlags`. The latter contains `nativeFormLayoutRender` followed by `nativeFormBufferedLayoutRender`. Each flag always has `effective` (`on`, `off`, or `unknown`), the mode captured at EDT startup; it can also have `requested`, the raw system-property string currently set (omitted when unset), and `forcedAtRuntime: true` when the known live mode differs from the known startup snapshot.
 
 ## Notes & gotchas
 - Secrets are never exposed: you get only the `authEnabled` boolean (never the token) and `checksFolderConfigured` (never the folder path).
-- Judge render behavior by `effective`, which is EDT's actual mode. `requested` can be overwritten by this plugin after `get_form_screenshot` sets `nativeFormBufferedLayoutRender`, so it may no longer reflect the startup request from `1cedt.ini`.
-- If a form screenshot is blank, check `nativeFormBufferedLayoutRender.effective`; `off` means the layout renderer has no offscreen buffer, while `unknown` means the EDT mode probe failed.
+- Judge how EDT was launched by `effective`, which is captured before this plugin's screenshot path can mutate a live flag. `requested` is the system property now; this plugin can overwrite it after startup, so it may no longer reflect the line that EDT read from `1cedt.ini`.
+- `forcedAtRuntime` means only that the live flag was forced after startup; it does **not** mean buffered rendering works. `HippoLayoutService` creates its offscreen handler once, when the layout-service singleton is initialized, so changing the flag later does not create the missing handler.
+- If a form screenshot is blank, check `nativeFormBufferedLayoutRender.effective`. `off` explains the empty image: add `-DnativeFormBufferedLayoutRender=true` to `1cedt.ini` and restart EDT. Calling the screenshot tool again cannot repair that startup state. `unknown` means the startup mode probe failed.
 - `enabledTools` < `totalTools` is normal when progressive disclosure is on - use `list_toolsets` / `enable_toolset` to reveal more.
 
 ---

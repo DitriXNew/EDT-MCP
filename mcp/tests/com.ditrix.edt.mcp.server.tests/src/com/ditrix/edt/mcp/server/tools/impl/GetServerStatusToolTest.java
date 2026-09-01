@@ -14,6 +14,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -202,6 +203,25 @@ public class GetServerStatusToolTest
             restoreProperty(bufferedKey, savedBuffered);
             restoreProperty(nativeKey, savedNative);
         }
+    }
+
+    @Test
+    public void testFormRenderFlagsOmitForcedAtRuntimeWhenLiveModesMatchStartup()
+    {
+        NativeRenderModeProbe.captureStartupModes();
+        assertEquals(NativeRenderModeProbe.getStartupNativeRenderMode(),
+            NativeRenderModeProbe.getNativeRenderMode());
+        assertEquals(NativeRenderModeProbe.getStartupBufferedRenderMode(),
+            NativeRenderModeProbe.getBufferedRenderMode());
+
+        JsonObject flags = JsonParser
+            .parseString(new GetServerStatusTool().execute(java.util.Collections.emptyMap()))
+            .getAsJsonObject().getAsJsonObject("formRenderFlags"); //$NON-NLS-1$
+
+        assertFalse("unchanged native mode must not be marked as runtime-forced", //$NON-NLS-1$
+            flags.getAsJsonObject("nativeFormLayoutRender").has("forcedAtRuntime")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("unchanged buffered mode must not be marked as runtime-forced", //$NON-NLS-1$
+            flags.getAsJsonObject("nativeFormBufferedLayoutRender").has("forcedAtRuntime")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static void assertEffectiveState(JsonObject flags, String key)

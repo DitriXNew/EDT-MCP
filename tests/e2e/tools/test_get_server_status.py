@@ -18,7 +18,7 @@ Stable, code-anchored expectations (from the real impl, verified against source)
     headless `false` branch would fail here)
   - totalTools / enabledTools are positive ints (registry is populated)
   - formRenderFlags carries BOTH named JVM-flag keys, each with an effective
-    mode (the diagnostic for a blank form screenshot).
+    EDT-startup mode (the diagnostic for a blank form screenshot).
 
 NEGATIVE MATRIX — why it is minimal (documented, not fudged):
   The tool has NO parameters: no required param to omit, no enum to violate, no
@@ -106,7 +106,7 @@ def test_returns_live_server_snapshot_and_does_not_mutate():
                 "expected boolean %s, got %r" % (key, s.get(key)))
 
     # --- formRenderFlags: the blank-screenshot diagnostic. BOTH named keys are the
-    # load-bearing contract; each must expose the effective EDT render mode.
+    # load-bearing contract; each must expose the EDT-startup render mode.
     flags = s.get("formRenderFlags")
     if not isinstance(flags, dict):
         raise AssertionError("expected formRenderFlags object, got %r" % (flags,))

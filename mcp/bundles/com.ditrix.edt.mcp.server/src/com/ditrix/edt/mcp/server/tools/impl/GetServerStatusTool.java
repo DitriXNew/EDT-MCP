@@ -30,7 +30,7 @@ import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
  * <p>
  * Reports: listening port, MCP protocol version, plugin and EDT version, the
  * enabled/total tool counts, the {@code plainTextMode} and {@code checksFolder}
- * preference flags, the effective and requested states of the two form-render modes
+ * preference flags, the startup, requested and runtime-forced states of the two form-render modes
  * ({@code -DnativeFormBufferedLayoutRender} / {@code -DnativeFormLayoutRender}),
  * and whether authentication is enabled.
  * <p>
@@ -99,7 +99,8 @@ public class GetServerStatusTool implements IMcpTool
             .booleanProperty("checksFolderConfigured", "Whether a checks folder path is configured") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("authEnabled", "Whether bearer-token authentication is enabled") //$NON-NLS-1$ //$NON-NLS-2$
             .objectProperty("formRenderFlags", //$NON-NLS-1$
-                "effective is actual EDT mode; requested is a system property this plugin may overwrite") //$NON-NLS-1$
+                "effective is the EDT-startup mode; requested is the current system property; " //$NON-NLS-1$
+                    + "forcedAtRuntime marks a later live-mode change") //$NON-NLS-1$
             .build();
     }
 
@@ -163,14 +164,16 @@ public class GetServerStatusTool implements IMcpTool
             result.put("checksFolderConfigured", checksFolderConfigured); //$NON-NLS-1$
             result.put("authEnabled", authEnabled); //$NON-NLS-1$
 
-            // Effective EDT render modes plus their raw requested System properties, the
-            // diagnostic for a blank get_form_screenshot / get_form_layout_snapshot.
+            // EDT-startup render modes, current live modes and raw requested System properties:
+            // the diagnostic for a blank get_form_screenshot / get_form_layout_snapshot.
             Map<String, Object> formRenderFlags = new LinkedHashMap<>();
             formRenderFlags.put(FLAG_NATIVE_LAYOUT_RENDER,
-                createRenderFlagState(NativeRenderModeProbe.getNativeRenderMode(),
+                createRenderFlagState(NativeRenderModeProbe.getStartupNativeRenderMode(),
+                    NativeRenderModeProbe.getNativeRenderMode(),
                     System.getProperty(FLAG_NATIVE_LAYOUT_RENDER)));
             formRenderFlags.put(FLAG_BUFFERED_LAYOUT_RENDER,
-                createRenderFlagState(NativeRenderModeProbe.getBufferedRenderMode(),
+                createRenderFlagState(NativeRenderModeProbe.getStartupBufferedRenderMode(),
+                    NativeRenderModeProbe.getBufferedRenderMode(),
                     System.getProperty(FLAG_BUFFERED_LAYOUT_RENDER)));
             result.put("formRenderFlags", formRenderFlags); //$NON-NLS-1$
 
@@ -183,13 +186,19 @@ public class GetServerStatusTool implements IMcpTool
         }
     }
 
-    private static Map<String, Object> createRenderFlagState(NativeRenderMode effective, String requested)
+    private static Map<String, Object> createRenderFlagState(NativeRenderMode startupMode,
+        NativeRenderMode liveMode, String requested)
     {
         Map<String, Object> state = new LinkedHashMap<>();
-        state.put("effective", effective.name().toLowerCase(Locale.ROOT)); //$NON-NLS-1$
+        state.put("effective", startupMode.name().toLowerCase(Locale.ROOT)); //$NON-NLS-1$
         if (requested != null)
         {
             state.put("requested", requested); //$NON-NLS-1$
+        }
+        if (startupMode != NativeRenderMode.UNKNOWN && liveMode != NativeRenderMode.UNKNOWN
+            && startupMode != liveMode)
+        {
+            state.put("forcedAtRuntime", true); //$NON-NLS-1$
         }
         return state;
     }

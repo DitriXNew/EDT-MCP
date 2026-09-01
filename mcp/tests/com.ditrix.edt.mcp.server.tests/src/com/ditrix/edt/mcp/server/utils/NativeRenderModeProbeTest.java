@@ -45,6 +45,30 @@ public class NativeRenderModeProbeTest
             mode, NativeRenderMode.valueOf(mode.name()));
     }
 
+    @Test
+    public void testStartupRenderModesAreAlwaysOneOfTheThreeDocumentedStates()
+    {
+        NativeRenderModeProbe.captureStartupModes();
+
+        assertDocumentedMode(NativeRenderModeProbe.getStartupNativeRenderMode());
+        assertDocumentedMode(NativeRenderModeProbe.getStartupBufferedRenderMode());
+    }
+
+    @Test
+    public void testCaptureStartupModesIsIdempotent()
+    {
+        NativeRenderModeProbe.captureStartupModes();
+        NativeRenderMode nativeMode = NativeRenderModeProbe.getStartupNativeRenderMode();
+        NativeRenderMode bufferedMode = NativeRenderModeProbe.getStartupBufferedRenderMode();
+
+        NativeRenderModeProbe.captureStartupModes();
+
+        assertEquals("repeated capture must not change the startup native mode", //$NON-NLS-1$
+            nativeMode, NativeRenderModeProbe.getStartupNativeRenderMode());
+        assertEquals("repeated capture must not change the startup buffered mode", //$NON-NLS-1$
+            bufferedMode, NativeRenderModeProbe.getStartupBufferedRenderMode());
+    }
+
     /**
      * The reason the probe exists: it must report the mode EDT is actually in rather than a value
      * derived from a system property this plugin overwrites at runtime (issue #522). Setting the
@@ -76,5 +100,12 @@ public class NativeRenderModeProbeTest
                 System.setProperty(property, original);
             }
         }
+    }
+
+    private static void assertDocumentedMode(NativeRenderMode mode)
+    {
+        assertNotNull("the startup snapshot must never answer null", mode); //$NON-NLS-1$
+        assertEquals("the startup mode must round-trip through the enum: " + mode, //$NON-NLS-1$
+            mode, NativeRenderMode.valueOf(mode.name()));
     }
 }
