@@ -1507,10 +1507,13 @@ def _backups_covering(before, after, failures=None):
     # inventing a tie-break cannot prove that the omitted source was safe to omit. The honest
     # answer is to mark the evidence incomplete and tell the reader to inspect the raw workspace.
     if failures is not None:
-        if pre_existing and len(appeared) >= _EVIDENCE_LOG_MAX_BACKUPS:
+        slots_left = max(0, _EVIDENCE_LOG_MAX_BACKUPS - len(appeared))
+        omitted_pre_existing = max(0, len(pre_existing) - slots_left)
+        if omitted_pre_existing:
             failures.append(
-                "backup cap of %d was fully consumed by appeared backups; "
-                "no pre-existing backup could be read" % _EVIDENCE_LOG_MAX_BACKUPS)
+                "backup cap of %d omitted %d pre-existing backup%s for want of room"
+                % (_EVIDENCE_LOG_MAX_BACKUPS, omitted_pre_existing,
+                   "" if omitted_pre_existing == 1 else "s"))
         appeared_by_mtime = {}
         for path in appeared:
             appeared_by_mtime.setdefault(when(path), []).append(path)

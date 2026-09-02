@@ -324,9 +324,66 @@ class EvidenceLogTailTest(unittest.TestCase):
                          "this scenario must exercise the pre-existing backup displaced by cap")
         self.assertIn("INCOMPLETE", out)
         self.assertIn(
-            "backup cap of %d was fully consumed by appeared backups; "
-            "no pre-existing backup could be read" % HARNESS._EVIDENCE_LOG_MAX_BACKUPS,
+            "backup cap of %d omitted 1 pre-existing backup for want of room"
+            % HARNESS._EVIDENCE_LOG_MAX_BACKUPS,
             out)
+
+    @staticmethod
+    def _evidence_with_one_appeared_backup(pre_existing_count):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            before = {}
+            for index in range(1, pre_existing_count + 1):
+                path = os.path.join(metadata, ".bak_%d.log" % index)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("PRE-EXISTING BACKUP %d\n" % index)
+                os.utime(path, (1_000_000_000 + index, 1_000_000_000 + index))
+                st = os.stat(path)
+                before[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+
+            appeared = os.path.join(metadata, ".bak_appeared.log")
+            with open(appeared, "w", encoding="utf-8") as handle:
+                handle.write("APPEARED BACKUP\n")
+            os.utime(appeared, (2_000_000_000, 2_000_000_000))
+            st = os.stat(appeared)
+            after = dict(before)
+            after[appeared] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_backup_identities",
+                                      side_effect=((before, None), (after, None))), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        return printed.getvalue()
+
+    def test_one_appeared_backup_omitting_pre_existing_backups_marks_incomplete(self):
+        """A partly consumed cap must admit how many older candidates it dropped."""
+        out = self._evidence_with_one_appeared_backup(4)
+
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn(
+            "backup cap of %d omitted 2 pre-existing backups for want of room"
+            % HARNESS._EVIDENCE_LOG_MAX_BACKUPS,
+            out)
+
+    def test_pre_existing_backup_cap_boundary_only_marks_the_overflow_incomplete(self):
+        """Every candidate fitting stays complete; one more makes the omission explicit."""
+        fits = self._evidence_with_one_appeared_backup(2)
+        overflows = self._evidence_with_one_appeared_backup(3)
+
+        self.assertNotIn("INCOMPLETE", fits)
+        self.assertIn("INCOMPLETE", overflows)
+        self.assertIn(
+            "backup cap of %d omitted 1 pre-existing backup for want of room"
+            % HARNESS._EVIDENCE_LOG_MAX_BACKUPS,
+            overflows)
 
     def test_more_appeared_backups_than_the_cap_with_one_mtime_mark_tie_incomplete(self):
         """Scandir order cannot decide which member of a capped timestamp tie is first."""
