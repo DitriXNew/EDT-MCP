@@ -146,13 +146,16 @@ public final class MetadataTypeBuilder
         new ProducedTypeSuffix("Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", "refType") }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     /**
-     * EDT's {@code MdTypeProvider} selects event-subscription source candidates through
-     * {@code EventSourceTypeInfoCategory}. That category's exact membership is platform data and is
-     * not available from the checked-in source or plugin declaration, so this is a curated judgement
-     * matching the platform concept, not a list derived from those sources.
+     * The platform narrows event-subscription source candidates through
+     * {@code EventSourceTypeInfoCategory}, whose membership is platform data not readable from the
+     * checked-in sources. This suffix list is anchored in a census of {@code <types>} values under
+     * the EventSubscriptions of a full production ERP configuration. It deliberately does not
+     * impose a per-metadata-kind restriction: the census establishes which suffixes occur, not which
+     * kind/suffix pairs the platform prohibits, and an unproven pair matrix would create false
+     * refusals.
      */
     private static final String[] EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES = {
-        "Object", "RecordSet", "RecordManager", "ValueManager"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "Object", "Manager", "RecordSet", "RecordManager", "ValueManager"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
     /** A parsed {@code <metadata-token><produced-suffix>} kind. Package-visible for pure tests. */
     static final class ProducedTypeKind

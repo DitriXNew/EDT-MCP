@@ -986,6 +986,46 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testEventSourceAcceptsConcreteCatalogAndDocumentManagers()
+    {
+        for (String[] one : new String[][] {
+            {"Catalog", "Products", "CatalogManager"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"Document", "Invoice", "DocumentManager"} }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+            Type expected = McoreFactory.eINSTANCE.createType();
+            seedProducedType(config, one[0], one[1], "managerType", expected); //$NON-NLS-1$
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            JsonObject item = json("{\"kind\":\"" + one[2] + "\",\"ref\":\"" //$NON-NLS-1$ //$NON-NLS-2$
+                + one[1] + "\"}").getAsJsonObject(); //$NON-NLS-1$
+
+            String error = MetadataTypeBuilder.addType(td, item, one[2], null, config, false,
+                MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+
+            assertNull(one[2], error);
+            assertEquals(one[2], 1, td.getTypes().size());
+            assertSame(one[2], expected, td.getTypes().get(0));
+        }
+    }
+
+    @Test
+    public void testEventSourceAcceptsAbstractCatalogAndDocumentManagers()
+    {
+        for (String kind : new String[] {"CatalogManager", "DocumentManager"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Type abstractType = McoreFactory.eINSTANCE.createType();
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+            String error = addKind(kind, providerKnowing(kind, abstractType), td,
+                MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+
+            assertNull(kind, error);
+            assertEquals(kind, 1, td.getTypes().size());
+            assertSame(kind, abstractType, td.getTypes().get(0));
+        }
+    }
+
+    @Test
     public void testEventSourceRefusesListAndSelectionProducedTypesAndListsAcceptedSuffixes()
     {
         for (String[] one : new String[][] {
@@ -1004,11 +1044,11 @@ public class MetadataTypeBuilderTest
 
             String expected = "Type kind '" + one[0] + "' cannot be used as an event " //$NON-NLS-1$ //$NON-NLS-2$
                 + "subscription's source: an event subscription's source is an object that " //$NON-NLS-1$
-                + "publishes write events. Accepted produced-type suffixes: Object, RecordSet, " //$NON-NLS-1$
-                + "RecordManager, ValueManager."; //$NON-NLS-1$
+                + "publishes write events. Accepted produced-type suffixes: Object, Manager, " //$NON-NLS-1$
+                + "RecordSet, RecordManager, ValueManager."; //$NON-NLS-1$
             assertEquals(one[0], expected, error);
-            for (String suffix : new String[] {"Object", "RecordSet", "RecordManager", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "ValueManager"}) //$NON-NLS-1$
+            for (String suffix : new String[] {"Object", "Manager", "RecordSet", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "RecordManager", "ValueManager"}) //$NON-NLS-1$ //$NON-NLS-2$
             {
                 assertTrue(one[0] + " refusal must name accepted suffix " + suffix, //$NON-NLS-1$
                     error.contains(suffix));
