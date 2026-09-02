@@ -398,6 +398,20 @@ public class PlatformFailuresTest
     }
 
     @Test(timeout = 1000)
+    public void testRootCauseDoesNotResetCauseChainCapAcrossCoreExceptionStatus()
+    {
+        Throwable failure = new IllegalStateException("beyond-cap diagnosis"); //$NON-NLS-1$
+        for (int level = 10; level >= 0; level--)
+        {
+            failure = new CoreException(
+                new Status(IStatus.ERROR, PLUGIN, "level-" + level, failure)); //$NON-NLS-1$
+        }
+
+        assertEquals("a CoreException's duplicate status edge must not reset the ten-hop cap", //$NON-NLS-1$
+            "level-9", rootCause(failure)); //$NON-NLS-1$
+    }
+
+    @Test(timeout = 1000)
     public void testRootCauseVisitsAnAliasedStatusGraphOnlyOncePerIdentity()
     {
         IStatus shared = new Status(IStatus.ERROR, PLUGIN, ""); //$NON-NLS-1$

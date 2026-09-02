@@ -132,16 +132,18 @@ public final class PlatformFailures
      * {@link #describe(Throwable)}'s headline.
      *
      * <p>The walk follows only {@link Throwable#getCause()} and {@link IStatus#getException()}
-     * edges. At each throwable hop, the message is selected by the same rule as {@code describe}:
-     * status children first when present (including the failing-child preference), then the
-     * throwable's own message, then the status fallback. A status tree therefore says what ONE
-     * causal hop means; structural depth within that aggregate never competes with causal depth.
+     * edges. At each throwable hop, failing status children come first, then the throwable's own
+     * message and status fallback. Unlike {@code describe}, causation never falls back to a
+     * non-failing aggregate child merely because it has text. A status tree therefore says what
+     * ONE causal hop means; structural depth within that aggregate never competes with causal depth.
      *
      * <p>Throwable identities are de-duplicated. Each ordinary or status-attached cause chain is
      * capped at {@link #MAX_CAUSE_CHAIN_DEPTH}, and discovery of attached exceptions is capped at
-     * {@link #MAX_STATUS_DEPTH}. Status aliases are revisited only when reached at a shallower depth,
-     * where the cap can expose children that were previously out of bounds. These rules terminate
-     * cyclic graphs without making the result depend on a deeper alias being visited first.
+     * {@link #MAX_STATUS_DEPTH}. A status exception identical to its current throwable's
+     * {@code getCause()} is the same edge and cannot restart that cause-chain cap. Status aliases are
+     * revisited only when reached at a shallower depth, where the cap can expose children that were
+     * previously out of bounds. These rules terminate cyclic graphs without making the result depend
+     * on a deeper alias being visited first.
      *
      * <p>Messages equal to the selected headline are excluded. The formatted result is compared
      * with the headline again, because adding a type prefix can recreate a headline that differed
@@ -176,7 +178,7 @@ public final class PlatformFailures
             ThrowableHop hop = pending.remove();
             if (hop.causalDepth > 0)
             {
-                FailureMessage atHop = failureMessageAt(hop.failure);
+                FailureMessage atHop = causalFailureMessageAt(hop.failure);
                 if (atHop != null && !selected.equals(atHop.message)
                     && (deepest == null || hop.causalDepth > deepest.depth))
                 {
@@ -184,13 +186,14 @@ public final class PlatformFailures
                 }
             }
 
+            Throwable directCause = hop.failure.getCause();
             if (hop.causeDepth + 1 < MAX_CAUSE_CHAIN_DEPTH)
             {
-                enqueue(hop.failure.getCause(), hop.causalDepth + 1, hop.causeDepth + 1,
-                    pending, visitedThrowables);
+                enqueue(directCause, hop.causalDepth + 1, hop.causeDepth + 1, pending,
+                    visitedThrowables);
             }
-            enqueueStatusExceptions(statusOf(hop.failure), 0, hop.causalDepth + 1, pending,
-                visitedThrowables, new IdentityHashMap<IStatus, Integer>());
+            enqueueStatusExceptions(statusOf(hop.failure), 0, hop.causalDepth + 1, directCause,
+                pending, visitedThrowables, new IdentityHashMap<IStatus, Integer>());
         }
         if (deepest == null)
         {
@@ -206,13 +209,26 @@ public final class PlatformFailures
         return selected.equals(formatted) ? "" : formatted; //$NON-NLS-1$
     }
 
-    /** The exact per-hop rule used by {@link #describe(Throwable)}, with message provenance. */
+    /** The exact per-hop display rule used by {@link #describe(Throwable)}. */
     private static FailureMessage failureMessageAt(Throwable failure)
+    {
+        return failureMessageAt(failure, true);
+    }
+
+    /** The per-hop causal rule: no unrelated non-failing child fallback. */
+    private static FailureMessage causalFailureMessageAt(Throwable failure)
+    {
+        return failureMessageAt(failure, false);
+    }
+
+    /** Shared per-hop selection, with message provenance. */
+    private static FailureMessage failureMessageAt(Throwable failure,
+            boolean allowNonFailingChildren)
     {
         IStatus status = statusOf(failure);
         if (hasChildren(status))
         {
-            String fromChildren = statusMessage(status, 0);
+            String fromChildren = statusMessage(status, 0, allowNonFailingChildren);
             if (fromChildren != null)
             {
                 return new FailureMessage(fromChildren, null, 0);
@@ -225,7 +241,7 @@ public final class PlatformFailures
                 && own.equals(trimToNull(status.getMessage()));
             return new FailureMessage(own, copiedFromStatus ? null : failure, 0);
         }
-        String fromStatus = statusMessage(status, 0);
+        String fromStatus = statusMessage(status, 0, allowNonFailingChildren);
         return fromStatus == null ? null : new FailureMessage(fromStatus, null, 0);
     }
 
@@ -242,7 +258,7 @@ public final class PlatformFailures
 
     /** Finds exception edges in a bounded status aggregate; status messages are not candidates. */
     private static void enqueueStatusExceptions(IStatus status, int statusDepth, int causalDepth,
-            ArrayDeque<ThrowableHop> pending,
+            Throwable directCause, ArrayDeque<ThrowableHop> pending,
             IdentityHashMap<Throwable, Boolean> visitedThrowables,
             IdentityHashMap<IStatus, Integer> visitedStatuses)
     {
@@ -270,12 +286,20 @@ public final class PlatformFailures
                     {
                         continue;
                     }
-                    enqueueStatusExceptions(child, statusDepth + 1, causalDepth, pending,
-                        visitedThrowables, visitedStatuses);
+                    enqueueStatusExceptions(child, statusDepth + 1, causalDepth, directCause,
+                        pending, visitedThrowables, visitedStatuses);
                 }
             }
         }
-        enqueue(status.getException(), causalDepth, 0, pending, visitedThrowables);
+        Throwable statusException = status.getException();
+        // CoreException.getCause() is its status exception. It is the SAME cause-chain edge, even
+        // when the ordinary enqueue is stopped by the cap, so admitting it here with depth zero
+        // would make every tenth CoreException restart the documented bound. Genuinely different
+        // status exceptions still begin their own bounded chains.
+        if (statusException != directCause)
+        {
+            enqueue(statusException, causalDepth, 0, pending, visitedThrowables);
+        }
     }
 
     /** Deterministic proxy for a terse generic message that benefits from its exception type. */
@@ -486,9 +510,12 @@ public final class PlatformFailures
      * @param children the child statuses (never {@code null})
      * @param depth the parent's recursion depth
      * @param failingOnly {@code true} to consider only failing children
+     * @param allowNonFailingChildren whether nested aggregates may use their display fallback
+     * @param visitedStatuses shallowest depth already visited for each status identity
      * @return the message, or {@code null} when none of the considered children carries one
      */
     private static String firstChildMessage(IStatus[] children, int depth, boolean failingOnly,
+            boolean allowNonFailingChildren,
             IdentityHashMap<IStatus, Integer> visitedStatuses)
     {
         for (IStatus child : children)
@@ -497,7 +524,8 @@ public final class PlatformFailures
             {
                 continue;
             }
-            String message = statusMessage(child, depth + 1, visitedStatuses);
+            String message = statusMessage(child, depth + 1, allowNonFailingChildren,
+                visitedStatuses);
             if (message != null)
             {
                 return message;
@@ -523,11 +551,18 @@ public final class PlatformFailures
      */
     static String statusMessage(IStatus status, int depth)
     {
-        return statusMessage(status, depth, new IdentityHashMap<IStatus, Integer>());
+        return statusMessage(status, depth, true);
+    }
+
+    /** Selects status text while optionally disabling display's non-failing child fallback. */
+    private static String statusMessage(IStatus status, int depth, boolean allowNonFailingChildren)
+    {
+        return statusMessage(status, depth, allowNonFailingChildren,
+            new IdentityHashMap<IStatus, Integer>());
     }
 
     /** Alias-aware implementation; a shallower path may expose children hidden by the depth cap. */
-    private static String statusMessage(IStatus status, int depth,
+    private static String statusMessage(IStatus status, int depth, boolean allowNonFailingChildren,
             IdentityHashMap<IStatus, Integer> visitedStatuses)
     {
         if (status == null || depth > MAX_STATUS_DEPTH)
@@ -547,18 +582,23 @@ public final class PlatformFailures
         IStatus[] children = status.getChildren();
         if (children != null)
         {
-            // FAILING children first: an aggregated EDT operation legitimately mixes informational
-            // or OK children with the one that failed, and a plain first-with-text rule could turn
-            // a database failure into an unrelated progress message.
-            String fromFailing = firstChildMessage(children, depth, true, visitedStatuses);
+            // "Failing" deliberately matches statusMessage's established display pass exactly:
+            // IStatus.matches(ERROR | CANCEL). Display and causation agree on that term; causation
+            // alone stops after this pass so an INFO/OK sibling cannot be presented as a cause.
+            String fromFailing = firstChildMessage(children, depth, true,
+                allowNonFailingChildren, visitedStatuses);
             if (fromFailing != null)
             {
                 return fromFailing;
             }
-            String fromAny = firstChildMessage(children, depth, false, visitedStatuses);
-            if (fromAny != null)
+            if (allowNonFailingChildren)
             {
-                return fromAny;
+                String fromAny = firstChildMessage(children, depth, false,
+                    allowNonFailingChildren, visitedStatuses);
+                if (fromAny != null)
+                {
+                    return fromAny;
+                }
             }
         }
         String own = trimToNull(status.getMessage());

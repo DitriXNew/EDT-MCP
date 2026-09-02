@@ -526,6 +526,45 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testApplicationFailureDoesNotUseInformationalStatusChildAsCause()
+    {
+        MultiStatus status = new MultiStatus(STATUS_PLUGIN_ID, 0, "", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID, "")); //$NON-NLS-1$
+        status.add(new Status(IStatus.CANCEL, STATUS_PLUGIN_ID, "")); //$NON-NLS-1$
+        status.add(new Status(IStatus.INFO, STATUS_PLUGIN_ID, "Cleanup completed")); //$NON-NLS-1$
+        ApplicationException failure = new ApplicationException(
+            "Infobase connection runtime session open error", new CoreException(status)); //$NON-NLS-1$
+
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "ProjectB", "app-b", false)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertFalse("an informational sibling is not a cause: " + error, //$NON-NLS-1$
+            error.contains("Cleanup completed")); //$NON-NLS-1$
+        assertFalse("blank failing children establish no cause clause: " + error, //$NON-NLS-1$
+            error.contains("Caused by")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testApplicationFailureStillUsesCausalHopsOwnStatusMessage()
+    {
+        MultiStatus status = new MultiStatus(STATUS_PLUGIN_ID, 0, "Connection refused", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID, "")); //$NON-NLS-1$
+        status.add(new Status(IStatus.INFO, STATUS_PLUGIN_ID, "Cleanup completed")); //$NON-NLS-1$
+        ApplicationException failure = new ApplicationException(
+            "Infobase connection runtime session open error", new CoreException(status)); //$NON-NLS-1$
+
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "ProjectB", "app-b", false)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue("the causal hop's own statement remains eligible: " + error, //$NON-NLS-1$
+            error.contains("Caused by: Connection refused.")); //$NON-NLS-1$
+        assertFalse("an informational sibling must not displace the hop's own statement: " + error, //$NON-NLS-1$
+            error.contains("Cleanup completed")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testApplicationFailureDoesNotRepeatFormattedHeadlineAsCause()
     {
         ApplicationException failure =
