@@ -509,6 +509,11 @@ DEEP_MUTATION_TOOLS = frozenset({
     "clean_project", "create_project", "delete_project",
 })
 
+# The server-side WriteScope has a distinct cascade grade, but does not publish that grade in
+# writtenProjects. Keep this list tied to actual WriteScope.recordCascade call sites: today only
+# delete_metadata records dependent extensions after EDT's opaque delete refactoring.
+CASCADE_MUTATION_TOOLS = frozenset({"delete_metadata"})
+
 # Tools that change the BM model. A SUCCESSFUL call, an observed post-commit error, or an error
 # whose mutating API cannot report rollback forfeits the shortcut, whatever later evidence says.
 #
@@ -583,6 +588,11 @@ _MUTATED_PROJECTS = set()
 # attempted-target union above, this is safe to use when deciding whether an unsynchronized
 # optional fixture must be reset: a separate successful call cannot confirm a refused target.
 _EVIDENCED_MUTATION_PROJECTS = set()
+# Project targets belonging to mutating calls whose response has not been parsed yet. Counts keep
+# two attempts naming the same project independent: resolving one refusal must not erase the other
+# call's still-unknown evidence. Unlike the per-test outcome set above, these survive
+# begin_test_calls() until either that call resolves or a verified model reset retires them.
+_UNRESOLVED_MUTATION_PROJECTS = {}
 # Inventory baselines are captured independently because each fixture has its own model. The
 # single-value name remains the base project's alias: the base-only shortcut and detail-backed
 # verification deliberately continue to read it exactly as before.
@@ -615,11 +625,19 @@ _CONFIRMED_MUTATION_TOOLS = set()
 # and until then every write test pays in full: slower, never wrong.
 _MUTATIONS_UNRESOLVED = 0
 
+# Only arguments whose schema says they NAME a project participate in target inference. Across the
+# fixture-model writers these are projectName and adopt_metadata_object's extensionProjectName;
+# fixture-looking text in source, fqn, or any other value is unrelated. An unresolved outcome
+# widens evidence only for a project named through one of these PROJECT-TYPED arguments, because
+# this branch already treats "outcome unknown" as "assume it moved".
+_PROJECT_ARGUMENT_KEYS = frozenset({"projectName", "extensionProjectName"})
+
 
 def _fixture_projects_named_in(args):
-    """Fixture-valued string arguments from one call; tracking must never block the call."""
+    """Fixture names supplied through project-typed arguments; never block the call."""
     try:
-        values = args.values() if isinstance(args, dict) else ()
+        values = (args.get(key) for key in _PROJECT_ARGUMENT_KEYS) \
+            if isinstance(args, dict) else ()
         return {
             value for value in values
             if isinstance(value, str) and value in ALL_FIXTURE_PROJECTS
@@ -634,10 +652,11 @@ def _record_attempt(tool, args=None):
     _CALLED_TOOLS.add(tool)
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
             and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS):
-        # The write target is not always under projectName: adoption names its destination under
-        # extensionProjectName. Record every fixture-valued string on the attempt because a call
-        # that dies on the wire may already have committed, leaving no response to narrow it.
-        _MUTATED_PROJECTS.update(_fixture_projects_named_in(args))
+        named_projects = _fixture_projects_named_in(args)
+        _MUTATED_PROJECTS.update(named_projects)
+        for project in named_projects:
+            _UNRESOLVED_MUTATION_PROJECTS[project] = \
+                _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) + 1
     if tool in MODEL_MUTATION_TOOLS:
         _MUTATIONS_UNRESOLVED += 1
 
@@ -666,6 +685,13 @@ def _record_outcome(tool, args, is_error, structured):
         pass
     if tool not in MODEL_MUTATION_TOOLS:
         return
+    if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
+        for project in _fixture_projects_named_in(args):
+            remaining = _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) - 1
+            if remaining > 0:
+                _UNRESOLVED_MUTATION_PROJECTS[project] = remaining
+            else:
+                _UNRESOLVED_MUTATION_PROJECTS.pop(project, None)
     _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
     mutation_committed = (isinstance(structured, dict)
                           and structured.get("mutationCommitted") is True)
@@ -698,6 +724,7 @@ def _mark_model_synced():
     since been re-imported from the clean disk and checked. Nothing else may clear it."""
     global _MUTATIONS_UNRESOLVED
     _MUTATIONS_UNRESOLVED = 0
+    _UNRESOLVED_MUTATION_PROJECTS.clear()
 
 
 def _model_may_have_moved():
@@ -726,8 +753,14 @@ def mutated_fixture_projects():
 
 
 def evidenced_mutation_fixture_projects():
-    """Fixture projects tied to mutation evidence from the same call's outcome."""
-    return frozenset(_EVIDENCED_MUTATION_PROJECTS)
+    """Fixture projects tied to an evidenced or still-unresolved mutating call."""
+    return frozenset(
+        _EVIDENCED_MUTATION_PROJECTS | set(_UNRESOLVED_MUTATION_PROJECTS))
+
+
+def mutation_could_have_cascaded():
+    """Whether this test called a writer whose server-side scope records cascade participants."""
+    return bool(_CALLED_TOOLS & CASCADE_MUTATION_TOOLS)
 
 
 def external_objects_model_synced():

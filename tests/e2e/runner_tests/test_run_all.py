@@ -30,6 +30,7 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.mutations_unresolved.return_value = False
         harness.mutated_fixture_projects.return_value = frozenset()
         harness.evidenced_mutation_fixture_projects.return_value = frozenset()
+        harness.mutation_could_have_cascaded.return_value = False
         harness.reset_all_fixtures.return_value = True
         return harness
 
@@ -105,6 +106,20 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.mutated_fixture_projects.return_value = frozenset({"Extension"})
 
         RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "write-metadata"})
+
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_declared_cascade_write_resets_every_available_fixture_project(self):
+        harness = self._mutation_harness()
+        harness.mutation_kind_violation_tools.return_value = ()
+        harness.model_is_pristine.return_value = False
+        harness.reset_fixture.return_value = True
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"Base"})
+        harness.mutation_could_have_cascaded.return_value = True
+
+        RUN_ALL._reset_after_write(
+            harness, {"name": "base delete", "kind": "write-metadata"})
 
         harness.reset_model.assert_called_once_with(["Base", "Extension"])
 

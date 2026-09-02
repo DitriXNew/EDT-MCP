@@ -20,12 +20,14 @@ class MutationOutcomeTest(unittest.TestCase):
         self.old_called = set(HARNESS._CALLED_TOOLS)
         self.old_mutated_projects = set(HARNESS._MUTATED_PROJECTS)
         self.old_evidenced_projects = set(HARNESS._EVIDENCED_MUTATION_PROJECTS)
+        self.old_unresolved_projects = dict(HARNESS._UNRESOLVED_MUTATION_PROJECTS)
         HARNESS._MUTATIONS_UNRESOLVED = 0
         HARNESS._MUTATION_CONFIRMED = False
         HARNESS._CONFIRMED_MUTATION_TOOLS.clear()
         HARNESS._CALLED_TOOLS.clear()
         HARNESS._MUTATED_PROJECTS.clear()
         HARNESS._EVIDENCED_MUTATION_PROJECTS.clear()
+        HARNESS._UNRESOLVED_MUTATION_PROJECTS.clear()
 
     def tearDown(self):
         HARNESS._MUTATIONS_UNRESOLVED = self.old_unresolved
@@ -38,6 +40,8 @@ class MutationOutcomeTest(unittest.TestCase):
         HARNESS._MUTATED_PROJECTS.update(self.old_mutated_projects)
         HARNESS._EVIDENCED_MUTATION_PROJECTS.clear()
         HARNESS._EVIDENCED_MUTATION_PROJECTS.update(self.old_evidenced_projects)
+        HARNESS._UNRESOLVED_MUTATION_PROJECTS.clear()
+        HARNESS._UNRESOLVED_MUTATION_PROJECTS.update(self.old_unresolved_projects)
 
     def test_mutating_attempt_tracks_fixture_project_but_read_attempt_does_not(self):
         HARNESS._record_attempt(
@@ -105,6 +109,35 @@ class MutationOutcomeTest(unittest.TestCase):
 
         self.assertEqual(
             frozenset(), HARNESS.evidenced_mutation_fixture_projects())
+
+    def test_successful_write_does_not_evidence_fixture_named_only_by_source(self):
+        HARNESS._record_attempt("write_module_source", {
+            "projectName": HARNESS.PROJECT,
+            "source": HARNESS.EXT_OBJECTS_PROJECT,
+        })
+        HARNESS._record_outcome(
+            "write_module_source",
+            {
+                "projectName": HARNESS.PROJECT,
+                "source": HARNESS.EXT_OBJECTS_PROJECT,
+            },
+            False,
+            {"success": True},
+        )
+
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT}),
+            HARNESS.evidenced_mutation_fixture_projects(),
+        )
+
+    def test_unresolved_write_evidences_fixture_named_by_project_argument(self):
+        HARNESS._record_attempt(
+            "write_module_source", {"projectName": HARNESS.EXT_OBJECTS_PROJECT})
+
+        self.assertEqual(
+            frozenset({HARNESS.EXT_OBJECTS_PROJECT}),
+            HARNESS.evidenced_mutation_fixture_projects(),
+        )
 
     def test_each_mutation_outcome_signal_evidences_the_call_named_fixture_project(self):
         outcomes = (

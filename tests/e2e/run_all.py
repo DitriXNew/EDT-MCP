@@ -307,8 +307,23 @@ def _reset_after_write(harness, t):
     # when the tree is off limits. Believe that answer instead of racing it.
     if not harness.reset_fixture():
         return
-    harness.reset_model(sorted(
-        {harness.PROJECT} | harness.mutated_fixture_projects()))
+    if harness.mutation_could_have_cascaded():
+        # The server waits for EDT's cascade participants but deliberately leaves them out of
+        # writtenProjects: it knows only what EDT scanned, not what EDT rewrote. Do not invent a
+        # client-side target. Reset every fixture model known to be available instead; the optional
+        # ExternalObjects project stays out unless setup synchronized it or call-correlated evidence
+        # says a request may actually have reached it.
+        evidenced_projects = harness.evidenced_mutation_fixture_projects()
+        reset_projects = [
+            project for project in harness.ALL_FIXTURE_PROJECTS
+            if project != harness.EXT_OBJECTS_PROJECT
+            or harness.external_objects_model_synced()
+            or project in evidenced_projects
+        ]
+    else:
+        reset_projects = sorted(
+            {harness.PROJECT} | harness.mutated_fixture_projects())
+    harness.reset_model(reset_projects)
 
 
 # Names of the tests whose model reset was skipped — reported at the end so the shortcut is
