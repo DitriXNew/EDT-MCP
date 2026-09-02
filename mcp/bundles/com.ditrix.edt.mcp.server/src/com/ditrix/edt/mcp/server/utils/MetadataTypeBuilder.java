@@ -129,6 +129,8 @@ public final class MetadataTypeBuilder
         new ProducedTypeSuffix("Object", "\u041E\u0431\u044A\u0435\u043A\u0442", "objectType"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         new ProducedTypeSuffix("Manager", "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440", //$NON-NLS-1$ //$NON-NLS-2$
             "managerType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("Record", "\u0417\u0430\u043F\u0438\u0441\u044C", //$NON-NLS-1$ //$NON-NLS-2$
+            "recordType"), //$NON-NLS-1$
         new ProducedTypeSuffix("RecordSet", //$NON-NLS-1$
             "\u041D\u0430\u0431\u043E\u0440\u0417\u0430\u043F\u0438\u0441\u0435\u0439", //$NON-NLS-1$
             "recordSetType"), //$NON-NLS-1$
@@ -729,7 +731,7 @@ public final class MetadataTypeBuilder
         return null;
     }
 
-    /** Returns the longest matching suffix, so ValueManager is never shortened to Manager. */
+    /** Returns the longest matching suffix, so RecordManager / ValueManager never become Manager. */
     private static ProducedTypeSuffix trailingProducedTypeSuffix(String candidate)
     {
         ProducedTypeSuffix best = null;
@@ -1187,7 +1189,7 @@ public final class MetadataTypeBuilder
             }
         }
         return available.isEmpty()
-            ? "none from the Object / Manager / RecordSet / RecordManager / ValueManager / " //$NON-NLS-1$
+            ? "none from the Object / Manager / Record / RecordSet / RecordManager / ValueManager / " //$NON-NLS-1$
                 + "RecordKey / List / Selection / Ref family" : String.join(", ", available); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

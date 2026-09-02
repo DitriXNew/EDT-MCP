@@ -219,7 +219,7 @@ public class MetadataTypeBuilderTest
     {
         // <Type>Ref keeps its OWN grammar, unchanged by the produced-type family: a ref is required,
         // and an omitted one is the first case in this list. The family covers the Object / Manager /
-        // RecordSet / ... types a Ref cannot name, and deliberately does not include Ref itself.
+        // Record / RecordSet / ... types a Ref cannot name, and deliberately does not include Ref itself.
         for (String suffix : new String[] { "", ",\"ref\":\"\"", ",\"ref\":\"   \"", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             ",\"ref\":1", ",\"ref\":true", ",\"ref\":{}", ",\"ref\":null" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         {
@@ -625,6 +625,45 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testInformationRegisterRecordFamilySplitsToExactFeaturesInEnglish()
+    {
+        assertProducedTypeSplit("InformationRegisterRecord", "InformationRegister", //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegister", "Record", "recordType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertProducedTypeSplit("InformationRegisterRecordSet", "InformationRegister", //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegister", "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertProducedTypeSplit("InformationRegisterRecordManager", "InformationRegister", //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegister", "RecordManager", "recordManagerType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertProducedTypeSplit("InformationRegisterRecordKey", "InformationRegister", //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegister", "RecordKey", "recordKeyType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testInformationRegisterRecordFamilySplitsToExactFeaturesInRussian()
+    {
+        String russianInformationRegister = "\u0420\u0435\u0433\u0438\u0441\u0442\u0440" //$NON-NLS-1$
+            + "\u0421\u0432\u0435\u0434\u0435\u043D\u0438\u0439"; //$NON-NLS-1$
+        String russianRecord = "\u0417\u0430\u043F\u0438\u0441\u044C"; //$NON-NLS-1$
+        String russianRecordSet = "\u041D\u0430\u0431\u043E\u0440" //$NON-NLS-1$
+            + "\u0417\u0430\u043F\u0438\u0441\u0435\u0439"; //$NON-NLS-1$
+        String russianRecordManager = "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440" //$NON-NLS-1$
+            + "\u0417\u0430\u043F\u0438\u0441\u0438"; //$NON-NLS-1$
+        String russianRecordKey = "\u041A\u043B\u044E\u0447" //$NON-NLS-1$
+            + "\u0417\u0430\u043F\u0438\u0441\u0438"; //$NON-NLS-1$
+
+        assertProducedTypeSplit(russianInformationRegister + russianRecord,
+            russianInformationRegister, "InformationRegister", "Record", "recordType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertProducedTypeSplit(russianInformationRegister + russianRecordSet,
+            russianInformationRegister, "InformationRegister", "RecordSet", //$NON-NLS-1$ //$NON-NLS-2$
+            "recordSetType"); //$NON-NLS-1$
+        assertProducedTypeSplit(russianInformationRegister + russianRecordManager,
+            russianInformationRegister, "InformationRegister", "RecordManager", //$NON-NLS-1$ //$NON-NLS-2$
+            "recordManagerType"); //$NON-NLS-1$
+        assertProducedTypeSplit(russianInformationRegister + russianRecordKey,
+            russianInformationRegister, "InformationRegister", "RecordKey", //$NON-NLS-1$ //$NON-NLS-2$
+            "recordKeyType"); //$NON-NLS-1$
+    }
+
+    @Test
     public void testBareProducedSuffixIsReportedAsAnUnknownKindNotAPhantomPrefix()
     {
         // The observable half of the rule above. A caller who types the suffix alone must be told that
@@ -864,6 +903,44 @@ public class MetadataTypeBuilderTest
         assertNull(error);
         assertEquals(1, td.getTypes().size());
         assertSame(expected, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testConcreteInformationRegisterRecordResolvesOnFormAndIsRefusedForEventSource()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Type expected = McoreFactory.eINSTANCE.createType();
+        seedProducedType(config, "InformationRegister", "Prices", "recordType", expected); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonElement spec = json(
+            "{\"types\":[{\"kind\":\"InformationRegisterRecord\",\"ref\":\"Prices\"}]}"); //$NON-NLS-1$
+        JsonObject item = spec.getAsJsonObject().getAsJsonArray("types").get(0) //$NON-NLS-1$
+            .getAsJsonObject();
+
+        MetadataTypeBuilder.Result shapeResult = MetadataTypeBuilder.build(spec, config,
+            Mockito.mock(com._1c.g5.v8.dt.platform.version.Version.class), false,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+        assertFalse(shapeResult.error,
+            shapeResult.error != null && shapeResult.error.contains("Unknown member 'ref'")); //$NON-NLS-1$
+
+        TypeDescription formTd = McoreFactory.eINSTANCE.createTypeDescription();
+        String formError = MetadataTypeBuilder.addType(formTd, item,
+            "InformationRegisterRecord", null, config, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(formError);
+        assertEquals(1, formTd.getTypes().size());
+        assertSame(expected, formTd.getTypes().get(0));
+
+        TypeDescription eventTd = McoreFactory.eINSTANCE.createTypeDescription();
+        String eventError = MetadataTypeBuilder.addType(eventTd, item,
+            "InformationRegisterRecord", null, config, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+
+        assertEquals("Type kind 'InformationRegisterRecord' cannot be used as an event " //$NON-NLS-1$
+            + "subscription's source: an event subscription's source is an object that " //$NON-NLS-1$
+            + "publishes write events. Accepted produced-type suffixes: Object, Manager, " //$NON-NLS-1$
+            + "RecordSet, RecordManager, ValueManager.", eventError); //$NON-NLS-1$
+        assertTrue(eventTd.getTypes().isEmpty());
     }
 
     @Test
