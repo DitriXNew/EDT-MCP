@@ -242,6 +242,8 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("EDT log tail: .metadata/.bak_1.log", out)
         self.assertIn("EDT log tail: .metadata/.log", out)
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
+        self.assertNotIn("INCOMPLETE", out,
+                         "an ordinary backup plus current log is complete evidence")
 
     def test_a_burst_of_rotations_keeps_the_EARLIEST_one_the_failure_went_into(self):
         """The cap must spend its budget on the first rotation, not the last three.
@@ -260,7 +262,7 @@ class EvidenceLogTailTest(unittest.TestCase):
             real_read = HARNESS._read_log_tail
             rotations = []
 
-            def rotate_four_times_then_read(path):
+            def rotate_four_times_then_read(path, *args):
                 if not rotations:
                     rotations.append(True)
                     for index in range(2, 6):
@@ -270,7 +272,7 @@ class EvidenceLogTailTest(unittest.TestCase):
                         os.utime(rotated_to, (stamp, stamp))
                         with open(current, "w", encoding="utf-8") as handle:
                             handle.write("LATER WRITE %d\n" % index)
-                return real_read(path)
+                return real_read(path, *args)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
@@ -283,6 +285,89 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FAILURE MOMENT", out,
                       "the earliest rotation holds the failure and must survive the cap")
         self.assertIn(".bak_2.log", out)
+
+    def test_appeared_backups_consuming_the_cap_mark_pre_existing_evidence_incomplete(self):
+        """The cap can leave no room for a backup that predates the first snapshot."""
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            with open(os.path.join(metadata, ".bak_1.log"), "w", encoding="utf-8") as handle:
+                handle.write("FAILURE ALREADY ROTATED\n")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("POST-FAILURE CURRENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotated = []
+
+            def rotate_through_the_cap_then_read(path, *args):
+                if not rotated:
+                    rotated.append(True)
+                    for index in range(2, 2 + HARNESS._EVIDENCE_LOG_MAX_BACKUPS):
+                        rotated_to = os.path.join(metadata, ".bak_%d.log" % index)
+                        os.replace(current, rotated_to)
+                        stamp = 2_000_000_000 + index
+                        os.utime(rotated_to, (stamp, stamp))
+                        with open(current, "w", encoding="utf-8") as handle:
+                            handle.write("POST-FAILURE ROTATION %d\n" % index)
+                return real_read(path, *args)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=rotate_through_the_cap_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertNotIn("FAILURE ALREADY ROTATED", out,
+                         "this scenario must exercise the pre-existing backup displaced by cap")
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn(
+            "backup cap of %d was fully consumed by appeared backups; "
+            "no pre-existing backup could be read" % HARNESS._EVIDENCE_LOG_MAX_BACKUPS,
+            out)
+
+    def test_more_appeared_backups_than_the_cap_with_one_mtime_mark_tie_incomplete(self):
+        """Scandir order cannot decide which member of a capped timestamp tie is first."""
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            stamp_ns = 2_000_000_000
+            paths = []
+            for index in range(1, HARNESS._EVIDENCE_LOG_MAX_BACKUPS + 2):
+                path = os.path.join(metadata, ".bak_%d.log" % index)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("BACKUP %d\n" % index)
+                os.utime(path, ns=(stamp_ns, stamp_ns))
+                paths.append(path)
+
+            after = {}
+            for path in paths:
+                st = os.stat(path)
+                after[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+            tied_mtime = after[paths[0]][0]
+            self.assertTrue(all(identity[0] == tied_mtime for identity in after.values()))
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_backup_identities",
+                                      side_effect=(({}, None), (after, None))), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        tied_count = HARNESS._EVIDENCE_LOG_MAX_BACKUPS + 1
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn(
+            "backup mtime tie: %d appeared backups share timestamp %d, exceeding cap of %d; "
+            "their order is not decidable"
+            % (tied_count, tied_mtime, HARNESS._EVIDENCE_LOG_MAX_BACKUPS),
+            out)
 
     def test_a_reused_backup_name_with_an_unchanged_timestamp_is_still_detected(self):
         """EDT reuses backup NAMES, so a rotation can overwrite one in place.
@@ -305,14 +390,14 @@ class EvidenceLogTailTest(unittest.TestCase):
             real_read = HARNESS._read_log_tail
             rotations = []
 
-            def rotate_in_place_then_read(path):
+            def rotate_in_place_then_read(path, *args):
                 if not rotations:
                     rotations.append(True)
                     os.replace(current, reused)
                     os.utime(reused, (stamp, stamp))    # the timestamp is deliberately unchanged
                     with open(current, "w", encoding="utf-8") as handle:
                         handle.write("AFTER ROTATION\n")
-                return real_read(path)
+                return real_read(path, *args)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
@@ -323,6 +408,43 @@ class EvidenceLogTailTest(unittest.TestCase):
 
         self.assertIn("FAILURE MOMENT", printed.getvalue(),
                       "a same-name, same-mtime replacement must still register as a rotation")
+
+    def test_a_selected_backup_replaced_before_read_marks_its_path_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            backup = os.path.join(metadata, ".bak_1.log")
+            replacement = os.path.join(metadata, "replacement.log")
+            current = os.path.join(metadata, ".log")
+            with open(backup, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE IN SELECTED GENERATION\n")
+            with open(replacement, "w", encoding="utf-8") as handle:
+                handle.write("REPLACEMENT GENERATION\n")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("CURRENT LINE\n")
+
+            real_read = HARNESS._read_log_tail
+            replaced = []
+
+            def replace_selected_path_then_read(path, *args):
+                if path == backup and not replaced:
+                    replaced.append(True)
+                    os.replace(replacement, backup)
+                return real_read(path, *args)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=replace_selected_path_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("REPLACEMENT GENERATION", out,
+                      "the replacement must have been the generation actually opened")
+        self.assertNotIn("FAILURE IN SELECTED GENERATION", out)
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn("selected backup identity changed at read time: %s" % backup, out)
 
     def test_a_tail_missing_one_source_says_so_instead_of_looking_complete(self):
         """An unread backup may be the file that held the failure; silence would overclaim."""
@@ -338,10 +460,10 @@ class EvidenceLogTailTest(unittest.TestCase):
 
             real_read = HARNESS._read_log_tail
 
-            def fail_on_the_backup(path):
+            def fail_on_the_backup(path, *args):
                 if path.endswith(".bak_1.log"):
                     raise OSError("vanished")
-                return real_read(path)
+                return real_read(path, *args)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
@@ -588,7 +710,7 @@ class EvidenceLogTailTest(unittest.TestCase):
             real_read = HARNESS._read_log_tail
             rotations = []
 
-            def rotate_twice_then_read(path):
+            def rotate_twice_then_read(path, *args):
                 if not rotations:
                     rotations.append(True)
                     for backup_name, next_body, stamp in (
@@ -599,7 +721,7 @@ class EvidenceLogTailTest(unittest.TestCase):
                         os.utime(rotated_to, (stamp, stamp))
                         with open(current, "w", encoding="utf-8") as handle:
                             handle.write(next_body)
-                return real_read(path)
+                return real_read(path, *args)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
@@ -635,7 +757,7 @@ class EvidenceLogTailTest(unittest.TestCase):
             real_read = HARNESS._read_log_tail
             rotated = []
 
-            def rotate_then_read(path):
+            def rotate_then_read(path, *args):
                 if not rotated:
                     # The writer rotates before the very first read gets its bytes.
                     rotated.append(True)
@@ -644,7 +766,7 @@ class EvidenceLogTailTest(unittest.TestCase):
                     os.utime(rotated_to, (2_000_000_000, 2_000_000_000))
                     with open(current, "w", encoding="utf-8") as handle:
                         handle.write("AFTER ROTATION\n")
-                return real_read(path)
+                return real_read(path, *args)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
@@ -684,8 +806,8 @@ class EvidenceLogTailTest(unittest.TestCase):
             real_read = HARNESS._read_log_tail
             rotated = []
 
-            def read_then_rotate(path):
-                text = real_read(path)
+            def read_then_rotate(path, *args):
+                text = real_read(path, *args)
                 if not rotated:
                     # The writer rotates the instant after the first read returns.
                     rotated.append(True)

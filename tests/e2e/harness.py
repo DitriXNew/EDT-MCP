@@ -1364,14 +1364,22 @@ _FAILED_SETTLE_EVIDENCE_THREAD = None
 _FAILED_SETTLE_EVIDENCE_LOCK = threading.Lock()
 
 
-def _read_log_tail(log_path):
+def _read_log_tail(log_path, capture_identity=False):
     """Return the last _EVIDENCE_LOG_TAIL_BYTES of `log_path`.
 
     Reads the TAIL rather than the file: seek back a bounded number of bytes instead of pulling in
     a log that may have grown to any size. It can still BLOCK on a filesystem that stopped
     answering, which is safe only because its sole caller runs off the reset thread entirely.
+
+    When requested, return the identity of the generation that was actually opened along with the
+    text. The fstat happens after open, so a backup path reused after selection cannot silently
+    substitute a different file generation.
     """
     with open(log_path, "rb") as handle:
+        opened_identity = None
+        if capture_identity:
+            st = os.fstat(handle.fileno())
+            opened_identity = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
         handle.seek(0, os.SEEK_END)
         size = handle.tell()
         handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
@@ -1380,7 +1388,8 @@ def _read_log_tail(log_path):
         # however much was written meanwhile - so the cap that justifies calling this cheap
         # was not being applied at all.
         blob = handle.read(_EVIDENCE_LOG_TAIL_BYTES)
-    return blob.decode("utf-8", errors="replace")
+    text = blob.decode("utf-8", errors="replace")
+    return (text, opened_identity) if capture_identity else text
 
 
 def _failed_settle_evidence(last_list_projects):
@@ -1458,7 +1467,7 @@ def _backup_identities(metadata):
     return (seen, None)
 
 
-def _backups_covering(before, after):
+def _backups_covering(before, after, failures=None):
     """The backups that can still hold the failure moment, oldest first.
 
     `before` and `after` are _backup_identities snapshots taken around the read of the current
@@ -1493,6 +1502,24 @@ def _backups_covering(before, after):
         """
         identity = after.get(path, before.get(path, (0, 0, 0)))
         return identity[0]
+
+    # Do not make selection cleverer in an ambiguity: enlarging the cap, reserving a slot or
+    # inventing a tie-break cannot prove that the omitted source was safe to omit. The honest
+    # answer is to mark the evidence incomplete and tell the reader to inspect the raw workspace.
+    if failures is not None:
+        if pre_existing and len(appeared) >= _EVIDENCE_LOG_MAX_BACKUPS:
+            failures.append(
+                "backup cap of %d was fully consumed by appeared backups; "
+                "no pre-existing backup could be read" % _EVIDENCE_LOG_MAX_BACKUPS)
+        appeared_by_mtime = {}
+        for path in appeared:
+            appeared_by_mtime.setdefault(when(path), []).append(path)
+        for timestamp, tied in sorted(appeared_by_mtime.items()):
+            if len(tied) > _EVIDENCE_LOG_MAX_BACKUPS:
+                failures.append(
+                    "backup mtime tie: %d appeared backups share timestamp %d, exceeding cap "
+                    "of %d; their order is not decidable"
+                    % (len(tied), timestamp, _EVIDENCE_LOG_MAX_BACKUPS))
 
     appeared.sort(key=when)
     # The earliest rotations first: the failure is at or before the moment collection started, so
@@ -1572,12 +1599,20 @@ def _print_failed_settle_evidence(last_list_projects):
                 failures.append("backup scan %s: %s" % (when, failure))
             return identities
 
-        def read_into(log_path):
+        def read_into(log_path, selected_identity=None):
             try:
-                by_path[log_path] = _read_log_tail(log_path)
+                if selected_identity is None:
+                    text = _read_log_tail(log_path)
+                else:
+                    text, opened_identity = _read_log_tail(log_path, True)
+                    if opened_identity != selected_identity:
+                        failures.append(
+                            "selected backup identity changed at read time: %s" % log_path)
+                by_path[log_path] = text
             except Exception as exc:
                 # Rotation may remove a path before it can be opened, so one failed read must not
-                # hide evidence that remains available in the other file.
+                # hide evidence that remains available in the other file. This also contains a
+                # failed local fstat: identity verification must never raise out of this block.
                 failures.append("%s: %s: %s" %
                                 (os.path.basename(log_path), type(exc).__name__, exc))
 
@@ -1600,13 +1635,15 @@ def _print_failed_settle_evidence(last_list_projects):
         before_rotation = scan_backups("before reading .log")
         read_into(current)
         after_rotation = scan_backups("after reading .log")
-        backups = _backups_covering(before_rotation, after_rotation)
-        for log_path in backups:
-            read_into(log_path)
+        backup_paths = _backups_covering(before_rotation, after_rotation, failures)
+        backups = [(path, after_rotation.get(path, before_rotation.get(path)))
+                   for path in backup_paths]
+        for log_path, selected_identity in backups:
+            read_into(log_path, selected_identity)
         # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
-        display_order = backups + [current]
+        display_order = backup_paths + [current]
         texts = []
         for log_path in display_order:
             if log_path in by_path:
@@ -1635,7 +1672,7 @@ def _print_failed_settle_evidence(last_list_projects):
         # in its own output this time.
         if failures:
             sections.append(("EDT log tail - INCOMPLETE",
-                             "could not read %s" % "; ".join(failures)))
+                             "evidence may be partial: %s" % "; ".join(failures)))
     except Exception as exc:
         sections.append(("EDT log tail (last 80 lines, last %d bytes per file at most)" %
                          _EVIDENCE_LOG_TAIL_BYTES,
