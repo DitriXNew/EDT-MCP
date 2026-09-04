@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.utils.compare;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -169,6 +168,19 @@ public final class SupportStateReader
      * Direct children of {@code node}, tolerating a null node and a node whose child list the
      * platform has not materialised. The lazy tree is the caller's problem (it must prioritize and
      * wait on the node status first); this reader never reports an empty list as "no support".
+     * <p>
+     * <b>The platform's own list, not a copy of it</b> - the twin of
+     * {@code ComparisonNodeRenderer.childrenOf}, which stopped copying for the same reason. The
+     * copy charged the FULL width of a level to two readers that stop at the first element they
+     * recognise: {@link #findSettings(ComparisonNode)} answers with its first support-settings
+     * child, so a settings node at index zero used to pay for a copy of every sibling behind it,
+     * and the node it is asked about is a compared metadata object whose children are its own
+     * members. Both callers test each element with {@code instanceof} before touching it, and
+     * {@code null instanceof X} is {@code false}, so the null filtering the copy also did bought
+     * neither of them anything either.
+     *
+     * @param node the node to read
+     * @return the live child list, or an empty one; elements may be {@code null}
      */
     private static List<ComparisonNode> children(ComparisonNode node)
     {
@@ -176,20 +188,8 @@ public final class SupportStateReader
         {
             return Collections.emptyList();
         }
-        List<ComparisonNode> result = new ArrayList<>();
         List<ComparisonNode> children = node.<ComparisonNode> getChildren();
-        if (children == null)
-        {
-            return result;
-        }
-        for (ComparisonNode child : children)
-        {
-            if (child != null)
-            {
-                result.add(child);
-            }
-        }
-        return result;
+        return children == null ? Collections.emptyList() : children;
     }
 
     /**

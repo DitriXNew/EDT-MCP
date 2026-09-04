@@ -1568,7 +1568,7 @@ public class CompareConfigurationsToolTest
         String report = ComparisonTreeReport.render(
             CompareConfigurationsTool.headerFor("cmp-1", request, "finished", true), //$NON-NLS-1$ //$NON-NLS-2$
             ComparisonTreeReport.ScopeSnapshot.copyOf(new ComparisonScope(Collections.emptyList(),
-                Collections.emptyList(), Collections.emptyList())),
+                Collections.emptyList(), Collections.emptyList()), 100),
             new ComparisonTreeReport.Collector(100, false));
 
         assertContains(report, "vendor/2.5.14 (" + OTHER_COMMIT + ")"); //$NON-NLS-1$ //$NON-NLS-2$

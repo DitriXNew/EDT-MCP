@@ -660,6 +660,52 @@ public class MergeRulesCodecTest
     }
 
     /**
+     * The DECISION walk lists each level's children once too - the same bound as the scan above,
+     * over the same shape, and it was the walk that still paid per key.
+     *
+     * <h2>Why this is a second pin and not covered by the scan's</h2>
+     * {@code testEachLevelsChildrenAreListedOnce} asserts the count straight after parsing, so it
+     * covers {@code MergeRulesCodec}'s duplicate-key scan and stops there. Reading the decisions
+     * is a SECOND walk of the same tree, and it re-resolved every key through {@code findNode} -
+     * one rebuild and rescan of the whole level per key, on top of the pass that collected them.
+     * A flat level of {@code n} siblings therefore cost {@code n + 1} listings, and unlike the
+     * scan this walk runs on every read AND every write of the document: {@code MergeRulesTool}
+     * calls {@code decisions()} to list, to count before a write, to report the count after one
+     * and twice more while rendering.
+     * <p>
+     * The DELTA is asserted rather than the absolute count, so this measures the decision walk
+     * alone and stays honest if the parse ahead of it ever lists a level for a reason of its own.
+     * <p>
+     * Nothing about the RESULT changes - which is why the second assertion is here: a walk that
+     * listed the level once by simply not descending would satisfy the bound and lose every
+     * decision below it.
+     *
+     * @throws Exception when the document cannot be parsed
+     */
+    @Test
+    public void testReadingTheDecisionsListsEachLevelsChildrenOnce() throws Exception
+    {
+        int siblings = 200;
+        StringBuilder xml = new StringBuilder("<Settings Format_version=\"2.0\"><MergeSettings>" //$NON-NLS-1$
+            + "<Node Key=\"$$Root$$\">"); //$NON-NLS-1$
+        for (int i = 0; i < siblings; i++)
+        {
+            xml.append("<Node Key=\"c").append(i).append("\" MergeRule=\"DoNotMerge\"/>"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        xml.append("</Node></MergeSettings></Settings>"); //$NON-NLS-1$
+        MergeRulesDocument document = MergeRulesCodec.parse(xml.toString());
+        int before = document.root().nodeChildListings();
+
+        List<Decision> decisions = document.decisions();
+
+        assertEquals("the decision walk may list a level once - resolving each key through " //$NON-NLS-1$
+            + "findNode costs one more listing per key", //$NON-NLS-1$
+            1, document.root().nodeChildListings() - before);
+        assertEquals("and the walk still reaches every decision below it", //$NON-NLS-1$
+            siblings, decisions.size());
+    }
+
+    /**
      * The control that keeps the refusal from being about the KEY rather than about the pair: the
      * same key at two different levels is two different addresses, and the platform's own path
      * generators produce exactly that (a feature collection and a top object can share a spelling).

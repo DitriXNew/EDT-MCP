@@ -18,6 +18,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.AbstractSet;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Iterator;
@@ -760,7 +761,7 @@ public class ComparisonTreeReportTest
             ComparisonSide.MAIN);
 
         ComparisonTreeReport.ScopeSnapshot snapshot =
-            ComparisonTreeReport.ScopeSnapshot.copyOf(scope);
+            ComparisonTreeReport.ScopeSnapshot.copyOf(scope, 50);
 
         scope.extendScope(DOCUMENT_ORDER, LATE_NAME_REASON, ComparisonSide.MAIN);
         scope.extendScope(CATALOG_WAREHOUSES, LATE_EXTRA_REASON, ComparisonSide.MAIN);
@@ -795,17 +796,21 @@ public class ComparisonTreeReportTest
     // it in), all while the comparison read is still held. limit=1 paid every bit of it to print
     // three lines.
     //
-    // The pins below COUNT, and never time anything: how many keys the report takes out of the
-    // map, and how many values. Both are exact integers, and both go up by a whole traversal per
-    // restored TreeMap. The counting map is the reason ScopeSnapshot has a package-visible
-    // factory: copyOf copies its input, so nothing handed to it can count.
+    // The pins below COUNT, and never time anything: how many keys the reading takes out of the
+    // map, how many values, and how many of each it KEEPS. All are exact integers, and the reads
+    // go up by a whole traversal per restored TreeMap.
+    //
+    // The bound is applied by ScopeSnapshot, where the live collections are, and not by the
+    // renderer afterwards - so these pins are taken on the SNAPSHOT and not only through the
+    // text. The counting map is the reason ScopeSnapshot has a package-visible factory: copyOf
+    // reads a live ComparisonScope, and a test cannot put a counting map inside one of those.
 
     @Test
     public void testTheAddedNamesAreReadOutOfTheMapExactlyOncePerSide()
     {
         CountingAdditions added = additions(200);
 
-        render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added), false);
+        renderBounded(1, added);
 
         // ONE pass. The cell and the bullets describe the same names under the same limit, so
         // they share one prefix; two TreeMap copies made it two passes, and a third caller would
@@ -822,7 +827,7 @@ public class ComparisonTreeReportTest
         // exactly one reason list is needed, so exactly one may be read.
         CountingAdditions added = additions(200);
 
-        render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added), false);
+        renderBounded(1, added);
 
         assertEquals("a bounded report reads the reasons of the names it prints and no others", //$NON-NLS-1$
             1, added.valueReads);
@@ -835,7 +840,7 @@ public class ComparisonTreeReportTest
         // count that happened to be one for some unrelated reason - would pass it just as well.
         CountingAdditions added = additions(200);
 
-        render(new ComparisonTreeReport.Collector(5, true), snapshotOf(added), false);
+        renderBounded(5, added);
 
         assertEquals("five printed names need five reason lists", 5, added.valueReads); //$NON-NLS-1$
         assertEquals("and still one walk of the keys", 200, added.keyReads); //$NON-NLS-1$
@@ -854,8 +859,7 @@ public class ComparisonTreeReportTest
         added.put("Catalog.Mike", Collections.singletonList("pulled in")); //$NON-NLS-1$ //$NON-NLS-2$
         added.put("Catalog.Alpha", Collections.singletonList("pulled in")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        String report = render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added),
-            false);
+        String report = renderBounded(1, added);
 
         // The positive half on the CELL, so it pins that consumer rather than being satisfied by
         // the bullet below it; the negative half stays report-wide, because a name that is not
@@ -880,8 +884,7 @@ public class ComparisonTreeReportTest
         // pin was narrowed to the row.
         CountingAdditions added = additions(200);
 
-        String row = mainScopeRow(render(new ComparisonTreeReport.Collector(1, true),
-            snapshotOf(added), false));
+        String row = mainScopeRow(renderBounded(1, added));
 
         assertTrue("the cell that hid 199 names must still say how many there were: " + row, //$NON-NLS-1$
             row.contains("(showing 1 of 200)")); //$NON-NLS-1$
@@ -894,8 +897,7 @@ public class ComparisonTreeReportTest
         // is an assertion that either of them can satisfy alone.
         CountingAdditions added = additions(200);
 
-        String report = render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added),
-            false);
+        String report = renderBounded(1, added);
 
         assertContains(report,
             "Why the engine added a qualified name of its own (showing 1 of 200)"); //$NON-NLS-1$
@@ -938,11 +940,125 @@ public class ComparisonTreeReportTest
         // bound affordable, and a total derived by walking would put the walk straight back.
         CountingAdditions added = additions(200);
 
-        render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added), false);
+        renderBounded(1, added);
 
         assertEquals("one walk, not two - the second would be the count", 200, added.keyReads); //$NON-NLS-1$
         assertTrue("and the fixture really is big enough for a second walk to show up", //$NON-NLS-1$
             added.size() > 1);
+    }
+
+    /**
+     * The bound the renderer relies on, asserted where it is APPLIED: the reading keeps only the
+     * names a report under that limit can print.
+     *
+     * <h2>Why this is not covered by the read counts above</h2>
+     * How much is READ and how much is KEPT are different quantities, and only the first was
+     * pinned. A reading that walked the keys once - satisfying every count above - and then
+     * copied all two hundred entries with their reason lists into itself would render exactly the
+     * same text, because the renderer prints a prefix of what it is given either way. What it
+     * would also do is hold the whole thing live for the rest of the comparison read.
+     *
+     * @see #testTheWholeCountSurvivesTheBoundThatHidTheNames the notice that must survive it
+     */
+    @Test
+    public void testTheReadingKeepsOnlyTheAddedNamesTheReportCanPrint()
+    {
+        CountingAdditions added = additions(200);
+
+        ComparisonTreeReport.ScopeSnapshot snapshot = snapshotOf(added, 1);
+
+        assertEquals("a reading taken for a report that prints one name may keep one", //$NON-NLS-1$
+            1, snapshot.addedNames(ComparisonSide.MAIN).size());
+        assertEquals("and it must still know how many there were, or the notice cannot", //$NON-NLS-1$
+            200, snapshot.addedTotal(ComparisonSide.MAIN));
+    }
+
+    /**
+     * The expensive half of the same bound: an addition's REASONS are one string per requested
+     * object that pulled it in, so a common dependency of a large request carries a list that
+     * dwarfs the map holding it. The report prints at most {@code limit} of them.
+     */
+    @Test
+    public void testTheReadingKeepsOnlyTheReasonsTheReportCanPrint()
+    {
+        CountingAdditions added = new CountingAdditions();
+        added.put(CATALOG_WAREHOUSES, manyReasons(500));
+
+        ComparisonTreeReport.ScopeSnapshot snapshot = snapshotOf(added, 3);
+
+        assertEquals("three reasons are printed, so three are kept", //$NON-NLS-1$
+            3, snapshot.reasons(ComparisonSide.MAIN, CATALOG_WAREHOUSES).size());
+        assertEquals("and the whole count survives the bound that hid the rest", //$NON-NLS-1$
+            500, snapshot.reasonTotal(ComparisonSide.MAIN, CATALOG_WAREHOUSES));
+    }
+
+    /**
+     * The other column of the scope table. The caller's own request is the smaller of the two in
+     * the usual case, but "usually smaller" is not a bound - a caller may name thousands of
+     * objects - and the cell printing it is cut by the same limit as the one beside it.
+     */
+    @Test
+    public void testTheReadingKeepsOnlyTheRequestedNamesTheReportCanPrint()
+    {
+        List<String> request = new ArrayList<>();
+        for (int i = 0; i < 200; i++)
+        {
+            request.add(String.format(Locale.ROOT, "Catalog.Asked%04d", Integer.valueOf(i))); //$NON-NLS-1$
+        }
+        Map<ComparisonSide, List<String>> requested = new EnumMap<>(ComparisonSide.class);
+        Map<ComparisonSide, Map<String, List<String>>> additions =
+            new EnumMap<>(ComparisonSide.class);
+        for (ComparisonSide side : ComparisonSide.values())
+        {
+            requested.put(side, request);
+            additions.put(side, Collections.emptyMap());
+        }
+
+        ComparisonTreeReport.ScopeSnapshot snapshot =
+            ComparisonTreeReport.ScopeSnapshot.of(requested, additions, 2);
+
+        assertEquals("two names are printed, so two are kept", //$NON-NLS-1$
+            2, snapshot.requested(ComparisonSide.MAIN).size());
+        assertEquals("and the cell's notice still has its whole count", //$NON-NLS-1$
+            200, snapshot.requestedTotal(ComparisonSide.MAIN));
+    }
+
+    /**
+     * A kept prefix is a COPY, so the platform extending the list it came from cannot reach it.
+     * <p>
+     * {@code subList} would have satisfied every count above while leaving the reading a view of
+     * the platform's own list - which is the defect the whole class exists to prevent, reopened
+     * one level further in than {@code testACopiedScopeDoesNotGrowWithTheEngine} looks.
+     */
+    @Test
+    public void testAKeptReasonPrefixDoesNotSeeLaterAppends()
+    {
+        List<String> live = new ArrayList<>(manyReasons(5));
+        CountingAdditions added = new CountingAdditions();
+        added.put(CATALOG_WAREHOUSES, live);
+
+        ComparisonTreeReport.ScopeSnapshot snapshot = snapshotOf(added, 2);
+        live.add(LATE_EXTRA_REASON);
+
+        assertEquals("the prefix was copied, not viewed", //$NON-NLS-1$
+            2, snapshot.reasons(ComparisonSide.MAIN, CATALOG_WAREHOUSES).size());
+        assertFalse("a reason appended after the reading is not part of it", //$NON-NLS-1$
+            snapshot.reasons(ComparisonSide.MAIN, CATALOG_WAREHOUSES).contains(LATE_EXTRA_REASON));
+    }
+
+    /**
+     * @param count how many reasons to build
+     * @return that many distinct reasons
+     */
+    private static List<String> manyReasons(int count)
+    {
+        List<String> list = new ArrayList<>();
+        for (int i = 0; i < count; i++)
+        {
+            list.add(String.format(Locale.ROOT, "referenced by Catalog.Asked%04d", //$NON-NLS-1$
+                Integer.valueOf(i)));
+        }
+        return list;
     }
 
     /**
@@ -968,7 +1084,7 @@ public class ComparisonTreeReportTest
      * @return the snapshot, holding the map ITSELF so its counters see what the report does
      */
     private static ComparisonTreeReport.ScopeSnapshot snapshotOf(
-        Map<String, List<String>> added)
+        Map<String, List<String>> added, int limit)
     {
         Map<ComparisonSide, List<String>> requested = new EnumMap<>(ComparisonSide.class);
         Map<ComparisonSide, Map<String, List<String>>> additions =
@@ -978,7 +1094,27 @@ public class ComparisonTreeReportTest
             requested.put(side, Collections.singletonList(CATALOG_GOODS));
             additions.put(side, side == ComparisonSide.MAIN ? added : Collections.emptyMap());
         }
-        return ComparisonTreeReport.ScopeSnapshot.of(requested, additions);
+        return ComparisonTreeReport.ScopeSnapshot.of(requested, additions, limit);
+    }
+
+    /**
+     * Renders one side's additions under {@code limit}, with the SNAPSHOT and the collector cut
+     * by the same number.
+     * <p>
+     * The two are taken in different places in production - the snapshot inside the comparison
+     * read, the collector where the text is assembled - so they can only agree by being given one
+     * limit. A test that spelled the number twice could hold them apart and would then be pinning
+     * a report no caller can produce; this helper cannot.
+     *
+     * @param limit the bound applied to both
+     * @param added the additions of the main side
+     * @return the rendered report
+     */
+    private static String renderBounded(int limit, Map<String, List<String>> added)
+    {
+        ComparisonTreeReport.Collector collector =
+            new ComparisonTreeReport.Collector(limit, true);
+        return render(collector, snapshotOf(added, collector.limit()), false);
     }
 
     /**
@@ -1128,7 +1264,8 @@ public class ComparisonTreeReportTest
     {
         // Copied HERE, which is where production copies it: inside the boundary that read the
         // tree, not at the moment the text is assembled.
-        return render(collector, ComparisonTreeReport.ScopeSnapshot.copyOf(scope), globalScope);
+        return render(collector,
+            ComparisonTreeReport.ScopeSnapshot.copyOf(scope, collector.limit()), globalScope);
     }
 
     private static String render(ComparisonTreeReport.Collector collector,

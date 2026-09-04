@@ -2808,8 +2808,10 @@ public class CompareConfigurationsTool implements IMcpTool
                 // handle to answer. Left to throw, it lands in the caller's "reading the
                 // comparison tree" failure, which says only what was observed. The one thing
                 // this may report as "no scope" is a real handle that carried none.
-                return new TreeReading(state, global,
-                    ComparisonTreeReport.ScopeSnapshot.copyOf(view.handle().getFullScope()));
+                // Bounded by the COLLECTOR's clamped limit and not by the raw request: the
+                // scope section and the row table beside it must be cut by one number.
+                return new TreeReading(state, global, ComparisonTreeReport.ScopeSnapshot
+                    .copyOf(view.handle().getFullScope(), collector.limit()));
             }
 
             /** @return the comparison's state, as the boundary that walked the tree saw it */

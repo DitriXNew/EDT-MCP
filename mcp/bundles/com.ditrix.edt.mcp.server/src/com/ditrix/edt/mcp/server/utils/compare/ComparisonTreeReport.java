@@ -209,78 +209,100 @@ public final class ComparisonTreeReport
      *
      * <h2>The two halves stay apart</h2>
      * {@link #requested(ComparisonSide)} is what the caller asked for and
-     * {@link #added(ComparisonSide)} is what the engine pulled in by itself, copied from the two
-     * accessors that answer exactly those questions. Neither is
+     * {@link #addedNames(ComparisonSide)} is what the engine pulled in by itself, copied from the
+     * two accessors that answer exactly those questions. Neither is
      * {@link ComparisonScope#getScope}, which is the two merged: rendering that as the request
      * would report objects the caller never named as objects the caller chose.
      */
     public static final class ScopeSnapshot
     {
         /** What a handle that reported no scope at all copies to. */
-        private static final ScopeSnapshot ABSENT = new ScopeSnapshot(null, null);
+        private static final ScopeSnapshot ABSENT = new ScopeSnapshot(null);
 
-        private final Map<ComparisonSide, List<String>> requested;
+        private final Map<ComparisonSide, Side> sides;
 
-        private final Map<ComparisonSide, Map<String, List<String>>> added;
-
-        private ScopeSnapshot(Map<ComparisonSide, List<String>> requested,
-            Map<ComparisonSide, Map<String, List<String>>> added)
+        private ScopeSnapshot(Map<ComparisonSide, Side> sides)
         {
-            this.requested = requested;
-            this.added = added;
+            this.sides = sides;
         }
 
         /**
-         * Copies one live scope. Call from inside the comparison read whose tree the report
-         * describes, and nowhere else.
+         * Copies one live scope, CUT DOWN to what a report under {@code limit} is able to print.
+         * Call from inside the comparison read whose tree the report describes, and nowhere else.
+         *
+         * <h2>Why the bound is applied here and not by the renderer</h2>
+         * The renderer prints at most {@code limit} added names per side and at most {@code limit}
+         * reasons under each of them, and it used to be handed the WHOLE thing to pick from: every
+         * name, and every one of its reasons, copied into lists of our own while the comparison
+         * read is still held. An addition's reasons are one string per requested object that
+         * pulled it in, so a common dependency of a large request is a single printed line whose
+         * value list is thousands long - and {@code limit=1} paid for all of them to print three.
+         * <p>
+         * What the copy exists for is unchanged and cannot be given up: the platform mutates this
+         * scope IN PLACE as the engine pulls dependencies in, so anything shared with it keeps
+         * growing after the reading was taken. The change is only in HOW MUCH is copied - the
+         * prefix the report can reach, rather than the whole of a collection it will discard.
+         * <p>
+         * <b>What is bounded, and what cannot be.</b> Bounded: what is ORDERED, and what is
+         * RETAINED once this returns. NOT bounded: how many keys are LOOKED at, which is n and has
+         * to be - see {@link ComparisonTreeReport#smallestKeys(Map, int)} for why the k smallest
+         * of a set is not knowable without seeing every element.
+         * <p>
+         * <b>The counts are taken from the live collections and kept exact.</b> A bounded reading
+         * may not know every name, but it must still know how many there were, because that is
+         * what every truncation notice in the section reports. {@code size()} costs nothing, which
+         * is the point.
          *
          * @param scope the handle's live scope, or {@code null} when it reported none
+         * @param limit largest number of names per side, and of reasons per name, the report may
+         *     print; pass {@link Collector#limit()} of the collector rendering beside it, so the
+         *     copy and the renderer cannot be bounded differently
          * @return the copy; {@link #isPresent()} answers {@code false} for a {@code null} scope
          */
-        public static ScopeSnapshot copyOf(ComparisonScope scope)
+        public static ScopeSnapshot copyOf(ComparisonScope scope, int limit)
         {
             if (scope == null)
             {
                 return ABSENT;
             }
-            Map<ComparisonSide, List<String>> requestedCopy = new EnumMap<>(ComparisonSide.class);
-            Map<ComparisonSide, Map<String, List<String>>> addedCopy =
-                new EnumMap<>(ComparisonSide.class);
+            Map<ComparisonSide, Side> copy = new EnumMap<>(ComparisonSide.class);
             for (ComparisonSide side : ComparisonSide.values())
             {
                 // getInputScope, NOT getScope: getScope also carries what the engine pulled in by
                 // itself, and presenting that as the caller's request is the lie this report
                 // exists to avoid.
-                requestedCopy.put(side, copyNames(scope.getInputScope(side)));
-                addedCopy.put(side, copyAdditions(scope.getExtendedScope(side)));
+                copy.put(side,
+                    Side.of(scope.getInputScope(side), scope.getExtendedScope(side), limit));
             }
-            return new ScopeSnapshot(requestedCopy, addedCopy);
+            return new ScopeSnapshot(copy);
         }
 
         /**
-         * A snapshot over maps supplied directly. A TEST SEAM and nothing else: production builds
-         * one through {@link #copyOf(ComparisonScope)}, which copies a live platform scope and
-         * owns the copies it makes.
+         * A snapshot over collections supplied directly. A TEST SEAM and nothing else: production
+         * builds one through {@link #copyOf(ComparisonScope, int)}, which reads a live platform
+         * scope.
          * <p>
-         * It exists because the bound {@code ComparisonTreeReport.smallestKeys} keeps -
-         * how much is ORDERED and how much is RETAINED while the comparison read is still held -
-         * leaves no trace in the rendered text: a bounded prefix and a fully sorted map print the
-         * same names in the same order. The only way to observe it from outside is to hand the
-         * report a map that COUNTS what is taken from it, and {@code copyOf} copies its input into
-         * a map of its own, so nothing handed to it can count anything.
-         * <p>
-         * The maps are stored AS GIVEN rather than copied, which is the whole point and also the
-         * reason this is not public: a snapshot built here is only as immutable as its caller
-         * makes it.
+         * It exists because what this class bounds - how much is ORDERED and how much is RETAINED
+         * while the comparison read is still held - leaves no trace in the rendered text: a
+         * bounded prefix and a fully copied scope print the same names in the same order. The only
+         * way to observe it from outside is to hand it collections that COUNT what is taken from
+         * them, and a {@code ComparisonScope} does not let a test supply those.
          *
          * @param requested the caller's request per side
          * @param added the engine's additions per side, each name with its reasons
+         * @param limit the same bound {@link #copyOf(ComparisonScope, int)} applies
          * @return the snapshot
          */
         static ScopeSnapshot of(Map<ComparisonSide, List<String>> requested,
-            Map<ComparisonSide, Map<String, List<String>>> added)
+            Map<ComparisonSide, Map<String, List<String>>> added, int limit)
         {
-            return new ScopeSnapshot(requested, added);
+            Map<ComparisonSide, Side> copy = new EnumMap<>(ComparisonSide.class);
+            for (ComparisonSide side : ComparisonSide.values())
+            {
+                copy.put(side, Side.of(requested == null ? null : requested.get(side),
+                    added == null ? null : added.get(side), limit));
+            }
+            return new ScopeSnapshot(copy);
         }
 
         /**
@@ -289,65 +311,173 @@ public final class ComparisonTreeReport
          */
         public boolean isPresent()
         {
-            return requested != null;
+            return sides != null;
         }
 
         /**
          * @param side the side
-         * @return the qualified names the CALLER asked for on that side; never {@code null}, and
-         *     empty is the platform's "compare everything" rather than a refusal
+         * @return at most the bound's worth of the qualified names the CALLER asked for on that
+         *     side, in the platform's own order; never {@code null}, and
+         *     {@link #requestedTotal(ComparisonSide)} says how many there were
          */
         public List<String> requested(ComparisonSide side)
         {
-            return requested == null ? Collections.emptyList()
-                : requested.getOrDefault(side, Collections.emptyList());
+            return side(side).requested;
         }
 
         /**
          * @param side the side
-         * @return what the ENGINE added on that side, each qualified name with the engine's own
-         *     reasons for it; never {@code null}
+         * @return how many names the caller asked for on that side, whether retained or not; zero
+         *     is the platform's "compare everything" rather than a refusal
          */
-        public Map<String, List<String>> added(ComparisonSide side)
+        public int requestedTotal(ComparisonSide side)
         {
-            return added == null ? Collections.emptyMap()
-                : added.getOrDefault(side, Collections.emptyMap());
+            return side(side).requestedTotal;
         }
 
         /**
-         * @param names the platform's list (may be {@code null})
-         * @return an immutable copy
+         * @param side the side
+         * @return the SMALLEST qualified names the engine added on that side, ascending and at
+         *     most the bound's worth of them; never {@code null}
          */
-        private static List<String> copyNames(List<String> names)
+        public List<String> addedNames(ComparisonSide side)
         {
-            return names == null || names.isEmpty() ? Collections.emptyList()
-                : Collections.unmodifiableList(new ArrayList<>(names));
+            return side(side).addedNames;
         }
 
         /**
-         * Copies the additions of one side, REASONS INCLUDED.
+         * @param side the side
+         * @return how many names the engine added on that side, whether retained or not
+         */
+        public int addedTotal(ComparisonSide side)
+        {
+            return side(side).addedTotal;
+        }
+
+        /**
+         * @param side the side
+         * @param name one of {@link #addedNames(ComparisonSide)}
+         * @return at most the bound's worth of the engine's reasons for that name, in the
+         *     platform's own order; empty for a name that was not retained
+         */
+        public List<String> reasons(ComparisonSide side, String name)
+        {
+            return side(side).reasons.getOrDefault(name, Collections.emptyList());
+        }
+
+        /**
+         * @param side the side
+         * @param name one of {@link #addedNames(ComparisonSide)}
+         * @return how many reasons the engine gave for that name, whether retained or not
+         */
+        public int reasonTotal(ComparisonSide side, String name)
+        {
+            Integer total = side(side).reasonTotals.get(name);
+            return total == null ? 0 : total.intValue();
+        }
+
+        /**
+         * @param side the side to read
+         * @return its reading, or the empty one - which is what every accessor answers from for a
+         *     snapshot that reported no scope, so none of them has to guard for it
+         */
+        private Side side(ComparisonSide side)
+        {
+            if (sides == null)
+            {
+                return Side.EMPTY;
+            }
+            Side held = sides.get(side);
+            return held == null ? Side.EMPTY : held;
+        }
+
+        /**
+         * One side's scope, already cut to the prefix the report can print, with the WHOLE counts
+         * kept beside it.
          * <p>
-         * The value lists are copied and not shared. {@code extendScope} appends the reason to the
-         * list already under a name, so a copy that kept the platform's lists would keep growing
-         * after the reading was taken - and the map would look copied while the deepest thing the
-         * report prints was still live.
-         *
-         * @param additions the live map (may be {@code null} or the platform's empty map)
-         * @return an immutable copy, in the platform's own iteration order; the report sorts what
-         *     it prints, because a {@code HashMap}'s order is not one
+         * The three counts are the reason this is a type rather than two maps: the names, the
+         * reasons and the request are each bounded separately and each carries its own total, and
+         * a bounded list stored next to a total derived from it would answer "showing 1 of 1".
          */
-        private static Map<String, List<String>> copyAdditions(Map<String, List<String>> additions)
+        private static final class Side
         {
-            if (additions == null || additions.isEmpty())
+            /** What a side nobody reported reads as - no names, and no claim that there were any. */
+            static final Side EMPTY = new Side(Collections.emptyList(), 0, Collections.emptyList(),
+                0, Collections.emptyMap(), Collections.emptyMap());
+
+            private final List<String> requested;
+
+            private final int requestedTotal;
+
+            private final List<String> addedNames;
+
+            private final int addedTotal;
+
+            private final Map<String, List<String>> reasons;
+
+            private final Map<String, Integer> reasonTotals;
+
+            private Side(List<String> requested, int requestedTotal, List<String> addedNames,
+                int addedTotal, Map<String, List<String>> reasons,
+                Map<String, Integer> reasonTotals)
             {
-                return Collections.emptyMap();
+                this.requested = requested;
+                this.requestedTotal = requestedTotal;
+                this.addedNames = addedNames;
+                this.addedTotal = addedTotal;
+                this.reasons = reasons;
+                this.reasonTotals = reasonTotals;
             }
-            Map<String, List<String>> copy = new LinkedHashMap<>();
-            for (Map.Entry<String, List<String>> entry : additions.entrySet())
+
+            /**
+             * Reads one side of a live scope, keeping only what a report under {@code limit} can
+             * print and the counts of what it cannot.
+             *
+             * @param requested the caller's input scope for the side (may be {@code null})
+             * @param added the engine's additions for the side (may be {@code null})
+             * @param limit the bound
+             * @return the reading; it shares nothing with either argument
+             */
+            static Side of(List<String> requested, Map<String, List<String>> added, int limit)
             {
-                copy.put(entry.getKey(), copyNames(entry.getValue()));
+                List<String> names = smallestKeys(added, limit);
+                Map<String, List<String>> reasons = new LinkedHashMap<>();
+                Map<String, Integer> reasonTotals = new LinkedHashMap<>();
+                for (String name : names)
+                {
+                    // The reasons of the names actually printed, and no others. Copying the map
+                    // carried every OTHER name's reasons along with it, and that was the
+                    // expensive half.
+                    List<String> live = added.get(name);
+                    reasonTotals.put(name, Integer.valueOf(live == null ? 0 : live.size()));
+                    reasons.put(name, prefixOf(live, limit));
+                }
+                return new Side(prefixOf(requested, limit),
+                    requested == null ? 0 : requested.size(), names,
+                    added == null ? 0 : added.size(), Collections.unmodifiableMap(reasons),
+                    Collections.unmodifiableMap(reasonTotals));
             }
-            return Collections.unmodifiableMap(copy);
+
+            /**
+             * The front of a list, copied so the platform cannot extend it afterwards.
+             * <p>
+             * {@code List.copyOf} of a {@code subList} and not the sublist itself: a sublist is a
+             * VIEW of the list it came from, so keeping one would keep the platform's whole list
+             * reachable and would see every append made to it - which is the thing this class
+             * exists to prevent.
+             *
+             * @param values the platform's list (may be {@code null})
+             * @param limit largest number to keep
+             * @return an immutable copy of at most {@code limit} values
+             */
+            private static List<String> prefixOf(List<String> values, int limit)
+            {
+                if (values == null || values.isEmpty() || limit <= 0)
+                {
+                    return Collections.emptyList();
+                }
+                return List.copyOf(values.subList(0, Math.min(values.size(), limit)));
+            }
         }
     }
 
@@ -380,6 +510,23 @@ public final class ComparisonTreeReport
         {
             this.limit = Pagination.clampLimit(limit, MAX_LIMIT);
             this.changedOnly = changedOnly;
+        }
+
+        /**
+         * The row bound this collector settled on, CLAMPED - which is the number the report
+         * actually prints by, not the one the caller asked for.
+         * <p>
+         * Exposed for one reason: {@link ScopeSnapshot#copyOf(ComparisonScope, int)} has to be
+         * bounded by the same number, and it is taken in a different place - inside the
+         * comparison read, before the report is assembled. Deriving it from the raw request there
+         * would let the scope section and the row table be bounded differently whenever the
+         * request fell outside {@code [1, MAX_LIMIT]}.
+         *
+         * @return the clamped limit
+         */
+        public int limit()
+        {
+            return limit;
         }
 
         /**
@@ -533,7 +680,7 @@ public final class ComparisonTreeReport
         summary.put("state", header.state); //$NON-NLS-1$
         out.append(MarkdownUtils.keyValueTable("Field", "Value", summary)); //$NON-NLS-1$ //$NON-NLS-2$
 
-        appendScope(out, scope, collector.limit, header.globalScope);
+        appendScope(out, scope, header.globalScope);
         appendNodes(out, scope, collector);
         return out.toString();
     }
@@ -542,13 +689,11 @@ public final class ComparisonTreeReport
      * Renders the requested scope and, separately, whatever the engine added to it.
      *
      * @param out the report being assembled
-     * @param scope the scope as the tree's own reading saw it (may be {@code null})
-     * @param limit largest number of qualified names to list per side - in the table cells AND in
-     *     the reasons below them, which describe the same names
+     * @param scope the scope as the tree's own reading saw it, already bounded to what may be
+     *     printed (may be {@code null})
      * @param globalScope the session's own answer to whether the run covered everything
      */
-    private static void appendScope(StringBuilder out, ScopeSnapshot scope, int limit,
-        boolean globalScope)
+    private static void appendScope(StringBuilder out, ScopeSnapshot scope, boolean globalScope)
     {
         out.append("\n## Scope\n\n"); //$NON-NLS-1$
         if (scope == null || !scope.isPresent())
@@ -557,24 +702,23 @@ public final class ComparisonTreeReport
             return;
         }
         out.append(MarkdownUtils.tableHeader("Side", "Requested", "Added by the engine")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        // ONE ordered prefix per side, taken here and read TWICE - by the cell beside it and by
-        // the bullet list below - because both describe the same names under the same limit. It
-        // used to be taken twice per side, each time by ordering the WHOLE map and copying every
-        // reason list with it, so limit=1 over a comparison that pulled in ten thousand
-        // dependencies ordered sixty thousand entries to print three lines. See smallestKeys for
-        // what is bounded and what is not.
-        Map<ComparisonSide, List<String>> prefixes = new EnumMap<>(ComparisonSide.class);
+        // ONE bounded reading per side, read TWICE here - by the cell beside it and by the
+        // bullet list below - because both describe the same names under the same bound. Nothing
+        // in this method orders, copies or counts anything: the prefix, the totals and the
+        // reasons all come out of the snapshot, which cut them where the LIVE collections were
+        // and while the comparison read was still held. It used to be the other way round - the
+        // whole scope copied out, then ordered here, twice per side - so limit=1 over a
+        // comparison that pulled in ten thousand dependencies copied and ordered sixty thousand
+        // entries to print three lines. See ScopeSnapshot.copyOf for what is bounded, and
+        // smallestKeys for what cannot be.
         for (ComparisonSide side : ComparisonSide.values())
         {
             // Two accessors, deliberately never merged: the snapshot keeps the caller's
             // request and the engine's own additions apart, because presenting the second as the
             // first is the lie this report exists to avoid.
-            List<String> requested = scope.requested(side);
-            Map<String, List<String>> added = scope.added(side);
-            List<String> prefix = smallestKeys(added, limit);
-            prefixes.put(side, prefix);
-            out.append(MarkdownUtils.tableRow(sideName(side), describeRequested(requested, limit),
-                describeAdded(prefix, added.size())));
+            out.append(MarkdownUtils.tableRow(sideName(side),
+                describeRequested(scope.requested(side), scope.requestedTotal(side)),
+                describeAdded(scope.addedNames(side), scope.addedTotal(side))));
         }
 
         // Bounded by the SAME limit as the cell above, and by the same count per side, so the
@@ -588,24 +732,18 @@ public final class ComparisonTreeReport
         int total = 0;
         for (ComparisonSide side : ComparisonSide.values())
         {
-            Map<String, List<String>> added = scope.added(side);
-            // The WHOLE count, asked of the map itself. It is what the truncation notice reports,
-            // and size() costs nothing - which is the point: a bounded report may not know every
-            // name, but it must still know how many there were.
-            total += added.size();
-            // The prefix is at most 'limit' long already, so this loop no longer needs a counter
-            // to stop itself. The bound moved from "stop printing" to "never order more than
-            // this", which is the only place it saves anything.
-            for (String name : prefixes.get(side))
+            // The WHOLE count, carried by the reading rather than derived from what it kept: a
+            // bounded report may not know every name, but it must still know how many there were.
+            total += scope.addedTotal(side);
+            // Already at most 'limit' long, so this loop needs no counter to stop itself. The
+            // bound is applied where the live collections are - see ScopeSnapshot.copyOf - which
+            // is the only place it saves anything.
+            for (String name : scope.addedNames(side))
             {
                 shown++;
-                // The reasons of the names actually printed, looked up one at a time. Ordering
-                // the whole map used to carry every OTHER name's reasons along with it, and one
-                // addition can hold a reason per requested object that pulled it in - see
-                // joinReasons - so those were the expensive half of the copy.
                 reasons.append("- `").append(sideName(side)).append("` / `") //$NON-NLS-1$ //$NON-NLS-2$
                     .append(name).append("` — ") //$NON-NLS-1$
-                    .append(joinReasons(added.get(name), limit))
+                    .append(joinReasons(scope.reasons(side, name), scope.reasonTotal(side, name)))
                     .append('\n');
             }
         }
@@ -676,41 +814,43 @@ public final class ComparisonTreeReport
      * while that one line ran past every other section of the report: the report's own limit
      * undone one level further in.
      *
-     * @param reasons why the engine added the name, as the platform reported it (may be
-     *     {@code null}, which is how the platform spells no reasons at all)
-     * @param limit largest number of reasons to list
+     * @param reasons the reasons kept for the name - already at most the bound's worth, from
+     *     {@link ScopeSnapshot#reasons(ComparisonSide, String)}
+     * @param total how many reasons the engine gave for it, whether kept or not; passed in rather
+     *     than derived from {@code reasons}, which would answer "showing 2 of 2" of a list that
+     *     was cut
      * @return the reasons, semicolon separated, carrying the whole count when it was cut
      */
-    private static String joinReasons(List<String> reasons, int limit)
+    private static String joinReasons(List<String> reasons, int total)
     {
-        if (reasons == null || reasons.isEmpty())
+        if (total == 0)
         {
             return ""; //$NON-NLS-1$
         }
-        int shown = Math.min(reasons.size(), limit);
-        return String.join("; ", reasons.subList(0, shown)) //$NON-NLS-1$
-            + Pagination.truncationNotice(shown, reasons.size());
+        return String.join("; ", reasons) + Pagination.truncationNotice(reasons.size(), total); //$NON-NLS-1$
     }
 
     /**
-     * @param requested the qualified names the caller asked for on one side
-     * @param limit largest number to list
+     * @param requested the names kept for the side - already at most the bound's worth
+     * @param total how many the caller asked for on that side, whether kept or not
      * @return the cell text, saying so when nothing was requested
      */
-    private static String describeRequested(List<String> requested, int limit)
+    private static String describeRequested(List<String> requested, int total)
     {
         // An empty input scope is not a refusal and not an empty comparison: the platform
-        // treats it as "compare everything", so say that rather than printing nothing.
-        if (requested == null || requested.isEmpty())
+        // treats it as "compare everything", so say that rather than printing nothing. Asked of
+        // the TOTAL and not of the kept prefix: those agree here, but only the total is a
+        // statement about the request rather than about the bound.
+        if (total == 0)
         {
             return WHOLE_CONFIGURATION;
         }
-        return join(requested, limit);
+        return join(requested, total);
     }
 
     /**
-     * @param prefix the ordered names to print - already at most {@code limit} long, from
-     *     {@link #smallestKeys(Map, int)}
+     * @param prefix the ordered names to print - already at most the bound's worth, from
+     *     {@link ScopeSnapshot#addedNames(ComparisonSide)}
      * @param total how many the engine added ON THIS SIDE, whether printed or not; the truncation
      *     notice is the only place the ones NOT printed are still reported, so it is passed in
      *     rather than derived from {@code prefix}
@@ -780,15 +920,15 @@ public final class ComparisonTreeReport
     }
 
     /**
-     * @param values the values to list
-     * @param limit largest number to list
+     * @param values the values to list - already at most the bound's worth
+     * @param total how many there were, whether listed or not; passed in rather than derived from
+     *     {@code values}, which would answer "showing 2 of 2" of a list that was cut
      * @return the values, comma separated, with the whole count kept when truncated
      */
-    private static String join(List<String> values, int limit)
+    private static String join(List<String> values, int total)
     {
-        int shown = Math.min(values.size(), limit);
-        String text = String.join(", ", values.subList(0, shown)); //$NON-NLS-1$
-        return text + Pagination.truncationNotice(shown, values.size());
+        String text = String.join(", ", values); //$NON-NLS-1$
+        return text + Pagination.truncationNotice(values.size(), total);
     }
 
     /**

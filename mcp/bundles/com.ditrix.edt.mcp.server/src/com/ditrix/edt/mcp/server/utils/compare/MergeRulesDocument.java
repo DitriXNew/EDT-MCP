@@ -9,11 +9,9 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * In-memory model of EDT's merge-settings ("merge rules") file - the document a comparison
@@ -923,11 +921,22 @@ public final class MergeRulesDocument
     /**
      * One level of the decision walk: the node's own rule, then the levels below it.
      * <p>
-     * The descent goes through {@link #findNode(Element, String)} on each DISTINCT key rather than
-     * through the child the loop happens to hold, so what is walked is by construction the element
-     * a lookup for that key would land on - the same rule the codec's duplicate-key scan follows.
-     * A child without a key is skipped entirely: {@code findNode} matches on tag AND key, so no
+     * The descent walks the element a lookup for each DISTINCT key would LAND ON rather than every
+     * child the loop happens to hold, so what is walked is by construction what a request for that
+     * key would reach - the same rule the codec's duplicate-key scan follows. A child without a
+     * key is skipped entirely: {@link #findNode(Element, String)} matches on tag AND key, so no
      * path can come to rest on it and nothing below it is reachable by any request either.
+     * <p>
+     * <b>That element is RETAINED by the one listing that finds the keys, not resolved again per
+     * key.</b> Calling {@code findNode} for each key re-listed the WHOLE level every time, so one
+     * level cost one listing plus one more per distinct key - quadratic in the width of the level,
+     * over a walk that every read and every write of the document performs (see {@link
+     * #decisions()}'s callers). {@code putIfAbsent} over the children in order retains the FIRST
+     * child carrying each key, which is precisely the element {@code findNode} answers with, so
+     * the walk visits the same elements in the same order and no assertion about the RESULT can
+     * tell the two apart. What differs is how many times the level is listed, and that is pinned
+     * as a counted bound through {@link Element#nodeChildListings()} - a timing would measure the
+     * machine.
      *
      * @param node the node to read; its rule, if any, is a decision at {@code path}
      * @param path the key chain that addresses {@code node}, starting at {@link #ROOT_KEY}
@@ -940,20 +949,21 @@ public final class MergeRulesDocument
         {
             collected.add(new Decision(path, rule, node.attribute(ATTR_ORDER_SIDE)));
         }
-        Set<String> keys = new LinkedHashSet<>();
+        Map<String, Element> targets = new LinkedHashMap<>();
         for (Element child : nodeChildren(node))
         {
             String key = child.attribute(ATTR_KEY);
             if (key != null)
             {
-                keys.add(key);
+                // First one wins, which is what findNode(node, key) would have answered.
+                targets.putIfAbsent(key, child);
             }
         }
-        for (String key : keys)
+        for (Map.Entry<String, Element> target : targets.entrySet())
         {
             List<String> here = new ArrayList<>(path);
-            here.add(key);
-            collect(findNode(node, key), here, collected);
+            here.add(target.getKey());
+            collect(target.getValue(), here, collected);
         }
     }
 
