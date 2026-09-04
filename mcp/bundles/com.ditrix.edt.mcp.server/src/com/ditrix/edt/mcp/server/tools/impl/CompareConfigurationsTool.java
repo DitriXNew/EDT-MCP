@@ -289,8 +289,36 @@ public class CompareConfigurationsTool implements IMcpTool
         // Answered FIRST, before any launch argument is demanded: this form starts nothing,
         // and a caller whose only business is giving EDT's comparison slot back should not
         // have to invent a project and two revisions to do it.
+        //
+        // WHICH FORM WAS ASKED FOR is read from the KEY's presence, not from its value. Deciding it
+        // by the trimmed value folded a blank id into an omission, and an omission is the OTHER call
+        // shape: a caller who sent a variable that resolved to empty had their release read as a
+        // launch, sailed past the mixed-intent refusal below, and took EDT's single slot with a
+        // comparison they never asked to start - the exact opposite of the request.
+        //
+        // "Presence" is presence in THIS map, which is not raw presence in the caller's JSON, and
+        // the difference is deliberate rather than overlooked. McpProtocolHandler.extractToolParams
+        // builds the map by skipping every argument whose JSON value is null, so
+        // 'releaseComparisonId: null' arrives as no key at all and is read here as an omission - it
+        // starts a comparison. That is the reading this tool wants: an explicit null for an optional
+        // argument is conventionally its absence, and the schema types this parameter as a string,
+        // so null is not a value it accepts in the first place - refusing such a call would refuse
+        // one that every schema-conforming client is entitled to make. Making it distinguishable
+        // would mean changing how arguments reach EVERY tool, to separate two shapes that mean the
+        // same thing. The blank STRING below is the case actually worth catching, because it is the
+        // one a caller can send while believing they sent an id.
+        boolean releaseAsked = params != null && params.containsKey(KEY_RELEASE_COMPARISON_ID);
         String releaseId =
             trimToNull(JsonUtils.extractStringArgument(params, KEY_RELEASE_COMPARISON_ID));
+        if (releaseAsked && releaseId == null)
+        {
+            return ToolResult
+                .error("Nothing was released and nothing was started: '" //$NON-NLS-1$
+                    + KEY_RELEASE_COMPARISON_ID + "' was sent blank, and a blank id names no " //$NON-NLS-1$
+                    + "comparison. Pass the comparisonId printed in the comparison's own report, " //$NON-NLS-1$
+                    + "or omit the parameter entirely to start a comparison instead.") //$NON-NLS-1$
+                .toJson();
+        }
         if (releaseId != null)
         {
             // ...but a call that carries BOTH intents is refused rather than half-served. Answering

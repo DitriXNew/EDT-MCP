@@ -648,6 +648,24 @@ public final class ComparisonNodeRenderer
         /** What each side's cell renders; empty string where the side carries no value. */
         private final String[] values = new String[SIDES.length];
 
+        /**
+         * What each side's value IS, which for a metadata reference is not what its cell renders.
+         * <p>
+         * The cell shows a reference target by its bare {@code Name}, because that is what reads
+         * well in a table. Two sides of a broad reference - a subsystem's {@code content} holds
+         * objects of ANY type - can then hold {@code Catalog.Foo} and {@code Document.Foo} and
+         * render the same word, so comparing the cells answered SAME for two different objects and
+         * the document went on to state there were no property differences. The introspector
+         * supplies the qualified form beside the rendered one for exactly this; see
+         * {@code PropertyInfo.valueIdentity}.
+         * <p>
+         * An EMPTY identity here means one thing only: the side HAS the property and set nothing in
+         * it. It is not a fallback for "there is a value but it prints as nothing" - a reference
+         * pointing at an unnamed object renders a blank CELL and still arrives with the target's
+         * type as its identity, so it is not compared equal to a reference pointing at nothing.
+         */
+        private final String[] identities = new String[SIDES.length];
+
         /** Whether the read of that side's value FAILED, independent of what the cell renders. */
         private final boolean[] readFailed = new boolean[SIDES.length];
 
@@ -662,6 +680,7 @@ public final class ComparisonNodeRenderer
         PropertyRow()
         {
             Arrays.fill(values, ""); //$NON-NLS-1$
+            Arrays.fill(identities, ""); //$NON-NLS-1$
         }
     }
 
@@ -833,6 +852,7 @@ public final class ComparisonNodeRenderer
             else
             {
                 row.values[index] = info.currentValue == null ? "" : info.currentValue; //$NON-NLS-1$
+                row.identities[index] = info.valueIdentity == null ? "" : info.valueIdentity; //$NON-NLS-1$
             }
         }
     }
@@ -901,8 +921,17 @@ public final class ComparisonNodeRenderer
      * classified as unread, so a genuine difference it carried came back
      * {@link RowState#UNDETERMINED} instead of {@link RowState#DIFFERENT}, vanished from the
      * differing count, and was announced to the caller as a property this server cannot read.
+     * <p>
+     * <b>The values themselves are compared as {@link PropertyRow#identities}, not as the rendered
+     * cells</b>, for a reason of the same shape one step further out: a cell is written to be READ,
+     * so it is allowed to be shorter than the value. A metadata reference renders as the target's
+     * bare {@code Name}, which makes {@code Catalog.Foo} and {@code Document.Foo} the same cell -
+     * two genuinely different targets answering SAME, a row missing from the differing list, and a
+     * document telling the caller that nothing differs. The table still prints the short name; only
+     * the comparison uses the qualified one.
      *
-     * @param row the three rendered cells and, beside them, which reads failed
+     * @param row the three rendered cells and, beside them, what each stands for and which
+     *            reads failed
      * @param sides the three compared objects, {@code null} where the side has none
      * @return what the row establishes
      */
@@ -930,7 +959,7 @@ public final class ComparisonNodeRenderer
             }
             else
             {
-                readable.add(row.values[i] == null ? "" : row.values[i]); //$NON-NLS-1$
+                readable.add(row.identities[i] == null ? "" : row.identities[i]); //$NON-NLS-1$
             }
         }
         if (anyPresent && anyAbsent)

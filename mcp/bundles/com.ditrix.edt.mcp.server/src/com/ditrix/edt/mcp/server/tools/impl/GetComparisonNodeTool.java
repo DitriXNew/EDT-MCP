@@ -747,10 +747,21 @@ public class GetComparisonNodeTool implements IMcpTool
     // ==================== Parameter parsing ====================
 
     /**
-     * The largest magnitude a {@code double} carries with no rounding. A JSON number bigger than
-     * this reached us through a {@code double} that could not hold it, so the digits we were handed
-     * may name a NEIGHBOURING node rather than the one the caller meant - and expanding the wrong
-     * node silently is worse than refusing.
+     * The largest magnitude a {@code double} carries with no rounding - and, for the same reason,
+     * the FIRST magnitude whose digits no longer say which integer the caller sent.
+     * <p>
+     * Below 2^53 the doubles are spaced one apart, so every integer is its own image and nothing
+     * else rounds onto it. AT 2^53 the spacing becomes two: 2^53 and 2^53+1 are the same double
+     * and arrive here as the same digits, {@code 9.007199254740992E15}. The value is therefore
+     * refused at the boundary and not merely past it - a JSON number of 2^53+1 would otherwise
+     * have expanded the NEIGHBOURING node 2^53 while reporting success, which is exactly the
+     * misrouting this constant exists to prevent.
+     * <p>
+     * That refuses a caller who genuinely means node 2^53 as well, and it is the right trade for
+     * the same reason the check already refuses the exactly-representable 2^53+2: the tool cannot
+     * tell the two apart, and a wrong node answered silently is worse than a refusal. Exact digits
+     * - a nodeId sent as a JSON STRING - never reach this check at all, so that caller still has a
+     * spelling that works.
      */
     private static final long EXACT_IN_DOUBLE = 1L << 53;
 
@@ -772,10 +783,10 @@ public class GetComparisonNodeTool implements IMcpTool
      *
      * <h2>What is still refused, and why</h2>
      * A fractional value, a non-number, anything outside {@code long}, and - the one that matters -
-     * an integral value beyond {@link #EXACT_IN_DOUBLE}. Past that point the double that carried the
-     * number could not hold it exactly, so the digits here may be a neighbouring id that is itself
-     * perfectly plausible. Refusing is the only honest answer: the true id is already lost, and
-     * expanding its neighbour would answer a question nobody asked.
+     * an integral value AT or beyond {@link #EXACT_IN_DOUBLE}. From that point on the double that
+     * carried the number could not hold every integer, so the digits here may be a neighbouring id
+     * that is itself perfectly plausible. Refusing is the only honest answer: the true id is
+     * already lost, and expanding its neighbour would answer a question nobody asked.
      * <p>
      * Scientific notation is no longer treated as suspect on its own. {@code 1e3} is a legitimate
      * JSON spelling of 1000 - JSON has no separate integer type - so reading it as node 1000 is
@@ -815,7 +826,7 @@ public class GetComparisonNodeTool implements IMcpTool
         {
             return null;
         }
-        return Math.abs(value) > EXACT_IN_DOUBLE ? null : Long.valueOf(value);
+        return Math.abs(value) >= EXACT_IN_DOUBLE ? null : Long.valueOf(value);
     }
 
     private static ComparisonSide parseSide(String raw)

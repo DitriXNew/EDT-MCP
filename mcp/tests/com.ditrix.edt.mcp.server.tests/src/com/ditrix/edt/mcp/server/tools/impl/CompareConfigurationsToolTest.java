@@ -2569,6 +2569,75 @@ public class CompareConfigurationsToolTest
         assertEquals(0, backend.handBacks());
     }
 
+    // ==================== A blank id is a release that cannot be served ====================
+
+    /**
+     * The worst shape of the defect: the blank id was folded into an omission, which is the OTHER
+     * call shape, so the mixed-intent refusal below was never reached and the tool STARTED a
+     * comparison - taking EDT's single slot for work nobody asked for, in a call whose whole
+     * subject was giving that slot back.
+     */
+    @Test
+    public void testABlankReleaseIdWithLaunchParametersStartsNothing()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("releaseComparisonId", "   "); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("projectName", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("otherRevision", "release"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("ancestorRevision", "base"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+
+        // Asserted before the payload is read: on the old behaviour this call ANSWERED WITH A
+        // COMPARISON REPORT, and reading that as an error fails over the JSON rather than over
+        // the thing that went wrong. The slot is the subject here, so the slot is asserted first.
+        assertEquals("a blank id must not start a comparison", 0, backend.starts()); //$NON-NLS-1$
+        assertEquals(0, backend.handBacks());
+        assertContains(errorMessage(result), "releaseComparisonId"); //$NON-NLS-1$
+    }
+
+    /** An empty string is the same non-answer as whitespace, and is refused the same way. */
+    @Test
+    public void testAnEmptyReleaseIdIsRefusedRatherThanTreatedAsAnOmission()
+    {
+        String message = errorMessage(tool.execute(Map.of("releaseComparisonId", ""))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(message, "releaseComparisonId"); //$NON-NLS-1$
+        assertContains(message, "blank"); //$NON-NLS-1$
+        assertEquals(0, backend.starts());
+        assertEquals(0, backend.handBacks());
+    }
+
+    /**
+     * The refusal has to say what to DO, and the two ways out are opposite intents - so both are
+     * named rather than one being assumed.
+     */
+    @Test
+    public void testTheBlankReleaseIdRefusalNamesBothWaysOut()
+    {
+        String message = errorMessage(tool.execute(Map.of("releaseComparisonId", " "))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(message, "comparisonId"); //$NON-NLS-1$
+        assertContains(message, "omit the parameter"); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that keeps the presence test from swallowing the launch form: a caller who never
+     * sent the key at all is still starting a comparison, not being refused for a blank id.
+     */
+    @Test
+    public void testOmittingTheKeyEntirelyIsStillALaunch()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("otherRevision", "release"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("ancestorRevision", "base"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        tool.execute(params);
+
+        assertEquals(1, backend.starts());
+    }
+
     @Test
     public void testReleaseWithOnlyAPollingKnobIsStillARelease()
     {

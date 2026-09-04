@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.emf.common.util.BasicEList;
@@ -48,6 +49,15 @@ import com._1c.g5.v8.dt.form.compare.FormComparisonNode;
 import com._1c.g5.v8.dt.md.compare.ParentSupportModeComparisonNode;
 import com._1c.g5.v8.dt.md.compare.SupportSettingsComparisonNode;
 import com._1c.g5.v8.dt.md.compare.UserSupportModeComparisonNode;
+import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.e1c.g5.v8.dt.distribution.model.ParentSupportMode;
 import com.e1c.g5.v8.dt.distribution.model.UserSupportMode;
@@ -100,6 +110,216 @@ public class ComparisonNodeRendererTest
 
         assertTrue("exactly one of the two properties differs: " + text, //$NON-NLS-1$
             text.contains("**Properties:** 2 (1 differing)")); //$NON-NLS-1$
+    }
+
+    // ============ Two references that RENDER alike are not thereby the same value ============
+
+    /**
+     * The defect this pins is a wrong ANSWER, not wrong prose: a subsystem's {@code content} is
+     * declared against the abstract {@code MdObject}, so one side can list {@code Catalog.Foo} and
+     * the other {@code Document.Foo}. Both render the bare word {@code Foo} - correctly, that is
+     * what a reader wants in the cell - and the row was compared as those rendered strings, so two
+     * different objects came out SAME and the document went on to state that no property differs.
+     */
+    @Test
+    public void testTwoDifferentReferenceTargetsSharingANameAreADifference()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(subsystemHolding(catalogNamed("Foo")), //$NON-NLS-1$
+                subsystemHolding(documentNamed("Foo")), null))); //$NON-NLS-1$
+
+        assertTrue("the two targets are different objects, so the row differs: " + text, //$NON-NLS-1$
+            text.contains(" (1 differing)")); //$NON-NLS-1$
+    }
+
+    /** ...and the document must not then announce that nothing differs. */
+    @Test
+    public void testTheReportDoesNotClaimNoDifferencesOverTwoTargetsSharingAName()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(subsystemHolding(catalogNamed("Foo")), //$NON-NLS-1$
+                subsystemHolding(documentNamed("Foo")), null))); //$NON-NLS-1$
+
+        assertFalse("a difference was found, so this claim is false: " + text, //$NON-NLS-1$
+            text.contains("No differences in the compared properties")); //$NON-NLS-1$
+    }
+
+    /**
+     * The display is NOT what changed. The cell keeps the short name - qualifying it there would
+     * lengthen every reference row to fix something nobody reads out of the table.
+     */
+    @Test
+    public void testTheReferenceCellStillRendersTheBareName()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(subsystemHolding(catalogNamed("Foo")), //$NON-NLS-1$
+                subsystemHolding(documentNamed("Foo")), null))); //$NON-NLS-1$
+
+        String row = rowContaining(text, "Foo"); //$NON-NLS-1$
+        assertNotNull("the content row must be rendered: " + text, row); //$NON-NLS-1$
+        assertFalse("the cell must not have grown a type prefix: " + row, //$NON-NLS-1$
+            row.contains("Catalog.Foo") || row.contains("Document.Foo")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The control against the opposite error: qualifying the comparison must not turn two sides
+     * that hold the SAME target into a difference.
+     */
+    @Test
+    public void testTwoSidesHoldingTheSameTargetStillAgree()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(subsystemHolding(catalogNamed("Foo")), //$NON-NLS-1$
+                subsystemHolding(catalogNamed("Foo")), null))); //$NON-NLS-1$
+
+        assertTrue("the same target on both sides is not a difference: " + text, //$NON-NLS-1$
+            text.contains(" (0 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * Two subsystems identical in every property but {@code content}. The uuid is pinned rather
+     * than left to the factory so the only thing the counts above can be measuring is the content.
+     *
+     * @param target the single object the subsystem's content holds
+     * @return the subsystem
+     */
+    private static Subsystem subsystemHolding(MdObject target)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("Sales"); //$NON-NLS-1$
+        subsystem.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000001")); //$NON-NLS-1$
+        subsystem.getContent().add(target);
+        return subsystem;
+    }
+
+    private static Catalog catalogNamed(String name)
+    {
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName(name);
+        return catalog;
+    }
+
+    private static Document documentNamed(String name)
+    {
+        Document document = MdClassFactory.eINSTANCE.createDocument();
+        document.setName(name);
+        return document;
+    }
+
+    // ============ A target the introspector ADMITS is a value, not an empty property ============
+
+    /**
+     * A command's {@code group} is declared against the mcore {@code CommandGroup} interface, whose
+     * concrete types include the platform's {@code StandardCommandGroup} - not an {@code MdObject},
+     * and therefore rendered as nothing at all. Two commands sitting in two DIFFERENT standard
+     * groups arrived here as two empty, not-failed cells and were reported as agreeing.
+     */
+    @Test
+    public void testTwoDifferentStandardCommandGroupsAreADifference()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(commandInStandardGroup("FormCommandBarImportant"), //$NON-NLS-1$
+                commandInStandardGroup("NavigationPanelSeeAlso"), null))); //$NON-NLS-1$
+
+        assertTrue("two different standard groups are a difference: " + text, //$NON-NLS-1$
+            text.contains(" (1 differing)")); //$NON-NLS-1$
+    }
+
+    /** ...and the group now has a cell, instead of being a property with nothing in it. */
+    @Test
+    public void testAStandardCommandGroupIsPrintedInItsCell()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(commandInStandardGroup("FormCommandBarImportant"), //$NON-NLS-1$
+                commandInStandardGroup("NavigationPanelSeeAlso"), null))); //$NON-NLS-1$
+
+        String row = rowContaining(text, "FormCommandBarImportant"); //$NON-NLS-1$
+        assertNotNull("the group must be rendered, not left blank: " + text, row); //$NON-NLS-1$
+        assertTrue("the other side's group belongs in its own column: " + row, //$NON-NLS-1$
+            row.contains("NavigationPanelSeeAlso")); //$NON-NLS-1$
+    }
+
+    /** The control: the SAME standard group on both sides must not become a difference. */
+    @Test
+    public void testTheSameStandardCommandGroupOnBothSidesStillAgrees()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(commandInStandardGroup("FormCommandBarImportant"), //$NON-NLS-1$
+                commandInStandardGroup("FormCommandBarImportant"), null))); //$NON-NLS-1$
+
+        assertTrue("one group named twice is one value: " + text, //$NON-NLS-1$
+            text.contains(" (0 differing)")); //$NON-NLS-1$
+    }
+
+    // ============ Pointing at an unnamed object is not pointing at nothing ============
+
+    /**
+     * The cell for a reference is the target's NAME, and a target whose name is unset has none - so
+     * the introspector answered ABSENT and threw away the identity it had already built. The result
+     * was the same {@code (empty, empty, not-failed)} a reference pointing at NOTHING produces, and
+     * the two sides were reported as agreeing about where they point.
+     */
+    @Test
+    public void testAnUnnamedTargetIsNotTheSameAsNoTargetAtAll()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(
+                subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()), subsystemUnder(null),
+                null)));
+
+        assertTrue("an unnamed parent and no parent are not the same answer: " + text, //$NON-NLS-1$
+            text.contains(" (1 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control on the other side of that line: two sides that BOTH point at an unnamed target of
+     * the same type have nothing to tell them apart, and must not be turned into a difference by
+     * the fix above.
+     */
+    @Test
+    public void testTwoUnnamedTargetsOfTheSameTypeStillAgree()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(
+                subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()),
+                subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()), null)));
+
+        assertTrue("nothing distinguishes the two targets: " + text, //$NON-NLS-1$
+            text.contains(" (0 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * Two commands identical in every property but {@code group}. The uuid is pinned rather than
+     * left to the factory so the counts above can only be measuring the group.
+     *
+     * @param groupName the standard group's name
+     * @return the command
+     */
+    private static DataProcessorCommand commandInStandardGroup(String groupName)
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        group.setName(groupName);
+        group.setCategory(CommandGroupCategory.FORM_COMMAND_BAR);
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setName("Post"); //$NON-NLS-1$
+        command.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000002")); //$NON-NLS-1$
+        command.setGroup(group);
+        return command;
+    }
+
+    /**
+     * Two subsystems identical in every property but {@code parentSubsystem}.
+     *
+     * @param parent the object the reference points at, or {@code null} to leave it unset
+     * @return the subsystem
+     */
+    private static Subsystem subsystemUnder(Subsystem parent)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("Sales"); //$NON-NLS-1$
+        subsystem.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000003")); //$NON-NLS-1$
+        subsystem.setParentSubsystem(parent);
+        return subsystem;
     }
 
     // ============ A property one side does not HAVE is not a property it left empty ============

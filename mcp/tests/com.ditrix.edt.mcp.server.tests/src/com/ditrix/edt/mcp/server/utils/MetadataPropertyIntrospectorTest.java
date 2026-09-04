@@ -29,18 +29,25 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.ValueKind;
@@ -59,6 +66,263 @@ public class MetadataPropertyIntrospectorTest
     private static Catalog newCatalog()
     {
         return MdClassFactory.eINSTANCE.createCatalog();
+    }
+
+    // ============ A reference renders short, but it does not IDENTIFY itself short ============
+
+    /**
+     * A subsystem's {@code content} is declared {@code refers MdObject[]} - it holds objects of any
+     * type - so its two sides can hold a Catalog and a Document that happen to share a name. Both
+     * render the bare {@code Foo}, which is right for a reader and wrong for anything that compares
+     * the rendered text: it makes two different objects one value.
+     */
+    @Test
+    public void testABroadReferenceIsIdentifiedByTypeAsWellAsName()
+    {
+        PropertyInfo content =
+            MetadataPropertyIntrospector.find(subsystemHolding(catalogNamed("Foo")), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(content);
+        assertEquals("the reader still sees the short name", "Foo", content.currentValue); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("but the value identifies itself by type", "Catalog.Foo", //$NON-NLS-1$ //$NON-NLS-2$
+            content.valueIdentity);
+    }
+
+    /** The other half of the same statement: a same-named target of another type is another value. */
+    @Test
+    public void testTwoTargetTypesSharingANameAreTwoIdentities()
+    {
+        PropertyInfo fromCatalog =
+            MetadataPropertyIntrospector.find(subsystemHolding(catalogNamed("Foo")), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+        PropertyInfo fromDocument =
+            MetadataPropertyIntrospector.find(subsystemHolding(documentNamed("Foo")), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the two render alike - that is the whole point", fromCatalog.currentValue, //$NON-NLS-1$
+            fromDocument.currentValue);
+        assertEquals("Document.Foo", fromDocument.valueIdentity); //$NON-NLS-1$
+        assertFalse("...and must not identify alike: " + fromCatalog.valueIdentity, //$NON-NLS-1$
+            fromCatalog.valueIdentity.equals(fromDocument.valueIdentity));
+    }
+
+    /** Every element of a MANY reference is qualified, not just the first. */
+    @Test
+    public void testEveryElementOfAReferenceListIsQualified()
+    {
+        Subsystem subsystem = subsystemHolding(catalogNamed("Foo")); //$NON-NLS-1$
+        subsystem.getContent().add(documentNamed("Bar")); //$NON-NLS-1$
+
+        PropertyInfo content = MetadataPropertyIntrospector.find(subsystem, "content"); //$NON-NLS-1$
+
+        assertEquals("Foo, Bar", content.currentValue); //$NON-NLS-1$
+        assertEquals("Catalog.Foo, Document.Bar", content.valueIdentity); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that keeps the new field from becoming a second, divergent rendering: a kind
+     * whose text already says which value it is identifies itself by that same text.
+     */
+    @Test
+    public void testAKindWithNothingToQualifyIdentifiesItselfByItsRenderedText()
+    {
+        Catalog catalog = newCatalog();
+        catalog.setComment("a plain comment"); //$NON-NLS-1$
+
+        PropertyInfo comment = MetadataPropertyIntrospector.find(catalog, "comment"); //$NON-NLS-1$
+
+        assertEquals("a plain comment", comment.currentValue); //$NON-NLS-1$
+        assertEquals("a plain comment", comment.valueIdentity); //$NON-NLS-1$
+    }
+
+    private static Subsystem subsystemHolding(MdObject target)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("Sales"); //$NON-NLS-1$
+        subsystem.getContent().add(target);
+        return subsystem;
+    }
+
+    private static Catalog catalogNamed(String name)
+    {
+        Catalog catalog = newCatalog();
+        catalog.setName(name);
+        return catalog;
+    }
+
+    private static Document documentNamed(String name)
+    {
+        Document document = MdClassFactory.eINSTANCE.createDocument();
+        document.setName(name);
+        return document;
+    }
+
+    // ====== A target this class ADMITS is read, not silently dropped as an empty property ======
+
+    /**
+     * {@code classifyReference} admits a reference declared against the mcore {@code CommandGroup}
+     * interface, and the platform's {@code StandardCommandGroup} is one of the things that interface
+     * covers. The render path answered every non-{@code MdObject} target with ABSENT, so a command
+     * that IS in a standard group reported the same {@code (null, null, not-failed)} as a command in
+     * no group at all - a property this server admits it can address, and then claims nobody set.
+     */
+    @Test
+    public void testAStandardCommandGroupIsReadRatherThanReportedAbsent()
+    {
+        PropertyInfo group = MetadataPropertyIntrospector.find(
+            commandInStandardGroup("FormCommandBarImportant", null), "group"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the reader sees the platform's own name for the group", //$NON-NLS-1$
+            "FormCommandBarImportant", group.currentValue); //$NON-NLS-1$
+        assertEquals("StandardCommandGroup.FormCommandBarImportant", group.valueIdentity); //$NON-NLS-1$
+        assertFalse("a group that was read is not a group that failed to read", group.readFailed); //$NON-NLS-1$
+    }
+
+    /** Two different standard groups are two values, which is what the old ABSENT hid. */
+    @Test
+    public void testTwoStandardCommandGroupsAreTwoIdentities()
+    {
+        PropertyInfo inCommandBar = MetadataPropertyIntrospector.find(
+            commandInStandardGroup("FormCommandBarImportant", null), "group"); //$NON-NLS-1$ //$NON-NLS-2$
+        PropertyInfo inNavigation = MetadataPropertyIntrospector.find(
+            commandInStandardGroup("NavigationPanelSeeAlso", null), "group"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("a standard group must identify itself at all", inCommandBar.valueIdentity); //$NON-NLS-1$
+        assertFalse("two standard groups must not identify alike: " + inCommandBar.valueIdentity, //$NON-NLS-1$
+            inCommandBar.valueIdentity.equals(inNavigation.valueIdentity));
+    }
+
+    /**
+     * A group carrying no name still carries the {@code category} its own class declares, and the
+     * category is what the rest of this server already prints for such a group. Two groups told
+     * apart by nothing else are still two values.
+     */
+    @Test
+    public void testAnUnnamedStandardCommandGroupIsIdentifiedByItsCategory()
+    {
+        PropertyInfo onCommandBar = MetadataPropertyIntrospector.find(
+            commandInStandardGroup(null, CommandGroupCategory.FORM_COMMAND_BAR), "group"); //$NON-NLS-1$
+        PropertyInfo onNavigation = MetadataPropertyIntrospector.find(
+            commandInStandardGroup(null, CommandGroupCategory.NAVIGATION_PANEL), "group"); //$NON-NLS-1$
+
+        assertEquals("a nameless group still shows what the platform knows about it", //$NON-NLS-1$
+            "FormCommandBar", onCommandBar.currentValue); //$NON-NLS-1$
+        assertEquals("StandardCommandGroup.FormCommandBar", onCommandBar.valueIdentity); //$NON-NLS-1$
+        assertEquals("...and two categories are two values", //$NON-NLS-1$
+            "StandardCommandGroup.NavigationPanel", onNavigation.valueIdentity); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that stops the fix from becoming a blanket: a command with NO group must still
+     * report an empty property, or every reference anybody left unset becomes a value.
+     */
+    @Test
+    public void testACommandWithNoGroupIsStillAnEmptyProperty()
+    {
+        PropertyInfo group = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createDataProcessorCommand(), "group"); //$NON-NLS-1$
+
+        assertNull("an unset group renders no value", group.currentValue); //$NON-NLS-1$
+        assertNull("...and identifies nothing", group.valueIdentity); //$NON-NLS-1$
+        assertFalse("...and nothing failed", group.readFailed); //$NON-NLS-1$
+    }
+
+    /**
+     * The other control: the metadata {@code CommandGroup} - the admitted target that IS an
+     * {@code MdObject} - must keep the shape it already had, so the new branch is an addition
+     * rather than a reroute.
+     */
+    @Test
+    public void testAMetadataCommandGroupKeepsItsNameAndTypeIdentity()
+    {
+        CommandGroup group = MdClassFactory.eINSTANCE.createCommandGroup();
+        group.setName("Sales"); //$NON-NLS-1$
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setGroup(group);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(command, "group"); //$NON-NLS-1$
+
+        assertEquals("Sales", info.currentValue); //$NON-NLS-1$
+        assertEquals("CommandGroup.Sales", info.valueIdentity); //$NON-NLS-1$
+    }
+
+    // ====== A target with no NAME is not a reference with no TARGET ======
+
+    /**
+     * ABSENT was chosen on the rendered text alone, so a reference pointing at an object whose name
+     * is not set threw away the identity it had already built and came back indistinguishable from
+     * a reference pointing at nothing - which a comparison then reports as agreement.
+     */
+    @Test
+    public void testAPresentButUnnamedTargetKeepsATypeIdentity()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()), "parentSubsystem"); //$NON-NLS-1$
+
+        assertEquals("the type is what is left to identify it by", "Subsystem", //$NON-NLS-1$ //$NON-NLS-2$
+            parent.valueIdentity);
+        assertFalse("it was read, so nothing failed", parent.readFailed); //$NON-NLS-1$
+    }
+
+    /**
+     * The cell is a NAME, and there is no name - so it stays empty rather than inventing one. The
+     * identity above, not the cell, is what keeps this apart from an unset reference.
+     */
+    @Test
+    public void testAPresentButUnnamedTargetStillPrintsAnEmptyCell()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()), "parentSubsystem"); //$NON-NLS-1$
+
+        assertNull("a nameless target must not be given a printed name", parent.currentValue); //$NON-NLS-1$
+    }
+
+    /** The control: pointing at nothing still identifies nothing, so the two remain distinguishable. */
+    @Test
+    public void testAnUnsetReferenceIdentifiesNothingAtAll()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createSubsystem(), "parentSubsystem"); //$NON-NLS-1$
+
+        assertNull(parent.currentValue);
+        assertNull("an unset reference must not acquire an identity", parent.valueIdentity); //$NON-NLS-1$
+    }
+
+    /**
+     * A command placed in a platform standard group.
+     *
+     * @param name the group's name, or {@code null} to leave it unset
+     * @param category the group's category, or {@code null} to leave the model's default
+     * @return the command
+     */
+    private static DataProcessorCommand commandInStandardGroup(String name,
+        CommandGroupCategory category)
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        if (name != null)
+        {
+            group.setName(name);
+        }
+        if (category != null)
+        {
+            group.setCategory(category);
+        }
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setGroup(group);
+        return command;
+    }
+
+    /**
+     * A subsystem whose {@code parentSubsystem} points at {@code parent} - a single-valued
+     * reference to a named object, so it says nothing about the many-valued {@code content} above.
+     *
+     * @param parent the object the reference points at
+     * @return the subsystem
+     */
+    private static Subsystem subsystemUnder(Subsystem parent)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("Sales"); //$NON-NLS-1$
+        subsystem.setParentSubsystem(parent);
+        return subsystem;
     }
 
     // ==================== A failed read is not an empty value ====================

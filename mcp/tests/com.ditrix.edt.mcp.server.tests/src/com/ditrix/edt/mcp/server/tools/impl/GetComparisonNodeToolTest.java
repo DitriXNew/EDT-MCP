@@ -1784,6 +1784,56 @@ public class GetComparisonNodeToolTest
         assertNull("nothing may be looked up on a rounded id", source.requestedNodeId); //$NON-NLS-1$
     }
 
+    /**
+     * The boundary itself, which the check used to let through: 2^53 is the FIRST double that two
+     * integers share. A caller sending the JSON number 2^53+1 delivers exactly these digits, so
+     * accepting them expanded the neighbouring node 2^53 and reported success - the misrouting the
+     * range check exists to prevent, reached through the one value the check admitted.
+     */
+    @Test
+    public void testTheFirstAmbiguousNodeIdIsRefusedRatherThanRoundedToItsNeighbour()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "9.007199254740992E15")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertError(result);
+        assertNull("nothing may be looked up on digits two ids share", source.requestedNodeId); //$NON-NLS-1$
+    }
+
+    /**
+     * The other side of that boundary, so the refusal is a boundary and not a blanket: the largest
+     * id whose digits belong to it alone is still addressable.
+     */
+    @Test
+    public void testTheLargestUnambiguousNodeIdIsStillAccepted()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "9.007199254740991E15")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertFalse("2^53-1 is carried exactly and shared with nothing: " + result, //$NON-NLS-1$
+            isError(result));
+        assertEquals(Long.valueOf(9007199254740991L), source.requestedNodeId);
+    }
+
+    /**
+     * The exact digits are a different spelling with a different guarantee, and it must keep
+     * working: a caller who really does mean node 2^53 sends it as a JSON string, which never goes
+     * through a double at all and so was never ambiguous.
+     */
+    @Test
+    public void testExactDigitsAtTheBoundaryAreStillAddressable()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "nodeId", "9007199254740992")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertFalse("exact digits carry no rounding to be suspicious of: " + result, //$NON-NLS-1$
+            isError(result));
+        assertEquals(Long.valueOf(9007199254740992L), source.requestedNodeId);
+    }
+
     /** And the controls: a fractional id and a non-number are still not ids. */
     @Test
     public void testAFractionalOrNonNumericNodeIdIsStillRefused()
