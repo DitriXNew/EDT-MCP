@@ -1246,8 +1246,9 @@ public class GetComparisonNodeToolTest
     // The same judgement compare_configurations makes about a scope entry, asked here about
     // objectFqn: the engine matches a symlink with String.equals, so an address padded with
     // whitespace trim() does not cut reaches no node. It is not silent here the way it is in a
-    // scope - the tool does refuse - but it refuses by quoting an address that looks exactly
-    // right, after spending the whole retry budget waiting for a node that cannot exist.
+    // scope - the tool does refuse - but without this check the refusal would carry the padding
+    // back inside the quoted address instead of naming it, and only after the whole retry budget
+    // had been spent waiting for a node that cannot exist.
 
     @Test
     public void testAnObjectFqnPaddedWithAnEmSpaceIsRefused()
@@ -1259,10 +1260,19 @@ public class GetComparisonNodeToolTest
 
         assertError(result);
         String message = errorMessage(result);
-        assertTrue("the character must be named by code point - quoting the address shows the " //$NON-NLS-1$
-            + "caller the string they already believe is right: " + message, //$NON-NLS-1$
+        assertTrue("the offending character must be named by code point, because the quoted " //$NON-NLS-1$
+            + "address carries it rather than naming it: " + message, //$NON-NLS-1$
             message.contains("U+2003")); //$NON-NLS-1$
         assertTrue("and its position given: " + message, message.contains("character 17")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The closing advice may keep the word "invisibly" only while its SUBJECT is named:
+        // unnamed, the claim widens back over every character this door refuses, U+0020
+        // included. Pinned here, on the message the caller actually reads, rather than on the
+        // characters of the source file.
+        assertTrue("the advice has to name a character that really does survive a trim: " //$NON-NLS-1$
+            + message, message.contains("U+00A0")); //$NON-NLS-1$
+        assertTrue("and say what it is that such a character survives: " + message, //$NON-NLS-1$
+            message.contains("survive an ordinary trim")); //$NON-NLS-1$
     }
 
     @Test
@@ -1313,17 +1323,41 @@ public class GetComparisonNodeToolTest
     }
 
     @Test
-    public void testThePositionIsCountedInTheAddressTheCallerSent()
+    public void testThePositionIsCountedInTheTrimmedAddressAndSaysSo()
     {
+        // The same frame compare_configurations states for a scope entry, in the same words: one
+        // rule at both doors of one address vocabulary. Counting in the untrimmed argument would
+        // be exact here and only here - it holds while three components upstream leave the string
+        // alone, nothing pins that they do, and the sibling door cannot promise it at all,
+        // because a comma-separated 'scope' is trimmed entry by entry before it is ever seen.
+        //
+        // Pinned as the whole phrase: a message that stated the frame elsewhere in its own prose
+        // would satisfy a looser assertion while leaving the number unattached to it.
         StubSource source = knownSource();
 
         String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "  Catalog.Products\u2003")); //$NON-NLS-1$
 
         assertError(result);
-        assertTrue("two spaces were cut before the pad was found, so 17 would be a position " //$NON-NLS-1$
-            + "in a string the caller never sent: " + errorMessage(result), //$NON-NLS-1$
-            errorMessage(result).contains("at character 19")); //$NON-NLS-1$
+        assertTrue("the position and the string it indexes must arrive together: " //$NON-NLS-1$
+            + errorMessage(result), errorMessage(result).contains(
+                "at character 17 of that address once ordinary spaces (U+0020 and below) are " //$NON-NLS-1$
+                    + "trimmed off its ends")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePositionIsNotFramedAsTheAddressTheCallerSent()
+    {
+        // The frame that was dropped, pinned as an absence in its own @Test: the frame sentence
+        // alone would still read correctly beside a restored offset into the untrimmed argument.
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "  Catalog.Products\u2003")); //$NON-NLS-1$
+
+        assertError(result);
+        assertFalse("the offset into the untrimmed argument must not come back: " //$NON-NLS-1$
+            + errorMessage(result), errorMessage(result).contains("at character 19")); //$NON-NLS-1$
     }
 
     @Test

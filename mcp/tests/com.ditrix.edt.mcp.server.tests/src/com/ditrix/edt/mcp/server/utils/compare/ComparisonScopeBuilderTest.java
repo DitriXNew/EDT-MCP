@@ -319,10 +319,11 @@ public class ComparisonScopeBuilderTest
     //
     // String.trim cuts only code points at or below U+0020, so an entry padded with U+2003 or
     // U+00A0 survives it - non-blank, structurally sound, leading token a real type - and the
-    // builder used to hand the engine a symlink that can never match. The comparison then runs to
-    // the end and reports no rows for it, which reads as "these objects did not differ". Every
-    // pin below therefore checks the REFUSAL, not the symlink: a build that produced the padded
-    // symlink was already the defect.
+    // builder used to hand the engine a symlink that can never match. EDT's single comparison
+    // slot is then spent for minutes on a name no node can answer to: the padding survives the
+    // trim, so the entry reaches the engine exactly as sent and the report can only quote it back
+    // that way. Every pin below therefore checks the REFUSAL, not the symlink: a build that
+    // produced the padded symlink was already the defect.
     //
     // The characters are written as escapes so this source stays pure ASCII (and so the pins are
     // readable at all - the whole point is that the character is invisible).
@@ -387,9 +388,9 @@ public class ComparisonScopeBuilderTest
     @Test
     public void testTheRefusalNamesTheCodePointAndWhereItSits()
     {
-        // Named by code, not echoed: quoting the entry back shows the caller the string they
-        // already believe is right. The position is the 1-based UTF-16 offset, so 'Catalog.'
-        // (8) + 'Products' (8) puts the pad at 17.
+        // Named by code, not echoed: quoting the entry back carries the character instead of
+        // naming it. The position is the 1-based UTF-16 offset, so 'Catalog.' (8) +
+        // 'Products' (8) puts the pad at 17.
         //
         // U+2007 and the whole phrase, not contains("U+2003"): the closing advice names U+2003
         // and U+00A0 as examples of trim-surviving whitespace, so a code-only assertion on either
@@ -405,18 +406,139 @@ public class ComparisonScopeBuilderTest
     }
 
     @Test
-    public void testThePositionIsCountedInTheStringTheCallerSentNotInTheTrimmedOne()
+    public void testThePositionIsCountedInTheTrimmedEntryAndSaysSo()
     {
-        // trim() runs before the padding question, so the offset it finds is an offset into a
-        // string the caller never sent. With two ordinary spaces cut from the front, the pad that
-        // sits at 17 of the trimmed entry sits at 19 of the request - and 17 is a number the
-        // caller cannot count to in their own text.
+        // The number and the string it is counted in, pinned as ONE phrase. 'entry' is
+        // raw.trim() by construction, so 17 is true here whatever the caller sent; the frame is
+        // what makes 17 readable rather than an offset the reader has to guess the origin of.
+        //
+        // The whole phrase rather than "of that entry once ordinary spaces": a message that
+        // stated the frame somewhere else in its own prose would satisfy a looser assertion
+        // while leaving the number unattached to it.
         Scoping scoping = ComparisonScopeBuilder.build(
             Collections.singletonList("  Catalog.Products\u2007")); //$NON-NLS-1$
 
         assertFalse(scoping.ok());
-        assertTrue("the position must refer to what was sent: " + scoping.errorJson(), //$NON-NLS-1$
-            scoping.errorJson().contains("at character 19")); //$NON-NLS-1$
+        assertTrue("the position and the string it indexes must arrive together: " //$NON-NLS-1$
+            + scoping.errorJson(), scoping.errorJson().contains(
+                "at character 17 of that entry once ordinary spaces (U+0020 and below) are " //$NON-NLS-1$
+                    + "trimmed off its ends")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePositionIsNotFramedAsTheStringTheCallerSent()
+    {
+        // The frame that was measured and dropped. 'scope' reaches this class two ways, and on
+        // the comma-separated one JsonUtils.extractArrayArgument trims every entry on the way in
+        // - so the leading spaces this class could add back are not the ones the caller typed,
+        // and 19 would be a number nothing here can stand behind. Pinned as the ABSENCE of 19,
+        // because the frame sentence alone would still read correctly beside a restored offset.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("  Catalog.Products\u2007")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertFalse("the offset into the untrimmed string must not come back: " //$NON-NLS-1$
+            + scoping.errorJson(), scoping.errorJson().contains("at character 19")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePaddedRefusalNamesTheSlotItSavesRatherThanClaimingTheReportReadsAsAgreement()
+    {
+        // What the refusal is FOR, stated as what actually happens. It used to justify itself by
+        // saying the finished run "reads as 'these objects did not differ'" - which is false
+        // about our own report: ComparisonTreeReport prints "That is an absence of data, NOT a
+        // statement that the sides agree" and, for a scope, "The requested scope matched no
+        // object". The real harm is the slot spent on a name that cannot match plus the fact
+        // that the report is left with nothing to do about the name but quote it back, and both
+        // are pinned.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u2007")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        String error = scoping.errorJson();
+        assertTrue("the cost of running it anyway must be named: " + error, //$NON-NLS-1$
+            error.contains("EDT's single comparison slot would be spent for minutes on a name " //$NON-NLS-1$
+                + "that can never match")); //$NON-NLS-1$
+        assertTrue("and what the report is left able to do about the name: " + error, //$NON-NLS-1$
+            error.contains("all the report could do about the name is quote it back in its " //$NON-NLS-1$
+                + "Requested column, where it still reads as a name")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePaddedRefusalDoesNotSayTheReportWouldReadAsAgreement()
+    {
+        // The false claim, pinned as an absence in its own @Test: JUnit stops a method at its
+        // first failed assertion, so an absence sharing a method with the positive pins above
+        // would only be reached while they all held.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u2007")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertFalse("our report never says this, so the refusal must not claim it would: " //$NON-NLS-1$
+            + scoping.errorJson(), scoping.errorJson().contains("did not differ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePaddedRefusalDoesNotSayThePaddingCannotBeSeen()
+    {
+        // The second false claim this message carried: "the entry looks correct wherever it is
+        // quoted back, because the padding is invisible". Invisibility is not a property of the
+        // inputs this refusal fires on - see the U+0020 pins below - so it cannot be the reason
+        // the entry is harmful. It is the reason the row is EASY TO MISS, and the message keeps
+        // that idea only where it is true: as a note about the characters an ordinary trim
+        // leaves behind.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u2007")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertFalse("invisibility is not true of every padded entry, so it may not be given as " //$NON-NLS-1$
+            + "the reason: " + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("the padding is invisible")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePaddedRefusalDoesNotSayTheEntryLooksCorrect()
+    {
+        // The other half of the same sentence, pinned separately: dropping "because the padding
+        // is invisible" while keeping "the entry looks correct" would leave the overclaim
+        // standing in shorter words, and the absence above would not notice.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u2007")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertFalse("what the entry LOOKS like is the caller's screen to judge: " //$NON-NLS-1$
+            + scoping.errorJson(), scoping.errorJson().contains("looks correct")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEntryPaddedWithAnOrdinaryVisibleSpaceIsStillRefused()
+    {
+        // The input that disproved "the padding is invisible". U+0020 is ordinary and perfectly
+        // visible, and inside the entry String.trim never touches it - trim cuts the ENDS of the
+        // whole string, while the question is asked at the ends of each SEGMENT. So this entry
+        // reaches the padding check, is refused, and its offending character is one anybody can
+        // see.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog. Products")); //$NON-NLS-1$
+
+        assertFalse("padding at a segment boundary is padding whether or not it can be seen", //$NON-NLS-1$
+            scoping.ok());
+        assertTrue("and it is named as the character it is: " + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("has U+0020, a whitespace character, at character 9")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusalForAVisibleSpaceDoesNotClaimThePaddingCannotBeSeen()
+    {
+        // The same absence as above, asked of the input that makes it a lie rather than merely
+        // an overreach. Its own @Test for the reason the pair above states.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog. Products")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertFalse("this padding is a plain space the caller can see: " //$NON-NLS-1$
+            + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("the padding is invisible")); //$NON-NLS-1$
     }
 
     // ==================== a segment that names nothing ====================
@@ -435,6 +557,33 @@ public class ComparisonScopeBuilderTest
         assertFalse("a name with nothing between two dots matches no object", scoping.ok()); //$NON-NLS-1$
         assertTrue("and the refusal says which segment: " + scoping.errorJson(), //$NON-NLS-1$
             scoping.errorJson().contains("nothing in segment 2")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheEmptySegmentRefusalNamesTheSlotItSaves()
+    {
+        // The same correction as the padded refusal, at the sibling door: this message carried
+        // the same false justification, and both had to move together or the two doors would
+        // give different reasons for one rule.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog..Products")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertTrue("the cost of running it anyway must be named: " + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("EDT's single comparison slot would be spent for " //$NON-NLS-1$
+                + "minutes on a name that can never match")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheEmptySegmentRefusalDoesNotSayTheReportWouldReadAsAgreement()
+    {
+        // Pinned as an absence in its own @Test, for the reason the padded pair states.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog..Products")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertFalse("our report never says this, so the refusal must not claim it would: " //$NON-NLS-1$
+            + scoping.errorJson(), scoping.errorJson().contains("did not differ")); //$NON-NLS-1$
     }
 
     @Test
@@ -582,17 +731,5 @@ public class ComparisonScopeBuilderTest
         assertEquals(1, PaddedNames.firstEmptyComponent(".Catalog", '.')); //$NON-NLS-1$
         assertEquals(-1, PaddedNames.firstEmptyComponent("Catalog.Products", '.')); //$NON-NLS-1$
         assertEquals(-1, PaddedNames.firstEmptyComponent(null, '.'));
-    }
-
-    @Test
-    public void testTrimmedFromTheFrontReproducesTrimAndNotStrip()
-    {
-        // trim cuts at or below U+0020 and strip is Unicode-aware, so the two disagree on a
-        // non-breaking space. The callers use trim, so this must too - otherwise the position it
-        // corrects would be corrected by the wrong amount.
-        assertEquals(2, PaddedNames.trimmedFromTheFront("  Catalog")); //$NON-NLS-1$
-        assertEquals(0, PaddedNames.trimmedFromTheFront("\u00a0Catalog")); //$NON-NLS-1$
-        assertEquals(0, PaddedNames.trimmedFromTheFront("Catalog")); //$NON-NLS-1$
-        assertEquals(0, PaddedNames.trimmedFromTheFront(null));
     }
 }

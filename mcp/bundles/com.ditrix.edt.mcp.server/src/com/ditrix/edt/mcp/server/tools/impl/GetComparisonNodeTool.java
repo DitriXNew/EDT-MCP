@@ -394,10 +394,13 @@ public class GetComparisonNodeTool implements IMcpTool
         // predicate: an address padded with whitespace trim() does not cut matches no node's
         // symlink, because the engine compares them with String.equals. Without it this call
         // spends its whole retry budget waiting for a lazily-built tree to produce a node that
-        // cannot exist, and then refuses by quoting an address that looks exactly right on any
-        // screen. Asked here rather than inside canonicalize(), because canonicalize answers a
-        // String and a refusal is not one.
-        String paddedFqn = unusableAddressRefusal(objectFqn, rawObjectFqn);
+        // cannot exist, and then refuses with a generic "no such node" that echoes the address
+        // back without naming anything wrong with it. Both halves are asked here - whitespace at
+        // a segment boundary, and a segment that names nothing at all - and each refusal names
+        // what it found: the code point and its offset, or the ordinal of the empty segment.
+        // Asked here rather than inside canonicalize(), because canonicalize answers a String
+        // and a refusal is not one.
+        String paddedFqn = unusableAddressRefusal(objectFqn);
         if (paddedFqn != null)
         {
             return paddedFqn;
@@ -867,12 +870,18 @@ public class GetComparisonNodeTool implements IMcpTool
      * question deliberately SKIPS a component that names nothing, which is safe only where
      * something else reports it. Here that something else is the second half.
      *
+     * The position is the 1-based UTF-16 offset within {@code objectFqn}, which is the argument
+     * already trimmed - the SAME frame {@code compare_configurations} states for a scope entry,
+     * and stated in the same words, so one rule answers at both doors of this one address
+     * vocabulary. Counting in the untrimmed argument instead would be exact here and only here:
+     * it holds while three components upstream leave the string alone, nothing pins that they do,
+     * and the sibling door cannot make the same promise at all, because a comma-separated
+     * {@code scope} is trimmed entry by entry before it is ever seen.
+     *
      * @param objectFqn the caller's address, already trimmed to null (may be {@code null})
-     * @param raw the same argument BEFORE trimming, so a position can be reported in the string
-     *     the caller actually sent (may be {@code null})
      * @return the rendered refusal, or {@code null} when the address is usable
      */
-    private static String unusableAddressRefusal(String objectFqn, String raw)
+    private static String unusableAddressRefusal(String objectFqn)
     {
         if (objectFqn == null)
         {
@@ -884,13 +893,14 @@ public class GetComparisonNodeTool implements IMcpTool
             return ToolResult.error("objectFqn has " //$NON-NLS-1$
                 + PaddedNames.codePointName(objectFqn.charAt(offset))
                 + ", a whitespace character, at character " //$NON-NLS-1$
-                + (PaddedNames.trimmedFromTheFront(raw) + offset + 1)
-                + ", where a name begins or ends. Nothing was read. The comparison engine " //$NON-NLS-1$
+                + (offset + 1)
+                + " of that address once ordinary spaces (U+0020 and below) are trimmed off its " //$NON-NLS-1$
+                + "ends, where a name begins or ends. Nothing was read. The comparison engine " //$NON-NLS-1$
                 + "matches an address against a node's own qualified name by exact string " //$NON-NLS-1$
                 + "equality and no name it produces holds whitespace, so a padded address " //$NON-NLS-1$
-                + "reaches NO node however long the tree is given to build. Such a character " //$NON-NLS-1$
-                + "survives an ordinary trim, so an address pasted out of a document can carry " //$NON-NLS-1$
-                + "one invisibly. Re-send it without the padding, for example " //$NON-NLS-1$
+                + "reaches NO node however long the tree is given to build. Note that 'U+2003', " //$NON-NLS-1$
+                + "'U+00A0' and their kin survive an ordinary trim, so an address pasted out of a " //$NON-NLS-1$
+                + "document can carry one invisibly. Re-send it without the padding, for example " //$NON-NLS-1$
                 + "'Catalog.Products'.").toJson(); //$NON-NLS-1$
         }
         int empty = PaddedNames.firstEmptyComponent(objectFqn, '.');

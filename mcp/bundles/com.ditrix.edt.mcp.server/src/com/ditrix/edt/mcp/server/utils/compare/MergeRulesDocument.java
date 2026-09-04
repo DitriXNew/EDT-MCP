@@ -733,8 +733,9 @@ public final class MergeRulesDocument
     }
 
     /**
-     * Where a key is PADDED with whitespace, which is the one defect in a key a caller cannot see
-     * by looking at their own request.
+     * Where a key is PADDED with whitespace - a key that is well-formed and still names nothing,
+     * because EDT matches node keys by exact string equality and no key it writes holds
+     * whitespace.
      * <p>
      * The JUDGEMENT is {@link PaddedNames}': which characters count, that only the ENDS of a
      * component are looked at, that a component naming nothing at all is skipped, and that

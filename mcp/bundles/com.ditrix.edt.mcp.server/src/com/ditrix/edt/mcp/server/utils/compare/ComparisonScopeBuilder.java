@@ -206,16 +206,18 @@ public final class ComparisonScopeBuilder
             // points at or below U+0020, so an entry padded with U+2003 or U+00A0 arrives here
             // still padded - and if the padding sits on the LEADING segment, asking about the
             // type first answers "'Catalog' is not a metadata type" over a token that reads as
-            // 'Catalog' on any screen. A message that quotes an invisible character without
-            // naming it is one the caller cannot act on, so the invisible defect is named first.
+            // 'Catalog' on any screen. A message that quotes the padding without naming it is
+            // one the caller cannot act on, so the padding is named first.
             int padded = paddedNameCharacter(entry);
             if (padded >= 0)
             {
-                // Reported against the string the CALLER sent, not against the trimmed one: with
-                // ordinary spaces cut from the front the two disagree, and a position the caller
-                // cannot count to is worse than no position.
-                return refuse(paddedEntryMessage(i, entry, padded,
-                    PaddedNames.trimmedFromTheFront(raw)));
+                // The offset indexes 'entry', which is raw.trim() BY CONSTRUCTION, and the
+                // message frames it that way rather than promising the caller's own request
+                // text. Adding the lead back would name a frame this class cannot stand behind:
+                // a scope that arrived as one comma-separated string had every entry trimmed by
+                // JsonUtils.extractArrayArgument before it got here, so the spaces this class
+                // could restore are not the ones the caller typed.
+                return refuse(paddedEntryMessage(i, entry, padded));
             }
             // The other half of the same failure, and it needs its own question here because
             // nothing else in this class asks one. The padding check SKIPS a component that names
@@ -335,18 +337,23 @@ public final class ComparisonScopeBuilder
     }
 
     /**
-     * Where a metadata address is PADDED with whitespace - the one defect in an address a caller
-     * cannot see by looking at their own request.
+     * Where a metadata address is PADDED with whitespace - the one defect that leaves an address
+     * still reading as a name while matching none.
      *
      * <h2>Why an address gets its own door onto the shared judgement</h2>
      * The comparison engine matches a symlink by string EQUALITY against a node's own, and no
      * symlink it produces carries whitespace. A padded address therefore matches nothing - which
      * is not an error anywhere downstream. As a SCOPE entry it is worse than a refusal: the entry
      * validates (its leading token is a real type), a non-empty {@link ComparisonScope} is built,
-     * EDT's single comparison slot is taken for minutes, and the finished run reports no matching
-     * rows - the caller is told the objects did not differ rather than that the name reached
-     * nothing. As {@code get_comparison_node}'s address it is merely unactionable: the refusal
-     * quotes an address that looks exactly right.
+     * and EDT's single comparison slot is spent for minutes on a name that can never match.
+     * The report does NOT read that absence as agreement - {@link ComparisonTreeReport} says the
+     * scope matched no object - but all it can do about the name is quote it back, so the
+     * Requested column carries an entry that still reads as a name. That is what makes the row
+     * easy to read past, and easier still where the padding is one of the characters an ordinary
+     * trim leaves behind - but the cost is the same slot either way, and an ordinary space at a
+     * segment boundary is padding while being perfectly visible.
+     * As {@code get_comparison_node}'s address the cost is only a refusal - one that names the
+     * offending code point and its offset instead of reporting a node that was not found.
      * <p>
      * <b>Not trimmed for the caller</b>, for the reason the merge-rules door gives: an address
      * this tool rewrote is no longer the address that was asked about, and a scope silently
@@ -373,28 +380,34 @@ public final class ComparisonScopeBuilder
      * mean this class deciding what the caller meant, which is the silent rewrite the refusal
      * exists instead of.
      *
-     * The position is the UTF-16 offset within the string as SENT - the trimmed offset plus
-     * whatever {@code trim} cut from the front - counted from 1. It is the same unit the
+     * The position is the 1-based UTF-16 offset within {@code entry}, and {@code entry} is
+     * {@code raw.trim()} BY CONSTRUCTION - so the message frames the count as "once ordinary
+     * spaces (U+0020 and below) are trimmed off its ends", which is true whatever the caller sent
+     * and however {@code scope} reached this class. Naming the caller's own string instead was
+     * measured and dropped: on the comma-separated shape of {@code scope},
+     * {@code JsonUtils.extractArrayArgument} trims every entry on the way in, so the leading
+     * spaces this class could add back are not the ones the caller typed. It is the same unit the
      * merge-rules refusal uses, and {@link PaddedNames#codePointName(char)} says why that unit
      * rather than a code-point ordinal.
      *
      * @param index the zero-based position of the offending entry
      * @param entry the entry, as trimmed
      * @param offset the 0-based offset of the padding character within it
-     * @param lead how many characters {@code trim} cut from the front of what the caller sent
      * @return the actionable message
      */
-    private static String paddedEntryMessage(int index, String entry, int offset, int lead)
+    private static String paddedEntryMessage(int index, String entry, int offset)
     {
         return "Scope entry #" + (index + 1) + " has " //$NON-NLS-1$ //$NON-NLS-2$
             + PaddedNames.codePointName(entry.charAt(offset))
-            + ", a whitespace character, at character " + (lead + offset + 1) //$NON-NLS-1$
-            + ", where a name begins or ends. Nothing was started. The comparison engine matches " //$NON-NLS-1$
+            + ", a whitespace character, at character " + (offset + 1) //$NON-NLS-1$
+            + " of that entry once ordinary spaces (U+0020 and below) are trimmed off its ends, " //$NON-NLS-1$
+            + "where a name begins or ends. Nothing was started. The comparison engine matches " //$NON-NLS-1$
             + "a scope entry against an object's own qualified name by exact string equality and " //$NON-NLS-1$
-            + "no name it produces holds whitespace, so a padded entry matches NO object - the " //$NON-NLS-1$
-            + "comparison would run to the end and report nothing for it, which reads as 'these " //$NON-NLS-1$
-            + "objects did not differ'. It is not trimmed for you, because an address this tool " //$NON-NLS-1$
-            + "rewrote is no longer the address you asked about. Note that '" //$NON-NLS-1$
+            + "no name it produces holds whitespace, so a padded entry matches NO object - EDT's " //$NON-NLS-1$
+            + "single comparison slot would be spent for minutes on a name that can never match, " //$NON-NLS-1$
+            + "and all the report could do about the name is quote it back in its Requested " //$NON-NLS-1$
+            + "column, where it still reads as a name. It is not trimmed for you, because an " //$NON-NLS-1$
+            + "address this tool rewrote is no longer the address you asked about. Note that '" //$NON-NLS-1$
             + PaddedNames.codePointName(EM_SPACE) + "', '" + PaddedNames.codePointName(NO_BREAK_SPACE) //$NON-NLS-1$
             + "' and their kin survive an ordinary trim, so a name pasted out of a document can " //$NON-NLS-1$
             + "carry one invisibly. Re-send it without the padding, for example " //$NON-NLS-1$
@@ -402,9 +415,11 @@ public final class ComparisonScopeBuilder
     }
 
     /**
-     * The refusal for an entry with a segment that names nothing. It says WHICH segment, because
-     * the offending part is invisible in a different way from padding - there is simply nothing
-     * between two separators, and pointing at a character offset would point at a dot.
+     * The refusal for an entry with a segment that names nothing. It says WHICH segment rather
+     * than a character offset, because such a segment need not hold a character to point at:
+     * in {@code Catalog..Products} the offset would land on a separator, and where the segment
+     * does hold something - a segment of nothing but spaces - the character there is not what the
+     * caller has to fix, the missing NAME is.
      *
      * @param index the zero-based position of the offending entry
      * @param segment the 1-based ordinal of the segment that names nothing
@@ -419,9 +434,9 @@ public final class ComparisonScopeBuilder
         return "Scope entry #" + (index + 1) + " has nothing in segment " + segment //$NON-NLS-1$ //$NON-NLS-2$
             + ": that segment of the name is empty, or holds only whitespace. Nothing was " //$NON-NLS-1$
             + "started. A scope entry is matched against an object's own qualified name by exact " //$NON-NLS-1$
-            + "string equality, so an entry with an empty segment matches NO object - the " //$NON-NLS-1$
-            + "comparison would run to the end and report nothing for it, which reads as 'these " //$NON-NLS-1$
-            + "objects did not differ'. Send every segment, for example 'Catalog.Products' or '" //$NON-NLS-1$
+            + "string equality, so an entry with an empty segment matches NO object - EDT's " //$NON-NLS-1$
+            + "single comparison slot would be spent for minutes on a name that can never " //$NON-NLS-1$
+            + "match. Send every segment, for example 'Catalog.Products' or '" //$NON-NLS-1$
             + RUSSIAN_EXAMPLE + "', or omit 'scope' to compare the whole configuration."; //$NON-NLS-1$
     }
 

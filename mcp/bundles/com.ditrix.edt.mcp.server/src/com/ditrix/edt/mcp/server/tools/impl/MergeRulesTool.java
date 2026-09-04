@@ -1725,7 +1725,7 @@ public class MergeRulesTool implements IMcpTool
      * @param character the character to name
      * @return its code point in the {@code U+XXXX} spelling, so a refusal can point at it without
      *         carrying it - {@link PaddedNames#codePointName(char)}'s spelling, because the same
-     *         invisible character is named for a scope entry by the same words
+     *         whitespace character is named for a scope entry by the same words
      */
     private static String codePointName(char character)
     {
@@ -1754,9 +1754,11 @@ public class MergeRulesTool implements IMcpTool
      * surrogate, which is not a code point. One unit for both, named rather than assumed.
      * <p>
      * <b>Named by code, not echoed.</b> Every other refusal here quotes the offending key back,
-     * and this is the one where quoting it shows nothing: the character is invisible by
-     * construction, so the key would come back looking identical to the one the caller believes
-     * they sent. The code point and the position are the only form of it a reader can act on.
+     * and this is the one where the echo would carry the offending character instead of naming
+     * it: what is wrong is a whitespace character, and the echo does not say which of them it is.
+     * So this refusal states the code point and its offset. A key is not trimmed on its way in,
+     * so an ordinary {@code U+0020} against a name's end is refused here exactly as
+     * {@code U+2003}, {@code U+00A0} and their kin are.
      * <p>
      * What counts as whitespace, why {@code isBlank} and {@code trim} disagreed about it, and
      * which characters are deliberately NOT covered are all settled by

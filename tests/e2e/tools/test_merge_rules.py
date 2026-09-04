@@ -386,8 +386,8 @@ def test_a_key_padded_with_unicode_whitespace_is_refused_rather_than_recorded():
     # The em space is not blank - the key names something - and String.trim cuts only what is at
     # or below U+0020, so this key used to reach the file exactly as sent while the report called
     # it RECORDED. EDT matches node keys by exact string equality, so it matches no node in any
-    # comparison: the padding makes the decision unappliable, and it is invisible in the request,
-    # which is why the refusal names the character by code point instead of quoting the key back.
+    # comparison: the padding makes the decision unappliable, and quoting the key back would
+    # carry the character instead of naming it, which is why the refusal gives the code point.
     target = os.path.join(_workdir(), "rules.xml")
 
     r = call("merge_rules", {

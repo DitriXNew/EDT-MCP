@@ -12,6 +12,11 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.AbstractSet;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -486,9 +491,10 @@ public class ComparisonTreeReportTest
     @Test
     public void testAScopeThatMatchedNothingIsNamedRatherThanReportedAsAgreement()
     {
-        // ComparisonScopeBuilder validates only the LEADING type token, so this is a legal
-        // scope that selects nothing. Telling the caller there are no differences in the
-        // objects he named would be an answer about objects that were never compared.
+        // A name whose type token is real and whose object is not exists on none of the three
+        // sides, so this is a legal scope that selects nothing. Telling the caller there are no
+        // differences in the objects he named would be an answer about objects that were never
+        // compared.
         ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
 
         String report = render(collector, requestedScope("Catalog.NoSuchThing")); //$NON-NLS-1$
@@ -497,6 +503,120 @@ public class ComparisonTreeReportTest
             report.toLowerCase(Locale.ROOT).contains("no differences")); //$NON-NLS-1$
         assertContains(report, "The requested scope matched no object"); //$NON-NLS-1$
         assertContains(report, "Catalog.NoSuchThing"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopeAdviceSaysWhyTheNameIsLegalWithoutDescribingTheValidator()
+    {
+        // The reason the advice gives, pinned as the whole sentence. It is a statement about
+        // NAMES - a qualified name can exist on none of the three sides - and it stays true
+        // whatever the scope builder checks.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+
+        String report = render(collector, requestedScope("Catalog.NoSuchThing")); //$NON-NLS-1$
+
+        assertContains(report, "A qualified name that exists on none of the three sides is a " //$NON-NLS-1$
+            + "legal scope that selects nothing"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheScopeAdviceDoesNotClaimOnlyTheLeadingTypeTokenIsValidated()
+    {
+        // It used to, and the branch that added padding and empty-segment validation to
+        // ComparisonScopeBuilder made it false without touching this file. Pinned as an absence,
+        // in its own @Test: JUnit stops a method at its first failed assertion, so an absence
+        // sharing a method with the positive pin above would only be reached while that held.
+        ComparisonTreeReport.Collector collector = new ComparisonTreeReport.Collector(50, true);
+
+        String report = render(collector, requestedScope("Catalog.NoSuchThing")); //$NON-NLS-1$
+
+        assertFalse("more than the leading token is validated now: " + report, //$NON-NLS-1$
+            report.contains("leading type token")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNothingInThisClassClaimsOnlyTheLeadingTypeTokenIsValidated()
+    {
+        // The twin. Correcting the sentence the reader SEES left the same sentence standing in
+        // the class javadoc, where no rendered-text assertion can reach it - and that is how it
+        // survived the round that removed it from the wire. So the claim is pinned absent from
+        // the SOURCE of this one file, javadoc and comments included.
+        //
+        // The text is unwrapped before it is searched: the javadoc broke the phrase across two
+        // lines as "LEADING\n * type token", which every contains() on the rendered report, and
+        // any naive one on the file, walks straight past.
+        String source =
+            unwrapped(sourceOf("utils/compare/ComparisonTreeReport.java")).toLowerCase( //$NON-NLS-1$
+                Locale.ROOT);
+
+        assertFalse("this file may not say it, in prose any more than on the wire: " //$NON-NLS-1$
+            + window(source, "leading type token"), source.contains("leading type token")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Shows WHERE a banned phrase was found, without emptying the file into the report.
+     *
+     * @param source the unwrapped source text
+     * @param phrase the phrase looked for
+     * @return the phrase with up to 120 characters of context on either side, or an empty string
+     *         when it is absent - the message is built on every call, pass or fail, and the whole
+     *         unwrapped {@code ComparisonTreeReport} is ~40 KB of it
+     */
+    private static String window(String source, String phrase)
+    {
+        int at = source.indexOf(phrase);
+        if (at < 0)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        int from = Math.max(0, at - 120);
+        int to = Math.min(source.length(), at + phrase.length() + 120);
+        return (from > 0 ? "..." : "") + source.substring(from, to) //$NON-NLS-1$ //$NON-NLS-2$
+            + (to < source.length() ? "..." : ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Reads one file of the bundle source tree, so a claim made in a comment can be pinned the
+     * way a claim made on the wire is.
+     *
+     * @param relative the path below the bundle's package root
+     * @return the file's text
+     */
+    private static String sourceOf(String relative)
+    {
+        String root = "mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server/"; //$NON-NLS-1$
+        File dir = new File(System.getProperty("user.dir")); //$NON-NLS-1$
+        for (int i = 0; i < 12 && dir != null; i++)
+        {
+            File candidate = new File(dir, root + relative);
+            if (candidate.isFile())
+            {
+                try
+                {
+                    return new String(Files.readAllBytes(candidate.toPath()),
+                        StandardCharsets.UTF_8);
+                }
+                catch (IOException e)
+                {
+                    throw new UncheckedIOException(e);
+                }
+            }
+            dir = dir.getParentFile();
+        }
+        throw new AssertionError("could not locate '" + root + relative //$NON-NLS-1$
+            + "' by walking up from user.dir=" + System.getProperty("user.dir")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * @param source Java source text
+     * @return the same text with javadoc line prefixes dropped and every run of whitespace
+     *         collapsed to one space, so a phrase broken across two lines is still one phrase
+     */
+    private static String unwrapped(String source)
+    {
+        return source.replace("\r", "") //$NON-NLS-1$ //$NON-NLS-2$
+            .replaceAll("\\n\\s*\\*", " ") //$NON-NLS-1$ //$NON-NLS-2$
+            .replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

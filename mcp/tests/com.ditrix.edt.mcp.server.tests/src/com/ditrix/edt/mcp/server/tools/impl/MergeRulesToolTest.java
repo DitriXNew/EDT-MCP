@@ -4108,10 +4108,11 @@ public class MergeRulesToolTest
     public void testThePaddedKeyRefusalNamesTheCharacterByCodeRatherThanEchoingIt()
         throws IOException
     {
-        // This is the one refusal where echoing the key shows the caller nothing: the character is
-        // invisible by construction, so the quoted key would look identical to the one they
-        // believe they sent. Both halves in one test, because "does not contain it" is satisfied
-        // by any successful report too.
+        // This is the refusal where echoing the key would carry the offending character instead
+        // of naming it: what is wrong is a whitespace character, and the echo does not say which
+        // of them it is. So the refusal states the code point, and must not carry the character
+        // itself. Both halves in one test, because "does not contain it" is satisfied by any
+        // successful report too.
         Path target = file("rules.xml"); //$NON-NLS-1$
 
         String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

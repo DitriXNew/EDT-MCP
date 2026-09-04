@@ -78,7 +78,9 @@ public final class PaddedNames
      * <p>
      * Every component is asked, at its ends only. The separator itself is never a component
      * boundary character a caller has to strip: the scan works on indices into {@code text}, so
-     * the offset it answers is an offset into the string the caller sent.
+     * the offset it answers is an offset into {@code text} itself and into nothing else. Which
+     * string that is - and therefore how a refusal may frame the number - is the caller's to
+     * state, not this class's to assume.
      *
      * @param text the whole name (may be {@code null})
      * @param separator the character that separates one component from the next
@@ -123,7 +125,7 @@ public final class PaddedNames
      * name that matches nothing, which is the exact failure the padding rule exists to stop.
      * <p>
      * The two questions stay separate rather than merging into one, because the answers are
-     * different and the caller acts on them differently: padding is an invisible character to
+     * different and the caller acts on them differently: padding is a whitespace character to
      * remove, an empty component is a name to supply. Merging them would also break the
      * asymmetry {@link #firstPaddedCharacter(String, int, int)} depends on - a component of
      * nothing but {@code U+00A0} is NOT blank, and must keep being reported as padding.
@@ -156,34 +158,6 @@ public final class PaddedNames
             }
             from = next + 1;
         }
-    }
-
-    /**
-     * How many characters {@code String.trim} would cut from the FRONT of a string.
-     * <p>
-     * Exists so a refusal can report a position in the string the CALLER sent rather than in the
-     * trimmed one a validator happens to hold. The two differ whenever ordinary ASCII padding was
-     * cut before the invisible padding was found, and a position measured in the wrong string is
-     * a number the caller cannot count to.
-     * <p>
-     * It reproduces {@code trim}'s own rule - code points at or below {@code U+0020} - and NOT
-     * {@code strip}'s, because {@code trim} is what the callers use.
-     *
-     * @param text the untrimmed text (may be {@code null})
-     * @return the number of leading characters {@code trim} removes
-     */
-    public static int trimmedFromTheFront(String text)
-    {
-        if (text == null)
-        {
-            return 0;
-        }
-        int lead = 0;
-        while (lead < text.length() && text.charAt(lead) <= ' ')
-        {
-            lead++;
-        }
-        return lead;
     }
 
     /**
@@ -223,12 +197,15 @@ public final class PaddedNames
     }
 
     /**
-     * Names a character by its code point, for a refusal about a character nobody can see.
+     * Names a character by its code point, so a refusal can point at it without carrying it.
      * <p>
-     * Every refusal about a malformed name quotes the name back, and for this class of defect
-     * quoting it shows nothing: the character is invisible by construction, so the name would come
-     * back looking identical to the one the caller believes they sent. The code point and the
-     * position are the only form of it a reader can act on.
+     * Every refusal about a malformed name quotes the name back, and for this class of defect the
+     * echo carries the offending character instead of naming it: what is wrong is a whitespace
+     * character, and the echo does not say which of them it is. So the refusal states the code
+     * point and its offset. The question is asked at every INNER boundary of a compound name,
+     * which no caller's {@code trim} reaches, and at every boundary of a merge-rule key, which is
+     * not trimmed at all - so an ordinary {@code U+0020} against one of those ends is reported
+     * here exactly as {@code U+2003}, {@code U+00A0} and their kin are.
      * <p>
      * The unit is the UTF-16 offset rather than a code-point ordinal, so a name holding a
      * character above {@code U+FFFF} before the padding counts it as two where a person counting

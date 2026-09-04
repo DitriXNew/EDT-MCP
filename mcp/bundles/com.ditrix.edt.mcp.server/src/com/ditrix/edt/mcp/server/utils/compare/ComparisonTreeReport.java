@@ -52,10 +52,11 @@ import com.ditrix.edt.mcp.server.utils.Pagination;
  * with, an absence of differences.</li>
  * <li><b>An empty tree is not an equal tree.</b> A comparison that produced no top node at
  * all compared nothing, so no claim about the sides can be derived from it. That case is
- * reachable without any failure: {@link ComparisonScopeBuilder} validates only the LEADING
- * type token of a scope entry, so a name that exists on none of the three sides is a legal
- * scope that selects nothing - and a tree that was never built answers the same way. The
- * report says what it observed instead of asserting agreement.</li>
+ * reachable without any failure: whatever {@link ComparisonScopeBuilder} checks about the SHAPE
+ * of a scope entry, nothing there knows which names EXIST, so a correctly spelled qualified
+ * name that exists on none of the three sides is a legal scope that selects nothing - and a
+ * tree that was never built answers the same way. The report says what it observed instead of
+ * asserting agreement.</li>
  * </ol>
  * <p>
  * Never routes a label through {@code ComparisonUtils.getLabel()}: that delegates to a
@@ -882,10 +883,9 @@ public final class ComparisonTreeReport
         if (hasRequestedScope(scope))
         {
             out.append('\n')
-                .append("The requested scope matched no object in this comparison. Only the ") //$NON-NLS-1$
-                .append("leading type token of a scope entry is validated, so a qualified name ") //$NON-NLS-1$
-                .append("that exists on none of the three sides is a legal scope that selects ") //$NON-NLS-1$
-                .append("nothing: check the names in the Requested column above with ") //$NON-NLS-1$
+                .append("The requested scope matched no object in this comparison. A qualified ") //$NON-NLS-1$
+                .append("name that exists on none of the three sides is a legal scope that ") //$NON-NLS-1$
+                .append("selects nothing: check the names in the Requested column above with ") //$NON-NLS-1$
                 .append("get_metadata_objects.\n"); //$NON-NLS-1$
         }
     }
