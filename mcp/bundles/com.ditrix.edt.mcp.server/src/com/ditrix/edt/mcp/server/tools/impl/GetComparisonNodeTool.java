@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.utils.compare.ComparisonScopeBuilder;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonView;
 import com.ditrix.edt.mcp.server.utils.compare.ElapsedTime;
+import com.ditrix.edt.mcp.server.utils.compare.PaddedNames;
 import com.ditrix.edt.mcp.server.utils.compare.PlatformAnswer;
 
 /**
@@ -375,7 +376,8 @@ public class GetComparisonNodeTool implements IMcpTool
                 + "comparisonId reported by compare_configurations.").toJson(); //$NON-NLS-1$
         }
 
-        String objectFqn = trimToNull(JsonUtils.extractStringArgument(params, KEY_OBJECT_FQN));
+        String rawObjectFqn = JsonUtils.extractStringArgument(params, KEY_OBJECT_FQN);
+        String objectFqn = trimToNull(rawObjectFqn);
         String rawNodeId = trimToNull(JsonUtils.extractStringArgument(params, KEY_NODE_ID));
         if (objectFqn == null && rawNodeId == null)
         {
@@ -387,6 +389,18 @@ public class GetComparisonNodeTool implements IMcpTool
             return ToolResult.error("Pass objectFqn or nodeId, not both: objectFqn '" + objectFqn //$NON-NLS-1$
                 + "' and nodeId '" + rawNodeId + "' address different nodes and the tool will not " //$NON-NLS-1$ //$NON-NLS-2$
                 + "guess which one you meant.").toJson(); //$NON-NLS-1$
+        }
+        // The SAME question compare_configurations asks of a scope entry, asked through the same
+        // predicate: an address padded with whitespace trim() does not cut matches no node's
+        // symlink, because the engine compares them with String.equals. Without it this call
+        // spends its whole retry budget waiting for a lazily-built tree to produce a node that
+        // cannot exist, and then refuses by quoting an address that looks exactly right on any
+        // screen. Asked here rather than inside canonicalize(), because canonicalize answers a
+        // String and a refusal is not one.
+        String paddedFqn = unusableAddressRefusal(objectFqn, rawObjectFqn);
+        if (paddedFqn != null)
+        {
+            return paddedFqn;
         }
         Long explicitNodeId = null;
         if (rawNodeId != null)
@@ -834,6 +848,64 @@ public class GetComparisonNodeTool implements IMcpTool
     {
         String canonical = ComparisonScopeBuilder.canonicalSymlink(objectFqn);
         return canonical == null || canonical.isEmpty() ? objectFqn : canonical;
+    }
+
+    /**
+     * Refuses an {@code objectFqn} no node can answer to: a segment padded with whitespace, or a
+     * segment holding no name at all.
+     * <p>
+     * The judgement is {@link ComparisonScopeBuilder#paddedNameCharacter(String)}'s - the one this
+     * server makes about a metadata address anywhere - so the address that can SCOPE a comparison
+     * and the address that can EXPAND a node of it are held to the same rule. What differs is only
+     * the consequence, and this refusal states its own: nothing here is left half-done, the call
+     * simply never had an address that could match.
+     * <p>
+     * It does not offer a corrected spelling. Trimming the address would expand a node the caller
+     * did not name, and this tool reports a node under the address it was given.
+     * <p>
+     * BOTH halves are asked, and the second is not a wider case of the first: the padding
+     * question deliberately SKIPS a component that names nothing, which is safe only where
+     * something else reports it. Here that something else is the second half.
+     *
+     * @param objectFqn the caller's address, already trimmed to null (may be {@code null})
+     * @param raw the same argument BEFORE trimming, so a position can be reported in the string
+     *     the caller actually sent (may be {@code null})
+     * @return the rendered refusal, or {@code null} when the address is usable
+     */
+    private static String unusableAddressRefusal(String objectFqn, String raw)
+    {
+        if (objectFqn == null)
+        {
+            return null;
+        }
+        int offset = ComparisonScopeBuilder.paddedNameCharacter(objectFqn);
+        if (offset >= 0)
+        {
+            return ToolResult.error("objectFqn has " //$NON-NLS-1$
+                + PaddedNames.codePointName(objectFqn.charAt(offset))
+                + ", a whitespace character, at character " //$NON-NLS-1$
+                + (PaddedNames.trimmedFromTheFront(raw) + offset + 1)
+                + ", where a name begins or ends. Nothing was read. The comparison engine " //$NON-NLS-1$
+                + "matches an address against a node's own qualified name by exact string " //$NON-NLS-1$
+                + "equality and no name it produces holds whitespace, so a padded address " //$NON-NLS-1$
+                + "reaches NO node however long the tree is given to build. Such a character " //$NON-NLS-1$
+                + "survives an ordinary trim, so an address pasted out of a document can carry " //$NON-NLS-1$
+                + "one invisibly. Re-send it without the padding, for example " //$NON-NLS-1$
+                + "'Catalog.Products'.").toJson(); //$NON-NLS-1$
+        }
+        int empty = PaddedNames.firstEmptyComponent(objectFqn, '.');
+        if (empty > 0)
+        {
+            // Describes the SEGMENT rather than where a separator sits: '.Catalog' has its
+            // empty segment before the first '.', which "between two '.'" does not cover.
+            return ToolResult.error("objectFqn has nothing in segment " + empty //$NON-NLS-1$
+                + ": that segment of the address is empty, or holds only whitespace. Nothing was " //$NON-NLS-1$
+                + "read. An address is matched against a node's own qualified name by exact " //$NON-NLS-1$
+                + "string equality, so an address with an empty segment reaches NO node however " //$NON-NLS-1$
+                + "long the tree is given to build. Send every segment, for example " //$NON-NLS-1$
+                + "'Catalog.Products'.").toJson(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     private static String trimToNull(String value)

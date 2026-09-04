@@ -111,6 +111,21 @@ public class MergeRulesToolTest
         + "</Settings>\n"; //$NON-NLS-1$
 
     /**
+     * The content of the entry this tool never reads. Distinctive on purpose: the pin is that
+     * these exact bytes survive, not that an entry of that name is still listed.
+     */
+    private static final String SIDECAR_TEXT = "kept by hand, not by this tool"; //$NON-NLS-1$
+
+    /**
+     * Every rule the platform has, for the archive tests: a validated write checks the decisions
+     * carried in from {@code basedOn} as well as the ones sent, and the seeded fixture already
+     * holds three different rules. An authority narrower than the fixture would refuse for the
+     * fixture's sake and never reach the question the test is asking.
+     */
+    private static final List<String> EVERY_RULE = List.of("GetFromOther", "DoNotMerge", //$NON-NLS-1$ //$NON-NLS-2$
+        "MergePrioritizingMain", "MergePrioritizingOther"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
      * One character XML 1.0 cannot carry. U+0001 is not whitespace, so a key holding it is not
      * blank; it IS below U+0020, so {@code String.trim} deletes it at either end - the two facts
      * that let it through every other check on the way to the file.
@@ -1849,6 +1864,320 @@ public class MergeRulesToolTest
             result.contains("EDT 2026.2 does not read it")); //$NON-NLS-1$
     }
 
+    // ====== a rewrite replaces the WHOLE archive, so it may not replace what it never read ======
+    //
+    // readZip accepts an archive holding the merge-settings entry BESIDE other entries - one .xml
+    // candidate is unambiguous however much sits next to it - and reads only the candidate. The
+    // write then produces a new SINGLE-ENTRY archive and moves it over the path, so a same-path
+    // rewrite destroyed every other entry and reported only how many merge rules it had recorded.
+    // Our write, somebody else's data, reported as a success.
+    //
+    // The answer is refusal rather than copy-through: this codec deleted a whole-archive copy for
+    // being unbounded (copyAddressedEntry), the JDK has no raw entry copy so a carried-through
+    // entry could not honestly be called unchanged, and writing to a path of its own costs one
+    // step and loses nothing. What the OTHER door owes is a description, not a refusal - see the
+    // report pins below.
+
+    @Test
+    public void testASamePathRewriteIsRefusedWhenTheArchiveHoldsEntriesThisToolDidNotRead()
+        throws IOException
+    {
+        Path archive = seedArchiveWithSidecar("rules.zip"); //$NON-NLS-1$
+        // A live comparison, so the zip IS addressable: without one the write would be refused
+        // for want of an entry name and this test would prove nothing about sidecars.
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+            "filePath", archive.toString(), "basedOn", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Nothing was written", "notes.txt", "1 other entry"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testTheEntryThisToolDidNotReadIsStillThereAfterTheRefusal()
+        throws IOException
+    {
+        // The pin that matters: a refusal naming the entry would be worth nothing if the write
+        // had already happened. Checked on the BYTES, not on the entry list - an archive that
+        // kept the name and lost the content would satisfy a name check.
+        Path archive = seedArchiveWithSidecar("rules.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the entry this tool never read must survive the write it refused", //$NON-NLS-1$
+            SIDECAR_TEXT, readNamedZipEntry(archive, "notes.txt")); //$NON-NLS-1$
+        assertTrue("and the merge-settings entry must still be there under its own name", //$NON-NLS-1$
+            zipEntryNames(archive).contains(ENTRY_ID + ".xml")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASamePathRewriteOfAnArchiveHoldingNothingElseIsStillAllowed()
+        throws IOException
+    {
+        // The pin that keeps the guard narrow. Refusing every same-path zip rewrite would pass
+        // both tests above and take away the update path the guide documents.
+        Path archive = file("rules.zip"); //$NON-NLS-1$
+        writeArchive(archive, null);
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the rewrite still produces the single addressed entry", //$NON-NLS-1$
+            List.of(ENTRY_ID + ".xml"), zipEntryNames(archive)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWritingToAnotherPathSaysTheNewArchiveIsNotACopyOfTheOldOne()
+        throws IOException
+    {
+        // The other door. Nothing is destroyed - the starting archive is only read - but the file
+        // produced holds the merge-settings entry ALONE, and a caller who carried it forward
+        // believing it a copy would have lost the rest without ever being told.
+        Path archive = seedArchiveWithSidecar("source.zip"); //$NON-NLS-1$
+        Path target = file("fresh.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        String line = lineStartingWith(result, "- Other entries:"); //$NON-NLS-1$
+        assertTrue("the report must name what did not come across: " + line, //$NON-NLS-1$
+            line.contains("notes.txt")); //$NON-NLS-1$
+        assertTrue("and say plainly that they are not in the new file: " + line, //$NON-NLS-1$
+            line.contains("NOT in the file written here")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWritingToAnotherPathLeavesTheStartingArchiveExactlyAsItWas()
+        throws IOException
+    {
+        Path archive = seedArchiveWithSidecar("source.zip"); //$NON-NLS-1$
+        Path target = file("fresh.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The write has to have HAPPENED for "the source is untouched" to say anything: without
+        // these two lines an unconditional refusal satisfies the assertion below, and the pin
+        // stops distinguishing this fix from its absence.
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and the new file must exist", Files.exists(target)); //$NON-NLS-1$
+        assertEquals("a read may not change what it read", //$NON-NLS-1$
+            SIDECAR_TEXT, readNamedZipEntry(archive, "notes.txt")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEntryWhoseNameEndsInASlashIsCountedThoughItAnswersIsDirectory()
+        throws IOException
+    {
+        // ZipEntry.isDirectory() answers whether the NAME ends in '/' and nothing else. Measured
+        // on this JDK: putNextEntry(new ZipEntry("notes/")) followed by write(...) produces an
+        // entry that answers true AND hands its bytes back. An earlier version of the guard
+        // skipped those on the premise that they hold nothing, so this archive was rewritten and
+        // the payload destroyed with the report mentioning only merge rules.
+        Path archive = file("rules.zip"); //$NON-NLS-1$
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive)))
+        {
+            out.putNextEntry(new ZipEntry(ENTRY_ID + ".xml")); //$NON-NLS-1$
+            out.write(FIXTURE.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            out.putNextEntry(new ZipEntry("notes/")); //$NON-NLS-1$
+            out.write(SIDECAR_TEXT.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Nothing was written", "notes/"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("and the bytes behind that name must still be there", //$NON-NLS-1$
+            SIDECAR_TEXT, readNamedZipEntry(archive, "notes/")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnArchiveCommentIsNotDestroyedWithoutAWord()
+        throws IOException
+    {
+        // Not an entry, destroyed by a rewrite just the same: the replacement is a fresh archive
+        // and carries no comment. Named as itself rather than counted among the entries, because
+        // a caller told "1 other entry" who then finds a comment gone was told something false.
+        Path archive = file("rules.zip"); //$NON-NLS-1$
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive)))
+        {
+            out.setComment("kept by hand"); //$NON-NLS-1$
+            out.putNextEntry(new ZipEntry(ENTRY_ID + ".xml")); //$NON-NLS-1$
+            out.write(FIXTURE.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "Nothing was written", "an archive comment"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a comment is not an entry and must not be counted as one: " + result, //$NON-NLS-1$
+            result.contains("other entry")); //$NON-NLS-1$
+        assertEquals("and the comment must still be there - a refusal that named it while the " //$NON-NLS-1$
+            + "write went ahead would be worth nothing", //$NON-NLS-1$
+            "kept by hand", zipComment(archive)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheReportSaysWhenTheReplacedEntryCarriedMetadataOfItsOwn()
+        throws IOException
+    {
+        // The other side of the same rule. This entry IS what the caller asked to replace - the
+        // new one is named after the comparison and holds the document just authored - so an
+        // attribute of it is not grounds to refuse. It is still lost, so the report says so
+        // instead of letting the caller find out afterwards.
+        Path archive = file("source.zip"); //$NON-NLS-1$
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive)))
+        {
+            ZipEntry entry = new ZipEntry(ENTRY_ID + ".xml"); //$NON-NLS-1$
+            entry.setComment("mine, on the entry"); //$NON-NLS-1$
+            out.putNextEntry(entry);
+            out.write(FIXTURE.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("an attribute of the entry being replaced is not grounds to refuse:\n" //$NON-NLS-1$
+            + result, result.trim().startsWith("{")); //$NON-NLS-1$
+        assertTrue("but the report has to say it did not come across:\n" + result, //$NON-NLS-1$
+            result.contains("- Entry metadata:")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheReportIsSilentAboutEntryMetadataWhenThereWasNone()
+    {
+        // Pins the ABSENCE: a line printed unconditionally would tell every caller they lost
+        // something they never had.
+        Path archive = file("source.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+        tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nothing was carried, so nothing is owed:\n" + result, //$NON-NLS-1$
+            result.contains("Entry metadata")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnArchiveOfNothingButADirectoryEntryIsNotDescribedAsEmpty()
+        throws IOException
+    {
+        // The read refusal describes the caller's own file, so it may not say "it is empty" of an
+        // archive that lists something - the more so because such an entry can carry bytes.
+        Path archive = file("rules.zip"); //$NON-NLS-1$
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive)))
+        {
+            out.putNextEntry(new ZipEntry("notes/")); //$NON-NLS-1$
+            out.write(SIDECAR_TEXT.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+
+        String result = call(params("mode", "read", "filePath", archive.toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertErrorNaming(result, "notes/"); //$NON-NLS-1$
+        assertFalse("an archive that lists an entry is not empty: " + result, //$NON-NLS-1$
+            result.contains("it is empty")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheOtherEntriesLineDoesNotCallAnXmlTargetAnArchive()
+    {
+        // The same clause is printed whatever filePath picked, and pointing an archive's
+        // decisions at an '.xml' target is a legitimate write - so a sentence calling the result
+        // an archive would be false for exactly that call. The claim the caller needs is about
+        // CONTENT, and that one is true of both containers.
+        //
+        // Pinned as the WHOLE sentence rather than as the absence of one phrase: rejecting only
+        // "it is a new archive" leaves every equivalent spelling of the same lie - "a new
+        // single-entry archive" among them - passing.
+        String line = lineStartingWith(xmlFromSidecarArchiveReport(), "- Other entries:"); //$NON-NLS-1$
+        assertTrue("the clause must state the CONTENT claim, which holds for both containers: " //$NON-NLS-1$
+            + line,
+            line.contains("which carries the merge-settings document and nothing else")); //$NON-NLS-1$
+        assertFalse("and it may not call the written file an archive at all: " + line, //$NON-NLS-1$
+            line.contains("archive, not a copy") || line.contains("single-entry archive")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheOtherEntriesLineStillNamesWhatDidNotComeAcrossForAnXmlTarget()
+    {
+        // The positive control for the pin above: a clause deleted altogether would pass it.
+        String line = lineStartingWith(xmlFromSidecarArchiveReport(), "- Other entries:"); //$NON-NLS-1$
+        assertTrue("the entry that did not come across must still be named: " + line, //$NON-NLS-1$
+            line.contains("notes.txt")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAReportSaysNothingAboutOtherEntriesWhenThereWereNone()
+    {
+        // Pins the ABSENCE. A clause that printed unconditionally would satisfy every pin above
+        // and tell a caller their file lost entries that never existed.
+        Path archive = file("source.zip"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+        tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+            "filePath", file("fresh.zip").toString(), "basedOn", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an archive with nothing else in it has nothing to report:\n" + result, //$NON-NLS-1$
+            result.contains("Other entries")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnXmlRewriteIsUnaffectedByTheArchiveRule()
+    {
+        // A file is not a container: there is nothing beside the document, so the rule has
+        // nothing to say and the ordinary same-path update goes on working.
+        Path target = file("rules.xml"); //$NON-NLS-1$
+        call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = call(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"documents\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:\n" + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     @Test
     public void testATargetThatIsNeitherXmlNorZipIsRefusedNamingBoth()
     {
@@ -3290,6 +3619,110 @@ public class MergeRulesToolTest
             }
         }
         return names;
+    }
+
+    /**
+     * Writes a sidecar-carrying archive and reports the write that carries its decisions into a
+     * bare {@code .xml} at another path.
+     *
+     * @return the report
+     */
+    private String xmlFromSidecarArchiveReport()
+    {
+        try
+        {
+            Path archive = seedArchiveWithSidecar("source.zip"); //$NON-NLS-1$
+            MergeRulesTool tool = new MergeRulesTool(
+                id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+            String result = tool.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
+                "filePath", file("fresh.xml").toString(), "basedOn", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("expected a report, got a refusal:\n" + result, //$NON-NLS-1$
+                result.trim().startsWith("{")); //$NON-NLS-1$
+            return result;
+        }
+        catch (IOException e)
+        {
+            throw new AssertionError("could not seed the archive", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Writes an archive holding the merge-settings entry and, optionally, one entry beside it.
+     *
+     * @param archive where to write
+     * @param sidecarName the name of the extra entry, or {@code null} for an archive holding
+     *     nothing but the merge-settings document
+     * @throws IOException when the archive cannot be written
+     */
+    private static void writeArchive(Path archive, String sidecarName) throws IOException
+    {
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive)))
+        {
+            out.putNextEntry(new ZipEntry(ENTRY_ID + ".xml")); //$NON-NLS-1$
+            out.write(FIXTURE.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+            if (sidecarName != null)
+            {
+                out.putNextEntry(new ZipEntry(sidecarName));
+                out.write(SIDECAR_TEXT.getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+        }
+    }
+
+    /**
+     * An archive this tool reads happily and does not fully understand: one merge-settings entry
+     * and one entry that is none of its business.
+     *
+     * @param name the archive's file name
+     * @return the archive
+     * @throws IOException when it cannot be written
+     */
+    private Path seedArchiveWithSidecar(String name) throws IOException
+    {
+        Path archive = file(name);
+        writeArchive(archive, "notes.txt"); //$NON-NLS-1$
+        return archive;
+    }
+
+    /**
+     * The archive-wide comment of a zip, or {@code null}.
+     *
+     * @param zip the archive
+     * @return the comment
+     * @throws IOException when the archive cannot be read
+     */
+    private static String zipComment(Path zip) throws IOException
+    {
+        try (ZipFile file = new ZipFile(zip.toFile()))
+        {
+            return file.getComment();
+        }
+    }
+
+    /**
+     * One NAMED entry of an archive, as text.
+     *
+     * @param zip the archive
+     * @param name the entry
+     * @return the entry's content, or {@code null} when the archive has no such entry
+     * @throws IOException when the archive cannot be read
+     */
+    private static String readNamedZipEntry(Path zip, String name) throws IOException
+    {
+        try (ZipFile file = new ZipFile(zip.toFile()))
+        {
+            ZipEntry entry = file.getEntry(name);
+            if (entry == null)
+            {
+                return null;
+            }
+            try (InputStream in = file.getInputStream(entry))
+            {
+                return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
     }
 
     /**

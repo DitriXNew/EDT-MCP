@@ -131,6 +131,12 @@ public final class MergeRulesDocument
 
     private String sourceLabel;
 
+    private List<String> unreadContainerEntries = Collections.emptyList();
+
+    private boolean containerCarriedComment;
+
+    private boolean readEntryCarriedMetadata;
+
     private MergeRulesDocument(Element settings, List<Element> prolog, List<Element> epilog)
     {
         this.settings = settings;
@@ -246,6 +252,105 @@ public final class MergeRulesDocument
     public void setSourceLabel(String label)
     {
         this.sourceLabel = label;
+    }
+
+    /**
+     * What ELSE the container this document came out of was holding - the entries the read walked
+     * past, in the order the container listed them.
+     *
+     * <h2>Why a document knows this at all</h2>
+     * A zipped merge-settings file is not one document but a container, and this codec reads ONE
+     * entry out of it. Everything else in the archive is somebody's data that this tool neither
+     * read nor understands, and the only place that fact is still available is the read - by the
+     * time a caller decides to write, the archive is just a path. A write that REPLACES that path
+     * replaces the whole archive with a single-entry one, so a document that could not report what
+     * it walked past would let this tool destroy data it never looked at and report only what it
+     * did look at. See {@code MergeRulesTool}'s same-path guard.
+     * <p>
+     * Empty for a bare {@code .xml} - a file is not a container and there is nothing beside the
+     * document - and empty for an archive holding nothing but the entry that was read.
+     * <p>
+     * <b>DIRECTORY entries ARE counted.</b> An earlier version excluded them on the grounds that
+     * they carry no content; the zip format does not support that premise. {@code isDirectory()}
+     * answers whether the NAME ends in {@code /} and nothing else, and an entry written under
+     * such a name hands its bytes back on request (measured on this JDK). Everything the archive
+     * lists except the entry that was read is therefore counted, so the guard never rests on a
+     * guess about what an entry holds.
+     *
+     * @return the other entry names, never {@code null}
+     */
+    public List<String> unreadContainerEntries()
+    {
+        return unreadContainerEntries;
+    }
+
+    /**
+     * Records what the container held besides the entry this document was read from.
+     *
+     * @param entries the other entry names; {@code null} reads as none
+     */
+    public void setUnreadContainerEntries(List<String> entries)
+    {
+        this.unreadContainerEntries = entries == null || entries.isEmpty() ? Collections.emptyList()
+            : Collections.unmodifiableList(new ArrayList<>(entries));
+    }
+
+    /**
+     * Whether the container this document came out of carried an archive COMMENT.
+     * <p>
+     * Reported beside {@link #unreadContainerEntries()} and kept apart from it, because it is not
+     * an entry and must not be counted as one: a caller told "1 other entry" who then finds a
+     * comment gone was told something false. A rewrite destroys it exactly as it destroys an
+     * entry - the replacement is a fresh archive and carries no comment - so the writer weighs
+     * the two together.
+     *
+     * @return {@code true} when the archive carried a comment
+     */
+    public boolean containerCarriedComment()
+    {
+        return containerCarriedComment;
+    }
+
+    /**
+     * Records whether the container carried an archive comment.
+     *
+     * @param carried whether there was one
+     */
+    public void setContainerCarriedComment(boolean carried)
+    {
+        this.containerCarriedComment = carried;
+    }
+
+    /**
+     * Whether the ENTRY this document was read from carried metadata of its own - a zip entry
+     * comment or an extra field.
+     *
+     * <h2>Why this one is reported and not refused</h2>
+     * A sidecar entry is data the caller never asked this tool to touch, so destroying it is
+     * refused. This is the opposite case: the merge-settings entry is exactly what a write
+     * replaces, and the replacement is a NEW entry by construction - it is named after the
+     * comparison EDT will look for and it holds the document that was just authored. Refusing
+     * over an attribute of the thing being replaced would refuse the operation itself.
+     * <p>
+     * It is still lost, and a caller who put a comment on that entry would otherwise find out
+     * afterwards - so the write report says so. The rule the two halves share: this tool never
+     * destroys what was not its business, and never stays quiet about what it did destroy.
+     *
+     * @return {@code true} when the entry carried a comment or an extra field
+     */
+    public boolean readEntryCarriedMetadata()
+    {
+        return readEntryCarriedMetadata;
+    }
+
+    /**
+     * Records whether the entry this document came out of carried metadata of its own.
+     *
+     * @param carried whether it did
+     */
+    public void setReadEntryCarriedMetadata(boolean carried)
+    {
+        this.readEntryCarriedMetadata = carried;
     }
 
     /**
@@ -630,50 +735,18 @@ public final class MergeRulesDocument
     /**
      * Where a key is PADDED with whitespace, which is the one defect in a key a caller cannot see
      * by looking at their own request.
-     *
-     * <h2>A padded name is not a name</h2>
-     * EDT keys its nodes by string equality, and no key it writes carries whitespace: a collection
-     * is keyed by a model feature name and an object by its three 1C names, and neither kind of
-     * name can hold a space. A name with whitespace against one of its ends therefore matches no
-     * node in any comparison - the decision is recorded and can never be applied, which is the one
-     * failure this whole slice is built to refuse.
-     *
-     * <h2>Why it walked past every check around it</h2>
-     * {@code String.isBlank} is Unicode-aware and {@code String.trim} is not - trim cuts only code
-     * points at or below {@code U+0020}. A key of {@code commonModules} followed by {@code U+2003}
-     * is therefore not blank (it names something), not trimmed (the character is far above the
-     * cut) and not malformed in any other way, so it reached the file exactly as sent while the
-     * report called it recorded.
-     *
-     * <h2>What counts as whitespace here, and what deliberately does not</h2>
-     * {@code Character.isWhitespace} - the predicate {@code isBlank} itself asks, so the gate and
-     * this question cannot drift apart again - OR {@code Character.isSpaceChar}, which adds the
-     * non-breaking spaces ({@code U+00A0}, {@code U+2007}, {@code U+202F}): whitespace to every
-     * reader, and to neither {@code trim} nor {@code strip}. A zero-width or format character
-     * ({@code U+200B}, {@code U+FEFF}) is neither, and is NOT reported here - it is legal XML, it
-     * is not whitespace in any Unicode sense, and whether the node it names exists is a question
-     * only a live comparison answers. That is the boundary, stated so the next unnamed character
-     * is a decision rather than an omission.
-     *
-     * <h2>Asked per COMPONENT, and only about the ends</h2>
-     * A top-object key is three names, so its middle name has two ends of its own: this looks at
-     * each of the three, not only at the ends of the whole key. Whitespace INSIDE a name is left
-     * alone - it is not padding, and whether a name may hold a space is a question about names,
-     * which only a comparison can answer. A component that names nothing at all is not padded
-     * either; {@link #emptyTopObjectKeySides(String)} reports that one, in the words that tell the
-     * caller which side to fill in.
-     *
-     * <h2>The skip is narrower than the check, and that asymmetry is load-bearing</h2>
-     * A component is skipped when {@code isBlank} says it names nothing, and that predicate is
-     * {@code Character.isWhitespace} ALONE - narrower than the union asked one line below. So a
-     * component of nothing but {@code U+00A0} is not skipped: it is reported here as padding.
-     * That looks like an inconsistency and is the only safe way round. Widening the skip to the
-     * union would hand such a component to {@link #emptyTopObjectKeySides(String)}, which asks
-     * {@code isBlank} too and would answer that it names something - and the key would be
-     * accepted and written, which is exactly the outcome this method exists to prevent. Narrowing
-     * the check to {@code isBlank} instead would let every non-breaking space through. The
-     * refusal a caller gets for it names padding rather than an empty side; the guidance is the
-     * same either way, since neither key can be applied.
+     * <p>
+     * The JUDGEMENT is {@link PaddedNames}': which characters count, that only the ENDS of a
+     * component are looked at, that a component naming nothing at all is skipped, and that
+     * zero-width and format characters are deliberately out of scope. This method supplies only
+     * what is specific to a node KEY - where one name in it ends and the next begins - so the same
+     * question asked of a metadata address cannot drift away from the same question asked here.
+     * <p>
+     * A key that names nothing on one side is not padded either;
+     * {@link #emptyTopObjectKeySides(String)} reports that one, in the words that tell the caller
+     * which side to fill in. That predicate asks {@code isBlank}, which is exactly why
+     * {@link PaddedNames} skips a blank component with {@code isBlank} and checks a non-blank one
+     * with the wider union - see its own note on the asymmetry.
      *
      * @param key a node key (may be {@code null})
      * @return the 0-based index of the first whitespace character that begins or ends a name in
@@ -711,29 +784,7 @@ public final class MergeRulesDocument
      */
     private static int paddingIn(String key, int from, int to)
     {
-        if (from >= to || key.substring(from, to).isBlank())
-        {
-            return -1;
-        }
-        if (isSpace(key.charAt(from)))
-        {
-            return from;
-        }
-        if (isSpace(key.charAt(to - 1)))
-        {
-            return to - 1;
-        }
-        return -1;
-    }
-
-    /**
-     * @param character one character of a key
-     * @return whether it is whitespace in either of Unicode's two senses - the union is wider than
-     *         {@code trim} and wider than {@code strip}, which is the point
-     */
-    private static boolean isSpace(char character)
-    {
-        return Character.isWhitespace(character) || Character.isSpaceChar(character);
+        return PaddedNames.firstPaddedCharacter(key, from, to);
     }
 
     /**

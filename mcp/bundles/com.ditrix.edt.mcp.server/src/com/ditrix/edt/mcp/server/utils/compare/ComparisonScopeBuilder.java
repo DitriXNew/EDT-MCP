@@ -83,6 +83,20 @@ public final class ComparisonScopeBuilder
         "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a.\u0422\u043e\u0432\u0430\u0440\u044b." //$NON-NLS-1$
             + "\u0424\u043e\u0440\u043c\u0430.\u0424\u043e\u0440\u043c\u0430\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u0430"; //$NON-NLS-1$
 
+    /**
+     * The two characters the padding refusal quotes as examples of whitespace an ordinary
+     * {@code trim} leaves behind: EM SPACE and NO-BREAK SPACE.
+     * <p>
+     * Written as numbers rather than as backslash-u escapes on purpose. The Java lexer
+     * translates such an escape BEFORE the code is parsed - in a comment as readily as in a
+     * literal - so writing one here would put the invisible character itself into this source,
+     * which is the very defect this refusal exists to name.
+     */
+    private static final char EM_SPACE = 0x2003;
+
+    /** @see #EM_SPACE */
+    private static final char NO_BREAK_SPACE = 0x00A0;
+
     /** The Russian type token the refusals quote as an accepted form (ASCII: "Spravochnik"). */
     private static final String RUSSIAN_TYPE_EXAMPLE =
         "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"; //$NON-NLS-1$
@@ -188,6 +202,32 @@ public final class ComparisonScopeBuilder
                 return refuse(blankEntryMessage(i));
             }
             String entry = raw.trim();
+            // BEFORE the type token, and that order is the whole point. trim() cuts only code
+            // points at or below U+0020, so an entry padded with U+2003 or U+00A0 arrives here
+            // still padded - and if the padding sits on the LEADING segment, asking about the
+            // type first answers "'Catalog' is not a metadata type" over a token that reads as
+            // 'Catalog' on any screen. A message that quotes an invisible character without
+            // naming it is one the caller cannot act on, so the invisible defect is named first.
+            int padded = paddedNameCharacter(entry);
+            if (padded >= 0)
+            {
+                // Reported against the string the CALLER sent, not against the trimmed one: with
+                // ordinary spaces cut from the front the two disagree, and a position the caller
+                // cannot count to is worse than no position.
+                return refuse(paddedEntryMessage(i, entry, padded,
+                    PaddedNames.trimmedFromTheFront(raw)));
+            }
+            // The other half of the same failure, and it needs its own question here because
+            // nothing else in this class asks one. The padding check SKIPS a component that names
+            // nothing - safe where a sibling predicate reports it, as it does for a merge-rule
+            // key, and a hole here, where there is no sibling: 'Catalog..Products' and
+            // 'Catalog.Products.' would pass every check and build a symlink matching nothing,
+            // which is the very outcome the padding refusal exists to prevent.
+            int empty = PaddedNames.firstEmptyComponent(entry, '.');
+            if (empty > 0)
+            {
+                return refuse(emptySegmentMessage(i, empty));
+            }
             String typeToken = firstSegment(entry);
             if (!isKnownTypeToken(typeToken))
             {
@@ -292,6 +332,97 @@ public final class ComparisonScopeBuilder
             return dot < 0 ? CONFIGURATION_SYMLINK : CONFIGURATION_SYMLINK + canonical.substring(dot);
         }
         return canonical;
+    }
+
+    /**
+     * Where a metadata address is PADDED with whitespace - the one defect in an address a caller
+     * cannot see by looking at their own request.
+     *
+     * <h2>Why an address gets its own door onto the shared judgement</h2>
+     * The comparison engine matches a symlink by string EQUALITY against a node's own, and no
+     * symlink it produces carries whitespace. A padded address therefore matches nothing - which
+     * is not an error anywhere downstream. As a SCOPE entry it is worse than a refusal: the entry
+     * validates (its leading token is a real type), a non-empty {@link ComparisonScope} is built,
+     * EDT's single comparison slot is taken for minutes, and the finished run reports no matching
+     * rows - the caller is told the objects did not differ rather than that the name reached
+     * nothing. As {@code get_comparison_node}'s address it is merely unactionable: the refusal
+     * quotes an address that looks exactly right.
+     * <p>
+     * <b>Not trimmed for the caller</b>, for the reason the merge-rules door gives: an address
+     * this tool rewrote is no longer the address that was asked about, and a scope silently
+     * widened to a neighbouring object is a comparison of something nobody requested.
+     * <p>
+     * What counts as whitespace, why {@code trim} and {@code isBlank} disagree about it, and which
+     * characters are deliberately NOT covered are all settled by {@link PaddedNames}; this method
+     * supplies only the component boundary an address is made of, the {@code .} between its
+     * segments. Asked per SEGMENT, so an address whose SECOND segment opens with a non-breaking
+     * space is caught as surely as one padded at its very end.
+     *
+     * @param address a metadata full name, English or Russian (may be {@code null})
+     * @return the 0-based UTF-16 offset of the first whitespace character that begins or ends a
+     *         segment, or {@code -1} when no segment is padded
+     */
+    public static int paddedNameCharacter(String address)
+    {
+        return PaddedNames.firstPaddedCharacter(address, '.');
+    }
+
+    /**
+     * The refusal for an entry whose segment is padded. It names the character by code point and
+     * says where it sits, and it does NOT quote a "did you mean" spelling: producing one would
+     * mean this class deciding what the caller meant, which is the silent rewrite the refusal
+     * exists instead of.
+     *
+     * The position is the UTF-16 offset within the string as SENT - the trimmed offset plus
+     * whatever {@code trim} cut from the front - counted from 1. It is the same unit the
+     * merge-rules refusal uses, and {@link PaddedNames#codePointName(char)} says why that unit
+     * rather than a code-point ordinal.
+     *
+     * @param index the zero-based position of the offending entry
+     * @param entry the entry, as trimmed
+     * @param offset the 0-based offset of the padding character within it
+     * @param lead how many characters {@code trim} cut from the front of what the caller sent
+     * @return the actionable message
+     */
+    private static String paddedEntryMessage(int index, String entry, int offset, int lead)
+    {
+        return "Scope entry #" + (index + 1) + " has " //$NON-NLS-1$ //$NON-NLS-2$
+            + PaddedNames.codePointName(entry.charAt(offset))
+            + ", a whitespace character, at character " + (lead + offset + 1) //$NON-NLS-1$
+            + ", where a name begins or ends. Nothing was started. The comparison engine matches " //$NON-NLS-1$
+            + "a scope entry against an object's own qualified name by exact string equality and " //$NON-NLS-1$
+            + "no name it produces holds whitespace, so a padded entry matches NO object - the " //$NON-NLS-1$
+            + "comparison would run to the end and report nothing for it, which reads as 'these " //$NON-NLS-1$
+            + "objects did not differ'. It is not trimmed for you, because an address this tool " //$NON-NLS-1$
+            + "rewrote is no longer the address you asked about. Note that '" //$NON-NLS-1$
+            + PaddedNames.codePointName(EM_SPACE) + "', '" + PaddedNames.codePointName(NO_BREAK_SPACE) //$NON-NLS-1$
+            + "' and their kin survive an ordinary trim, so a name pasted out of a document can " //$NON-NLS-1$
+            + "carry one invisibly. Re-send it without the padding, for example " //$NON-NLS-1$
+            + "'Catalog.Products' or '" + RUSSIAN_EXAMPLE + "'."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for an entry with a segment that names nothing. It says WHICH segment, because
+     * the offending part is invisible in a different way from padding - there is simply nothing
+     * between two separators, and pointing at a character offset would point at a dot.
+     *
+     * @param index the zero-based position of the offending entry
+     * @param segment the 1-based ordinal of the segment that names nothing
+     * @return the actionable message
+     */
+    private static String emptySegmentMessage(int index, int segment)
+    {
+        // The wording describes the segment, not where a separator happens to sit. "between
+        // two '.', or after the last one" left out the leading case entirely: '.Catalog' has its
+        // empty segment BEFORE the first separator, and the sentence then described a shape the
+        // entry does not have.
+        return "Scope entry #" + (index + 1) + " has nothing in segment " + segment //$NON-NLS-1$ //$NON-NLS-2$
+            + ": that segment of the name is empty, or holds only whitespace. Nothing was " //$NON-NLS-1$
+            + "started. A scope entry is matched against an object's own qualified name by exact " //$NON-NLS-1$
+            + "string equality, so an entry with an empty segment matches NO object - the " //$NON-NLS-1$
+            + "comparison would run to the end and report nothing for it, which reads as 'these " //$NON-NLS-1$
+            + "objects did not differ'. Send every segment, for example 'Catalog.Products' or '" //$NON-NLS-1$
+            + RUSSIAN_EXAMPLE + "', or omit 'scope' to compare the whole configuration."; //$NON-NLS-1$
     }
 
     /**

@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec.MergeRulesFormatE
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Decision;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.TopObjectKey;
+import com.ditrix.edt.mcp.server.utils.compare.PaddedNames;
 import com.ditrix.edt.mcp.server.utils.compare.PathMutex;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -770,6 +771,13 @@ public class MergeRulesTool implements IMcpTool
             document = MergeRulesDocument.empty();
         }
         int existingDecisions = document.decisions().size();
+        // Asked the moment the starting document is in hand, and BEFORE a single decision is
+        // parsed: nothing below this line may run for a write that is not going to happen.
+        String sidecars = sidecarEntriesRefusal(file, targetPolicy, document);
+        if (sidecars != null)
+        {
+            return sidecars;
+        }
 
         List<RequestedDecision> requested = new ArrayList<>();
         // The normalised path, not the raw one, and that is the point: two spellings the platform
@@ -1001,6 +1009,203 @@ public class MergeRulesTool implements IMcpTool
     }
 
     /**
+     * Largest number of foreign entry names a refusal or a report spells out before it counts the
+     * rest. The same shape the codec uses for its own entry listings: a huge archive costs a
+     * sentence rather than a page.
+     */
+    private static final int MAX_LISTED_OTHER_ENTRIES = 10;
+
+    /**
+     * Refuses a same-path rewrite of an archive that holds entries this tool did not read.
+     *
+     * <h2>The loss this exists to prevent</h2>
+     * A zipped merge-settings file is a CONTAINER. {@code MergeRulesCodec.read} takes the one
+     * merge-settings entry out of it and is content to do so while other entries sit beside it -
+     * a {@code notes.txt}, a file somebody dropped in, anything - because one candidate is still
+     * unambiguous. The write then produces a NEW single-entry archive and moves it over the path.
+     * Every other entry is gone, and the report says only how many merge rules were recorded: our
+     * write destroying data that was never ours, reported as a success. That is the same shape as
+     * the reservation defect this feature already fixed, and a declared boundary did not shield
+     * data loss there either.
+     *
+     * <h2>Why refusing, rather than copying the other entries through</h2>
+     * Copying looks kinder and is the worse answer, for three reasons that were weighed rather
+     * than assumed.
+     * <ul>
+     * <li><b>It re-writes bytes nothing here validated.</b> {@code MAX_DOCUMENT_BYTES} bounds the
+     * entry this codec reads; a foreign entry is bounded by nothing, and this very codec DELETED a
+     * whole-archive copy for exactly that - see {@code MergeRulesCodec#copyAddressedEntry}, whose
+     * javadoc names the multi-gigabyte neighbour it used to duplicate byte for byte. Re-adding one
+     * at the write door would put back the defect the read door removed.</li>
+     * <li><b>The result could not be described honestly.</b> The JDK offers no raw entry copy, so
+     * a carried-through entry is inflated and re-deflated: a different compression, different
+     * metadata, and no claim of "unchanged" this tool could support. A report that said the
+     * entries were kept would be making the promise this class exists not to make.</li>
+     * <li><b>Refusing costs one step, and that step loses nothing.</b> Point {@code filePath} at a
+     * path of its own: the rules land in a clean single-entry archive, the original keeps
+     * everything it had, and both are readable afterwards.</li>
+     * </ul>
+     *
+     * <h2>The answer is the same at every door, which is why only one door asks</h2>
+     * A write to a path that is NOT the starting file is already refused when something is there
+     * (see the guard at the top of {@code writeUnderMutex}), and a write to a free path creates a
+     * new archive and destroys nothing. So the one door through which an existing archive gets
+     * replaced is the same-path rewrite, and this is it. What the other door still owes the caller
+     * is a description rather than a refusal - the new file holds the merge-settings entry alone,
+     * while the archive it started from was only read - and {@link #otherEntriesClause} says it.
+     * One rule stated at two doors, because the outcomes differ: this tool never destroys an entry
+     * it did not read, and it never lets a caller believe a copy was made that was not.
+     *
+     * @param file the write target
+     * @param targetPolicy what was established about the path; only
+     *     {@link MergeRulesCodec.Target#MAY_BE_REPLACED} is a rewrite of the very file the
+     *     document came out of
+     * @param document the starting document, carrying what its container held besides it
+     * @return the rendered refusal, or {@code null} when nothing would be destroyed
+     */
+    private static String sidecarEntriesRefusal(Path file, MergeRulesCodec.Target targetPolicy,
+        MergeRulesDocument document)
+    {
+        String held = describeWhatElseTheContainerHeld(document);
+        if (targetPolicy != MergeRulesCodec.Target.MAY_BE_REPLACED || held == null)
+        {
+            return null;
+        }
+        return ToolResult.error("Nothing was written: " + file + " is an archive that also holds " //$NON-NLS-1$ //$NON-NLS-2$
+            + held
+            + ", and this write replaces the WHOLE archive with one holding the merge-settings " //$NON-NLS-1$
+            + "entry alone - so that would be destroyed, while the report named only the merge " //$NON-NLS-1$
+            + "rules. It is not copied through either: this tool did not read it, cannot bound " //$NON-NLS-1$
+            + "its size, and re-compressing an entry is not the same as keeping it. Write to a " //$NON-NLS-1$
+            + "path of its own instead - keep " + KEY_BASED_ON + "='" + file //$NON-NLS-1$ //$NON-NLS-2$
+            + "' and give " + KEY_FILE_PATH //$NON-NLS-1$
+            + " a different path: the decisions this archive holds are carried into a clean " //$NON-NLS-1$
+            + "single-entry file while this one keeps everything it has. Or extract the " //$NON-NLS-1$
+            + "merge-settings entry yourself and manage the archive outside this tool.").toJson();
+    }
+
+    /**
+     * Names everything the container held besides the merge-settings entry that was read - the
+     * entries, the archive COMMENT, or both - or {@code null} when it held nothing else.
+     * <p>
+     * The comment is named separately and never counted as an entry: a caller told "1 other
+     * entry" who then finds a comment gone was told something false. It is destroyed by a rewrite
+     * for the same reason an entry is - the replacement is a fresh archive that carries none.
+     *
+     * @param document the document, carrying what its container held besides it
+     * @return the phrase, or {@code null} when there is nothing else
+     */
+    private static String describeWhatElseTheContainerHeld(MergeRulesDocument document)
+    {
+        List<String> others = document.unreadContainerEntries();
+        boolean comment = document.containerCarriedComment();
+        if (others.isEmpty() && !comment)
+        {
+            return null;
+        }
+        if (others.isEmpty())
+        {
+            return "an archive comment"; //$NON-NLS-1$
+        }
+        return describeOtherEntries(others) + (comment ? " and an archive comment" : ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Names the entries a container held besides the one that was read, keeping at most
+     * {@link #MAX_LISTED_OTHER_ENTRIES} of them and COUNTING the rest.
+     *
+     * @param others the other entry names, never empty
+     * @return the phrase, e.g. {@code 1 other entry (notes.txt)}
+     */
+    private static String describeOtherEntries(List<String> others)
+    {
+        int shown = Math.min(others.size(), MAX_LISTED_OTHER_ENTRIES);
+        // "and N more" rather than the report's "(showing X of Y)" notice: this is one clause
+        // inside a sentence, and a parenthesis nested in a parenthesis is harder to read than the
+        // count it carries. The wording is the codec's own, which lists entries the same way.
+        return others.size() + (others.size() == 1 ? " other entry (" : " other entries (") //$NON-NLS-1$ //$NON-NLS-2$
+            + String.join(", ", others.subList(0, shown)) //$NON-NLS-1$
+            + (shown < others.size() ? " and " + (others.size() - shown) + " more" : "") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
+     * The line that says what became of the entries the STARTING archive held beside its
+     * merge-settings document, when the write went to a different path.
+     * <p>
+     * Nothing was destroyed here - the starting archive was only read - but the file produced is
+     * not a copy of it, and a caller who believed it was would carry a container forward that has
+     * quietly lost everything except the rules. The same fact at the other door is a refusal
+     * rather than a line; {@link #sidecarEntriesRefusal} says why the two differ.
+     *
+     * @param document the starting document, carrying what its container held besides it
+     * @param basedOn the starting path exactly as it arrived, for the sentence
+     * @return the line ending in a newline, or an empty string when there is nothing to say
+     */
+    private static String otherEntriesClause(MergeRulesDocument document, String basedOn)
+    {
+        List<String> others = document.unreadContainerEntries();
+        boolean comment = document.containerCarriedComment();
+        if (others.isEmpty() && !comment)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        // The entry names are the ARCHIVE's text, not this server's, and they land in a report
+        // that HAS structure - the same reason the source label and the target path go through
+        // this helper rather than into the line raw.
+        StringBuilder line = new StringBuilder("- Other entries: the archive at "); //$NON-NLS-1$
+        line.append(MarkdownUtils.inlineCode(basedOn)).append(" also held "); //$NON-NLS-1$
+        int shown = Math.min(others.size(), MAX_LISTED_OTHER_ENTRIES);
+        for (int i = 0; i < shown; i++)
+        {
+            line.append(i == 0 ? "" : ", ").append(MarkdownUtils.inlineCode(others.get(i))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (shown < others.size())
+        {
+            line.append(" and ").append(others.size() - shown).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (comment)
+        {
+            line.append(others.isEmpty() ? "an archive comment" : " and an archive comment"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        // What is NOT said here: that the file written is an archive. It is whatever filePath
+        // picked, and pointing an archive's decisions at an '.xml' target is a legitimate write -
+        // a sentence calling the result "a new archive" would be false for exactly that call.
+        // The claim the caller needs is about CONTENT, and it is true of both containers.
+        return line.append(". **That is NOT in the file written here**, which carries the " //$NON-NLS-1$
+            + "merge-settings document and nothing else. Nothing was removed from the archive " //$NON-NLS-1$
+            + "above; it was only read.\n") //$NON-NLS-1$
+            .toString();
+    }
+
+    /**
+     * The line that says what was lost from the merge-settings ENTRY itself - a zip entry comment
+     * or an extra field.
+     * <p>
+     * A line rather than a refusal, and the difference is not a compromise: a sidecar entry is
+     * data this tool was never asked to touch, while THIS entry is the one the caller asked to
+     * replace. The replacement is a new entry by construction - named after the comparison EDT
+     * looks for, holding the document just authored - so refusing over an attribute of it would
+     * refuse the operation. What the caller is owed is not a veto but the fact, and it is stated
+     * here rather than discovered later.
+     *
+     * @param document the starting document
+     * @return the line ending in a newline, or an empty string when the entry carried nothing
+     */
+    private static String replacedEntryMetadataClause(MergeRulesDocument document)
+    {
+        if (!document.readEntryCarriedMetadata())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return "- Entry metadata: the merge-settings entry this write started from carried a zip " //$NON-NLS-1$
+            + "entry comment or an extra field, and **that did not come across**. The entry " //$NON-NLS-1$
+            + "written here is a new one - it is named after the comparison EDT looks for and " //$NON-NLS-1$
+            + "holds the document authored by this call - so nothing of the old entry's own " //$NON-NLS-1$
+            + "attributes is carried. Nothing EDT reads is affected: it matches the entry NAME " //$NON-NLS-1$
+            + "and reads the content.\n"; //$NON-NLS-1$
+    }
+
+    /**
      * States which container was written and which EDT reads it.
      * <p>
      * The two containers are not interchangeable and the difference is invisible in the file: a
@@ -1127,6 +1332,12 @@ public class MergeRulesTool implements IMcpTool
             // zip, and the label then ends in that archive's ENTRY name. See renderRead.
             out.append("- Based on: ").append(MarkdownUtils.inlineCode(document.sourceLabel())) //$NON-NLS-1$
                 .append(carriedOverClause(existingDecisions, replaced));
+            // Beside it, and only when there is something to say: what the starting archive held
+            // that this file does NOT. The same-path rewrite that would have DESTROYED those
+            // entries never gets here - it is refused - so reaching this line means the starting
+            // archive still has them and the caller is being told the new file is not a copy.
+            out.append(otherEntriesClause(document, basedOn));
+            out.append(replacedEntryMetadataClause(document));
         }
         out.append("- Decisions in the file now: ").append(document.decisions().size()).append('\n'); //$NON-NLS-1$
         out.append("- Preserved sections this tool does not interpret: ") //$NON-NLS-1$
@@ -1513,11 +1724,12 @@ public class MergeRulesTool implements IMcpTool
     /**
      * @param character the character to name
      * @return its code point in the {@code U+XXXX} spelling, so a refusal can point at it without
-     *         carrying it
+     *         carrying it - {@link PaddedNames#codePointName(char)}'s spelling, because the same
+     *         invisible character is named for a scope entry by the same words
      */
     private static String codePointName(char character)
     {
-        return String.format(Locale.ROOT, "U+%04X", (int)character); //$NON-NLS-1$
+        return PaddedNames.codePointName(character);
     }
 
 

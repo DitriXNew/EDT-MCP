@@ -1241,6 +1241,104 @@ public class GetComparisonNodeToolTest
         return JsonParser.parseString(result).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
     }
 
+    // ==================== a padded address is not an address ====================
+    //
+    // The same judgement compare_configurations makes about a scope entry, asked here about
+    // objectFqn: the engine matches a symlink with String.equals, so an address padded with
+    // whitespace trim() does not cut reaches no node. It is not silent here the way it is in a
+    // scope - the tool does refuse - but it refuses by quoting an address that looks exactly
+    // right, after spending the whole retry budget waiting for a node that cannot exist.
+
+    @Test
+    public void testAnObjectFqnPaddedWithAnEmSpaceIsRefused()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Products\u2003")); //$NON-NLS-1$
+
+        assertError(result);
+        String message = errorMessage(result);
+        assertTrue("the character must be named by code point - quoting the address shows the " //$NON-NLS-1$
+            + "caller the string they already believe is right: " + message, //$NON-NLS-1$
+            message.contains("U+2003")); //$NON-NLS-1$
+        assertTrue("and its position given: " + message, message.contains("character 17")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAPaddedObjectFqnIsRefusedBeforeTheComparisonIsReadAtAll()
+    {
+        // The bound this check exists for, pinned by COUNTING rather than by the message: the
+        // address cannot match, so opening a read boundary and retrying inside it spends the
+        // caller's whole waitSeconds budget to learn what the string itself already said.
+        StubSource source = knownSource();
+
+        call(source, args("comparisonId", "cmp-1", "objectFqn", "Catalog.Products\u00a0")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertEquals("a padded address must not open a single read of the comparison", //$NON-NLS-1$
+            0, source.reads);
+    }
+
+    @Test
+    public void testAnObjectFqnWithAnEmptySegmentIsRefusedBeforeAnyRead()
+    {
+        // The half the padding question walks past on purpose. Without its own question here the
+        // address builds a symlink matching nothing and the call spends its whole budget on it.
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog..Products")); //$NON-NLS-1$
+
+        assertError(result);
+        assertTrue("the refusal says which segment: " + errorMessage(result), //$NON-NLS-1$
+            errorMessage(result).contains("nothing in segment 2")); //$NON-NLS-1$
+        assertEquals("and nothing was read", 0, source.reads); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALeadingDotIsRefusedWithWordingThatFitsIt()
+    {
+        // An empty segment BEFORE the first separator: neither "between two '.'" nor "after the
+        // last one", which is what the first wording claimed.
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ".Catalog")); //$NON-NLS-1$
+
+        assertError(result);
+        assertTrue("it is the FIRST segment: " + errorMessage(result), //$NON-NLS-1$
+            errorMessage(result).contains("nothing in segment 1")); //$NON-NLS-1$
+        assertFalse("and the wording must fit it: " + errorMessage(result), //$NON-NLS-1$
+            errorMessage(result).contains("between two")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePositionIsCountedInTheAddressTheCallerSent()
+    {
+        StubSource source = knownSource();
+
+        String result = call(source, args("comparisonId", "cmp-1", "objectFqn", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "  Catalog.Products\u2003")); //$NON-NLS-1$
+
+        assertError(result);
+        assertTrue("two spaces were cut before the pad was found, so 17 would be a position " //$NON-NLS-1$
+            + "in a string the caller never sent: " + errorMessage(result), //$NON-NLS-1$
+            errorMessage(result).contains("at character 19")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnpaddedObjectFqnStillReachesTheComparison()
+    {
+        // The positive control, and the pin that keeps the check narrow: without it the test
+        // above passes just as well on a tool that refuses every address.
+        StubSource source = knownSource();
+
+        call(source, args("comparisonId", "cmp-1", "objectFqn", "Catalog.Products")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertTrue("an ordinary address must still be resolved against the comparison", //$NON-NLS-1$
+            source.reads > 0);
+    }
+
     /** Records what the tool asked the engine for, and answers from a scripted fixture. */
     private static final class StubSource
         implements GetComparisonNodeTool.NodeSource

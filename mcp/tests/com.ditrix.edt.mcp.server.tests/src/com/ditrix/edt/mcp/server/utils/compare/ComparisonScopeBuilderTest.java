@@ -314,4 +314,285 @@ public class ComparisonScopeBuilderTest
         assertFalse("and after the engine extended it, the same object no longer answers that", //$NON-NLS-1$
             ComparisonScopeBuilder.isGlobalScope(launchedGlobal));
     }
+
+    // ==================== a padded name is not a name ====================
+    //
+    // String.trim cuts only code points at or below U+0020, so an entry padded with U+2003 or
+    // U+00A0 survives it - non-blank, structurally sound, leading token a real type - and the
+    // builder used to hand the engine a symlink that can never match. The comparison then runs to
+    // the end and reports no rows for it, which reads as "these objects did not differ". Every
+    // pin below therefore checks the REFUSAL, not the symlink: a build that produced the padded
+    // symlink was already the defect.
+    //
+    // The characters are written as escapes so this source stays pure ASCII (and so the pins are
+    // readable at all - the whole point is that the character is invisible).
+
+    @Test
+    public void testAnEntryPaddedWithAnEmSpaceIsRefused()
+    {
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u2003")); //$NON-NLS-1$
+
+        assertFalse("a padded entry must not build a scope", scoping.ok()); //$NON-NLS-1$
+        assertNull("and it must not reach the engine as a symlink either", scoping.scope()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEntryPaddedWithANonBreakingSpaceIsRefused()
+    {
+        // U+00A0 is the harder half: Character.isWhitespace says NO, so String.isBlank does too,
+        // and a check written on isBlank alone would let this through. It is caught by
+        // Character.isSpaceChar, which is why the shared predicate asks both.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u00a0")); //$NON-NLS-1$
+
+        assertFalse("a non-breaking space is padding to every reader, and to no trim", //$NON-NLS-1$
+            scoping.ok());
+    }
+
+    @Test
+    public void testPaddingOnAnInnerSegmentIsRefusedToo()
+    {
+        // The question is asked per SEGMENT, not about the ends of the whole string: this entry
+        // begins with 'C' and ends with 's', so a check that looked only at the outside would
+        // pass it while the second name still matches nothing.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.\u00a0Products")); //$NON-NLS-1$
+
+        assertFalse("an inner name has two ends of its own", scoping.ok()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPaddingOnTheLeadingTypeTokenIsNamedAsPaddingRatherThanAsAnUnknownType()
+    {
+        // The ORDER of the two checks, pinned. Ask about the type first and the caller is told
+        // "'Catalog' is neither a metadata type ... nor the configuration root" over a token that
+        // reads as exactly 'Catalog' on any screen - a true sentence that cannot be acted on.
+        //
+        // U+2007 rather than U+2003, and the whole phrase rather than the code: the refusal's
+        // closing advice NAMES U+2003 and U+00A0 as examples, so contains("U+2003") is satisfied
+        // by a message that got the offending character wrong.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog\u2007.Products")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertTrue("the padding must be named, not reported as an unknown type: " //$NON-NLS-1$
+            + scoping.errorJson(),
+            scoping.errorJson().contains("has U+2007, a whitespace character, at character 8")); //$NON-NLS-1$
+        assertFalse("and the unknown-type wording must not be what comes out: " //$NON-NLS-1$
+            + scoping.errorJson(),
+            scoping.errorJson().contains("does not start with a known metadata type")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusalNamesTheCodePointAndWhereItSits()
+    {
+        // Named by code, not echoed: quoting the entry back shows the caller the string they
+        // already believe is right. The position is the 1-based UTF-16 offset, so 'Catalog.'
+        // (8) + 'Products' (8) puts the pad at 17.
+        //
+        // U+2007 and the whole phrase, not contains("U+2003"): the closing advice names U+2003
+        // and U+00A0 as examples of trim-surviving whitespace, so a code-only assertion on either
+        // of those passes even when the message names the wrong character.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u2007")); //$NON-NLS-1$
+
+        String error = scoping.errorJson();
+        assertTrue("the character and its position, as one phrase: " + error, //$NON-NLS-1$
+            error.contains("has U+2007, a whitespace character, at character 17")); //$NON-NLS-1$
+        assertTrue("and the entry identified by position in the list: " + error, //$NON-NLS-1$
+            error.contains("Scope entry #1")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePositionIsCountedInTheStringTheCallerSentNotInTheTrimmedOne()
+    {
+        // trim() runs before the padding question, so the offset it finds is an offset into a
+        // string the caller never sent. With two ordinary spaces cut from the front, the pad that
+        // sits at 17 of the trimmed entry sits at 19 of the request - and 17 is a number the
+        // caller cannot count to in their own text.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("  Catalog.Products\u2007")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        assertTrue("the position must refer to what was sent: " + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("at character 19")); //$NON-NLS-1$
+    }
+
+    // ==================== a segment that names nothing ====================
+    //
+    // The other half of the same failure, and the one the padding rule deliberately walks past:
+    // it SKIPS a component that names nothing, because for a merge-rule key another predicate
+    // reports that one. Here there is no other predicate, so the skip was a hole - and an entry
+    // with an empty segment builds a symlink that matches nothing exactly as a padded one does.
+
+    @Test
+    public void testAnEmptyInnerSegmentIsRefused()
+    {
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog..Products")); //$NON-NLS-1$
+
+        assertFalse("a name with nothing between two dots matches no object", scoping.ok()); //$NON-NLS-1$
+        assertTrue("and the refusal says which segment: " + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("nothing in segment 2")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATrailingDotIsRefused()
+    {
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products.")); //$NON-NLS-1$
+
+        assertFalse("a trailing separator leaves a segment naming nothing", scoping.ok()); //$NON-NLS-1$
+        assertTrue("and it is the LAST segment: " + scoping.errorJson(), //$NON-NLS-1$
+            scoping.errorJson().contains("nothing in segment 3")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASegmentOfNothingButUnicodeWhitespaceIsRefused()
+    {
+        // U+2003 IS Character.isWhitespace, so isBlank calls this segment blank and the padding
+        // question skips it. Without the empty-segment question it walked straight through.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.\u2003.Products")); //$NON-NLS-1$
+
+        assertFalse("a segment of nothing but whitespace names nothing", scoping.ok()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASegmentOfNothingButANonBreakingSpaceIsReportedAsPaddingNotAsEmpty()
+    {
+        // The asymmetry the shared judgement rests on, pinned where it bites. U+00A0 is NOT
+        // Character.isWhitespace, so isBlank says the segment names something and the
+        // empty-segment question passes it - which is exactly why the padding question must use
+        // the WIDER predicate. Either refusal keeps the address off the engine; the pin is that
+        // one of them fires.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.\u00a0.Products")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        // The WHOLE phrase, not contains("U+00A0"): the closing advice names U+00A0 as an
+        // example of trim-surviving whitespace, so a code-only assertion passes even when the
+        // offending-character clause names something else.
+        assertTrue("the wider predicate is what catches it, so it is named as padding: " //$NON-NLS-1$
+            + scoping.errorJson(), scoping.errorJson()
+                .contains("has U+00A0, a whitespace character, at character 9")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALeadingDotIsRefusedAndTheWordingFitsIt()
+    {
+        // The shape the first wording left out. An empty segment BEFORE the first separator is
+        // neither "between two '.'" nor "after the last one", so the sentence described an entry
+        // the caller had not sent. The message now describes the SEGMENT instead of guessing
+        // where a separator sits.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList(".Catalog")); //$NON-NLS-1$
+
+        assertFalse(scoping.ok());
+        String error = scoping.errorJson();
+        assertTrue("it is the FIRST segment that names nothing: " + error, //$NON-NLS-1$
+            error.contains("nothing in segment 1")); //$NON-NLS-1$
+        assertFalse("and the wording may not describe a shape this entry does not have: " //$NON-NLS-1$
+            + error, error.contains("between two")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRefusalSaysNothingWasStartedAndDoesNotOfferToTrimIt()
+    {
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u00a0")); //$NON-NLS-1$
+
+        String error = scoping.errorJson();
+        assertTrue("the caller has to know the expensive run did not happen: " + error, //$NON-NLS-1$
+            error.contains("Nothing was started")); //$NON-NLS-1$
+        assertTrue("and why it is not trimmed for them: " + error, //$NON-NLS-1$
+            error.contains("is no longer the address you asked about")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAsciiPaddedEntryIsStillAccepted()
+    {
+        // The check must not become a blanket refusal of anything with a space near it. Ordinary
+        // ASCII padding is what trim() is for, and it was already handled: this pins that the new
+        // question did not take that behaviour away.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("  Catalog.Products  ")); //$NON-NLS-1$
+
+        assertTrue("trim still deals with the padding it was always able to deal with", //$NON-NLS-1$
+            scoping.ok());
+        assertEquals(Collections.singletonList("Catalog.Products"), scoping.symlinks()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnOrdinaryEntryIsUnaffected()
+    {
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Arrays.asList("Catalog.Products", SPRAVOCHNIK + "." + TOVARY)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(scoping.ok());
+        assertEquals(Arrays.asList("Catalog.Products", "Catalog." + TOVARY), //$NON-NLS-1$ //$NON-NLS-2$
+            scoping.symlinks());
+    }
+
+    @Test
+    public void testASpaceInsideANameIsNotPadding()
+    {
+        // Whitespace INSIDE a name is not padding, and whether a 1C name may hold a space is a
+        // question about names that only a comparison answers. Refusing it here would refuse an
+        // address this builder has no standing to judge.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.My Product")); //$NON-NLS-1$
+
+        assertTrue("only the ENDS of a name are asked about", scoping.ok()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("Catalog.My Product"), scoping.symlinks()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAZeroWidthCharacterIsNotReportedAsPadding()
+    {
+        // The DECLARED boundary, pinned so widening it is a decision rather than a drift.
+        // U+200B is neither isWhitespace nor isSpaceChar - it is not whitespace in any Unicode
+        // sense - and whether the object it spells exists is a question only a live comparison
+        // answers. Refusing it here would be this class inventing a rule about names.
+        Scoping scoping = ComparisonScopeBuilder.build(
+            Collections.singletonList("Catalog.Products\u200b")); //$NON-NLS-1$
+
+        assertTrue("a zero-width character is out of scope by decision, not by omission", //$NON-NLS-1$
+            scoping.ok());
+    }
+
+    @Test
+    public void testTheAddressPredicateIsTheOneOtherToolsAsk()
+    {
+        // get_comparison_node asks this same method about its objectFqn, so the two tools cannot
+        // disagree about what a padded address is. Pinned directly, because the sharing is the
+        // point: a second copy of the judgement would pass every test above.
+        assertEquals(16, ComparisonScopeBuilder.paddedNameCharacter("Catalog.Products\u2003")); //$NON-NLS-1$
+        assertEquals(8, ComparisonScopeBuilder.paddedNameCharacter("Catalog.\u00a0Products")); //$NON-NLS-1$
+        assertEquals(-1, ComparisonScopeBuilder.paddedNameCharacter("Catalog.Products")); //$NON-NLS-1$
+        assertEquals(-1, ComparisonScopeBuilder.paddedNameCharacter(null));
+    }
+
+    @Test
+    public void testTheEmptySegmentPredicateCountsSegmentsFromOne()
+    {
+        assertEquals(2, PaddedNames.firstEmptyComponent("Catalog..Products", '.')); //$NON-NLS-1$
+        assertEquals(3, PaddedNames.firstEmptyComponent("Catalog.Products.", '.')); //$NON-NLS-1$
+        assertEquals(1, PaddedNames.firstEmptyComponent(".Catalog", '.')); //$NON-NLS-1$
+        assertEquals(-1, PaddedNames.firstEmptyComponent("Catalog.Products", '.')); //$NON-NLS-1$
+        assertEquals(-1, PaddedNames.firstEmptyComponent(null, '.'));
+    }
+
+    @Test
+    public void testTrimmedFromTheFrontReproducesTrimAndNotStrip()
+    {
+        // trim cuts at or below U+0020 and strip is Unicode-aware, so the two disagree on a
+        // non-breaking space. The callers use trim, so this must too - otherwise the position it
+        // corrects would be corrected by the wrong amount.
+        assertEquals(2, PaddedNames.trimmedFromTheFront("  Catalog")); //$NON-NLS-1$
+        assertEquals(0, PaddedNames.trimmedFromTheFront("\u00a0Catalog")); //$NON-NLS-1$
+        assertEquals(0, PaddedNames.trimmedFromTheFront("Catalog")); //$NON-NLS-1$
+        assertEquals(0, PaddedNames.trimmedFromTheFront(null));
+    }
 }

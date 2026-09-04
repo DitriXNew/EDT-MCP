@@ -1776,6 +1776,11 @@ public final class MergeRulesCodec
         {
             List<ZipEntry> candidates = new ArrayList<>();
             List<String> names = new ArrayList<>();
+            // Every entry the archive lists, directories included - the list the WRITER is judged
+            // against. 'names' below stays what it always was, the entries a merge-settings
+            // document could have come out of, because that is what picks the candidate and what
+            // the "not exactly one entry" refusal describes. Two different questions, two lists.
+            List<String> walkedNames = new ArrayList<>();
             Enumeration<? extends ZipEntry> entries = zip.entries();
             int walked = 0;
             while (entries.hasMoreElements())
@@ -1789,6 +1794,7 @@ public final class MergeRulesCodec
                 {
                     throw new MergeRulesFormatException(tooManyEntries());
                 }
+                walkedNames.add(entry.getName());
                 if (entry.isDirectory())
                 {
                     continue;
@@ -1806,8 +1812,12 @@ public final class MergeRulesCodec
             }
             if (candidates.size() != 1)
             {
+                // Described from the WHOLE walk, not from the candidates: 'names' drops
+                // directory entries, so an archive holding nothing but 'notes/' was reported as
+                // "it is empty" - a false statement about the caller's own file, and the more
+                // misleading because such an entry can carry bytes.
                 throw new MergeRulesFormatException("The zip does not hold exactly one merge-settings entry: " //$NON-NLS-1$
-                    + (names.isEmpty() ? "it is empty" : listEntries(names)) //$NON-NLS-1$
+                    + (walkedNames.isEmpty() ? "it is empty" : listEntries(walkedNames)) //$NON-NLS-1$
                     + ". A comparison saves one entry per comparison, named " //$NON-NLS-1$
                     + "'<mainProject>_<otherProject>_<ancestorProject>.xml'; extract the entry you " //$NON-NLS-1$
                     + "mean and read it as .xml."); //$NON-NLS-1$
@@ -1826,6 +1836,35 @@ public final class MergeRulesCodec
             }
             MergeRulesDocument document = parse(new ByteArrayInputStream(content));
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
+            // What the archive held BESIDES the entry that was read, carried on the document
+            // because this is the only moment it is knowable. An archive of one merge-settings
+            // entry beside a notes file reads perfectly well - the candidate is unambiguous - and
+            // a caller who then rewrites that same path would have had the notes file replaced by
+            // a single-entry archive with nothing said about it. Recorded here; judged by the
+            // writer, which is where a replacement is decided.
+            //
+            // EVERY other entry, and 'walked' rather than 'names': the loop above skips a
+            // DIRECTORY entry, and an entry is a directory to ZipEntry when its name ends in
+            // '/' - which says nothing about whether it holds bytes. Measured on this JDK:
+            // putNextEntry(new ZipEntry("notes/")) followed by write(...) produces an entry that
+            // answers isDirectory() == true and hands back its payload. A guard that excluded
+            // those would rest on a premise the format does not support, so nothing is excluded
+            // here but the entry that was actually read.
+            List<String> others = new ArrayList<>(walkedNames);
+            others.remove(entry.getName());
+            document.setUnreadContainerEntries(others);
+            // The archive's own COMMENT is destroyed by a rewrite exactly as an entry is - the
+            // replacement is a fresh archive and carries none - so it is reported the same way.
+            // It is not an entry and does not go in the list; a caller who is told "1 other
+            // entry" and finds a comment gone would have been told something false.
+            document.setContainerCarriedComment(zip.getComment() != null);
+            // Metadata carried by the merge-settings entry ITSELF. Unlike a sidecar it is not
+            // refused, because this entry is precisely what the caller asked to replace - the
+            // rewrite gives it the comparison's own name and the new document as content, so a
+            // brand-new entry is the operation rather than a side effect of it. It is still lost,
+            // so it is REPORTED: this tool does not let a caller find out afterwards.
+            document.setReadEntryCarriedMetadata(
+                entry.getComment() != null || entry.getExtra() != null);
             return document;
         }
     }

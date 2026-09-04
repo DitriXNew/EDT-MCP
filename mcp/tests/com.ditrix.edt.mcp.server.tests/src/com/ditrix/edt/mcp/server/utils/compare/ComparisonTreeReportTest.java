@@ -12,9 +12,15 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.AbstractSet;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 import org.junit.Test;
 
@@ -658,6 +664,326 @@ public class ComparisonTreeReportTest
     {
         return new ComparisonScope(Collections.singletonList(symlink),
             Collections.singletonList(symlink), Collections.singletonList(symlink));
+    }
+
+    // ====== a bounded report may not do unbounded work to produce its bounded prefix ======
+    //
+    // The Scope section prints at most 'limit' added names per side, in a table cell and again as
+    // bullets - and it used to obtain that prefix by copying the WHOLE map into a TreeMap, once
+    // for each of the two, on each of the three sides. Six full orderings, O(n) live entries each,
+    // with the VALUES carried along (an addition holds one reason per requested object that pulled
+    // it in), all while the comparison read is still held. limit=1 paid every bit of it to print
+    // three lines.
+    //
+    // The pins below COUNT, and never time anything: how many keys the report takes out of the
+    // map, and how many values. Both are exact integers, and both go up by a whole traversal per
+    // restored TreeMap. The counting map is the reason ScopeSnapshot has a package-visible
+    // factory: copyOf copies its input, so nothing handed to it can count.
+
+    @Test
+    public void testTheAddedNamesAreReadOutOfTheMapExactlyOncePerSide()
+    {
+        CountingAdditions added = additions(200);
+
+        render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added), false);
+
+        // ONE pass. The cell and the bullets describe the same names under the same limit, so
+        // they share one prefix; two TreeMap copies made it two passes, and a third caller would
+        // have made it three.
+        assertEquals("the keys of one side may be walked once, not once per rendered section", //$NON-NLS-1$
+            200, added.keyReads);
+    }
+
+    @Test
+    public void testOnlyTheReasonsOfThePrintedNamesAreEverRead()
+    {
+        // The expensive half. Ordering the map copied every entry, so every OTHER name's reason
+        // list came along - and one such list can be thousands of strings long. With limit=1
+        // exactly one reason list is needed, so exactly one may be read.
+        CountingAdditions added = additions(200);
+
+        render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added), false);
+
+        assertEquals("a bounded report reads the reasons of the names it prints and no others", //$NON-NLS-1$
+            1, added.valueReads);
+    }
+
+    @Test
+    public void testRaisingTheLimitRaisesTheReasonsReadAndNothingElse()
+    {
+        // The positive control for the pin above: a report that read NO values at all - or a
+        // count that happened to be one for some unrelated reason - would pass it just as well.
+        CountingAdditions added = additions(200);
+
+        render(new ComparisonTreeReport.Collector(5, true), snapshotOf(added), false);
+
+        assertEquals("five printed names need five reason lists", 5, added.valueReads); //$NON-NLS-1$
+        assertEquals("and still one walk of the keys", 200, added.keyReads); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheBoundedPrefixIsTheSMALLESTNamesAndNotTheFirstOnesTheMapHappensToHold()
+    {
+        // Stopping the walk early would bound it further and answer the wrong question: the
+        // platform hands these back unordered, so the first k of the iteration are not the k the
+        // report is supposed to print, and two runs of the same comparison would disagree. The
+        // fixture is inserted in DESCENDING order, so "the first one seen" and "the smallest one"
+        // are different names.
+        CountingAdditions added = new CountingAdditions();
+        added.put("Catalog.Zulu", Collections.singletonList("pulled in")); //$NON-NLS-1$ //$NON-NLS-2$
+        added.put("Catalog.Mike", Collections.singletonList("pulled in")); //$NON-NLS-1$ //$NON-NLS-2$
+        added.put("Catalog.Alpha", Collections.singletonList("pulled in")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String report = render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added),
+            false);
+
+        // The positive half on the CELL, so it pins that consumer rather than being satisfied by
+        // the bullet below it; the negative half stays report-wide, because a name that is not
+        // the smallest must appear nowhere at all.
+        assertTrue("the cell must print the smallest name: " + mainScopeRow(report), //$NON-NLS-1$
+            mainScopeRow(report).contains("Catalog.Alpha")); //$NON-NLS-1$
+        assertFalse("the first name the map lists is not the name a sorted prefix prints:\n" //$NON-NLS-1$
+            + report, report.contains("Catalog.Zulu")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheWholeCountSurvivesTheBoundThatHidTheNames()
+    {
+        // The other half of the ask: bounding what is ordered may not cost the report its count
+        // of what it left out. The total comes from the map's own size(), which is free, and not
+        // from the prefix - deriving it from the prefix would answer "showing 1 of 1".
+        //
+        // Asserted on the TABLE ROW and not on the report. The bullet list below the table
+        // carries a notice of its own, over its own count, and its text is identical here - so a
+        // report-wide assertContains passed with the cell's notice gone. Measured: mutating
+        // describeAdded's total to prefix.size() left every test in this class green until this
+        // pin was narrowed to the row.
+        CountingAdditions added = additions(200);
+
+        String row = mainScopeRow(render(new ComparisonTreeReport.Collector(1, true),
+            snapshotOf(added), false));
+
+        assertTrue("the cell that hid 199 names must still say how many there were: " + row, //$NON-NLS-1$
+            row.contains("(showing 1 of 200)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheBulletListKeepsItsOwnCountToo()
+    {
+        // The other notice, pinned separately for the same reason: one assertion covering both
+        // is an assertion that either of them can satisfy alone.
+        CountingAdditions added = additions(200);
+
+        String report = render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added),
+            false);
+
+        assertContains(report,
+            "Why the engine added a qualified name of its own (showing 1 of 200)"); //$NON-NLS-1$
+    }
+
+    /**
+     * The Scope table's {@code main} row, which is where the added-name cell lives.
+     * <p>
+     * Searched from the {@code ## Scope} heading onwards, and that is not fussiness: the summary
+     * table at the top of the report ALSO has a row beginning {@code | main |} - the working tree
+     * it names - and it comes first. Matching the first {@code | main |} in the report picked
+     * that one, so this helper returned a row that can never carry a truncation notice and the
+     * assertion using it failed whatever the code did. Caught by reading the failure text of a
+     * mutation run rather than by the mutation's verdict, which was red for the wrong reason.
+     *
+     * @param report the rendered report
+     * @return the row
+     */
+    private static String mainScopeRow(String report)
+    {
+        int scope = report.indexOf("## Scope"); //$NON-NLS-1$
+        if (scope < 0)
+        {
+            throw new AssertionError("no Scope section in:\n" + report); //$NON-NLS-1$
+        }
+        for (String line : report.substring(scope).split("\n")) //$NON-NLS-1$
+        {
+            if (line.startsWith("| main |")) //$NON-NLS-1$
+            {
+                return line;
+            }
+        }
+        throw new AssertionError("no '| main |' row under ## Scope in:\n" + report); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAskingTheMapForItsSizeIsNotAskingItForItsContents()
+    {
+        // size() must not be answered by counting a traversal: the count above is what makes the
+        // bound affordable, and a total derived by walking would put the walk straight back.
+        CountingAdditions added = additions(200);
+
+        render(new ComparisonTreeReport.Collector(1, true), snapshotOf(added), false);
+
+        assertEquals("one walk, not two - the second would be the count", 200, added.keyReads); //$NON-NLS-1$
+        assertTrue("and the fixture really is big enough for a second walk to show up", //$NON-NLS-1$
+            added.size() > 1);
+    }
+
+    /**
+     * @param count how many additions to build
+     * @return a counting map of {@code count} names, inserted in DESCENDING order so that the
+     *     first one iterated is never the smallest
+     */
+    private static CountingAdditions additions(int count)
+    {
+        CountingAdditions added = new CountingAdditions();
+        for (int i = count - 1; i >= 0; i--)
+        {
+            added.put(String.format(Locale.ROOT, "Catalog.Pulled%04d", Integer.valueOf(i)), //$NON-NLS-1$
+                Collections.singletonList("referenced by " + CATALOG_GOODS)); //$NON-NLS-1$
+        }
+        return added;
+    }
+
+    /**
+     * Wraps one side's additions in a snapshot, leaving the other two sides empty.
+     *
+     * @param added the additions of the main side
+     * @return the snapshot, holding the map ITSELF so its counters see what the report does
+     */
+    private static ComparisonTreeReport.ScopeSnapshot snapshotOf(
+        Map<String, List<String>> added)
+    {
+        Map<ComparisonSide, List<String>> requested = new EnumMap<>(ComparisonSide.class);
+        Map<ComparisonSide, Map<String, List<String>>> additions =
+            new EnumMap<>(ComparisonSide.class);
+        for (ComparisonSide side : ComparisonSide.values())
+        {
+            requested.put(side, Collections.singletonList(CATALOG_GOODS));
+            additions.put(side, side == ComparisonSide.MAIN ? added : Collections.emptyMap());
+        }
+        return ComparisonTreeReport.ScopeSnapshot.of(requested, additions);
+    }
+
+    /**
+     * A map that records how much of itself the report took: one count for the KEYS it handed
+     * out and one for the VALUES.
+     * <p>
+     * The two are separate on purpose. Ordering the whole map costs both - {@code TreeMap}'s
+     * copy constructor walks {@code entrySet} and reads each key AND each value - while a bounded
+     * prefix costs one walk of the keys and a value lookup per printed name. A single counter
+     * could not tell the two apart.
+     */
+    private static final class CountingAdditions
+        extends LinkedHashMap<String, List<String>>
+    {
+        private static final long serialVersionUID = 1L;
+
+        transient int keyReads;
+
+        transient int valueReads;
+
+        @Override
+        public Set<String> keySet()
+        {
+            Set<String> delegate = super.keySet();
+            return new AbstractSet<String>()
+            {
+                @Override
+                public Iterator<String> iterator()
+                {
+                    Iterator<String> keys = delegate.iterator();
+                    return new Iterator<String>()
+                    {
+                        @Override
+                        public boolean hasNext()
+                        {
+                            return keys.hasNext();
+                        }
+
+                        @Override
+                        public String next()
+                        {
+                            keyReads++;
+                            return keys.next();
+                        }
+                    };
+                }
+
+                @Override
+                public int size()
+                {
+                    return delegate.size();
+                }
+            };
+        }
+
+        @Override
+        public Set<Map.Entry<String, List<String>>> entrySet()
+        {
+            Set<Map.Entry<String, List<String>>> delegate = super.entrySet();
+            return new AbstractSet<Map.Entry<String, List<String>>>()
+            {
+                @Override
+                public Iterator<Map.Entry<String, List<String>>> iterator()
+                {
+                    Iterator<Map.Entry<String, List<String>>> entries = delegate.iterator();
+                    return new Iterator<Map.Entry<String, List<String>>>()
+                    {
+                        @Override
+                        public boolean hasNext()
+                        {
+                            return entries.hasNext();
+                        }
+
+                        @Override
+                        public Map.Entry<String, List<String>> next()
+                        {
+                            return counting(entries.next());
+                        }
+                    };
+                }
+
+                @Override
+                public int size()
+                {
+                    return delegate.size();
+                }
+            };
+        }
+
+        @Override
+        public List<String> get(Object key)
+        {
+            valueReads++;
+            return super.get(key);
+        }
+
+        /**
+         * @param entry the real entry
+         * @return a view that charges a key read and a value read as they are asked for
+         */
+        Map.Entry<String, List<String>> counting(Map.Entry<String, List<String>> entry)
+        {
+            return new Map.Entry<String, List<String>>()
+            {
+                @Override
+                public String getKey()
+                {
+                    keyReads++;
+                    return entry.getKey();
+                }
+
+                @Override
+                public List<String> getValue()
+                {
+                    valueReads++;
+                    return entry.getValue();
+                }
+
+                @Override
+                public List<String> setValue(List<String> value)
+                {
+                    throw new UnsupportedOperationException();
+                }
+            };
+        }
     }
 
     private static ComparisonScope emptyScope()

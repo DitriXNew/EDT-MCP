@@ -12,7 +12,8 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.NavigableSet;
+import java.util.TreeSet;
 
 import com._1c.g5.v8.dt.compare.core.ComparisonScope;
 import com._1c.g5.v8.dt.compare.model.ComparisonNodeStatus;
@@ -253,6 +254,32 @@ public final class ComparisonTreeReport
                 addedCopy.put(side, copyAdditions(scope.getExtendedScope(side)));
             }
             return new ScopeSnapshot(requestedCopy, addedCopy);
+        }
+
+        /**
+         * A snapshot over maps supplied directly. A TEST SEAM and nothing else: production builds
+         * one through {@link #copyOf(ComparisonScope)}, which copies a live platform scope and
+         * owns the copies it makes.
+         * <p>
+         * It exists because the bound {@code ComparisonTreeReport.smallestKeys} keeps -
+         * how much is ORDERED and how much is RETAINED while the comparison read is still held -
+         * leaves no trace in the rendered text: a bounded prefix and a fully sorted map print the
+         * same names in the same order. The only way to observe it from outside is to hand the
+         * report a map that COUNTS what is taken from it, and {@code copyOf} copies its input into
+         * a map of its own, so nothing handed to it can count anything.
+         * <p>
+         * The maps are stored AS GIVEN rather than copied, which is the whole point and also the
+         * reason this is not public: a snapshot built here is only as immutable as its caller
+         * makes it.
+         *
+         * @param requested the caller's request per side
+         * @param added the engine's additions per side, each name with its reasons
+         * @return the snapshot
+         */
+        static ScopeSnapshot of(Map<ComparisonSide, List<String>> requested,
+            Map<ComparisonSide, Map<String, List<String>>> added)
+        {
+            return new ScopeSnapshot(requested, added);
         }
 
         /**
@@ -529,6 +556,13 @@ public final class ComparisonTreeReport
             return;
         }
         out.append(MarkdownUtils.tableHeader("Side", "Requested", "Added by the engine")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // ONE ordered prefix per side, taken here and read TWICE - by the cell beside it and by
+        // the bullet list below - because both describe the same names under the same limit. It
+        // used to be taken twice per side, each time by ordering the WHOLE map and copying every
+        // reason list with it, so limit=1 over a comparison that pulled in ten thousand
+        // dependencies ordered sixty thousand entries to print three lines. See smallestKeys for
+        // what is bounded and what is not.
+        Map<ComparisonSide, List<String>> prefixes = new EnumMap<>(ComparisonSide.class);
         for (ComparisonSide side : ComparisonSide.values())
         {
             // Two accessors, deliberately never merged: the snapshot keeps the caller's
@@ -536,8 +570,10 @@ public final class ComparisonTreeReport
             // first is the lie this report exists to avoid.
             List<String> requested = scope.requested(side);
             Map<String, List<String>> added = scope.added(side);
+            List<String> prefix = smallestKeys(added, limit);
+            prefixes.put(side, prefix);
             out.append(MarkdownUtils.tableRow(sideName(side), describeRequested(requested, limit),
-                describeAdded(added, limit)));
+                describeAdded(prefix, added.size())));
         }
 
         // Bounded by the SAME limit as the cell above, and by the same count per side, so the
@@ -552,21 +588,23 @@ public final class ComparisonTreeReport
         for (ComparisonSide side : ComparisonSide.values())
         {
             Map<String, List<String>> added = scope.added(side);
+            // The WHOLE count, asked of the map itself. It is what the truncation notice reports,
+            // and size() costs nothing - which is the point: a bounded report may not know every
+            // name, but it must still know how many there were.
             total += added.size();
-            int shownForSide = 0;
-            // Sorted, because the platform hands this back as a HashMap: an unordered report
-            // would change between two runs of the same comparison for no reason.
-            for (Map.Entry<String, List<String>> entry : new TreeMap<>(added).entrySet())
+            // The prefix is at most 'limit' long already, so this loop no longer needs a counter
+            // to stop itself. The bound moved from "stop printing" to "never order more than
+            // this", which is the only place it saves anything.
+            for (String name : prefixes.get(side))
             {
-                if (shownForSide >= limit)
-                {
-                    break;
-                }
-                shownForSide++;
                 shown++;
+                // The reasons of the names actually printed, looked up one at a time. Ordering
+                // the whole map used to carry every OTHER name's reasons along with it, and one
+                // addition can hold a reason per requested object that pulled it in - see
+                // joinReasons - so those were the expensive half of the copy.
                 reasons.append("- `").append(sideName(side)).append("` / `") //$NON-NLS-1$ //$NON-NLS-2$
-                    .append(entry.getKey()).append("` — ") //$NON-NLS-1$
-                    .append(joinReasons(entry.getValue(), limit))
+                    .append(name).append("` — ") //$NON-NLS-1$
+                    .append(joinReasons(added.get(name), limit))
                     .append('\n');
             }
         }
@@ -670,17 +708,74 @@ public final class ComparisonTreeReport
     }
 
     /**
-     * @param added the engine's own additions on one side
-     * @param limit largest number to list
+     * @param prefix the ordered names to print - already at most {@code limit} long, from
+     *     {@link #smallestKeys(Map, int)}
+     * @param total how many the engine added ON THIS SIDE, whether printed or not; the truncation
+     *     notice is the only place the ones NOT printed are still reported, so it is passed in
+     *     rather than derived from {@code prefix}
      * @return the cell text
      */
-    private static String describeAdded(Map<String, List<String>> added, int limit)
+    private static String describeAdded(List<String> prefix, int total)
     {
-        if (added == null || added.isEmpty())
+        if (total == 0)
         {
             return NONE;
         }
-        return join(new ArrayList<>(new TreeMap<>(added).keySet()), limit);
+        return String.join(", ", prefix) + Pagination.truncationNotice(prefix.size(), total); //$NON-NLS-1$
+    }
+
+    /**
+     * The at most {@code limit} smallest keys of a map, in ascending order, WITHOUT ordering the
+     * rest of it.
+     *
+     * <h2>What was wrong with sorting the map</h2>
+     * The report prints a bounded prefix - {@code limit} names in a table cell and the same
+     * {@code limit} names as bullets - and it used to obtain that prefix by copying the whole map
+     * into a {@code TreeMap} and taking the front of it. Twice per side, so six times for a
+     * comparison. Every one of those copies was O(n log n) comparisons and O(n) live entries while
+     * the comparison read is still held, and it carried the VALUES along: an addition's reasons
+     * are one string per requested object that pulled it in, so a common dependency of a large
+     * request is a single printed line whose value list is thousands long. {@code limit=1} paid
+     * all of it to print one name.
+     *
+     * <h2>What this bounds, and what it cannot</h2>
+     * Bounded: what is ORDERED and what is RETAINED - never more than {@code limit} keys, and no
+     * values at all. NOT bounded: how many keys are LOOKED at, which is n and has to be. The k
+     * smallest of a set is not knowable without seeing every element, so an implementation that
+     * stopped early would answer with the first k in the platform's own {@code HashMap} order -
+     * a different answer, unstable between two runs of the same comparison, which is exactly what
+     * the ordering was introduced for.
+     * <p>
+     * The map's SIZE is deliberately not part of the answer. The caller reads it from the map,
+     * which knows it in constant time, and reports it in the truncation notice - so bounding the
+     * output never costs the report its count of what it left out.
+     *
+     * @param entries the additions of one side, keyed by qualified name
+     * @param limit largest number of keys to return; {@code 0} or less returns nothing
+     * @return the keys, ascending, at most {@code limit} of them
+     */
+    private static List<String> smallestKeys(Map<String, List<String>> entries, int limit)
+    {
+        if (entries == null || entries.isEmpty() || limit <= 0)
+        {
+            return Collections.emptyList();
+        }
+        NavigableSet<String> smallest = new TreeSet<>();
+        for (String key : entries.keySet())
+        {
+            if (smallest.size() < limit)
+            {
+                smallest.add(key);
+            }
+            else if (key.compareTo(smallest.last()) < 0)
+            {
+                // Evicted BEFORE the insert, so the set never holds limit + 1 entries even for an
+                // instant: the whole claim of this method is a ceiling on what is live at once.
+                smallest.pollLast();
+                smallest.add(key);
+            }
+        }
+        return List.copyOf(smallest);
     }
 
     /**
