@@ -31,10 +31,14 @@ Fixture truth (committed; values confirmed by calling the live tool):
   - Catalog.Catalog -> 9 references, including the Configuration containment
     'Configuration - Catalogs - catalogs' and form-item data-path usages like
     'Catalog.Catalog.Form.ItemForm.Form - Items.Code.Data path - Type: types'.
-  - CommonModule.Calc -> 2 references, including
-    'Configuration - Common modules - commonModules'.
+  - CommonModule.Calc -> 3 references, including its Configuration containment
+    and the pre-existing extension usage, rendered project-qualified as
+    'TestConfiguration.tests/CommonModules/tests_SampleTests/Module.bsl'.
   - CommonModule.OK -> 2 references (same Configuration containment shape).
   - Subsystem.Subsystem -> 1 reference: 'Configuration - Subsystems - subsystems'.
+  Measured: extension BSL usages of an adopted copy are surfaced against the base object;
+  its extension-Configuration containment is not, because BM back-references use the base target.
+  No shared-fixture change is needed: the Calc extension usage predates this feature and proves it.
   Every object in this tiny fixture is at least referenced by its Configuration
   containment, so there is no genuine 0-reference object to exercise the
   "No references found." branch — that branch is therefore NOT asserted here
@@ -126,9 +130,10 @@ def test_catalog_references_real_usages_and_does_not_mutate():
 @e2e_test(tool="find_references", kind="read")
 def test_common_module_references_configuration_containment():
     """A CommonModule object resolves and its references are found. CommonModule.Calc
-    is referenced by the Configuration (it owns the module) -> exactly 2 references.
-    This proves object resolution + reference collection for a *different* metadata
-    type than Catalog, with its own deterministic count."""
+    has two metadata references and one indexed BSL usage of its adopted extension
+    copy -> exactly 3 references. This proves object resolution, adopted-target
+    augmentation and extension source scoping for a *different* metadata type than
+    Catalog, with its own deterministic count."""
     r = call("find_references", {
         "projectName": PROJECT,
         "objectFqn": "CommonModule.Calc",
@@ -136,10 +141,19 @@ def test_common_module_references_configuration_containment():
     assert_ok(r, "find_references on CommonModule.Calc")
     assert_contains(r.text, "# References to CommonModule.Calc",
                     "heading must carry the CommonModule FQN")
-    assert_contains(r.text, "**Total references found:** 2",
-                    "CommonModule.Calc has exactly 2 references in the fixture")
+    assert_contains(r.text, "**Total references found:** 3",
+                    "CommonModule.Calc has exactly 3 references in the fixture")
     assert_contains(r.text, "Configuration - Common modules - commonModules",
                     "the Configuration commonModules containment reference must be listed")
+    # This extension usage predates adopted-target support and needs no purpose-built fixture.
+    # It is the sole regression proof that searching the BASE Calc surfaces BSL references
+    # resolved to the extension's ADOPTED Calc copy.
+    # The row is qualified with its owning PROJECT because an adopted copy keeps the base module's
+    # relative path: without that prefix a base row and an extension row sharing a line collapse
+    # into one (relative path plus line is the whole deduplication key).
+    assert_contains(r.text, "TestConfiguration.tests/CommonModules/tests_SampleTests/Module.bsl",
+                    "the extension BSL usage of the adopted Calc module must be listed, "
+                    "qualified with the extension project it lives in")
     assert_no_diff("a read tool must not touch the project on disk")
 
 

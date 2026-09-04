@@ -55,6 +55,7 @@ import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -65,6 +66,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -96,6 +98,19 @@ import com.google.gson.JsonParser;
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /**
+     * A non-forced delete answers "is anything still referencing this?" from the Xtext index, and a
+     * predefined-item delete does so even when the strict cascade settle is skipped. That index is
+     * built in the NORMAL bucket, which EDT's "important" segment set excludes - so the model gate
+     * could admit a delete whose reference check then runs against an index that is still being
+     * built and reports a clean bill of health. This tool keeps the strict gate.
+     */
+    @Override
+    protected boolean requiresFullDerivedData()
+    {
+        return true;
+    }
+
     /** Bounded cascade settle seam; production delegates to {@link ProjectStateChecker}. */
     @FunctionalInterface
     interface CascadeSettler
@@ -289,6 +304,31 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
 
+    /** Input key: caller-side bound on the UI-thread delete work, in seconds. */
+    static final String KEY_TIMEOUT = "timeout"; //$NON-NLS-1$
+
+    /**
+     * Default bound on the delete work (7 minutes).
+     * <p>
+     * Delete and rename use the same md-refactoring/UI-thread machinery, so delete deliberately
+     * uses rename's 420s default and 60..3600 range. The shared worst legitimate observation is a
+     * 301-second refactoring that completed after EDT waited out its own five-minute derived-data
+     * timeout. A lower delete default has the more dangerous failure mode: the call reports a
+     * timeout while the non-preemptible cascade goes on to remove the target and rewrite references,
+     * manufacturing exactly the uncertain, possibly half-deleted configuration this bound exists to
+     * report. 420s clears that observation by almost two minutes while still bounding a genuinely
+     * wedged request; 60s is the lowest value that does not invite cutting an ordinary healthy
+     * cascade off mid-flight, and 3600s still gives unusually large configurations an explicit
+     * escape hatch without restoring an indefinite wait.
+     */
+    static final int DEFAULT_DELETE_TIMEOUT_SECONDS = 420;
+
+    /** Smallest accepted UI-thread delete bound, in seconds. */
+    private static final int MIN_DELETE_TIMEOUT_SECONDS = 60;
+
+    /** Largest accepted UI-thread delete bound, in seconds. */
+    private static final int MAX_DELETE_TIMEOUT_SECONDS = 3600;
+
     /** Shared bound for derived-data drain and BM-model registration before an mdclass cascade. */
     private static final long SETTLE_TIMEOUT_MS = 60_000L;
 
@@ -369,7 +409,149 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "platform prohibitions (only the incoming references are left dangling). Default " //$NON-NLS-1$
                 + "false = on confirm=true either condition BLOCKS deletion and is listed under its " //$NON-NLS-1$
                 + "own output fields (independent of 'confirm', which is the preview gate).") //$NON-NLS-1$
+            .integerProperty(KEY_TIMEOUT,
+                "How long to wait for the UI-thread delete work, in seconds (default " //$NON-NLS-1$
+                + DEFAULT_DELETE_TIMEOUT_SECONDS + ", clamped to " + MIN_DELETE_TIMEOUT_SECONDS //$NON-NLS-1$
+                + ".." + MAX_DELETE_TIMEOUT_SECONDS + "). On expiry the call fails, but EDT may " //$NON-NLS-1$ //$NON-NLS-2$
+                + "still finish a confirm=true delete, so verify the model before retrying. Does " //$NON-NLS-1$
+                + "not cover the pre-flight cascade settle (a separate 60s bound).") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected long uiThreadBoundMs(Map<String, String> params)
+    {
+        return resolveDeleteTimeoutMs(params);
+    }
+
+    /** A preview cannot mutate, even when its non-preemptible UI work remains in flight. */
+    @Override
+    protected boolean uiThreadBoundOutcomeMayHaveMutated(Map<String, String> params,
+        BoundedJob.Outcome outcome)
+    {
+        boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        return confirm && super.uiThreadBoundOutcomeMayHaveMutated(params, outcome);
+    }
+
+    @Override
+    protected String uiThreadBoundError(Map<String, String> params, long timeoutMs,
+        BoundedJob.Outcome outcome)
+    {
+        String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+        return boundedOutcomeError(fqn, confirm, timeoutMs, outcome);
+    }
+
+    /**
+     * Resolves the UI-thread delete bound for this call: the explicit {@code timeout} argument when
+     * given, otherwise the configured per-tool default, clamped to the accepted range.
+     *
+     * @param params the raw tool arguments
+     * @return the bound in milliseconds
+     */
+    static long resolveDeleteTimeoutMs(Map<String, String> params)
+    {
+        int configuredDefault = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, KEY_TIMEOUT, DEFAULT_DELETE_TIMEOUT_SECONDS);
+        int seconds = JsonUtils.extractIntArgument(params, KEY_TIMEOUT, configuredDefault);
+        return clampTimeoutSeconds(seconds) * 1000L;
+    }
+
+    /**
+     * Clamps a delete bound to the range chosen for a non-preemptible cascade.
+     *
+     * @param seconds the requested bound in seconds
+     * @return the accepted bound in seconds
+     */
+    static int clampTimeoutSeconds(int seconds)
+    {
+        if (seconds < MIN_DELETE_TIMEOUT_SECONDS)
+        {
+            return MIN_DELETE_TIMEOUT_SECONDS;
+        }
+        return Math.min(seconds, MAX_DELETE_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * Translates every non-completed bounded outcome without requiring a live workbench.
+     * <p>
+     * Package-visible so the unit test can pin the safety-critical distinction between a queued
+     * delete our cancellation kept from starting and UI work that may still finish after the caller
+     * stopped waiting.
+     *
+     * @param fqn the requested delete target
+     * @param confirm whether this call could mutate the model
+     * @param timeoutMs the configured caller-side bound
+     * @param outcome the bounded-job outcome
+     * @return the actionable error JSON
+     */
+    static String boundedOutcomeError(String fqn, boolean confirm, long timeoutMs,
+        BoundedJob.Outcome outcome)
+    {
+        String target = fqn == null || fqn.isEmpty() ? "<missing fqn>" : fqn; //$NON-NLS-1$
+        long seconds = Math.max(1L, Math.round(timeoutMs / 1000.0));
+        switch (outcome)
+        {
+        case TIMED_OUT:
+            return inFlightBoundError("Deleting '" + target + "' did not finish within " + seconds //$NON-NLS-1$ //$NON-NLS-2$
+                + secondsSuffix(seconds) + ".", target, confirm, seconds); //$NON-NLS-1$
+        case TIMED_OUT_BEFORE_START:
+            return ToolResult.error("Deleting '" + target + "' did not START within " + seconds //$NON-NLS-1$ //$NON-NLS-2$
+                + secondsSuffix(seconds) + ": the deadline elapsed while its UI-thread work was " //$NON-NLS-1$
+                + "still queued, and cancelling it kept it from starting. NOTHING was deleted and " //$NON-NLS-1$
+                + "the model is untouched - no check or cleanup is needed. Retry when EDT's job " //$NON-NLS-1$
+                + "scheduler is less busy, or " + largerTimeoutAdvice(seconds)).toJson(); //$NON-NLS-1$
+        case INTERRUPTED:
+            return inFlightBoundError("Waiting for the deletion of '" + target //$NON-NLS-1$
+                + "' was interrupted after " + seconds + secondsSuffix(seconds) + ".", //$NON-NLS-1$ //$NON-NLS-2$
+                target, confirm, seconds);
+        case NOT_RUN:
+            return ToolResult.error("The delete request for '" + target + "' was cancelled before " //$NON-NLS-1$ //$NON-NLS-2$
+                + "its UI-thread work started, so NOTHING was deleted and the model is untouched - " //$NON-NLS-1$
+                + "no check or cleanup is needed. Retry; if it keeps happening, EDT is shutting " //$NON-NLS-1$
+                + "down or another operation is cancelling background jobs.").toJson(); //$NON-NLS-1$
+        case COMPLETED:
+        default:
+            return ToolResult.error("The deletion of '" + target + "' ended in an unrecognised " //$NON-NLS-1$ //$NON-NLS-2$
+                + "bounded state (" + outcome + "). Whether it applied is unknown; call " //$NON-NLS-1$ //$NON-NLS-2$
+                + "get_metadata_details on '" + target + "' before retrying.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** A running preview is harmless; a running confirmed delete must be treated as possibly applied. */
+    private static String inFlightBoundError(String prefix, String fqn, boolean confirm, long seconds)
+    {
+        if (!confirm)
+        {
+            return ToolResult.error(prefix + " This was a PREVIEW (confirm=false), which never " //$NON-NLS-1$
+                + "writes: nothing was deleted and the model is unchanged. EDT may still finish " //$NON-NLS-1$
+                + "computing the preview, but it cannot apply the deletion. Retry later, or " //$NON-NLS-1$
+                + largerTimeoutAdvice(seconds)).toJson();
+        }
+        return ToolResult.error(prefix + " The MCP call stopped waiting, but it did NOT stop EDT's " //$NON-NLS-1$
+            + "UI-thread work: EDT may still finish deleting '" + fqn + "', and the model may " //$NON-NLS-1$ //$NON-NLS-2$
+            + "already have changed. Before retrying, call get_metadata_details on '" + fqn //$NON-NLS-1$
+            + "'; for a top-level target, also call get_metadata_objects for its metadata type. " //$NON-NLS-1$
+            + largerTimeoutAdvice(seconds)).toJson();
+    }
+
+    /** Grammar helper for error messages that name the configured bound. */
+    private static String secondsSuffix(long seconds)
+    {
+        return seconds == 1L ? " second" : " seconds"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The actionable lever, without recommending a value above the accepted maximum. */
+    private static String largerTimeoutAdvice(long seconds)
+    {
+        if (seconds >= MAX_DELETE_TIMEOUT_SECONDS)
+        {
+            return "this is already the largest accepted '" + KEY_TIMEOUT + "', so check for a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "stuck build or another EDT operation holding the workspace."; //$NON-NLS-1$
+        }
+        return "pass a larger '" + KEY_TIMEOUT + "' (seconds, up to " //$NON-NLS-1$ //$NON-NLS-2$
+            + MAX_DELETE_TIMEOUT_SECONDS + ") or raise the default in Preferences > MCP Server > " //$NON-NLS-1$ //$NON-NLS-2$
+            + "Tools > " + NAME + "."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Override
@@ -2331,12 +2513,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     MetadataReferenceService referenceService = new MetadataReferenceService();
                     List<Map<String, Object>> refs = new ArrayList<>();
                     java.util.Set<String> seen = new java.util.HashSet<>();
-                    boolean completed = collectOnePredefinedItemReferences(referenceService, bmModel, item,
-                        ownerBmId, seen, refs);
+                    boolean completed = collectOnePredefinedItemReferences(referenceService, project,
+                        bmModel, item, ownerBmId, seen, refs);
                     for (PredefinedItem descendant : PredefinedWriter.descendants(item))
                     {
-                        completed = collectOnePredefinedItemReferences(referenceService, bmModel, descendant,
-                            ownerBmId, seen, refs) && completed;
+                        completed = collectOnePredefinedItemReferences(referenceService, project, bmModel,
+                            descendant, ownerBmId, seen, refs) && completed;
                     }
                     return new PredefinedRefScan(refs, completed);
                 });
@@ -2372,14 +2554,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      *     scans, per {@link PredefinedRefScan#completed})
      */
     private static boolean collectOnePredefinedItemReferences(MetadataReferenceService referenceService,
-        IBmModel bmModel, PredefinedItem item, long ownerTopId, java.util.Set<String> seen,
+        IProject project, IBmModel bmModel, PredefinedItem item, long ownerTopId, java.util.Set<String> seen,
         List<Map<String, Object>> out)
     {
         MetadataReferenceService.ReferenceScanResult scanResult;
         try
         {
-            scanResult = referenceService.collectReferencesForObjectStrict(bmModel, (IBmObject)item,
-                PREDEFINED_REF_SCAN_LIMIT);
+            scanResult = referenceService.collectReferencesForObjectStrict(project, bmModel,
+                (IBmObject)item, PREDEFINED_REF_SCAN_LIMIT);
         }
         catch (Exception e)
         {

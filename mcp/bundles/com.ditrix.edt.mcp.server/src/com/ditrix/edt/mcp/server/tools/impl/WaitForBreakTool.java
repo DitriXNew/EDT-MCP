@@ -166,7 +166,7 @@ public class WaitForBreakTool implements IMcpTool
 
         // Proactively scan live targets for threads already suspended before the
         // listener was registered (e.g. manual breakpoint hit in EDT, or suspend
-        // that happened between debug_launch and this call).
+        // that happened between launch and this call).
         scanForAlreadySuspended(registry, applicationId);
 
         try

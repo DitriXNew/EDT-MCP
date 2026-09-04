@@ -211,7 +211,7 @@ public class ToolCallResultTest
         // The suppressed-structuredContent error result (plain-text mode / an opted-out client): the
         // WHOLE payload in the text channel + isError:true, and NO structuredContent - suppressing the
         // payload must never turn a failure into a success-looking result, nor drop the fields that
-        // say what to do next (debug_launch's availableConfigurations, update_database's project and
+        // say what to do next (launch's availableConfigurations, update_database's project and
         // application, an attached userSignal).
         JsonElement payload = JsonParser.parseString(
             "{\"success\":false,\"error\":\"boom\",\"availableConfigurations\":[\"A\",\"B\"]}");

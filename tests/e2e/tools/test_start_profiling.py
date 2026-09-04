@@ -3,7 +3,7 @@ e2e tests for start_profiling (kind: read).
 
 start_profiling enables 1C line-level performance measurement (замер
 производительности) on an ACTIVE debug target. It is a DEBUG/RUNTIME tool:
-its happy path requires a live debug session created by debug_launch or
+its happy path requires a live debug session created by launch or
 debug_yaxunit_tests. Response type is JSON (getResponseType() == JSON), so the
 payload is in r.structured ({"success":..,"error"/"message":..}); r.text is the
 serialized JSON, and the harness error_text() reads structured["error"] first.
@@ -21,15 +21,15 @@ here, execute() takes the realistic branch:
       -> DebugSessionRegistry.findActiveTarget(id) == null
       -> ToolResult.error("No active debug target for applicationId: <id>. "
                           + "Start a debug session first "
-                          + "(debug_launch or debug_yaxunit_tests).")
+                          + "(launch or debug_yaxunit_tests).")
 
 THAT no-session sentinel IS the correct, realistic happy contract here: a CLEAR,
 ACTIONABLE error that (a) names the missing applicationId and (b) names the exact
-next step (start a debug session via debug_launch / debug_yaxunit_tests). We
+next step (start a debug session via launch / debug_yaxunit_tests). We
 assert that specific sentinel (mutation-sensitive: a no-op, a wrong/vague error,
 or a tool that silently "succeeded" without a session would all fail it).
 
-We deliberately do NOT start a real infobase / debug_launch (heavy, not
+We deliberately do NOT start a real infobase / launch (heavy, not
 configured) — the sentinel + the negative matrix is the full coverage.
 
 DIFF: start_profiling drives the running infobase / EDT debug runtime, NOT the
@@ -41,7 +41,7 @@ Real branches in StartProfilingTool.execute() relevant here:
         -> "applicationId is required"
   - present applicationId, not already-active, no live target (this env)
         -> "No active debug target for applicationId: <id>. Start a debug
-            session first (debug_launch or debug_yaxunit_tests)."
+            session first (launch or debug_yaxunit_tests)."
   - already-active id (unreachable here — set is empty without a prior start)
         -> success {"started": false, "message": "already active ..."}
 """
@@ -56,7 +56,7 @@ from harness import (
 
 
 # A syntactically plausible application id that is guaranteed NOT to be a live
-# debug session in this environment (no debug_launch was performed).
+# debug session in this environment (no launch was performed).
 NONEXISTENT_APP_ID = "e2e-no-such-application-zzz"
 
 
@@ -71,7 +71,7 @@ def test_no_active_session_returns_clear_actionable_sentinel():
     isProfilingActive(id) is false and DebugSessionRegistry.findActiveTarget(id)
     returns null, so the tool returns the no-active-target sentinel. We assert
     the SPECIFIC message: it must name the missing applicationId AND point at the
-    exact next step (start a debug session via debug_launch / debug_yaxunit_tests).
+    exact next step (start a debug session via launch / debug_yaxunit_tests).
 
     Mutation-sensitive: a broken tool that toggled profiling on a non-existent
     target, returned success-without-a-session, or emitted a bare/opaque error
@@ -82,7 +82,7 @@ def test_no_active_session_returns_clear_actionable_sentinel():
     assert_error_quality(
         err,
         names=[NONEXISTENT_APP_ID],
-        suggests=["No active debug target", "debug_launch", "debug_yaxunit_tests"],
+        suggests=["No active debug target", "launch", "debug_yaxunit_tests"],
         ctx="no-session sentinel names the id + the next step (start a debug session)",
     )
     assert_no_diff("start_profiling must not touch the project source on disk")
@@ -102,7 +102,7 @@ def test_missing_application_id_errors_clearly():
     r = call("start_profiling", {})
     e = assert_error(r, "missing required applicationId")
     # AUDIT: "applicationId is required" names the param but offers no next step
-    # (no pointer to get_applications / debug_launch to obtain a valid id) ->
+    # (no pointer to get_applications / launch to obtain a valid id) ->
     # suggests=[] intentionally. Fix-card: make the required-arg guard actionable.
     assert_error_quality(
         e,
@@ -152,7 +152,7 @@ def test_nonexistent_application_id_names_value_and_suggests_start():
     assert_error_quality(
         e,
         names=[bad],
-        suggests=["No active debug target", "debug_launch", "debug_yaxunit_tests"],
+        suggests=["No active debug target", "launch", "debug_yaxunit_tests"],
         ctx="non-existent applicationId is echoed + the fix (start a debug session) is named",
     )
     assert_no_diff("an invalid call must not touch the project source on disk")
@@ -179,7 +179,7 @@ def test_whitespace_application_id_surfaces_as_no_target():
     assert_error_quality(
         e,
         names=["No active debug target"],
-        suggests=["debug_launch", "debug_yaxunit_tests"],
+        suggests=["launch", "debug_yaxunit_tests"],
         ctx="whitespace applicationId surfaces as no-active-target + names the next step",
     )
     assert_no_diff("an invalid call must not touch the project source on disk")

@@ -33,12 +33,12 @@ import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link LaunchOverrides} — the per-launch {@code /C} startup option and external
- * data processor / report of {@code debug_launch} (issue #344).
+ * data processor / report of {@code launch} (issue #344).
  *
  * <p>Everything asserted here is reachable headlessly: the emptiness contract, the two refusals
  * that precede any model access, and — the one that matters most — that applying an override
  * stamps a WORKING COPY and never saves it. Resolving the external object itself needs a live
- * workspace and is covered by {@code test_debug_launch.py}.</p>
+ * workspace and is covered by {@code test_launch.py}.</p>
  */
 public class LaunchOverridesTest
 {
@@ -71,7 +71,7 @@ public class LaunchOverridesTest
     @Test
     public void testEmptyOverridesLaunchTheSavedConfigurationUntouched() throws Exception
     {
-        // The no-override path must not even create a working copy: an ordinary debug_launch
+        // The no-override path must not even create a working copy: an ordinary launch
         // keeps launching exactly the object it launched before this feature existed.
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
         LaunchOverrides.Applied applied = LaunchOverrides.of(null, null, null).prepare().applyTo(config, false);

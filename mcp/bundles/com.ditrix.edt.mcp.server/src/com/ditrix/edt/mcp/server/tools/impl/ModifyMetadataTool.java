@@ -4623,10 +4623,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return methodRefErr;
         }
-        // A VALID reference is re-written to its canonical stored form (resolved module casing;
-        // methodName without a type prefix, handler with the English CommonModule prefix) so a
-        // tolerated variant like 'CommonModule.Calc.Add' / 'ОбщийМодуль.Calc.Add' never serializes
-        // verbatim into the model where the platform's own resolution would miss it.
+        // A VALID reference is re-written to its canonical stored form (English CommonModule prefix;
+        // resolved module casing) so a tolerated variant like 'Calc.Add' / 'ОбщийМодуль.Calc.Add'
+        // never serializes verbatim into the model where the platform's own resolution would miss it.
         value = canonicalMethodReference(ctx.config, target, name, value);
 
         // findFeature classifies ONLY the matched feature and skips the current-value rendering
@@ -4654,6 +4653,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareLocalized(ctx, name, value, prop, info, out, normReport);
             case ENUM:
                 return prepareEnum(name, value, info, out);
+            case MANY_ENUM:
+                return prepareManyEnum(name, prop, info, out);
             case BOOLEAN:
                 return prepareBoolean(name, value, info, out);
             case INTEGER:
@@ -4703,7 +4704,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
         {
             return MethodReferenceValidator.validate(project, config, value, PROP_METHOD_NAME,
-                "'CommonModuleName.MethodName'", "Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+                "'CommonModule.ModuleName.MethodName'", "CommonModule.Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
         {
@@ -4715,10 +4716,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Canonicalizes an ALREADY-VALIDATED method reference for the two guarded combos (see
-     * {@link #validateMethodReference}): a ScheduledJob's {@code methodName} stores
-     * {@code Module.Method} (no type prefix), an EventSubscription's {@code handler} stores
-     * {@code CommonModule.Module.Method}, both with the RESOLVED module's exact metadata name.
-     * Any other target/property - or a defensive resolution failure - returns the value unchanged.
+     * {@link #validateMethodReference}): both a ScheduledJob's {@code methodName} and an
+     * EventSubscription's {@code handler} store {@code CommonModule.Module.Method}, with the RESOLVED
+     * module's exact metadata name. Any other target/property - or a defensive resolution failure -
+     * returns the value unchanged.
      */
     static String canonicalMethodReference(Configuration config, EObject target, String name, String value)
     {
@@ -4727,13 +4728,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return value;
         }
         String canonical = null;
-        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        if ((target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+            || (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name)))
         {
-            canonical = MethodReferenceValidator.canonicalReference(config, value, false);
-        }
-        else if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
-        {
-            canonical = MethodReferenceValidator.canonicalReference(config, value, true);
+            canonical = MethodReferenceValidator.canonicalReference(config, value);
         }
         return canonical != null ? canonical : value;
     }
@@ -4754,6 +4752,67 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         out.add(PreparedChange.scalar(info.feature, literal.getInstance()));
         return null;
+    }
+
+    /**
+     * Validates a {@code MANY_ENUM} property and queues a whole-list replacement. A JSON array of
+     * literal strings is canonical; a bare string is accepted as a one-element replacement. Every
+     * literal is resolved by the same case-insensitive resolver as scalar {@code ENUM}.
+     */
+    private static String prepareManyEnum(String name, JsonObject prop, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        JsonElement raw = prop.get(KEY_VALUE);
+        List<JsonElement> elements = new ArrayList<>();
+        boolean arrayInput = raw != null && raw.isJsonArray();
+        if (arrayInput)
+        {
+            for (JsonElement element : raw.getAsJsonArray())
+            {
+                elements.add(element);
+            }
+        }
+        else if (raw != null && raw.isJsonPrimitive() && raw.getAsJsonPrimitive().isString())
+        {
+            elements.add(raw);
+        }
+        else
+        {
+            return invalidManyEnumShape(name, raw, -1);
+        }
+
+        List<Object> values = new ArrayList<>();
+        for (int i = 0; i < elements.size(); i++)
+        {
+            JsonElement element = elements.get(i);
+            if (element == null || !element.isJsonPrimitive()
+                || !element.getAsJsonPrimitive().isString())
+            {
+                return invalidManyEnumShape(name, element, i);
+            }
+            String value = element.getAsString();
+            EEnumLiteral literal = MetadataPropertyIntrospector.resolveEnumLiteral(info.feature, value);
+            if (literal == null)
+            {
+                String offender = arrayInput ? "Element at index " + i + " ('" + value + "')" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    : "'" + value + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+                return ToolResult.error(offender + " is not a valid value for '" + name //$NON-NLS-1$
+                    + "'. Allowed: " + String.join(", ", info.allowedValues) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+            values.add(literal.getInstance());
+        }
+        out.add(PreparedChange.manyEnum(info.feature, values));
+        return null;
+    }
+
+    /** A shape refusal that quotes the bad JSON and states both accepted replacement forms. */
+    private static String invalidManyEnumShape(String name, JsonElement badValue, int index)
+    {
+        String location = index >= 0 ? " at index " + index : ""; //$NON-NLS-1$ //$NON-NLS-2$
+        String rendered = badValue == null ? "missing" : badValue.toString(); //$NON-NLS-1$
+        return ToolResult.error("Invalid value" + location + " for '" + name + "': " + rendered //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ". Expected a JSON array of enum literal strings, e.g. [\"PersonalComputer\"], " //$NON-NLS-1$
+            + "or a bare enum literal string as shorthand for a one-element replacement.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -5531,8 +5590,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         private enum Kind
         {
-            SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MCORE_VALUE_LIST, STYLE_VALUE, PICTURE,
-            ADJUSTABLE_BOOLEAN
+            SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MANY_ENUM, MCORE_VALUE_LIST, STYLE_VALUE,
+            PICTURE, ADJUSTABLE_BOOLEAN
         }
 
         private final EStructuralFeature feature;
@@ -5607,6 +5666,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange manyReference(EStructuralFeature feature, List<Long> targetBmIds)
         {
             return new PreparedChange(feature, Kind.MANY_REFERENCE, null, null, null, targetBmIds,
+                null, false);
+        }
+
+        /** A detached list of enum instances that replaces a many-valued EAttribute in the write tx. */
+        static PreparedChange manyEnum(EStructuralFeature feature, List<Object> values)
+        {
+            return new PreparedChange(feature, Kind.MANY_ENUM,
+                java.util.Collections.unmodifiableList(new ArrayList<>(values)), null, null, null,
                 null, false);
         }
 
@@ -5703,6 +5770,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         list.add(requireInTx(tx, id));
                     }
+                    return;
+                }
+                case MANY_ENUM:
+                {
+                    // Replace the whole attribute list; every element was resolved to this feature's
+                    // enum instance during preparation, before the write transaction opened.
+                    EList<Object> list = (EList<Object>)target.eGet(feature);
+                    list.clear();
+                    list.addAll((List<Object>)scalarValue);
                     return;
                 }
                 case MCORE_VALUE_LIST:

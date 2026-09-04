@@ -7,7 +7,7 @@ get_applications enumerates the *applications* (infobases) registered for an EDT
 project via IApplicationManager.getApplications(project). Each application carries
 an id, name, type id, and update state; the tool also reports the default
 application id. The returned application *id* is the round-trip input that
-update_database and debug_launch consume (see the tool description) — so this is a
+update_database and launch consume (see the tool description) — so this is a
 discovery/read tool, never a mutator.
 
 Response shape (IMPORTANT)
@@ -37,7 +37,7 @@ if the tool is broken regardless of how many applications exist:
   - "applications" is a list and "count" is an int,
   - count == len(applications)   (the tool derives count from applications.size()),
   - if applications exist, every entry carries the round-trip "id" + "name" the
-    sibling tools (update_database / debug_launch) require,
+    sibling tools (update_database / launch) require,
   - if NO applications exist, the tool emits the explicit empty-branch contract
     (count==0, applications==[], the "No applications found" message) rather than
     garbage or a crash.
@@ -178,7 +178,7 @@ def test_returns_consistent_envelope_and_does_not_mutate():
 
     This is render/environment-dependent on whether an infobase is registered:
       - if applications exist, each MUST expose the 'id' + 'name' update_database /
-        debug_launch consume (the whole point of the tool);
+        launch consume (the whole point of the tool);
       - if none exist, the tool MUST take its explicit empty branch (count==0,
         applications==[], a "No applications found" message) — NOT crash or emit
         garbage. Either way is a VALID observed contract; we assert whichever the
@@ -203,7 +203,7 @@ def test_returns_consistent_envelope_and_does_not_mutate():
                 % sc.get("message"))
     else:
         # Non-empty: every entry must carry the round-trip identifiers the sibling
-        # tools require. Missing 'id' would break update_database / debug_launch.
+        # tools require. Missing 'id' would break update_database / launch.
         for entry in apps:
             if not isinstance(entry, dict):
                 raise AssertionError("each application entry must be an object: %r" % entry)
@@ -268,7 +268,7 @@ def test_dependent_project_inherits_base_applications():
     When the contract IS exercised it pins the #203 fix:
       - success=true and a well-formed, count-consistent envelope;
       - every inherited entry carries the round-trip id + name (so update_database /
-        debug_launch can consume them through the dependent project);
+        launch can consume them through the dependent project);
       - count == the base project's application count (the set was inherited verbatim);
       - "inheritedFromProject" == the BASE project name (the new field);
       - "project" still echoes the NAMED (dependent) project, NOT the base.

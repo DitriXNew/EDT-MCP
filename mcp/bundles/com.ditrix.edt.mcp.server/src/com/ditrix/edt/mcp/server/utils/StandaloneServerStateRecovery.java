@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -54,6 +57,18 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * only returns EDT's own bookkeeping to {@code STOPPED} so the operation the caller asked for can
  * proceed. A server process that outlived EDT's bookkeeping may still be holding the configured
  * ports; that surfaces as the ordinary port-conflict answer on the retry, which names the ports.
+ *
+ * <h2>Two moments, one repair</h2>
+ * The same stop is applied at two moments, and both are needed:
+ * <ul>
+ *   <li>{@link #ensureStartable(IProject, IApplication, String)} runs BEFORE the operation and
+ *       is what keeps the failure from happening at all — including the workbench-log stack
+ *       trace EDT writes even when the retry succeeds (the refusal escapes a WST job, and the
+ *       job framework logs it);</li>
+ *   <li>{@link #launchWithRecovery} / {@link #updateWithRecovery} keep the reactive repair for
+ *       what a pre-flight cannot see: a state that goes stale between the check and the start,
+ *       and any refusal reaching a path the pre-flight could not resolve.</li>
+ * </ul>
  */
 public final class StandaloneServerStateRecovery
 {
@@ -80,6 +95,47 @@ public final class StandaloneServerStateRecovery
      * break that operation instead of this one.
      */
     private static final String RECOVERABLE_STATE = "STARTED"; //$NON-NLS-1$
+
+    /**
+     * WST server states, as {@code org.eclipse.wst.server.core.IServer} numbers them. Mirrored
+     * as constants rather than imported: the plugin carries no dependency on the WST server
+     * bundles (see {@link StandaloneServerSupport}), so the state is read reflectively and
+     * compared against these.
+     */
+    private static final int STATE_STARTING = 1;
+
+    /** @see #STATE_STARTING */
+    private static final int STATE_STARTED = 2;
+
+    /** @see #STATE_STARTING */
+    private static final int STATE_STOPPING = 3;
+
+    /**
+     * How long the pre-flight waits for a server another operation is starting or stopping right
+     * now. Comfortably above a normal {@code ibsrv} start, and bounded because an unattended MCP
+     * request must not be held open by somebody else's operation.
+     */
+    private static final long SETTLE_TIMEOUT_MS = 30_000L;
+
+    /** How often the settle wait re-reads the server state. */
+    private static final long SETTLE_POLL_MS = 250L;
+
+    /**
+     * Monitors that serialize the stale-server STOP with itself, one per project+application.
+     *
+     * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that monitor is held across a
+     * whole {@code update_database} publish, and waiting on it inside a bounded caller (the
+     * {@code build_external_objects} job has a deadline, and a thread parked in
+     * {@code synchronized} cannot be cancelled) would trade one hang for another. This lock is
+     * held only across "re-read the state, then stop", which is bounded by the stop itself.
+     *
+     * <p>What the long lock would have bought is bought by the RE-READ instead: an operation that
+     * holds the application (an update publishing through the server, a launch that owns it)
+     * leaves the server either STARTING/STOPPING or STARTED-with-a-live-launch, and neither is a
+     * state this stop acts on. The only state it does act on - STARTED with the launch gone - is
+     * by construction one that nobody owns.
+     */
+    private static final Map<String, Object> STOP_LOCKS = new ConcurrentHashMap<>();
 
     private StandaloneServerStateRecovery()
     {
@@ -195,6 +251,19 @@ public final class StandaloneServerStateRecovery
     public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
         IProgressMonitor monitor) throws CoreException
     {
+        Target target = resolveTarget(config);
+        try
+        {
+            ensureStartable(target.project, null, target.applicationId);
+        }
+        catch (ApplicationException abort)
+        {
+            // The pre-flight refused to start on top of a stop that may still be running. This
+            // path reports every failure as a CoreException, so hand the caller the same reason
+            // in the shape it already handles.
+            throw new CoreException(
+                new Status(IStatus.ERROR, Activator.PLUGIN_ID, abort.getMessage(), abort));
+        }
         try
         {
             return config.launch(mode, monitor);
@@ -206,7 +275,7 @@ public final class StandaloneServerStateRecovery
             {
                 throw e;
             }
-            return relaunchAfterStop(config, mode, monitor, e, refusal);
+            return relaunchAfterStop(config, mode, monitor, e, refusal, target);
         }
     }
 
@@ -218,25 +287,17 @@ public final class StandaloneServerStateRecovery
      * @param monitor the progress monitor (may be {@code null})
      * @param failure the refused first attempt
      * @param refusal EDT's refusal message
+     * @param target the launch's project and application id, resolved once by
+     *     {@link #resolveTarget(ILaunchConfiguration)} before the first attempt
      * @return the launch started by the retry
      * @throws CoreException when the server could not be stopped or the retry failed too
      */
     private static ILaunch relaunchAfterStop(ILaunchConfiguration config, String mode,
-        IProgressMonitor monitor, Exception failure, String refusal) throws CoreException
+        IProgressMonitor monitor, Exception failure, String refusal, Target target)
+        throws CoreException
     {
-        String applicationId = null;
-        IProject project = null;
-        try
-        {
-            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName);
-            ProjectContext ctx = ProjectContext.of(projectName);
-            project = ctx.isOpen() ? ctx.project() : null;
-        }
-        catch (CoreException e) // NOSONAR an unreadable config only costs the recovery, not the report
-        {
-            Activator.logError("Stale standalone server: cannot read the launch configuration", e); //$NON-NLS-1$
-        }
+        String applicationId = target.applicationId;
+        IProject project = target.project;
         Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
         if (!recovery.recovered())
         {
@@ -275,6 +336,7 @@ public final class StandaloneServerStateRecovery
         IProject project, IApplication application, String applicationId,
         ApplicationUpdateType updateType, ExecutionContext context, IProgressMonitor monitor)
     {
+        ensureStartable(project, application, applicationId);
         try
         {
             return manager.update(application, updateType, context, monitor);
@@ -324,7 +386,78 @@ public final class StandaloneServerStateRecovery
                 + (state == null ? "in a state EDT did not name" : state) //$NON-NLS-1$
                 + ", which another start or stop is holding right now"); //$NON-NLS-1$
         }
-        return stopStaleServer(project, applicationId);
+        // The SAME guarded stop the pre-flight uses. The refusal proves the server was stale when
+        // EDT answered, not that it still is: two operations refused at the same moment would
+        // otherwise both stop it, and the second would stop the server the first had already
+        // recovered and started.
+        return stopStaleServerGuarded(project, applicationId);
+    }
+
+    /**
+     * Stops a stale standalone server, having re-established UNDER A LOCK that it is still stale.
+     *
+     * <p>The decision and the stop must not be separated by a window in which somebody revives the
+     * server, or the stop lands on a HEALTHY one: two operations can reach this point together
+     * (both pre-flighted the same stale server, or both were refused by EDT), the first stops it,
+     * starts a fresh one, and the second would stop THAT. Serializing the stop and re-reading the
+     * state inside the lock closes it - the second sees a live launch and does nothing.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * <p>Nothing is stopped on state that cannot be re-read: a server that will not resolve gives
+     * no evidence that stopping it is right NOW, and the refusal (or the earlier read) that sent
+     * us here describes a moment that has passed.
+     *
+     * @return the outcome, never {@code null}; {@link Recovery#recovered()} is also true when the
+     *     server stopped being stale on its own, because the caller's next step - proceed, or
+     *     retry what EDT refused - is then exactly the same
+     */
+    private static Recovery stopStaleServerGuarded(IProject project, String applicationId)
+    {
+        if (project == null || applicationId == null)
+        {
+            // Nothing to lock on and nothing to re-read; stopStaleServer reports the miss.
+            return stopStaleServer(project, applicationId);
+        }
+        synchronized (stopLockFor(project, applicationId))
+        {
+            Object server = resolveServer(project, null, applicationId);
+            if (server == null)
+            {
+                // No server to read means no evidence that stopping is the right thing to do NOW.
+                // The refusal that sent us here (or the state the pre-flight read) is a statement
+                // about a moment that has passed, and somebody else may have recovered and
+                // restarted the server since. Stopping on unverifiable state would take theirs
+                // down, so this reports instead - the caller already turns it into a message that
+                // names the manual way out.
+                Activator.logError("Standalone server: its state could not be re-read, so it was " //$NON-NLS-1$
+                    + "NOT stopped: " + applicationId, null); //$NON-NLS-1$
+                return Recovery.failed("its server could not be resolved, so stopping it would " //$NON-NLS-1$
+                    + "have acted on a state nothing could confirm"); //$NON-NLS-1$
+            }
+            if (decide(serverState(server), hasLiveLaunch(server)) != Preflight.STOP_STALE)
+            {
+                Activator.logInfo("Standalone server: it is no longer stale (somebody else " //$NON-NLS-1$
+                    + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
+                return Recovery.stopped();
+            }
+            return stopStaleServer(project, applicationId);
+        }
+    }
+
+    /**
+     * The monitor serializing the stale-server stop for one application.
+     *
+     * @param project the project owning the application (never {@code null})
+     * @param applicationId the application id (never {@code null})
+     * @return the monitor, never {@code null}
+     */
+    private static Object stopLockFor(IProject project, String applicationId)
+    {
+        // NUL separator for the same reason LaunchLifecycleUtils.lockFor uses one: project names
+        // and application ids both contain spaces, so any printable separator can collide.
+        return STOP_LOCKS.computeIfAbsent(project.getName() + "\u0000" + applicationId, //$NON-NLS-1$
+            k -> new Object());
     }
 
     /**
@@ -398,6 +531,19 @@ public final class StandaloneServerStateRecovery
             Activator.logInfo("Stale standalone server: stopped: " + applicationId); //$NON-NLS-1$
             return Recovery.stopped();
         }
+        // The OUTCOME is classified before the failure, not after it: an INTERRUPTED run carries
+        // its InterruptedException in getFailure(), so a failure-first branch would answer
+        // "nothing is in flight" for the very outcome that means the opposite - the job was only
+        // ASKED to stop and may still be running.
+        BoundedJob.Outcome outcome = result.getOutcome();
+        if (outcome == BoundedJob.Outcome.TIMED_OUT || outcome == BoundedJob.Outcome.INTERRUPTED)
+        {
+            Activator.logError("Stale standalone server: stopping it did not finish (" //$NON-NLS-1$
+                + outcome + "): " + applicationId, result.getFailure()); //$NON-NLS-1$
+            return Recovery.failedInFlight(outcome == BoundedJob.Outcome.INTERRUPTED
+                ? "the wait for it was interrupted" //$NON-NLS-1$
+                : "stopping it did not finish within " + (STOP_TIMEOUT_MS / 1000) + "s"); //$NON-NLS-1$
+        }
         if (result.getFailure() != null)
         {
             Activator.logError("Stale standalone server: stopping it failed: " + applicationId, //$NON-NLS-1$
@@ -405,10 +551,9 @@ public final class StandaloneServerStateRecovery
             return Recovery.failed("stopping it failed: " //$NON-NLS-1$
                 + PlatformFailures.describe(result.getFailure()));
         }
-        Activator.logError("Stale standalone server: stopping it did not finish (" //$NON-NLS-1$
-            + result.getOutcome() + "): " + applicationId, null); //$NON-NLS-1$
-        return Recovery.failed("stopping it did not finish within " //$NON-NLS-1$
-            + (STOP_TIMEOUT_MS / 1000) + "s"); //$NON-NLS-1$
+        Activator.logError("Stale standalone server: stopping it did not run (" //$NON-NLS-1$
+            + outcome + "): " + applicationId, null); //$NON-NLS-1$
+        return Recovery.failed("it never ran (" + outcome + ")"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -462,6 +607,373 @@ public final class StandaloneServerStateRecovery
     }
 
     /**
+     * Returns a standalone server EDT can no longer start to a state it CAN start from, BEFORE the
+     * operation that starts it runs.
+     *
+     * <h2>Why this exists next to the recovery</h2>
+     * {@link #launchWithRecovery} and {@link #updateWithRecovery} repair the stale state AFTER EDT
+     * refuses, and the operation then succeeds. What they cannot repair is the noise: the refusal
+     * is thrown inside WST's start job, whose {@code startImpl} catches only {@link CoreException},
+     * so the {@link IllegalStateException} escapes the job and the Eclipse job framework writes the
+     * whole stack into the workbench log — even when the retry that follows succeeds. An unattended
+     * run accumulates ERROR entries that describe nothing the caller can act on. Deciding BEFORE
+     * the start means the refusal never happens, so nothing is logged.
+     *
+     * <p>The check mirrors EDT's OWN "it is already running, nothing to do" condition
+     * ({@code StandaloneServerService.startServer}): a server counts as running only when its state
+     * is {@code STARTED} AND it still holds a live launch. That is deliberate — a server whose
+     * launch is gone is exactly the one EDT refuses, and a server that still holds one is exactly
+     * the one EDT leaves alone.
+     *
+     * <p>It never fails an operation for its own reasons: any failure to READ the state (an EDT
+     * without the standalone-server feature, a changed API, a server that cannot be resolved)
+     * leaves the call to proceed exactly as before, where the reactive recovery still covers it.
+     * The single exception is deliberate - a stop that MAY STILL BE RUNNING, where proceeding
+     * would start a server the lingering stop can take down again.
+     *
+     * @param project the project owning the application (may be {@code null} — no-op)
+     * @param application the application, when the caller already holds it (may be {@code null} —
+     *     it is then resolved from {@code applicationId})
+     * @param applicationId the application id; anything but a standalone-server id
+     *     ({@code ServerApplication.<name>}) is a no-op
+     * @throws ApplicationException when a stale server had to be stopped and that stop did not
+     *     finish - it may still be running, so the operation must not start the server now
+     */
+    public static void ensureStartable(IProject project, IApplication application,
+        String applicationId)
+    {
+        if (project == null || !DebugServerTargetSupport.isServerApplicationId(applicationId))
+        {
+            return;
+        }
+        try
+        {
+            Object server = resolveServer(project, application, applicationId);
+            if (server == null)
+            {
+                return;
+            }
+            Preflight decision = decide(serverState(server), hasLiveLaunch(server));
+            if (decision == Preflight.WAIT_SETTLE)
+            {
+                decision = decide(awaitSettled(server, applicationId), hasLiveLaunch(server));
+            }
+            if (decision == Preflight.STOP_STALE)
+            {
+                stopStaleServerBeforeStart(project, applicationId);
+            }
+        }
+        catch (ApplicationException abort)
+        {
+            // The one deliberate abort: a stop that may STILL BE RUNNING (see
+            // stopStaleServerBeforeStart). Swallowing it here would let the caller start a server
+            // that the lingering stop can take down again.
+            throw abort;
+        }
+        catch (Exception e) // NOSONAR every other pre-flight failure must not break an operation that would otherwise run
+        {
+            Activator.logError("Standalone server: the pre-flight state check failed for " //$NON-NLS-1$
+                + applicationId, e);
+        }
+    }
+
+    /**
+     * The pre-flight for a caller that names no application: EDT prepares the project's DEFAULT
+     * application (that is what the external-object dump does), so that is the server whose state
+     * has to be settled.
+     *
+     * @param project the project whose default application will be prepared (may be {@code null} —
+     *     no-op)
+     */
+    public static void ensureDefaultApplicationStartable(IProject project)
+    {
+        if (project == null)
+        {
+            return;
+        }
+        Activator activator = Activator.getDefault();
+        IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+        if (manager == null)
+        {
+            return;
+        }
+        ensureStartable(project, null,
+            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager));
+    }
+
+    /** What the pre-flight decided to do about the server's current state. */
+    enum Preflight
+    {
+        /** Nothing to do — EDT will start it, or leave it alone, by itself. */
+        PROCEED,
+        /** {@code STARTED} with no live launch: the stuck state, stop it before starting. */
+        STOP_STALE,
+        /** A start or stop is in flight: wait for it to finish before deciding. */
+        WAIT_SETTLE
+    }
+
+    /**
+     * The pre-flight decision for one server state, kept pure so the whole rule is testable
+     * without an EDT runtime.
+     *
+     * @param state the WST server state, or {@code null} when it could not be read
+     * @param liveLaunch whether the server still holds a live launch, or {@code null} when that
+     *     could not be determined
+     * @return the decision, never {@code null}
+     */
+    static Preflight decide(Integer state, Boolean liveLaunch)
+    {
+        if (state == null)
+        {
+            return Preflight.PROCEED;
+        }
+        if (state == STATE_STARTING || state == STATE_STOPPING)
+        {
+            return Preflight.WAIT_SETTLE;
+        }
+        // Only a server EDT believes is RUNNING can be stuck, and only when the launch that owned
+        // it is gone. An UNREADABLE launch (null) is not a dead one: stopping a healthy server
+        // because its launch could not be inspected would break the very operation this check
+        // exists to protect.
+        return state == STATE_STARTED && Boolean.FALSE.equals(liveLaunch) ? Preflight.STOP_STALE
+            : Preflight.PROCEED;
+    }
+
+    /**
+     * Waits, bounded, for a server another operation is starting or stopping right now.
+     *
+     * <p>Waiting is what makes a transitional state usable instead of fatal: the recovery refuses
+     * to touch {@code STARTING}/{@code STOPPING} (stopping a server somebody else is starting
+     * would break THAT operation), so without a wait a concurrent start turns into an error the
+     * caller can only answer by retrying by hand.
+     *
+     * @param server the WST server object
+     * @param applicationId the application id (for the log)
+     * @return the state the server settled in, the transitional state when it did not settle in
+     *     time, or {@code null} when the state could not be read
+     */
+    private static Integer awaitSettled(Object server, String applicationId)
+    {
+        long deadline = System.currentTimeMillis() + SETTLE_TIMEOUT_MS;
+        Integer state = serverState(server);
+        while (isTransitional(state) && System.currentTimeMillis() < deadline)
+        {
+            try
+            {
+                Thread.sleep(SETTLE_POLL_MS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return state;
+            }
+            state = serverState(server);
+        }
+        if (isTransitional(state))
+        {
+            Activator.logInfo("Standalone server: it is still " + stateName(state.intValue()) //$NON-NLS-1$
+                + " after " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+                + "s; proceeding and letting EDT decide: " + applicationId); //$NON-NLS-1$
+        }
+        return state;
+    }
+
+    /** Whether a state is one a concurrent start/stop is holding right now. */
+    private static boolean isTransitional(Integer state)
+    {
+        return state != null && (state == STATE_STARTING || state == STATE_STOPPING);
+    }
+
+    /**
+     * The pre-flight stop: the same stop the reactive recovery performs, run before the refusal
+     * instead of after it.
+     *
+     * @param project the project owning the application
+     * @param applicationId the application id
+     * @throws ApplicationException when the stop did not finish and MAY STILL BE RUNNING - the
+     *     caller must not start a server that a lingering stop can take down again
+     */
+    private static void stopStaleServerBeforeStart(IProject project, String applicationId)
+    {
+        Activator.logInfo("Standalone server: EDT still has it STARTED while the launch that " //$NON-NLS-1$
+            + "owned it is gone; stopping it so the operation is not refused: " + applicationId); //$NON-NLS-1$
+        Recovery recovery = stopStaleServerGuarded(project, applicationId);
+        if (recovery.recovered())
+        {
+            return;
+        }
+        if (recovery.stopStillInFlight())
+        {
+            // The stop was neither completed nor abandoned: BoundedJob cancels the job but cannot
+            // preempt it, so it may finish later - and stop whatever server is running by then,
+            // including the one this operation is about to start. Refusing here costs the caller a
+            // retry; proceeding would cost them a server that dies under them.
+            throw new ApplicationException("The standalone server of application '" //$NON-NLS-1$
+                + applicationId + "' is in a state EDT cannot start from, and stopping it " //$NON-NLS-1$
+                + "did not finish (" + recovery.detail() + "). That stop may still be " //$NON-NLS-1$ //$NON-NLS-2$
+                + "running, so starting the server now could be undone by it. Wait for it to " //$NON-NLS-1$
+                + "finish (Servers view in EDT), or restart EDT, then retry."); //$NON-NLS-1$
+        }
+        // The stop never ran (it was refused outright): nothing is in flight, so the operation
+        // still runs, meets EDT's refusal, and the reactive recovery answers it with the same
+        // actionable message it always did.
+        Activator.logError("Standalone server: the pre-flight stop did not happen (" //$NON-NLS-1$
+            + recovery.detail() + "); the operation proceeds and may be refused: " //$NON-NLS-1$
+            + applicationId, null);
+    }
+
+    /**
+     * The WST {@code IServer} behind a standalone-server application, or {@code null} when this is
+     * not a standalone-server application or the server cannot be resolved.
+     *
+     * <p>Resolved ONLY through the application's own {@code IServerApplication.getServer()} - see
+     * the comment in the body for why the by-module-name scan {@code delete_infobase} falls back
+     * to must not be used for a decision that can stop a server.
+     *
+     * @param project the project owning the application
+     * @param application the application when the caller holds it, else {@code null}
+     * @param applicationId the application id
+     * @return the WST server object (address it reflectively), or {@code null}
+     */
+    private static Object resolveServer(IProject project, IApplication application,
+        String applicationId)
+    {
+        IApplication app = application;
+        if (app == null)
+        {
+            Activator activator = Activator.getDefault();
+            IApplicationManager manager =
+                activator == null ? null : activator.getApplicationManager();
+            if (manager == null)
+            {
+                return null;
+            }
+            try
+            {
+                app = manager.getApplication(project, applicationId).orElse(null);
+            }
+            catch (Exception e) // NOSONAR an unresolvable application only skips the pre-flight
+            {
+                Activator.logError("Standalone server: cannot resolve application " //$NON-NLS-1$
+                    + applicationId, e);
+                return null;
+            }
+        }
+        if (app == null)
+        {
+            return null;
+        }
+        String typeId = app.getType() != null ? app.getType().getId() : null;
+        if (!StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
+        {
+            // The id looked like a standalone server's but the application is something else —
+            // there is no WST server to inspect, and nothing to do.
+            return null;
+        }
+        // ONLY the application's own accessor. delete_infobase additionally falls back to a scan
+        // for a server whose MODULE NAME matches, but a module name is not scoped to a project:
+        // two projects may hold standalone applications with the same display name, and reading
+        // the state of the wrong server would then decide the fate of this one. A decision that
+        // can stop a server must be made from the server that provably belongs to it, so when the
+        // accessor gives nothing the pre-flight simply does not run.
+        return StandaloneServerSupport.serverOfApplication(app);
+    }
+
+    /**
+     * Reflective {@code IServer.getServerState()}. Reflective for the same reason the rest of the
+     * standalone-server access is (see {@link StandaloneServerSupport}): the plugin carries no
+     * dependency on the WST server bundles, so it must stay loadable on an EDT without them.
+     *
+     * @param server the WST server object (never {@code null})
+     * @return the state, or {@code null} when it could not be read
+     */
+    static Integer serverState(Object server)
+    {
+        try
+        {
+            Object value = server.getClass().getMethod("getServerState").invoke(server); //$NON-NLS-1$
+            return (value instanceof Integer) ? (Integer)value : null;
+        }
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective boundary
+        {
+            Activator.logError("Standalone server: IServer.getServerState() refl failed", t); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Whether the server still holds a live launch — the second half of EDT's own "already
+     * running" condition.
+     *
+     * @param server the WST server object (never {@code null})
+     * @return {@code TRUE} when a non-terminated launch is attached, {@code FALSE} when there is
+     *     none, and {@code null} when the answer could not be determined (an unknown launch type,
+     *     a reflective failure) — which the decision treats as "do not touch it"
+     */
+    static Boolean hasLiveLaunch(Object server)
+    {
+        try
+        {
+            Object launch = server.getClass().getMethod("getLaunch").invoke(server); //$NON-NLS-1$
+            if (launch == null)
+            {
+                return Boolean.FALSE;
+            }
+            if (!(launch instanceof ILaunch))
+            {
+                return null;
+            }
+            return Boolean.valueOf(!((ILaunch)launch).isTerminated());
+        }
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective boundary
+        {
+            Activator.logError("Standalone server: IServer.getLaunch() refl failed", t); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /** The project and application id a launch configuration targets. */
+    private static final class Target
+    {
+        /** The launch's project, or {@code null} when it is unknown or not open. */
+        final IProject project;
+        /** The delegate-resolved application id, or {@code null} when it could not be read. */
+        final String applicationId;
+
+        Target(IProject project, String applicationId)
+        {
+            this.project = project;
+            this.applicationId = applicationId;
+        }
+    }
+
+    /**
+     * The project and application a launch configuration targets, read ONCE per launch and shared
+     * by the pre-flight and the recovery (both need exactly this pair, and the recovery must not
+     * re-read a configuration whose launch has already failed).
+     *
+     * @param config the launch configuration (never {@code null})
+     * @return the target, never {@code null}; its fields are {@code null} when the configuration
+     *     could not be read
+     */
+    private static Target resolveTarget(ILaunchConfiguration config)
+    {
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String applicationId =
+                LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName);
+            ProjectContext ctx = ProjectContext.of(projectName);
+            return new Target(ctx.isOpen() ? ctx.project() : null, applicationId);
+        }
+        catch (Exception e) // NOSONAR an unreadable config costs the pre-flight and the recovery, never the launch
+        {
+            Activator.logError("Standalone server: cannot read the launch configuration", e); //$NON-NLS-1$
+            return new Target(null, null);
+        }
+    }
+
+    /**
      * The outcome of the recovery stop: whether EDT's server bookkeeping was returned to
      * {@code STOPPED}, and — when it was not — why not.
      */
@@ -469,11 +981,13 @@ public final class StandaloneServerStateRecovery
     {
         private final boolean recovered;
         private final String detail;
+        private final boolean stopStillInFlight;
 
-        private Recovery(boolean recovered, String detail)
+        private Recovery(boolean recovered, String detail, boolean stopStillInFlight)
         {
             this.recovered = recovered;
             this.detail = detail;
+            this.stopStillInFlight = stopStillInFlight;
         }
 
         /**
@@ -481,7 +995,7 @@ public final class StandaloneServerStateRecovery
          */
         static Recovery stopped()
         {
-            return new Recovery(true, null);
+            return new Recovery(true, null, false);
         }
 
         /**
@@ -490,7 +1004,21 @@ public final class StandaloneServerStateRecovery
          */
         static Recovery failed(String detail)
         {
-            return new Recovery(false, detail);
+            return new Recovery(false, detail, false);
+        }
+
+        /**
+         * A stop that was neither completed nor abandoned - it was asked to stop and may still be
+         * running. Separate from {@link #failed} because the caller's next move differs: nothing
+         * is in flight after a plain failure, so the operation may proceed; after this one it may
+         * not, or the lingering stop can take its freshly started server down.
+         *
+         * @param detail why the stop did not finish, as a sentence fragment
+         * @return a failed recovery whose stop may still be running
+         */
+        static Recovery failedInFlight(String detail)
+        {
+            return new Recovery(false, detail, true);
         }
 
         /** @return {@code true} when the server was stopped and the operation may be retried */
@@ -503,6 +1031,15 @@ public final class StandaloneServerStateRecovery
         public String detail()
         {
             return detail;
+        }
+
+        /**
+         * @return {@code true} when the stop was asked to stop but may still be running, so
+         *     starting the server now can be undone by it
+         */
+        public boolean stopStillInFlight()
+        {
+            return stopStillInFlight;
         }
     }
 }

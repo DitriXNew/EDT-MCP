@@ -137,6 +137,13 @@ public final class ToolParameterSettings // NOSONAR intentional singleton (Eclip
                     + "instead of holding the call open. Raise it for very large configurations", //$NON-NLS-1$
                 120, 10, 3600)));
 
+        map.put("delete_metadata", Collections.singletonList( //$NON-NLS-1$
+            new ParameterDef("timeout", "Delete timeout (sec)", //$NON-NLS-1$ //$NON-NLS-2$
+                "How long to wait for the UI-thread delete work before failing with a timeout " //$NON-NLS-1$
+                    + "instead of holding the call open. EDT may still finish a confirmed delete, " //$NON-NLS-1$
+                    + "so lowering it risks an uncertain, partially applied cascade", //$NON-NLS-1$
+                420, 60, 3600)));
+
         map.put("rename_metadata_object", Collections.singletonList( //$NON-NLS-1$
             new ParameterDef("timeout", "Rename timeout (sec)", //$NON-NLS-1$ //$NON-NLS-2$
                 "How long to wait for the cascade rename itself before failing with a timeout " //$NON-NLS-1$

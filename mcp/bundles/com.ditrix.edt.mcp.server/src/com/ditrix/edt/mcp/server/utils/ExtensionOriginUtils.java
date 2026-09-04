@@ -6,7 +6,12 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.io.InputStream;
+import java.util.Map;
+
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 
 import com._1c.g5.v8.dt.core.platform.IDependentProject;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -14,6 +19,7 @@ import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.ProjectManifest;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -102,6 +108,115 @@ public final class ExtensionOriginUtils
                 + (project == null ? "<null>" : project.getName()), e); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * Whether a dependent project PERMANENTLY declares a base project, read from its
+     * {@code DT-INF/PROJECT.PMF} manifest. See {@link #readDeclaredBaseProject(IProject)} for why the
+     * runtime parent cannot answer this.
+     */
+    public enum DeclaredBaseProject
+    {
+        /** The manifest exists and declares no {@code Base-Project} - the project is genuinely unlinked. */
+        NONE,
+        /** The manifest declares a {@code Base-Project}. */
+        DECLARED,
+        /** The manifest could not be read, so neither answer is proven. */
+        UNREADABLE
+    }
+
+    /**
+     * Reads the base project a dependent project PERMANENTLY declares in {@code DT-INF/PROJECT.PMF}.
+     * <p>
+     * {@link #resolveBaseProject(IProject)} cannot answer "is this project linked?": EDT's
+     * {@code AbstractDependentProject.getParent()} returns {@code null} when the parent field is not
+     * yet wired, when the parent has no workspace project, AND when the parent project is merely not
+     * {@code isAccessible()} - so a LINKED project reports a null parent while its base is closed or
+     * still opening, indistinguishable from a genuinely unlinked one. The manifest is the permanent
+     * artifact that makes a project linked (EDT itself reads {@code Base-Project} from it), which is
+     * the same reason this file prefers permanent natures over runtime registrations elsewhere.
+     * <p>
+     * Every DT project kind carries this manifest - it also holds the mandatory {@code Manifest-Version}
+     * and {@code Runtime-Version} headers - so a missing or unparseable file is a malformed project,
+     * reported as {@link DeclaredBaseProject#UNREADABLE} rather than as "declares none".
+     *
+     * @param project the workspace project (may be {@code null})
+     * @return whether a base project is declared, or {@link DeclaredBaseProject#UNREADABLE}
+     */
+    public static DeclaredBaseProject readDeclaredBaseProject(IProject project)
+    {
+        if (project == null)
+        {
+            return DeclaredBaseProject.UNREADABLE;
+        }
+        try
+        {
+            IFile manifestFile = project.getFile(ProjectManifest.DT_PROJECT_MANIFEST);
+            if (manifestFile == null || !manifestFile.exists())
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            // A manifest being rewritten (save, refresh, git checkout) can be read back truncated,
+            // and a truncation that lands past the mandatory headers but before Base-Project parses
+            // cleanly into a map that merely LOOKS unlinked. Bracket the read with the resource
+            // modification stamp - the same change-detection this search already applies to the Xtext
+            // index - so a concurrently written manifest proves nothing instead of proving "unlinked".
+            long stampBefore = manifestFile.getModificationStamp();
+            if (stampBefore == IResource.NULL_STAMP)
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            Map<String, String> headers = parseManifest(manifestFile);
+            if (manifestFile.getModificationStamp() != stampBefore)
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            // The workspace stamp only moves for a workspace-mediated write. A rewrite performed
+            // OUTSIDE Eclipse (a checkout, an external editor) is invisible to it until a refresh,
+            // and getContents(true) reads the local file - so a single read can land mid-write.
+            // Reading a second time and requiring identical headers catches a manifest still in
+            // flight. A manifest that is STABLY truncated is a corrupt project, which no cheap check
+            // can tell apart from a legitimately unlinked one; that residual case is why the caller
+            // additionally requires the project to have SETTLED before it acts on NONE.
+            if (headers == null || !headers.equals(parseManifest(manifestFile)))
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            // Manifest-Version and Runtime-Version are mandatory in every DT project kind (verified
+            // on configuration, extension, external-objects and a freshly created external-objects
+            // project). Their absence means this is not a complete manifest, however well it parsed.
+            if (isBlank(headers.get(ProjectManifest.MANIFEST_VERSION))
+                || isBlank(headers.get(ProjectManifest.RUNTIME_VERSION)))
+            {
+                return DeclaredBaseProject.UNREADABLE;
+            }
+            return isBlank(headers.get(ProjectManifest.BASE_PROJECT))
+                ? DeclaredBaseProject.NONE : DeclaredBaseProject.DECLARED;
+        }
+        catch (Exception e)
+        {
+            // Deliberately broad: parsing, I/O and workspace access each fail differently and EVERY
+            // failure must reach the same fail-closed answer. Nothing here is swallowed into a
+            // cheerful default - UNREADABLE is what callers treat as "not proven".
+            Activator.logError("Error reading project manifest for: " //$NON-NLS-1$
+                + project.getName(), e);
+            return DeclaredBaseProject.UNREADABLE;
+        }
+    }
+
+    /** One parse of the project manifest; {@code null} when it yields no headers. */
+    private static Map<String, String> parseManifest(IFile manifestFile) throws Exception
+    {
+        try (InputStream contents = manifestFile.getContents(true))
+        {
+            return ProjectManifest.parseProjectManifest(contents);
+        }
+    }
+
+    /** A header is present only when it carries a non-blank value. */
+    private static boolean isBlank(String value)
+    {
+        return value == null || value.trim().isEmpty();
     }
 
     /**

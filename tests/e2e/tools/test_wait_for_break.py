@@ -29,7 +29,7 @@ ENVIRONMENT (this EDT, this fixture):
      This is is_error:false. It is the genuine "no session -> no break" contract and
      is what callers poll on. We pass timeout:1 so the wait window is ~1s, not 60s.
 
-  We do NOT start a real infobase / debug_launch (heavy, not configured here). The
+  We do NOT start a real infobase / launch (heavy, not configured here). The
   sentinel (#1) + the timeout status (#2) + the negative matrix below ARE the coverage.
 
 DIFF: a debug tool operates on the running infobase / EDT workspace, never on the

@@ -48,6 +48,7 @@ import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.rights.model.RightValue;
 import com._1c.g5.v8.dt.rights.model.RightsFactory;
 import com._1c.g5.v8.dt.rights.model.RoleDescription;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -767,12 +768,12 @@ public class RoleRightsWriterTest
     @Test
     public void testARefusalAfterTheBootstrapDeclaresTheWriteTheBootstrapMade()
     {
-        // A refusal is NOT proof that nothing was written. The description bootstrap runs - and
-        // COMMITS - before the first entry is resolved, so an unknown object, an unknown right or a
-        // missing template refuses AFTER a fresh Rights.rights resource exists in the model. Reporting
-        // no write leaves the caller with a resource it neither drains to disk nor declares having
-        // written (WriteScope is recorded by the export submission, issue #408) - the same defect
-        // shape as #310 / #412, output describing something other than the work that happened.
+        // Template resolution genuinely needs RoleDescription, so it still runs after the bootstrap.
+        // A missing template therefore refuses AFTER a fresh Rights.rights resource exists in the
+        // model. Reporting no write leaves the caller with a resource it neither drains to disk nor
+        // declares having written (WriteScope is recorded by the export submission, issue #408) - the
+        // same defect shape as #310 / #412, output describing something other than the work that
+        // happened.
         Role role = mockRole("Reader"); //$NON-NLS-1$
         RoleRightsWriter.Result result = applyThroughMockedModel(role, null,
             generator("Role.Reader.Rights"), List.of(templateEntry("edit", "Missing", "C1"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -783,6 +784,25 @@ public class RoleRightsWriterTest
         assertTrue("the bootstrap attached a fresh rights model: that is a write, and the refusal " //$NON-NLS-1$
             + "owes the caller both its drain and its WriteScope declaration", //$NON-NLS-1$
             result.rightsModelWritten);
+    }
+
+    @Test
+    public void testAnUnresolvableRightsEntryIsRefusedBeforeTheBootstrapWrites()
+    {
+        // The whole rights payload must resolve before the bootstrap commits. An unresolvable entry
+        // on a fresh role must therefore leave NO Rights.rights model behind - and, above all, must
+        // not leave a right granted while the caller sees only a refusal.
+        Role role = mockRole("Reader"); //$NON-NLS-1$
+        JsonObject missing = rightsEntry("DefinitelyNotAnObjectFqn", "Read", "set"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        RoleRightsWriter.Result result = applyThroughMockedModel(role, null,
+            generator("Role.Reader.Rights"), List.of(missing), Collections.emptyList()); //$NON-NLS-1$
+
+        assertTrue("the unresolved object must refuse the call", result.hasError()); //$NON-NLS-1$
+        assertErrorMentions(result.error, "DefinitelyNotAnObjectFqn"); //$NON-NLS-1$
+        assertFalse("rights resolution failed before the bootstrap, so no rights model was written", //$NON-NLS-1$
+            result.rightsModelWritten);
+        assertNull("the refused call must not attach a rights model", role.getRights()); //$NON-NLS-1$
+        assertEquals(0, result.rights);
     }
 
     @Test
@@ -819,6 +839,15 @@ public class RoleRightsWriterTest
         assertTrue("the batch must be refused", result.hasError()); //$NON-NLS-1$
         assertTrue("the first template committed before the second was refused: the call wrote", //$NON-NLS-1$
             result.rightsModelWritten);
+        assertEquals("the refusal must report the template that really landed", 1, //$NON-NLS-1$
+            result.templates);
+        JsonObject applied = JsonParser.parseString(result.error).getAsJsonObject()
+            .getAsJsonObject("applied"); //$NON-NLS-1$
+        assertEquals(0, applied.get("rights").getAsInt()); //$NON-NLS-1$
+        assertEquals(1, applied.get("templates").getAsInt()); //$NON-NLS-1$
+        assertEquals(0, applied.get("roleProperties").getAsInt()); //$NON-NLS-1$
+        assertErrorMentions(result.error, "model was changed"); //$NON-NLS-1$
+        assertErrorMentions(result.error, "get_metadata_details"); //$NON-NLS-1$
     }
 
     @Test
@@ -864,6 +893,15 @@ public class RoleRightsWriterTest
     private static RoleRightsWriter.Result applyThroughMockedModel(Role role,
         RoleDescription existing, ITopObjectFqnGenerator fqnGenerator, List<JsonObject> templates)
     {
+        return applyThroughMockedModel(role, existing, fqnGenerator, Collections.emptyList(),
+            templates);
+    }
+
+    /** Five-argument harness overload that also drives a {@code rights[]} payload. */
+    private static RoleRightsWriter.Result applyThroughMockedModel(Role role,
+        RoleDescription existing, ITopObjectFqnGenerator fqnGenerator, List<JsonObject> rights,
+        List<JsonObject> templates)
+    {
         if (existing != null)
         {
             when(existing.getTemplates()).thenReturn(new BasicEList<>());
@@ -879,8 +917,7 @@ public class RoleRightsWriterTest
         RoleRightsWriter.Context ctx = new RoleRightsWriter.Context(mock(IProject.class),
             mock(Configuration.class), model, role, ROLE_BM_ID, mock(IRightInfosService.class),
             mock(IEventBroker.class), mock(IModelObjectCollectionRuntimeOrderSorter.class));
-        return RoleRightsWriter.applyResolved(ctx, fqnGenerator, Collections.emptyList(), templates,
-            null);
+        return RoleRightsWriter.applyResolved(ctx, fqnGenerator, rights, templates, null);
     }
 
     /** Runs the writer's own task; reports an EDT rights task as having committed. */
@@ -905,6 +942,59 @@ public class RoleRightsWriterTest
         entry.addProperty("name", name); //$NON-NLS-1$
         entry.addProperty("condition", condition); //$NON-NLS-1$
         return entry;
+    }
+
+    /** One {@code rights[]} entry. */
+    private static JsonObject rightsEntry(String object, String right, String value)
+    {
+        JsonObject entry = new JsonObject();
+        entry.addProperty("object", object); //$NON-NLS-1$
+        entry.addProperty("right", right); //$NON-NLS-1$
+        entry.addProperty("value", value); //$NON-NLS-1$
+        return entry;
+    }
+
+    @Test
+    public void testPartialApplicationReportAddsCountsAndReconciliationMessage()
+    {
+        String error = ToolResult.error("The last operation failed.").toJson(); //$NON-NLS-1$
+
+        String reported = RoleRightsWriter.reportPartialApplication(error, 2, 1, 3);
+        JsonObject object = JsonParser.parseString(reported).getAsJsonObject();
+        JsonObject applied = object.getAsJsonObject("applied"); //$NON-NLS-1$
+        assertEquals(2, applied.get("rights").getAsInt()); //$NON-NLS-1$
+        assertEquals(1, applied.get("templates").getAsInt()); //$NON-NLS-1$
+        assertEquals(3, applied.get("roleProperties").getAsInt()); //$NON-NLS-1$
+        assertErrorMentions(reported, "model was changed"); //$NON-NLS-1$
+        assertErrorMentions(reported, "get_metadata_details"); //$NON-NLS-1$
+        assertErrorMentions(reported, "undo or complete"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPartialApplicationReportPassesThroughWhenNothingApplied()
+    {
+        String error = "{ \"success\": false, \"error\": \"unchanged formatting\" }"; //$NON-NLS-1$
+
+        assertSame("a zero-count refusal must pass through byte-for-byte", error, //$NON-NLS-1$
+            RoleRightsWriter.reportPartialApplication(error, 0, 0, 0));
+    }
+
+    @Test
+    public void testPartialApplicationReportPassesThroughSuccessJson()
+    {
+        String success = "{ \"success\": true, \"message\": \"unchanged formatting\" }"; //$NON-NLS-1$
+
+        assertSame("a success is not an eligible error shape", success, //$NON-NLS-1$
+            RoleRightsWriter.reportPartialApplication(success, 1, 0, 0));
+    }
+
+    @Test
+    public void testPartialApplicationReportPassesThroughMalformedJson()
+    {
+        String malformed = "{definitely not json"; //$NON-NLS-1$
+
+        assertSame("malformed input must pass through byte-for-byte", malformed, //$NON-NLS-1$
+            RoleRightsWriter.reportPartialApplication(malformed, 1, 0, 0));
     }
 
     @Test

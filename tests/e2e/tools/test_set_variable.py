@@ -24,7 +24,7 @@ ENVIRONMENT (the realistic happy contract here):
   REAL, CORRECT contract for every frame reference we can supply is a CLEAR,
   ACTIONABLE SENTINEL naming the missing precondition + the next step
   (wait_for_break). That sentinel IS the coverage — we deliberately do NOT start an
-  infobase / debug_launch (heavy, not configured for this fixture), so the
+  infobase / launch (heavy, not configured for this fixture), so the
   happy/resume path (set a var -> get_variables re-read shows it -> resume -> new
   value in effect) is exercised MANUALLY on a live suspended session, not here.
 
@@ -43,7 +43,7 @@ ENVIRONMENT (the realistic happy contract here):
   # `variableName` is not found ("variable not found"), a variable that is read-only
   # / does not support modification, and an "invalid value" rejected by verifyValue —
   # are all UNREACHABLE without a live suspended frame, so they are not exercised
-  # here. Reaching them needs a real debug_launch + a breakpoint hit (e.g. inside
+  # here. Reaching them needs a real launch + a breakpoint hit (e.g. inside
   # CommonModule.Calc) with a live frame whose variables can be addressed. Deferred to
   # a live-session run; flagged here so the gap is explicit rather than silently
   # skipped.

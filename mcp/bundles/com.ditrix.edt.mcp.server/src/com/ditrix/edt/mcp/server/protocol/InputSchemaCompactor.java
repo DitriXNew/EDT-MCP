@@ -132,6 +132,8 @@ public final class InputSchemaCompactor
         keep.put("get_markers", asSet("markerKind", "priority")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // Two filters that are mutually exclusive and differ in matching semantics.
         keep.put("get_project_errors", asSet("objects", "objectFqns")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Name-only compatibility filter vs Name-or-localized-Synonym discovery filter.
+        keep.put("get_metadata_objects", asSet("nameFilter", "textFilter")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // 'callers' vs 'callees' - the enum values alone do not say which way they point.
         // methodName is REQUIRED for callers/callees and optional only for the module-wide
         // 'outgoing' mode - a conditional the schema states nowhere. The committed
@@ -200,8 +202,8 @@ public final class InputSchemaCompactor
         // external work. A launch that looks routine silently overwrites someone's changes.
         // restartIfRunning=true TERMINATES the live session before relaunching, on a tool
         // whose destructiveHint is false - nothing else in the always-loaded contract says so.
-        keep.put("debug_launch", //$NON-NLS-1$
-            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT,
+        keep.put("launch", //$NON-NLS-1$
+            asSet("mode", "updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT, //$NON-NLS-1$
                 "restartIfRunning")); //$NON-NLS-1$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$

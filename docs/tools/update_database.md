@@ -40,7 +40,7 @@ After changing metadata/configuration, to push those changes into the running in
 
 A runtime-client configuration can be created without being bound to an application (its `applicationId` attribute is empty) — the same case the launch tools cover by falling back to the project's default application. Here the fallback is deliberately narrower, because this call WRITES to a database and cannot be undone:
 
-- the project has **exactly one** application → that application is the target, and it is the same one `run_yaxunit_tests` / `debug_launch` would have used for this configuration;
+- the project has **exactly one** application → that application is the target, and it is the same one `run_yaxunit_tests` / `launch` would have used for this configuration;
 - the project has **several** → the call is REFUSED and lists the candidates. Pick one and re-call with `projectName` + `applicationId`; updating the wrong database is not something this tool will guess at;
 - the project has **none of its own** → refused. For an extension project the applications belong to its base configuration project, and `update_database` must target THAT project (an application id is only resolvable through the project that owns it).
 
@@ -102,7 +102,7 @@ Workaround: update via the platform CLI instead — `export_configuration_to_xml
 - With `terminateRunningClients=false`, most failures are the exclusive lock above — terminate the running launch first (the default frees it automatically).
 - `launchConfigurationName` must reference a runtime-client config; an Attach config is rejected.
 - The project must exist and be open; a closed project returns an error.
-- Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `debug_launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `debug_launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.
+- Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.
 
 ## Infobase changed outside EDT
 
@@ -151,26 +151,39 @@ The usual holder of a busy port is an `ibsrv` process left over from an earlier 
 survives EDT being killed. Stopping it (or stopping the server in EDT's *Servers* view) is
 usually preferable to re-addressing the server.
 
-The same parameter exists on `debug_launch` and `run_yaxunit_tests`, which start the server too.
-Where the refusal shows up differs: `debug_launch` is fire-and-forget, so it reports through
+The same parameter exists on `launch` and `run_yaxunit_tests`, which start the server too.
+Where the refusal shows up differs: `launch` is fire-and-forget, so it reports through
 `debug_status` under `recentLaunchFailures`; `run_yaxunit_tests` reports through its own named job -
 in the initial response, or from `get_job_status(jobId)`.
 
-## Standalone server stuck in STARTED (recovered automatically)
+## Standalone server: "can only start server that is stopped" (handled for you)
 
-EDT starts a standalone server only from the STOPPED state, and it returns the server to STOPPED
-only once it has confirmed that the `ibsrv` process is gone - a confirmation it waits a few seconds
-for. When the process takes longer to disappear, or the wait is interrupted by a cancelled
-operation, EDT keeps the server marked STARTED while the launch that owned it is already dead, and
-refuses every further start with *"Can only start server that is stopped but current server state
-is 2"*. Nothing clears that state by itself: from then on EVERY launch or update of that
-application fails with the same message.
+EDT starts a standalone server only from the STOPPED state, and its own "already running, nothing
+to do" shortcut applies only when the server is STARTED **and** still holds a live launch. Two
+situations therefore reach the platform's refusal *"Can only start server that is stopped but
+current server state is 2"*:
 
-That refusal is now detected and repaired: the server is stopped through EDT's own application
-lifecycle and the operation is retried ONCE. Only the STARTED case is touched - a server that is
-STARTING or STOPPING belongs to an operation still in flight, and is reported ("retry once it
-settles") instead of being stopped underneath it. If the retry fails too, the error says so and
-names the likely reason: an `ibsrv` left over from the previous run still holding the ports.
+- **the stuck server** - EDT returns a server to STOPPED only once it has confirmed the `ibsrv`
+  process is gone, and it waits only a few seconds for that. When the process takes longer, or the
+  wait is interrupted, the server stays marked STARTED with a launch that is already dead, and
+  nothing clears it: from then on EVERY launch or update of that application fails the same way;
+- **the race** - a second operation asks to start the server while a first start is still
+  STARTING; by the time the platform runs the start, the state is already STARTED.
+
+Both are handled before the operation runs: the server state is read first, and
+
+- STARTED with a live launch -> nothing is done (EDT will no-op, exactly as its own check does);
+- STARTED with no live launch -> the server is stopped through EDT's own application lifecycle,
+  then the operation proceeds;
+- STARTING/STOPPING -> the operation waits (bounded, 30s) for the state to settle instead of
+  failing; a server somebody else is starting is never stopped underneath them.
+
+A refusal that still arrives (the state can go stale between the check and the start) is repaired
+the same way and the operation is retried ONCE. If the retry fails too, the error says so and names
+the likely reason: an `ibsrv` left over from the previous run still holding the ports.
+
+EDT's own background jobs - notably its external-object dump - can still lose this race on their
+own, which is logged in the workbench log without failing the MCP call.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

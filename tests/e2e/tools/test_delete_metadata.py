@@ -282,6 +282,40 @@ def test_preview_without_confirm_lists_changepoints_and_does_not_mutate():
     assert_no_diff("a preview must not touch the project on disk")
 
 
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_preview_accepts_explicit_timeout_and_clamps_out_of_range_value():
+    assert_contains(_list_commonmodules(), "Calc", "baseline: CommonModule.Calc must exist")
+
+    for timeout in (600, 1):
+        r = call("delete_metadata", {
+            "projectName": PROJECT,
+            "fqn": "CommonModule.Calc",
+            "timeout": timeout,
+        })
+        assert_ok(r, "preview with timeout=%s" % timeout)
+        assert r.structured is not None, "a JSON tool must return structuredContent"
+        assert r.structured.get("action") == "preview", \
+            "timeout=%s must still return a normal preview: %r" % (timeout, r.structured)
+        assert r.structured.get("fqn") == "CommonModule.Calc", \
+            "the preview must echo its target when timeout=%s" % timeout
+        assert r.structured.get("writtenProjects") == [], \
+            "a bounded preview must still declare that it wrote nowhere: %r" % (r.structured,)
+
+    assert_contains(_list_commonmodules(), "Calc",
+                    "explicit and clamped preview timeouts must not delete CommonModule.Calc")
+    assert_no_diff("explicit and clamped preview timeouts must not touch the project on disk")
+
+    # The other half of #509: the guide has to SAY what a timeout leaves the model in. This is what
+    # makes the test fail on a pre-fix server - an unknown 'timeout' argument is simply ignored, so
+    # the calls above would pass there too.
+    g = call("get_tool_guide", {"toolName": "delete_metadata"})
+    assert_ok(g, "the delete_metadata guide must be readable")
+    assert_contains(g.text, "Timeout, and what the model is left in",
+                    "the guide must document what a timed-out delete leaves the model in")
+    assert_contains(g.text, "`timeout`",
+                    "the guide's parameter list must name the timeout parameter")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Happy — FORM members (the cross-model hop: delete an item / attribute / command /
 # handler from the editable .form). Fixture: Catalog.Catalog has form "ItemForm".

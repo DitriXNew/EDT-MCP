@@ -50,6 +50,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
@@ -527,8 +528,22 @@ public class BuildExternalObjectsTool implements IMcpTool
             {
                 try
                 {
+                    // The dump PREPARES the project's default application, and preparing a
+                    // server-backed one starts its standalone server. A server another operation
+                    // has just launched is still STARTING, and EDT starts only a STOPPED one — the
+                    // start then fails the whole dump with its "can only start server that is
+                    // stopped" refusal. Settling the state first turns that race into a short wait.
+                    StandaloneServerStateRecovery.ensureDefaultApplicationStartable(bc.project);
                     for (Target target : bc.targets)
                     {
+                        // The caller stops waiting at BUILD_TIMEOUT_MS and cancels this job, but
+                        // cancellation is cooperative: without this check the job would keep
+                        // deleting outputs and stamping Comments long after the tool reported the
+                        // timeout. Each object is a mutation, so the check belongs per object.
+                        if (monitor.isCanceled())
+                        {
+                            break;
+                        }
                         results.add(dumpOne(bc, target, buildStamp, monitor));
                     }
                 }

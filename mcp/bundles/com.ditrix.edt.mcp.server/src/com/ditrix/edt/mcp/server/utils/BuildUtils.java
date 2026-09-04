@@ -150,7 +150,11 @@ public final class BuildUtils
                 return;
             }
 
-            // Wait for all derived data computations
+            // Wait for ALL derived data. Callers of this method depend on that: the cascade
+            // pre-flight opens a BM batch session afterwards, and RevalidateObjectsTool reports
+            // "Revalidation completed" on the strength of it. Waiting only for the model would let
+            // both claim something that has not happened. The model-only probe lives in
+            // ProjectStateChecker.isModelDataComputed, bounded and non-blocking, for the write gate.
             Activator.logInfo("Waiting for derived data computations for: " + project.getName()); //$NON-NLS-1$
             boolean completed = ddManager.waitAllComputations(timeoutMs);
             

@@ -1,6 +1,6 @@
 # start_profiling
 
-Start performance measurement on the active debug target. Enables line-level profiling: call counts and timing for every executed BSL line. Start-only and idempotent: if profiling is already active for this applicationId it stays on. Call stop_profiling to stop, then get_profiling_results to see which code was covered. Requires an active debug session (debug_launch or debug_yaxunit_tests).
+Start performance measurement on the active debug target. Enables line-level profiling: call counts and timing for every executed BSL line. Start-only and idempotent: if profiling is already active for this applicationId it stays on. Call stop_profiling to stop, then get_profiling_results to see which code was covered. Requires an active debug session (launch or debug_yaxunit_tests).
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -15,13 +15,13 @@ Turns on 1C line-level performance measurement for a running debug session: once
 - Measuring coverage of a YAXUnit run or a manual test (start it, exercise the code, stop, read results).
 
 ## Parameter details
-- `applicationId` (required) - the running debug session to profile. Get it from `get_applications` or `debug_status`; a `debug_yaxunit_tests` / `debug_launch` run provides one.
+- `applicationId` (required) - the running debug session to profile. Get it from `get_applications` or `debug_status`; a `debug_yaxunit_tests` / `launch` run provides one.
 
 ## What you get
 JSON: `active`, `started` (true if this call switched it on, false if it was already on), `applicationId`, and a `message` with the next step.
 
 ## Notes & gotchas
-- **Requires an active DEBUG session** - start one with `debug_launch` or `debug_yaxunit_tests` first. A plain run is not enough.
+- **Requires an active DEBUG session** - start one with `launch` or `debug_yaxunit_tests` first. A plain run is not enough.
 - Start-only and idempotent: calling it again while already profiling does NOT toggle it off - it reports "already active". (The on/off state is shared with `stop_profiling`.)
 - The data is collected on the debug server while the session runs; you only see it after `stop_profiling` + `get_profiling_results`.
 

@@ -111,7 +111,7 @@ def test_create_thin_client_config_happy_path():
 
         # 2) list_configurations: verify the config is visible with the real applicationId.
         #    This is the CRITICAL assertion (point 3 from the brief): a config saved WITHOUT
-        #    ATTR_APPLICATION_ID would show 'launch:<name>' here, which breaks debug_launch.
+        #    ATTR_APPLICATION_ID would show 'launch:<name>' here, which breaks launch.
         lc = call("list_configurations", {"projectName": PROJECT, "type": "client"})
         assert_ok(lc, "list_configurations after create")
         configs = lc.structured.get("configurations", []) if lc.structured else []

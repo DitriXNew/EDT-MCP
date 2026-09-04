@@ -43,9 +43,13 @@ import com._1c.g5.v8.dt.metadata.mdtype.MdTypeSet;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
-import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.AdoptedReferenceTargets;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.BslReferenceSearch;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Domain service that finds all references to a metadata object.
@@ -105,7 +109,7 @@ public class MetadataReferenceService
         }
 
         // Collect all references
-        ReferenceCollector collector = new ReferenceCollector(bmModel, (IBmObject)targetObject, limit);
+        ReferenceCollector collector = new ReferenceCollector(project, bmModel, (IBmObject)targetObject, limit);
 
         try
         {
@@ -150,7 +154,9 @@ public class MetadataReferenceService
      */
     public List<ReferenceInfo> collectReferencesForObject(IBmModel bmModel, IBmObject target, int limit)
     {
-        ReferenceCollector collector = new ReferenceCollector(bmModel, target, limit);
+        // Without an owning project the BSL helper deliberately falls back to the complete workspace
+        // index. Keep this compatibility entry point complete.
+        ReferenceCollector collector = new ReferenceCollector(null, bmModel, target, limit);
         collector.collect();
         return collector.getAllReferences();
     }
@@ -159,15 +165,16 @@ public class MetadataReferenceService
      * Same collection engine as {@link #collectReferencesForObject}, but ALSO reports whether the BSL
      * code-reference scan (the 5th collection step, {@code collectBslReferences}) ran to completion -
      * see {@link ReferenceScanResult}. {@code find_references} itself stays best-effort: an unavailable
-     * Xtext resource-service-provider / {@link IReferenceFinder}, or a {@code findAllReferences}
+     * Xtext resource-service-provider / {@link IReferenceFinder}, or a scoped/fallback finder-call
      * exception, is caught and logged, and the (possibly incomplete) result is still returned - correct
      * for a diagnostic tool. A DESTRUCTIVE caller cannot accept that silently: delete_metadata's
      * predefined-item incoming-reference check must fail CLOSED (block unless {@code force=true}) when
      * the BSL scan could not be consulted, since a missed BSL-only reference would otherwise be treated
-     * as "genuinely zero references" and the delete would proceed unverified. This method changes
-     * NOTHING about how the BSL scan itself behaves - it only surfaces whether it completed, so
-     * {@code find_references} (which keeps calling {@link #collectReferencesForObject} /
-     * {@code executeReadonlyTask} directly) is entirely unaffected.
+     * as "genuinely zero references" and the delete would proceed unverified. This compatibility
+     * overload has no owning project, so its source scan uses the complete workspace fallback. For an
+     * {@link MdObject} or {@link PredefinedItem}, however, it cannot discover adopted-extension
+     * counterparts without that project and therefore reports the strict scan incomplete; the
+     * project-aware overload below is required when that completeness signal protects a mutation.
      *
      * @param bmModel the BM model (already open in the caller's own transaction)
      * @param target the object to find references TO
@@ -176,7 +183,31 @@ public class MetadataReferenceService
      */
     public ReferenceScanResult collectReferencesForObjectStrict(IBmModel bmModel, IBmObject target, int limit)
     {
-        ReferenceCollector collector = new ReferenceCollector(bmModel, target, limit);
+        // No target project means the source-scope optimization cannot be proven safe. The collector
+        // runs the complete workspace fallback; MdObject/PredefinedItem adopted-target augmentation
+        // remains undeterminable and is reflected in ReferenceScanResult.complete.
+        return collectReferencesForObjectStrict(null, bmModel, target, limit);
+    }
+
+    /**
+     * Project-aware strict scan. An undeterminable scoped source set NEVER becomes a partial scan: the
+     * BSL step falls back to {@link IReferenceFinder#findAllReferences}, so a successful fallback still
+     * yields {@link ReferenceScanResult#complete}={@code true}. This preserves {@code delete_metadata}'s
+     * fail-closed predefined-item guard: omitting an extension reference, if one exists, could otherwise
+     * be reported as "no references" and allow a delete that leaves a dangling use. An unavailable
+     * finder, a scoped/fallback finder call that throws, or an adopted-target lookup that could not be
+     * completed makes the BSL scan incomplete.
+     *
+     * @param project the project that owns {@code target}
+     * @param bmModel the BM model (already open in the caller's own transaction)
+     * @param target the object to find references TO
+     * @param limit result-size hint, same semantics as {@link #collectReferencesForObject}
+     * @return the collected references plus whether the BSL step completed (never {@code null})
+     */
+    public ReferenceScanResult collectReferencesForObjectStrict(IProject project, IBmModel bmModel,
+        IBmObject target, int limit)
+    {
+        ReferenceCollector collector = new ReferenceCollector(project, bmModel, target, limit);
         collector.collect();
         return new ReferenceScanResult(collector.getAllReferences(), collector.isBslScanComplete());
     }
@@ -370,6 +401,17 @@ public class MetadataReferenceService
          */
         public IBmObject sourceObject;
 
+        /**
+         * What makes this reference UNIQUE, which is not always what is displayed. A BSL row shows a
+         * friendly module path with everything up to {@code /src/} removed, and two different resources
+         * can reduce to the same friendly path - an adopted copy keeps the base module's relative path,
+         * and a source URI that carries no {@code /src/} segment at all is shortened to its last three
+         * segments. Deduplicating on the displayed path therefore drops real references. Defaults to
+         * {@link #sourcePath} so a caller that has nothing better keeps the previous behaviour.
+         */
+        public String identityPath;
+
+
         /** Constructor for metadata references. */
         public ReferenceInfo(String category, String sourcePath, String feature, IBmObject sourceObject)
         {
@@ -377,27 +419,35 @@ public class MetadataReferenceService
             this.sourcePath = sourcePath;
             this.feature = feature;
             this.isBslReference = false;
+            this.identityPath = sourcePath;
             this.sourceObject = sourceObject;
         }
 
         /** Constructor for BSL code references (no live source object - see {@link #sourceObject}). */
         public ReferenceInfo(String category, String sourcePath, int line)
         {
+            this(category, sourcePath, line, sourcePath);
+        }
+
+        /** Constructor for BSL code references whose identity differs from what is displayed. */
+        public ReferenceInfo(String category, String sourcePath, int line, String identityPath)
+        {
             this.category = category;
             this.sourcePath = sourcePath;
             this.line = line;
             this.isBslReference = true;
+            this.identityPath = identityPath == null ? sourcePath : identityPath;
         }
     }
 
     /**
      * Result of {@link #collectReferencesForObjectStrict}: the collected references AND whether the
      * BSL code-reference scan ran to completion. {@code complete=false} means the Xtext reference index
-     * was unavailable (no resource-service-provider / {@link IReferenceFinder}) or {@code
-     * findAllReferences} threw - a BSL-only incoming reference could have been MISSED, so a caller that
-     * must fail CLOSED (delete_metadata's predefined-item check) should treat the reference state as
-     * UNVERIFIED, never as "genuinely zero references". Public, simple-data-holder style, matching
-     * {@link ReferenceInfo}.
+     * was unavailable (no resource-service-provider / {@link IReferenceFinder}), adopted-extension
+     * target augmentation was incomplete, or the scoped/fallback finder call threw - a BSL-only
+     * incoming reference could have been MISSED, so a caller that must fail CLOSED
+     * (delete_metadata's predefined-item check) should treat the reference state as UNVERIFIED, never
+     * as "genuinely zero references". Public, simple-data-holder style, matching {@link ReferenceInfo}.
      */
     public static final class ReferenceScanResult
     {
@@ -420,9 +470,47 @@ public class MetadataReferenceService
      * MdObject-only collection steps (produced types / predefined items / fields) that {@link
      * #findReferences} relies on for a top object and that simply do not apply to anything else.
      */
+    /**
+     * The workspace project segment of a platform-resource path ({@code /Project/src/...}), or
+     * {@code null} when the path carries none.
+     */
+    static String extractProjectName(String path)
+    {
+        if (path == null)
+        {
+            return null;
+        }
+        int srcIdx = path.indexOf("/src/"); //$NON-NLS-1$
+        if (srcIdx <= 0)
+        {
+            return null;
+        }
+        String head = path.substring(0, srcIdx);
+        int lastSlash = head.lastIndexOf('/');
+        String name = lastSlash >= 0 ? head.substring(lastSlash + 1) : head;
+        return name.isEmpty() ? null : name;
+    }
+
+    /**
+     * Prefixes {@code modulePath} with {@code projectName} when the reference comes from a project
+     * other than the one being searched, so a base module and its adopted copy stay distinct in both
+     * the deduplication key and the rendered row.
+     */
+    static String qualifyWithProject(String modulePath, String projectName,
+        String searchedProjectName)
+    {
+        if (projectName == null || searchedProjectName == null
+            || projectName.equals(searchedProjectName))
+        {
+            return modulePath;
+        }
+        return projectName + "/" + modulePath; //$NON-NLS-1$
+    }
+
     private static class ReferenceCollector extends AbstractBmTask<Void>
     {
 
+        private final IProject sourceProject;
         private final IBmModel bmModel;
         private final IBmObject target;
         /** Non-null exactly when {@code target instanceof MdObject} - see the class comment. */
@@ -435,10 +523,11 @@ public class MetadataReferenceService
         private org.eclipse.emf.ecore.resource.ResourceSet lineResolveResourceSet;
         /**
          * Whether {@link #collectBslReferences} ran to completion - {@code false} when the Xtext
-         * resource-service-provider / {@link IReferenceFinder} was unavailable, or {@code
-         * findAllReferences} threw. {@code find_references} itself never reads this (best-effort by
-         * design); {@link MetadataReferenceService#collectReferencesForObjectStrict} surfaces it to a
-         * caller that must fail CLOSED on an incomplete scan. Default {@code true}: most scans complete.
+         * resource-service-provider / {@link IReferenceFinder} was unavailable, adopted-target
+         * augmentation was incomplete, or the scoped/fallback finder call threw. {@code find_references}
+         * itself never reads this (best-effort by design); {@link
+         * MetadataReferenceService#collectReferencesForObjectStrict} surfaces it to a caller that must
+         * fail CLOSED on an incomplete scan. Default {@code true}: most scans complete.
          */
         private boolean bslScanComplete = true;
 
@@ -448,9 +537,10 @@ public class MetadataReferenceService
             return bslScanComplete;
         }
 
-        ReferenceCollector(IBmModel bmModel, IBmObject target, int limit)
+        ReferenceCollector(IProject sourceProject, IBmModel bmModel, IBmObject target, int limit)
         {
             super("Find references to " + safeTargetName(target)); //$NON-NLS-1$
+            this.sourceProject = sourceProject;
             this.bmModel = bmModel;
             this.target = target;
             this.targetAsMdObject = (target instanceof MdObject) ? (MdObject)target : null;
@@ -512,8 +602,8 @@ public class MetadataReferenceService
                 collectFieldReferences(engine, targetAsMdObject);
             }
 
-            // 5. Collect BSL code references - applies to ANY IBmObject (collectBslReferences already
-            // branches internally on `target instanceof MdObject` for the produced-types URI set).
+            // 5. Collect BSL code references - applies to ANY IBmObject. MdObject targets add their
+            // produced types; MdObject and PredefinedItem targets can add adopted-extension copies.
             collectBslReferences(target);
         }
 
@@ -524,7 +614,7 @@ public class MetadataReferenceService
         private boolean addReference(ReferenceInfo ref)
         {
             // Create unique key
-            String key = ref.category + ":" + ref.sourcePath + ":" + //$NON-NLS-1$ //$NON-NLS-2$
+            String key = ref.category + ":" + ref.identityPath + ":" + //$NON-NLS-1$ //$NON-NLS-2$
                 (ref.isBslReference ? ref.line : ref.feature);
 
             // Skip duplicates
@@ -756,11 +846,15 @@ public class MetadataReferenceService
                     return;
                 }
 
+                SearchDependenciesResult searchDependencies =
+                    ProjectStateChecker.determineSearchDependencies(sourceProject);
+
                 // Collect target URIs (including produced types)
                 List<URI> targetURIs = new ArrayList<>();
                 targetURIs.add(EcoreUtil.getURI((EObject) target));
 
-                // Add produced types URIs
+                // Add produced types URIs for the base MdObject. Predefined items do not own produced
+                // types, but their adopted counterparts are resolved below through the adopted owner.
                 if (target instanceof MdObject)
                 {
                     MdTypes producedTypes = MdClassUtil.getProducedTypes((MdObject) target);
@@ -777,13 +871,59 @@ public class MetadataReferenceService
                     }
                 }
 
-                // Find all references in BSL code
-                finder.findAllReferences(targetURIs, null, this::collectBslReferenceDescription, new NullProgressMonitor());
+                AdoptedReferenceTargets.Resolution adoptedTargets =
+                    AdoptedReferenceTargets.resolve(target, searchDependencies);
+                targetURIs.addAll(adoptedTargets.getTargetURIs());
+                if (!adoptedTargets.isComplete())
+                {
+                    // find_references remains best-effort and still searches every target found.
+                    // Strict destructive callers must not interpret a failed augmentation as proof
+                    // that the missing extension contains no adopted counterpart or BSL reference.
+                    bslScanComplete = false;
+                    Activator.logInfo("BSL adopted-target augmentation incomplete for project '" //$NON-NLS-1$
+                        + safeProjectName(sourceProject) + "' (" //$NON-NLS-1$
+                        + adoptedTargets.getFailureReason() + "); continuing with resolved targets."); //$NON-NLS-1$
+                }
+
+                boolean dependencySnapshotStable = BslReferenceSearch.findReferences(
+                    resourceServiceProvider, finder, sourceProject, targetURIs,
+                    this::collectBslReferenceDescription, new NullProgressMonitor(),
+                    searchDependencies);
+
+                if (!dependencySnapshotStable
+                    && adoptedTargets.isComplete()
+                    && (target instanceof MdObject || target instanceof PredefinedItem))
+                {
+                    // The source search fell back and is complete, but its complete source set cannot
+                    // repair adopted target URIs derived from a dependency snapshot that changed.
+                    bslScanComplete = false;
+                    Activator.logInfo("BSL dependency membership, extension kind, or readiness changed " //$NON-NLS-1$
+                        + "during adopted-target " //$NON-NLS-1$
+                        + "and source resolution for project '" + safeProjectName(sourceProject) //$NON-NLS-1$
+                        + "'; the reference result is best-effort only."); //$NON-NLS-1$
+                }
             }
             catch (Exception e)
             {
                 Activator.logError("Error finding BSL references", e); //$NON-NLS-1$
                 bslScanComplete = false;
+            }
+        }
+
+        private static String safeProjectName(IProject project)
+        {
+            if (project == null)
+            {
+                return "<unknown>"; //$NON-NLS-1$
+            }
+            try
+            {
+                String name = project.getName();
+                return name != null ? name : "<unknown>"; //$NON-NLS-1$
+            }
+            catch (RuntimeException e)
+            {
+                return "<unknown>"; //$NON-NLS-1$
             }
         }
 
@@ -808,14 +948,20 @@ public class MetadataReferenceService
                 path = sourceUri.toString();
             }
 
-            // Extract module path from URI
-            String modulePath = extractModulePath(path);
+            // Extract module path from URI, keeping the OWNING PROJECT whenever it is not the project
+            // being searched. An adopted copy in an extension keeps the base module's relative path,
+            // so two genuinely different usages would otherwise collapse: identical relative path plus
+            // identical line IS the whole deduplication key, and even with different lines the rows
+            // would read as one module. Only cross-project rows are qualified, so a search that stays
+            // inside its own project renders exactly as before.
+            String modulePath = qualifyWithProject(extractModulePath(path), extractProjectName(path),
+                sourceProject == null ? null : sourceProject.getName());
 
             // Extract line number - we need to load the EObject and use NodeModelUtils
             int line = extractLineNumberFromSourceUri(sourceUri);
 
             // Use addReference for deduplication
-            addReference(new ReferenceInfo("BSL modules", modulePath, line)); //$NON-NLS-1$
+            addReference(new ReferenceInfo("BSL modules", modulePath, line, path)); //$NON-NLS-1$
         }
 
         private String extractModulePath(String path)

@@ -35,9 +35,9 @@ evidence alone answers the question.
    start a fresh one before installing the smallest `set_breakpoint`. Use an
    existing session directly only when it is the exact authorized target and no
    fresh-start effect is required; install the breakpoint and continue without
-   `debug_launch`, or stop. For a fresh launch or Attach, set the breakpoint
+   `launch`, or stop. For a fresh launch or Attach, set the breakpoint
    before starting it and retain task-owned identifiers.
-4. If a preflight race makes `debug_launch` report `alreadyRunning=true`, do not
+4. If a preflight race makes `launch` report `alreadyRunning=true`, do not
    claim that launch, update, restart, or startup options ran. Refresh the
    uniquely identified target, resume only a suspension caused by the task's
    breakpoint, remove task-owned temporary state, and stop unless a fresh

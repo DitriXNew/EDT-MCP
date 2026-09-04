@@ -23,7 +23,7 @@ ENVIRONMENT (the realistic happy contract here):
   every input we can supply is a CLEAR, ACTIONABLE SENTINEL that names the missing
   precondition (a suspended thread / an active debug launch) and the next step
   (wait_for_break / debug_status). That sentinel IS the coverage — we deliberately
-  do NOT start an infobase/debug_launch (heavy, not configured for this fixture).
+  do NOT start an infobase/launch (heavy, not configured for this fixture).
 
   The exact sentinels, read straight from ResumeTool.execute() in branch order
   (threadId is resolved FIRST, before applicationId / the auto-resolution fallback):
@@ -168,7 +168,7 @@ def test_nonexistent_applicationid_errors_and_names_value():
     err = assert_error(r, "non-existent applicationId")
     # AUDIT: "no active debug target for applicationId: <id>" echoes the bad value
     # but is NOT actionable — it does not point at debug_status / get_applications
-    # (the siblings that enumerate valid applicationIds) nor at debug_launch (to
+    # (the siblings that enumerate valid applicationIds) nor at launch (to
     # start one). suggests=[] is deliberate; fix-card: make this sentinel actionable.
     assert_error_quality(
         err,
@@ -357,7 +357,7 @@ def test_attach_style_applicationid_no_target_errors_and_names_value():
     r = call("resume", {"applicationId": bad})
     err = assert_error(r, "attach-style applicationId with no target")
     # AUDIT: echoes the id but is not actionable (no pointer to debug_status /
-    # debug_launch). suggests=[] deliberate; same fix-card as the plain-id case.
+    # launch). suggests=[] deliberate; same fix-card as the plain-id case.
     assert_error_quality(
         err,
         names=[bad],
@@ -380,6 +380,6 @@ def test_attach_style_applicationid_no_target_errors_and_names_value():
 #       hit inside CommonModule.Calc) whose resume-ability can be probed.
 #   * the SUCCESS paths {resumed:true, scope:"thread"|"target", autoResolved:true}
 #       — need a live, suspended debug target to actually resume.
-#   These require a real debug_launch + a running infobase, which this fixture
+#   These require a real launch + a running infobase, which this fixture
 #   does NOT provide; the sentinel + negative matrix above are the coverage here.
 # ──────────────────────────────────────────────────────────────────────────────

@@ -12,12 +12,18 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
  * Tests for {@link GetMetadataObjectsTool}.
@@ -25,10 +31,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * Covers tool metadata (name/constant, response type, description, input schema,
  * output schema, result file name, guide) and the {@code projectName}
  * required-argument validation in {@code execute(Map)} that returns BEFORE the
- * first {@code PlatformUI.getWorkbench().getDisplay()} call. Everything past that
- * call (project/configuration resolution, metadata collection including the
- * "Unknown metadata type" branch, collection and formatting) needs a live EDT
- * workspace and is covered by the E2E suite.
+ * first {@code PlatformUI.getWorkbench().getDisplay()} call. Pure {@link CommonModule}
+ * matching and collection are covered directly; project/scope resolution and final
+ * formatting need a live EDT workspace and are covered by the E2E suite.
  */
 public class GetMetadataObjectsToolTest
 {
@@ -84,6 +89,7 @@ public class GetMetadataObjectsToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"metadataType\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"nameFilter\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"textFilter\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -111,6 +117,8 @@ public class GetMetadataObjectsToolTest
         assertTrue("metadataType must NOT be required", //$NON-NLS-1$
             !requiredBlock.contains("\"metadataType\"")); //$NON-NLS-1$
         assertFalse("nameFilter must NOT be required", requiredBlock.contains("\"nameFilter\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("textFilter must NOT be required", //$NON-NLS-1$
+            requiredBlock.contains("\"textFilter\"")); //$NON-NLS-1$
         assertFalse("limit must NOT be required", requiredBlock.contains("\"limit\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("language must NOT be required", requiredBlock.contains("\"language\"")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -164,13 +172,14 @@ public class GetMetadataObjectsToolTest
     {
         // The exhaustive per-tool detail moved out of the always-loaded
         // description/schema and into the on-demand guide channel. The guide
-        // must be non-empty and still carry the type vocabulary, the Name-only
-        // filter rule, and the module/subsystem boundaries.
+        // must be non-empty and still carry the type vocabulary, both text-filter
+        // rules, and the module/subsystem boundaries.
         String guide = new GetMetadataObjectsTool().getGuide();
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
         assertTrue(guide.contains("HTTPService")); //$NON-NLS-1$
         assertTrue(guide.contains("nameFilter")); //$NON-NLS-1$
+        assertTrue(guide.contains("textFilter")); //$NON-NLS-1$
         assertTrue(guide.contains("ManagerModule")); //$NON-NLS-1$
         assertTrue(guide.contains("list_subsystems")); //$NON-NLS-1$
     }
@@ -228,6 +237,144 @@ public class GetMetadataObjectsToolTest
         assertTrue(result.contains("projectName is required")); //$NON-NLS-1$
         assertTrue("an invalid metadataType must NOT leak through before the projectName guard", //$NON-NLS-1$
             !result.contains("Unknown metadata type")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNameAndTextFiltersAreMutuallyExclusive()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("nameFilter", "DebtAdjustment"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("textFilter", "Debt adjustment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new GetMetadataObjectsTool().execute(params);
+
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result.contains("Use either nameFilter or textFilter, not both")); //$NON-NLS-1$
+        assertTrue(result.contains("nameFilter='DebtAdjustment'")); //$NON-NLS-1$
+        assertTrue(result.contains("textFilter='Debt adjustment'")); //$NON-NLS-1$
+        assertTrue(result.contains("programmatic Name")); //$NON-NLS-1$
+        assertTrue(result.contains("effective language")); //$NON-NLS-1$
+    }
+
+    // ==================== Name / localized-text matching (pure model logic) ====================
+
+    @Test
+    public void testTextFilterMatchesEnglishNameCaseInsensitively()
+    {
+        CommonModule object = metadataObject("DebtAdjustment", "Debt adjustment", //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041A\u043E\u0440\u0440\u0435\u043A\u0442\u0438\u0440\u043E\u0432\u043A\u0430 " //$NON-NLS-1$
+            + "\u0434\u043E\u043B\u0433\u0430"); //$NON-NLS-1$
+
+        assertTrue(new GetMetadataObjectsTool().matches(object, "adjust", //$NON-NLS-1$
+            GetMetadataObjectsTool.FilterMode.TEXT, "en")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextFilterMatchesRussianNameCaseInsensitively()
+    {
+        String russianName = "\u0412\u0437\u0430\u0438\u043C\u043E\u0437\u0430\u0447\u0435\u0442"; //$NON-NLS-1$
+        CommonModule object = metadataObject(russianName, "Offset", //$NON-NLS-1$
+            "\u041A\u043E\u0440\u0440\u0435\u043A\u0442\u0438\u0440\u043E\u0432\u043A\u0430 " //$NON-NLS-1$
+            + "\u0434\u043E\u043B\u0433\u0430"); //$NON-NLS-1$
+
+        assertTrue(new GetMetadataObjectsTool().matches(object,
+            "\u0437\u0430\u0447\u0435\u0442", //$NON-NLS-1$
+            GetMetadataObjectsTool.FilterMode.TEXT, "en")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextFilterMatchesRussianSynonymInRussian()
+    {
+        CommonModule object = metadataObject("DebtOffset", "Debt offset", //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041A\u043E\u0440\u0440\u0435\u043A\u0442\u0438\u0440\u043E\u0432\u043A\u0430 " //$NON-NLS-1$
+            + "\u0434\u043E\u043B\u0433\u0430"); //$NON-NLS-1$
+
+        assertTrue(new GetMetadataObjectsTool().matches(object,
+            "\u043A\u043E\u0440\u0440\u0435\u043A\u0442", //$NON-NLS-1$
+            GetMetadataObjectsTool.FilterMode.TEXT, "ru")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextFilterDoesNotMatchSynonymFromAnotherLanguage()
+    {
+        CommonModule object = metadataObject("DebtOffset", "Debt offset", //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041A\u043E\u0440\u0440\u0435\u043A\u0442\u0438\u0440\u043E\u0432\u043A\u0430 " //$NON-NLS-1$
+            + "\u0434\u043E\u043B\u0433\u0430"); //$NON-NLS-1$
+
+        assertFalse(new GetMetadataObjectsTool().matches(object, "Debt offset", //$NON-NLS-1$
+            GetMetadataObjectsTool.FilterMode.TEXT, "ru")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNameFilterRemainsNameOnly()
+    {
+        CommonModule object = metadataObject("DebtOffset", "Human caption", //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041F\u043E\u0434\u043F\u0438\u0441\u044C"); //$NON-NLS-1$
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+
+        assertTrue(tool.matches(object, "offset", //$NON-NLS-1$
+            GetMetadataObjectsTool.FilterMode.NAME, "en")); //$NON-NLS-1$
+        assertFalse(tool.matches(object, "Human caption", //$NON-NLS-1$
+            GetMetadataObjectsTool.FilterMode.NAME, "en")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTextFilterMatchingBothFieldsProducesOneResult()
+    {
+        CommonModule object = metadataObject("SharedCaption", "SharedCaption", //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041E\u0431\u0449\u0430\u044F\u041F\u043E\u0434\u043F\u0438\u0441\u044C"); //$NON-NLS-1$
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.getCommonModules().add(object);
+        List<GetMetadataObjectsTool.MetadataInfo> rows = new ArrayList<>();
+
+        int total = new GetMetadataObjectsTool().collectMetadataObjects(config,
+            MetadataTypeUtils.resolve("CommonModule"), rows, "caption", //$NON-NLS-1$ //$NON-NLS-2$
+            GetMetadataObjectsTool.FilterMode.TEXT, 10, "en"); //$NON-NLS-1$
+
+        assertEquals("an object matching both fields must count once", 1, total); //$NON-NLS-1$
+        assertEquals("an object matching both fields must produce one row", 1, rows.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEmptyOrAbsentTextFilterDoesNotFilter()
+    {
+        CommonModule object = metadataObject("AnyName", "Any caption", //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041B\u044E\u0431\u0430\u044F\u041F\u043E\u0434\u043F\u0438\u0441\u044C"); //$NON-NLS-1$
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+
+        assertTrue(tool.matches(object, null, GetMetadataObjectsTool.FilterMode.TEXT, "ru")); //$NON-NLS-1$
+        assertTrue(tool.matches(object, "", GetMetadataObjectsTool.FilterMode.TEXT, "ru")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The corner the shared resolver decides, pinned so it stays a decision: an object with NO
+     * synonym in the effective language falls back to its first non-empty one - exactly what the
+     * Synonym COLUMN displays for that row - so the filter can match text from another language.
+     * Matching what the caller can see in the table is the point; diverging from the column would
+     * make a visible row unfindable by the text printed in it.
+     */
+    @Test
+    public void testTextFilterFallsBackToTheDisplayedSynonymWhenTheLanguageHasNone()
+    {
+        CommonModule object = MdClassFactory.eINSTANCE.createCommonModule();
+        object.setName("DebtOffset"); //$NON-NLS-1$
+        object.getSynonym().put("ru", "\u041A\u043E\u0440\u0440\u0435\u043A\u0442\u0438\u0440\u043E\u0432\u043A\u0430 " //$NON-NLS-1$
+            + "\u0434\u043E\u043B\u0433\u0430"); //$NON-NLS-2$
+
+        assertTrue("an object whose only synonym is the one the column shows must be findable "
+            + "by that text", new GetMetadataObjectsTool().matches(object, "\u043A\u043E\u0440\u0440\u0435\u043A\u0442",
+                GetMetadataObjectsTool.FilterMode.TEXT, "en")); //$NON-NLS-1$
+    }
+
+    private static CommonModule metadataObject(String name, String englishSynonym,
+        String russianSynonym)
+    {
+        CommonModule object = MdClassFactory.eINSTANCE.createCommonModule();
+        object.setName(name);
+        object.getSynonym().put("en", englishSynonym); //$NON-NLS-1$
+        object.getSynonym().put("ru", russianSynonym); //$NON-NLS-1$
+        return object;
     }
 
     // ==================== metadataType normalization (pure logic, no workbench) ====================

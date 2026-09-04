@@ -21,6 +21,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
    - Changed metadata/code resolution → a bilingual case (English `Name`, Russian `Name`, synonym). (`edt-mcp-bilingual`.)
 
 3. **Build + unit (Tier 1)** — `bash source/compile.sh` → **BUILD SUCCESS** + every ratchet green (`BuiltInToolTestCoverageTest`, `ToolContractConsistencyTest`, e2e coverage ratchet). Toolchain isn't on PATH — pass `--java-home`/`--maven-home`.
+   - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
 4. **README updated** — bump the tool count (both places), add/adjust the group table, the flat tool table, and the detailed section; parameters must match the schema.
 
@@ -41,7 +42,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 ## Quick "definition of done"
 - [ ] No stray Cyrillic / English surface / lowerCamelCase / `ToolResult.error` / tx boundary
 - [ ] Unit `XxxToolTest` + e2e `test_<tool>.py` (+ bilingual case if resolution changed)
-- [ ] `compile.sh` BUILD SUCCESS + ratchets green
+- [ ] `compile.sh` BUILD SUCCESS + ratchets green; `docs/validate_agent_skills.py` clean
 - [ ] README count + tables + detail updated
 - [ ] Redeployed live; deployed jar verified (anti-stale); projects `ready`
 - [ ] Golden regenerated + committed (if `tools/list` changed)

@@ -53,7 +53,7 @@ public enum StandaloneServerPortConflictPolicy
 
     /**
      * The {@code standaloneServerPortConflict} parameter description, shared verbatim by every
-     * tool that can start a standalone server ({@code update_database}, {@code debug_launch},
+     * tool that can start a standalone server ({@code update_database}, {@code launch},
      * {@code run_yaxunit_tests}).
      *
      * <p>It lives on the policy rather than on one of those tools so the three stay in sync by

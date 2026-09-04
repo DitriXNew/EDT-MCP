@@ -303,6 +303,36 @@ public class MetadataPropertyIntrospectorTest
     }
 
     @Test
+    public void testManyEnumAttributeClassifiesSeparatelyFromScalarEnum()
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("enumMultiplicity"); //$NON-NLS-1$
+        pkg.setNsPrefix("enumMultiplicity"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/enum-multiplicity"); //$NON-NLS-1$
+        EEnum purpose = newEnum(factory, "ApplicationUsePurpose", //$NON-NLS-1$
+            "PersonalComputer", "MobileDevice"); //$NON-NLS-1$ //$NON-NLS-2$
+        EClass holderClass = factory.createEClass();
+        holderClass.setName("PurposeHolder"); //$NON-NLS-1$
+        addEnum(factory, holderClass, "singlePurpose", purpose); //$NON-NLS-1$
+        addEnum(factory, holderClass, "usePurposes", purpose, true); //$NON-NLS-1$
+        pkg.getEClassifiers().add(purpose);
+        pkg.getEClassifiers().add(holderClass);
+        EObject holder = new org.eclipse.emf.ecore.impl.DynamicEObjectImpl(holderClass);
+
+        PropertyInfo single = MetadataPropertyIntrospector.findFeature(holder, "singlePurpose"); //$NON-NLS-1$
+        PropertyInfo many = MetadataPropertyIntrospector.findFeature(holder, "usePurposes"); //$NON-NLS-1$
+
+        assertNotNull(single);
+        assertEquals("a single-valued enum must keep the scalar classification", //$NON-NLS-1$
+            ValueKind.ENUM, single.valueKind);
+        assertNotNull(many);
+        assertEquals(ValueKind.MANY_ENUM, many.valueKind);
+        assertEquals(java.util.Arrays.asList("PersonalComputer", "MobileDevice"), //$NON-NLS-1$ //$NON-NLS-2$
+            many.allowedValues);
+    }
+
+    @Test
     public void testContainmentChildrenAreNotAssignable()
     {
         // A Catalog's attributes / tabularSections / forms / commands are child collections created
@@ -993,9 +1023,18 @@ public class MetadataPropertyIntrospectorTest
 
     private static void addEnum(EcoreFactory f, EClass owner, String name, EEnum type)
     {
+        addEnum(f, owner, name, type, false);
+    }
+
+    private static void addEnum(EcoreFactory f, EClass owner, String name, EEnum type, boolean many)
+    {
         EAttribute attribute = f.createEAttribute();
         attribute.setName(name);
         attribute.setEType(type);
+        if (many)
+        {
+            attribute.setUpperBound(-1);
+        }
         owner.getEStructuralFeatures().add(attribute);
     }
 }

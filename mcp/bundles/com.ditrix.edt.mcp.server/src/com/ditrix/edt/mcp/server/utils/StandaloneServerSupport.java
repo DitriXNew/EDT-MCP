@@ -4,7 +4,7 @@
  * Licensed under AGPL-3.0-or-later
  */
 
-package com.ditrix.edt.mcp.server.tools.impl;
+package com.ditrix.edt.mcp.server.utils;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -35,7 +35,7 @@ import com.e1c.g5.dt.applications.IApplication;
  * with NO {@code Require-Bundle}/{@code Import-Package} on the standalone-server bundles. A hard
  * dependency on {@code com.e1c.g5.v8.dt.platform.standaloneserver.wst.core} would make the whole MCP
  * plugin fail to resolve on a minimal headless EDT (that bundle pulls a transitive snakeyaml the headless
- * CI does not ship — see {@link CreateInfobaseTool}'s history). Reflection keeps the plugin loadable
+ * CI does not ship — see {@code CreateInfobaseTool}'s history). Reflection keeps the plugin loadable
  * everywhere; the standalone-server paths degrade gracefully with an actionable error when the feature is
  * absent. All call wrappers return {@code null}/{@code false} (never throw) on a missing bundle/service.
  *
@@ -45,10 +45,10 @@ import com.e1c.g5.dt.applications.IApplication;
  * {@code #getServers():List<IServer>}; {@code IServerApplication#getServer():IServer},
  * {@code #getModule():IModule}; {@code StandaloneServerInfobase#getInfobaseId():UUID}.
  */
-final class StandaloneServerSupport
+public final class StandaloneServerSupport
 {
     /** Application type id of a standalone (WST) server application. */
-    static final String WST_SERVER_APP_TYPE = "com.e1c.g5.dt.applications.type.wst-server"; //$NON-NLS-1$
+    public static final String WST_SERVER_APP_TYPE = "com.e1c.g5.dt.applications.type.wst-server"; //$NON-NLS-1$
 
     /** Symbolic name of the bundle that owns the standalone-server WST service. */
     private static final String WST_CORE_BUNDLE_ID =
@@ -76,7 +76,7 @@ final class StandaloneServerSupport
     private static final String METHOD_GET_ID = "getId"; //$NON-NLS-1$
 
     /** Outcome of the best-effort infobases.yaml registry cleanup. */
-    enum RegistryCleanup
+    public enum RegistryCleanup
     {
         /** The stale entry was found and removed from the registry. */
         REMOVED,
@@ -98,7 +98,7 @@ final class StandaloneServerSupport
      *
      * @return the service object (call it reflectively), or {@code null} when unavailable
      */
-    static Object acquireService()
+    public static Object acquireService()
     {
         try
         {
@@ -162,12 +162,12 @@ final class StandaloneServerSupport
      *         mistaken for success). May be {@code null} only if the call returned a non-{@code IStatus}.
      * @throws Exception the real failure cause if {@code deleteServer} itself threw
      */
-    static IStatus deleteServer(Object service, Object server, IProgressMonitor monitor) throws Exception
+    public static IStatus deleteServer(Object service, Object server, IProgressMonitor monitor) throws Exception
     {
         Method del = findMethod(service.getClass(), "deleteServer", 2); //$NON-NLS-1$
         if (del == null)
         {
-            Activator.logError("delete_infobase: IStandaloneServerService.deleteServer not found", null); //$NON-NLS-1$
+            Activator.logError("standalone-server: IStandaloneServerService.deleteServer not found", null); //$NON-NLS-1$
             return new Status(IStatus.ERROR, PLUGIN_ID,
                 "IStandaloneServerService.deleteServer(IServer, IProgressMonitor) was not found in this " //$NON-NLS-1$
                     + "EDT — the standalone-server API may have changed."); //$NON-NLS-1$
@@ -193,7 +193,7 @@ final class StandaloneServerSupport
      * {@code IServer} backing the application. Returns {@code null} on any failure (the caller then falls
      * back to a name scan via {@link #findServerByModuleName}).
      */
-    static Object serverOfApplication(IApplication app)
+    public static Object serverOfApplication(IApplication app)
     {
         try
         {
@@ -202,7 +202,7 @@ final class StandaloneServerSupport
         }
         catch (Throwable t)
         {
-            Activator.logError("delete_infobase: IServerApplication.getServer() refl failed", t); //$NON-NLS-1$
+            Activator.logError("standalone-server: IServerApplication.getServer() refl failed", t); //$NON-NLS-1$
             return null;
         }
     }
@@ -211,17 +211,26 @@ final class StandaloneServerSupport
      * Reflective {@code IServerApplication.getModule()} — the {@code StandaloneServerInfobase} module of a
      * wst-server application (used to read the infobaseId for the infobases.yaml cleanup). May be
      * {@code null}.
+     *
+     * <p>An application that simply HAS no {@code getModule()} is not a failure and is not logged:
+     * callers routinely probe a plain infobase application with this (see
+     * {@code InfobaseAccessSupport.resolveInfobaseReference}), and logging that would put an ERROR
+     * in the workbench log for an ordinary, expected answer.
      */
-    static Object moduleOfApplication(IApplication app)
+    public static Object moduleOfApplication(IApplication app)
     {
         try
         {
             Method m = app.getClass().getMethod("getModule"); //$NON-NLS-1$
             return m.invoke(app);
         }
+        catch (NoSuchMethodException e) // NOSONAR not a server application - an expected answer, not a failure
+        {
+            return null;
+        }
         catch (Throwable t)
         {
-            Activator.logError("delete_infobase: IServerApplication.getModule() refl failed", t); //$NON-NLS-1$
+            Activator.logError("standalone-server: IServerApplication.getModule() refl failed", t); //$NON-NLS-1$
             return null;
         }
     }
@@ -239,7 +248,7 @@ final class StandaloneServerSupport
      * Returns {@code null} on failure/absence of BOTH shapes, never throwing; an error is logged only
      * when neither shape resolved (so a single-shape EDT version never logs spuriously).
      */
-    static String infobaseIdOf(Object standaloneServerInfobaseModule)
+    public static String infobaseIdOf(Object standaloneServerInfobaseModule)
     {
         try
         {
@@ -254,7 +263,7 @@ final class StandaloneServerSupport
             String id = infobaseIdViaConfiguration(standaloneServerInfobaseModule);
             if (id == null)
             {
-                Activator.logError("delete_infobase: could not read standalone-server infobaseId " //$NON-NLS-1$
+                Activator.logError("standalone-server: could not read standalone-server infobaseId " //$NON-NLS-1$
                     + "(neither getInfobaseId() nor getStandaloneServerConfiguration()." //$NON-NLS-1$
                     + "getInfobase().getId() resolved)", null); //$NON-NLS-1$
             }
@@ -262,7 +271,7 @@ final class StandaloneServerSupport
         }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
-            Activator.logError("delete_infobase: could not read standalone-server infobaseId", t); //$NON-NLS-1$
+            Activator.logError("standalone-server: could not read standalone-server infobaseId", t); //$NON-NLS-1$
             return null;
         }
     }
@@ -308,7 +317,7 @@ final class StandaloneServerSupport
      * (the config is torn down after). Returns {@code null} for an RDBMS-backed server (no local directory)
      * or on any reflective failure.
      */
-    static String databaseDirOf(Object standaloneServerInfobaseModule)
+    public static String databaseDirOf(Object standaloneServerInfobaseModule)
     {
         try
         {
@@ -344,7 +353,7 @@ final class StandaloneServerSupport
         }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
-            Activator.logError("delete_infobase: could not read standalone-server database directory", t); //$NON-NLS-1$
+            Activator.logError("standalone-server: could not read standalone-server database directory", t); //$NON-NLS-1$
             return null;
         }
     }
@@ -355,7 +364,7 @@ final class StandaloneServerSupport
      *
      * @return the matching {@code IServer} object, or {@code null} if none matched
      */
-    static Object findServerByModuleName(Object service, String appName)
+    public static Object findServerByModuleName(Object service, String appName)
     {
         try
         {
@@ -391,7 +400,7 @@ final class StandaloneServerSupport
         }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
-            Activator.logError("delete_infobase: server-by-name scan failed", t); //$NON-NLS-1$
+            Activator.logError("standalone-server: server-by-name scan failed", t); //$NON-NLS-1$
         }
         return null;
     }
@@ -426,7 +435,7 @@ final class StandaloneServerSupport
      *         a reflective failure / when both {@code module} and {@code infobaseId} are {@code null}
      *         (nothing to target)
      */
-    static RegistryCleanup removeFromInfobaseRegistry(Object module, String infobaseId,
+    public static RegistryCleanup removeFromInfobaseRegistry(Object module, String infobaseId,
         IProgressMonitor monitor)
     {
         if (module == null && infobaseId == null)
@@ -503,7 +512,7 @@ final class StandaloneServerSupport
         }
         catch (Throwable t)
         {
-            Activator.logError("delete_infobase: best-effort infobases.yaml cleanup failed " //$NON-NLS-1$
+            Activator.logError("standalone-server: best-effort infobases.yaml cleanup failed " //$NON-NLS-1$
                 + "(non-fatal — the server is deleted; the orphan self-heals on restart)", t); //$NON-NLS-1$
             return RegistryCleanup.FAILED;
         }

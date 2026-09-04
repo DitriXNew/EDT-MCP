@@ -3,7 +3,7 @@ e2e tests for list_configurations (kind: read).
 
 The tool lists EDT *launch* configurations (runtime-client + Attach + other 1C
 launch types) from the live EDT workbench, with each entry's running state. It is
-the discovery step before debug_launch / run_yaxunit_tests / debug_yaxunit_tests /
+the discovery step before launch / run_yaxunit_tests / debug_yaxunit_tests /
 update_database.
 
 Response type is JSON (ListConfigurationsTool.getResponseType()==JSON), so the

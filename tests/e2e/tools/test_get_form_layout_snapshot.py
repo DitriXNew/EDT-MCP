@@ -123,6 +123,75 @@ def _assert_is_failure(r, ctx):
     return msg
 
 
+def _assert_zero_bounds_warning_is_a_real_diagnosis(body):
+    """#506: when a snapshot comes back with zero Java-side bounds, the warning must
+    name the actual cause instead of always blaming an unfinished render.
+
+    Pins the warning to exactly ONE of the three render-mode diagnoses and requires
+    that whichever one is emitted is internally coherent (a structural verdict must
+    not also tell the caller to retry, and vice versa).
+
+    Deliberately NOT cross-checked against get_server_status.formRenderFlags. That
+    report is not a trustworthy oracle: `nativeFormLayoutRender` is EDT's default when
+    the property is ABSENT, while the tool reads Boolean.parseBoolean(None) -> False
+    and therefore publishes the OPPOSITE of the effective mode (issue #522). Judging
+    the new diagnosis by the broken reporter makes this test fail on a CORRECT server.
+
+    Anti-cheat: a pre-#506 server emits the unconditional "The form may not be fully
+    rendered yet" wording in every mode, so it fails the first assertion whichever
+    render mode the stand happens to be in."""
+    if "elementsWithBounds: 0" not in body:
+        return
+
+    # SnakeYAML may wrap the long warning at its configured width. Collapse only
+    # whitespace so the semantic phrases stay strict without depending on wrapping.
+    normalized = " ".join(body.split())
+    assert "The form may not be fully rendered yet" not in normalized, (
+        "the unconditional pre-#506 retry diagnosis must be gone in every render "
+        "mode:\n%s" % body[:1200])
+
+    native = "does not produce Java-side per-element bounds in native render mode" in normalized
+    java = "Native render mode is off" in normalized
+    unknown = "effective native render mode could not be read" in normalized
+    assert sum((native, java, unknown)) == 1, (
+        "the zero-bounds warning must be exactly one of the three render-mode "
+        "diagnoses:\n%s" % body[:1200])
+
+    if native:
+        # Structural: retrying cannot help, and the caller is owed a fallback that does.
+        assert "structural rather than transient" in normalized, (
+            "native-render warning must say the result is not transient:\n%s" % body[:1200])
+        assert "will not help" in normalized, (
+            "native-render warning must explicitly rule out retries/refresh:\n%s" % body[:1200])
+        assert "get_metadata_details" in normalized, (
+            "native-render warning must name the fallback that does answer:\n%s" % body[:1200])
+        assert "Retry the call" not in normalized, (
+            "native-render warning must not tell the caller to retry:\n%s" % body[:1200])
+    elif java:
+        # Transient: retrying IS the right advice, and must not be contradicted.
+        assert "may not have finished rendering" in normalized, (
+            "Java-render warning must retain the transient-render diagnosis:\n%s" % body[:1200])
+        assert "Retry the call" in normalized and "refresh is true" in normalized, (
+            "Java-render warning must suggest retry/refresh:\n%s" % body[:1200])
+        assert "will not help" not in normalized, (
+            "Java-render warning must not claim retries are structurally useless:\n%s"
+            % body[:1200])
+    else:
+        # Unknown: it must name both causes, commit to neither, and offer a
+        # render-mode-independent way to inspect the element tree.
+        assert ("when native render mode is on" in normalized
+                and "when native render mode is off" in normalized), (
+            "unknown-mode warning must name both possible causes:\n%s" % body[:1200])
+        assert "Retry the call" not in normalized and "will not help" not in normalized, (
+            "unknown-mode warning must not assert either cause:\n%s" % body[:1200])
+        assert "get_metadata_details" in normalized and "form FQN" in normalized, (
+            "unknown-mode warning must offer render-independent element-tree advice:\n%s"
+            % body[:1200])
+        assert "get_server_status" not in normalized, (
+            "unknown-mode warning must not use requested render flags as an effective-mode oracle:\n%s"
+            % body[:1200])
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATHS
 # ──────────────────────────────────────────────────────────────────────────────
@@ -168,6 +237,8 @@ def test_snapshot_common_form_returns_render_dependent_yaml():
                         "a real snapshot carries an elementCount")
         assert_contains(body, "boundsCoordinateSpace: form WYSIWYG pixels",
                         "a real snapshot states its bounds coordinate space")
+        # #506: an empty-bounds snapshot must explain WHY, not always blame rendering.
+        _assert_zero_bounds_warning_is_a_real_diagnosis(body)
     else:
         # Render-unavailable path (flag missing / still rendering): DOCUMENTED, not a
         # bug. Must be one of the known render sentinels, not a random failure.
@@ -204,6 +275,7 @@ def test_full_mode_is_honoured_and_echoed():
                         "full mode must round-trip into the snapshot, not fall back to compact")
         assert "mode: compact" not in body, \
             "full mode must NOT be silently downgraded to compact:\n%s" % body[:400]
+        _assert_zero_bounds_warning_is_a_real_diagnosis(body)
     else:
         msg = _assert_is_failure(r, "full-mode render-unavailable")
         assert any(s in msg for s in _RENDER_UNAVAILABLE_SENTINELS), \

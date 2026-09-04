@@ -37,7 +37,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | «Проверь запрос 1С» | `validate_query` (для СКД — `dcsMode: true`) | Перед вставкой текста запроса в код |
 | «Что в этой форме?» | `get_form_layout_snapshot` с `mode: compact` (YAML); `get_form_screenshot` если нужен визуал | YAML дешевле PNG |
 | «Что показывает платформа для типа X?» | `get_platform_documentation` | Не угадывай сигнатуры |
-| «Запусти / отладь / обнови ИБ» | `list_configurations` → `debug_launch` / `update_database` | Сперва узнай имя launch-конфигурации |
+| «Запусти / отладь / обнови ИБ» | `list_configurations` → `launch` / `update_database` | Сперва узнай имя launch-конфигурации |
 | «Прогон тестов» | `run_yaxunit_tests`; для отладки падающих — `set_breakpoint`, затем `run_yaxunit_tests(debug=true)` | |
 | «Что значит ошибка с checkId Z?» | `get_check_description` | |
 
@@ -114,9 +114,9 @@ MCP-клиенты именуют инструменты по-разному. Р
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
 | `get_applications` | Список информационных баз проекта со статусом обновления | Для отладки/обновления |
-| `list_configurations` | Launch-конфигурации (runtime-client + Attach) с текущим running/suspended | Перед `debug_launch` |
+| `list_configurations` | Launch-конфигурации (runtime-client + Attach) с текущим running/suspended | Перед `launch` |
 | `update_database` | Обновление ИБ. Идентификация двумя способами: `launchConfigurationName` **или** `projectName + applicationId`. Режим full/incremental | По запросу |
-| `debug_launch` | Запуск в режиме отладки. Аналогично: `launchConfigurationName` (включая Attach to 1C:Enterprise Debug Server) **или** `projectName + applicationId` | По запросу |
+| `launch` | Запуск в режиме debug (по умолчанию) или run. Аналогично: `launchConfigurationName` (включая debug-only Attach) **или** `projectName + applicationId` | По запросу |
 | `run_yaxunit_tests` | Запуск тестов YAxUnit, парсинг JUnit XML, Markdown-отчёт | После правок, если в проекте есть тесты |
 
 ### 6. Debugging — отладчик (13 неустаревших инструментов)

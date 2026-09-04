@@ -1,10 +1,10 @@
-Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `debug_launch`, `run_yaxunit_tests`, and `update_database`.
+Creates a 1C:EDT runtime-client launch configuration (thin / thick / web client) and persists it in the workspace metadata. The configuration is immediately visible in `list_configurations` and usable by `launch`, `run_yaxunit_tests`, and `update_database`.
 
 ## Run vs debug — one config, two modes
 
 There is **no separate debug configuration type** for a runtime client. The same `RuntimeClient` config works for both run and debug:
 
-- `debug_launch({launchConfigurationName: "<name>"})` — launches and attaches the debugger.
+- `launch({launchConfigurationName: "<name>"})` — launches and attaches the debugger.
 - `run_yaxunit_tests({launchConfigurationName: "<name>"})` — runs YAXUnit tests.
 
 Run mode vs debug mode is chosen at launch time (the mode string), never a different config or attribute. Attach-to-server configs (`RemoteRuntime` / `LocalRuntime`) are a different feature and are out of scope here.
@@ -18,7 +18,7 @@ Run mode vs debug mode is chosen at launch time (the mode string), never a diffe
 
 ## Why applicationId is required (internal)
 
-The tool always writes a real `applicationId` so `list_configurations` shows it with the real id (not the synthetic `launch:<name>` fallback), and so `debug_launch` / `run_yaxunit_tests` can resolve the config by `projectName + applicationId` without an "Application not found" error.
+The tool always writes a real `applicationId` so `list_configurations` shows it with the real id (not the synthetic `launch:<name>` fallback), and so `launch` / `run_yaxunit_tests` can resolve the config by `projectName + applicationId` without an "Application not found" error.
 
 ## Result
 
@@ -37,7 +37,7 @@ Use `delete_launch_config(name='<name>', confirm=true)` to remove a configuratio
 2. create_launch_config({projectName: "MyProject", clientType: "thin"})
    -> {"action": "created", "name": "MyProject Thin Client", "applicationId": "abc-123", ...}
 
-3. debug_launch({launchConfigurationName: "MyProject Thin Client"})
+3. launch({launchConfigurationName: "MyProject Thin Client"})
    -> launches the thin client with the debugger attached
 
 4. delete_launch_config({name: "MyProject Thin Client", confirm: true})

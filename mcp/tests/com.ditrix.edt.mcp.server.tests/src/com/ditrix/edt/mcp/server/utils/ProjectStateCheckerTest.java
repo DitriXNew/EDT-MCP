@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -22,6 +23,9 @@ import static org.mockito.Mockito.when;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -31,7 +35,18 @@ import org.junit.Test;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+
+import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
+
+import com._1c.g5.v8.derived.DerivedDataStatus;
+import com._1c.g5.v8.derived.IDerivedDataManager;
+
+import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils.DeclaredBaseProject;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.CascadeEnvironment;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectState;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.SearchDependenciesResult;
 
 /**
  * Tests for {@link ProjectStateChecker#buildingErrorOrNull(String)} and the cascade pre-flight
@@ -99,6 +114,238 @@ public class ProjectStateCheckerTest
         when(env.hasBmModelProjectNature(any(IProject.class))).thenReturn(null);
         when(env.resolveModelsForRefactoring(any(IProject.class))).thenReturn(available);
         return env;
+    }
+
+    @Test
+    public void failureAwareDependencyLookupDistinguishesNoDependenciesFromDiscoveryFailure()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        CascadeEnvironment noDependencies = mock(CascadeEnvironment.class);
+        when(noDependencies.getOpenDtProjects()).thenReturn(Collections.singletonList(base));
+        when(noDependencies.getOpenDependentNatureProjects()).thenReturn(Collections.emptyList());
+        when(noDependencies.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        ProjectStateResult ready = new ProjectStateResult(ProjectState.READY, "ready"); //$NON-NLS-1$
+        when(noDependencies.getProjectState(base)).thenReturn(ready);
+
+        SearchDependenciesResult empty =
+            ProjectStateChecker.determineSearchDependencies(base, noDependencies);
+
+        assertTrue(empty.isDetermined());
+        assertEquals(Collections.singletonList(base), empty.getProjects());
+        assertTrue(empty.getExtensionProjects().isEmpty());
+
+        CascadeEnvironment failed = mock(CascadeEnvironment.class);
+        when(failed.getOpenDtProjects()).thenThrow(new IllegalStateException("workspace changed")); //$NON-NLS-1$
+
+        SearchDependenciesResult undetermined =
+            ProjectStateChecker.determineSearchDependencies(base, failed);
+
+        assertFalse(undetermined.isDetermined());
+        assertTrue(undetermined.getProjects().isEmpty());
+        assertTrue(undetermined.getExtensionProjects().isEmpty());
+    }
+
+    @Test
+    public void extensionWithUnavailableBaseResolutionIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, extension));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
+        when(environment.resolveBaseProject(extension)).thenReturn(null);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    @Test
+    public void extensionNatureWithoutRuntimeExtensionClassificationIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        List<IProject> openProjects = Arrays.asList(base, extension);
+        List<IProject> extensionProjects = Collections.singletonList(extension);
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(openProjects);
+        when(environment.getOpenDependentNatureProjects()).thenReturn(extensionProjects);
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(extensionProjects);
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.isExtensionProject(extension)).thenReturn(false);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    @Test
+    public void searchDependenciesDeriveExtensionTargetsAsSubsetOfSourceProjects()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        IProject externalObjects = mockOpenProject("ExternalObjects"); //$NON-NLS-1$
+        IProject unrelatedDependent = mockOpenProject("Other.tests"); //$NON-NLS-1$
+        IProject otherBase = mockOpenProject("Other"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(
+            Arrays.asList(base, extension, externalObjects, unrelatedDependent));
+        when(environment.getOpenDependentNatureProjects()).thenReturn(
+            Arrays.asList(extension, externalObjects, unrelatedDependent));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Arrays.asList(extension, unrelatedDependent));
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.resolveBaseProject(externalObjects)).thenReturn(base);
+        when(environment.resolveBaseProject(unrelatedDependent)).thenReturn(otherBase);
+        when(environment.isExtensionProject(extension)).thenReturn(true);
+        when(environment.isExtensionProject(unrelatedDependent)).thenReturn(true);
+        when(environment.getProjectState(any(IProject.class)))
+            .thenReturn(new ProjectStateResult(ProjectState.READY, "ready")); //$NON-NLS-1$
+
+        SearchDependenciesResult search =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertTrue(search.isDetermined());
+        assertTrue(search.isAllReady());
+        assertEquals(3, search.getProjectNames().size());
+        assertTrue(search.getProjectNames().contains("Base")); //$NON-NLS-1$
+        assertTrue(search.getProjectNames().contains("Base.tests")); //$NON-NLS-1$
+        assertTrue(search.getProjectNames().contains("ExternalObjects")); //$NON-NLS-1$
+        assertFalse(search.getProjectNames().contains("Other.tests")); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(extension), search.getExtensionProjects());
+        assertTrue(search.getProjects().containsAll(search.getExtensionProjects()));
+    }
+
+    /**
+     * An external-objects project is legitimately UNLINKED - {@code create_project} REJECTS
+     * baseProjectName for that kind, so this is the state it is CREATED in. Treating that null
+     * parent as "undeterminable" hands every workspace merely containing one the workspace-wide
+     * scan this scoping exists to avoid, and (because adopted-target augmentation needs the
+     * snapshot) silently drops references living in a genuine extension.
+     */
+    @Test
+    public void unlinkedExternalObjectsProjectIsUnrelatedRatherThanUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject extension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        IProject unlinkedExternalObjects = mockOpenProject("UnlinkedProbe"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects())
+            .thenReturn(Arrays.asList(base, extension, unlinkedExternalObjects));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Arrays.asList(extension, unlinkedExternalObjects));
+        when(environment.getOpenExtensionNatureProjects())
+            .thenReturn(Collections.singletonList(extension));
+        when(environment.resolveBaseProject(extension)).thenReturn(base);
+        when(environment.resolveBaseProject(unlinkedExternalObjects)).thenReturn(null);
+        when(environment.isExtensionProject(extension)).thenReturn(true);
+        when(environment.isExtensionProject(unlinkedExternalObjects)).thenReturn(false);
+        when(environment.readDeclaredBaseProject(unlinkedExternalObjects))
+            .thenReturn(DeclaredBaseProject.NONE);
+        when(environment.getProjectState(any(IProject.class)))
+            .thenReturn(new ProjectStateResult(ProjectState.READY, "ready")); //$NON-NLS-1$
+
+        SearchDependenciesResult search =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertTrue(search.isDetermined());
+        assertEquals(2, search.getProjectNames().size());
+        assertTrue(search.getProjectNames().contains("Base")); //$NON-NLS-1$
+        assertTrue(search.getProjectNames().contains("Base.tests")); //$NON-NLS-1$
+        assertFalse(search.getProjectNames().contains("UnlinkedProbe")); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(extension), search.getExtensionProjects());
+    }
+
+    /**
+     * The unlinked-is-unrelated shortcut applies ONLY where both views agree the project is not an
+     * extension. A runtime registration claiming extension kind while the permanent nature does not
+     * is unclassifiable, and an extension without a base means an unusable registration - never
+     * "unrelated".
+     */
+    @Test
+    public void unlinkedDependentClaimingRuntimeExtensionKindIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject unlinkedDependent = mockOpenProject("UnlinkedProbe"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, unlinkedDependent));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(unlinkedDependent));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        when(environment.resolveBaseProject(unlinkedDependent)).thenReturn(null);
+        when(environment.isExtensionProject(unlinkedDependent)).thenReturn(true);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    /**
+     * A null runtime parent is NOT proof of unlinkedness: EDT's {@code AbstractDependentProject}
+     * returns null when the parent is not wired yet AND when the parent project is merely not
+     * accessible. A project whose manifest still declares a base therefore has an unusable
+     * registration - skipping it would drop its indexed references while reporting the scan complete.
+     */
+    @Test
+    public void dependentDeclaringABaseItCannotResolveIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject externalObjects = mockOpenProject("ExternalObjects"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, externalObjects));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(externalObjects));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        when(environment.resolveBaseProject(externalObjects)).thenReturn(null);
+        when(environment.isExtensionProject(externalObjects)).thenReturn(false);
+        when(environment.readDeclaredBaseProject(externalObjects))
+            .thenReturn(DeclaredBaseProject.DECLARED);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    /** An unreadable manifest proves nothing, so it must not earn the unrelated shortcut either. */
+    @Test
+    public void dependentWithUnreadableManifestIsUndetermined()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject externalObjects = mockOpenProject("ExternalObjects"); //$NON-NLS-1$
+        CascadeEnvironment environment = mock(CascadeEnvironment.class);
+        when(environment.getOpenDtProjects()).thenReturn(Arrays.asList(base, externalObjects));
+        when(environment.getOpenDependentNatureProjects())
+            .thenReturn(Collections.singletonList(externalObjects));
+        when(environment.getOpenExtensionNatureProjects()).thenReturn(Collections.emptyList());
+        when(environment.resolveBaseProject(externalObjects)).thenReturn(null);
+        when(environment.isExtensionProject(externalObjects)).thenReturn(false);
+        when(environment.readDeclaredBaseProject(externalObjects))
+            .thenReturn(DeclaredBaseProject.UNREADABLE);
+
+        SearchDependenciesResult result =
+            ProjectStateChecker.determineSearchDependencies(base, environment);
+
+        assertFalse(result.isDetermined());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void dependencySnapshotRejectsTargetExtensionOutsideSourceScope()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject omittedExtension = mockOpenProject("Base.tests"); //$NON-NLS-1$
+        List<IProject> searchProjects = Collections.singletonList(base);
+        List<IProject> extensionProjects = Collections.singletonList(omittedExtension);
+        Map<String, ProjectState> readiness = new LinkedHashMap<>();
+        readiness.put("Base", ProjectState.READY); //$NON-NLS-1$
+
+        SearchDependenciesResult.determined(searchProjects, extensionProjects, readiness);
     }
 
     @Test
@@ -579,5 +826,83 @@ public class ProjectStateCheckerTest
         assertNull(result);
         verify(env).waitBeforeModelRetry(anyLong());
         verify(env, times(2)).resolveModelsForRefactoring(base);
+    }
+
+    /**
+     * Issue #495: the validation checks run for HOURS on a large configuration and keep both
+     * isIdle() and isAllComputed() false, which used to switch metadata editing off for that whole
+     * time. What a create or a modify needs answered is narrower - whether the metadata and form
+     * models are computed - and isComputed answers exactly that, as a pure query that cannot block.
+     */
+    @Test
+    public void modelDataIsComputedWhenItsSegmentsAre()
+    {
+        assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, false)));
+    }
+
+    /** Validation still running is irrelevant; an uncomputed model segment is not. */
+    @Test
+    public void pendingModelSegmentsAreNotReady()
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, false)));
+    }
+
+    /**
+     * An ACTIVE model synchronisation is tracked separately from the pipeline, so its contexts may
+     * not be enqueued yet and the segments would still read as computed for the PREVIOUS model.
+     */
+    @Test
+    public void activeModelSynchronisationIsNeverReady()
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, true)));
+    }
+
+    /**
+     * Not being able to ASK is never proof of readiness - including the platform's own assertion for
+     * a segment this EDT does not register.
+     */
+    @Test
+    public void anUnanswerableProbeIsNotReady()
+    {
+        IDerivedDataManager noStatus = mock(IDerivedDataManager.class);
+        when(noStatus.getDerivedDataStatus()).thenReturn(null);
+        assertFalse(ProjectStateChecker.isModelDataComputed(noStatus));
+
+        IDerivedDataManager throwing = mock(IDerivedDataManager.class);
+        when(throwing.getDerivedDataStatus()).thenThrow(new IllegalStateException("no pipeline")); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.isModelDataComputed(throwing));
+
+        IDerivedDataManager unsupported = managerThatAnswers(true, false);
+        when(unsupported.isComputed(ArgumentMatchers.<java.util.Collection<String>> any()))
+            .thenThrow(new IllegalArgumentException("Unsupported segment is specified")); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.isModelDataComputed(unsupported));
+    }
+
+    /** The probe asks about the MODEL segments by name, never about validation. */
+    @Test
+    public void theProbeAsksOnlyForTheModelSegments()
+    {
+        IDerivedDataManager manager = managerThatAnswers(true, false);
+
+        ProjectStateChecker.isModelDataComputed(manager);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Collection<String>> asked =
+            ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(manager).isComputed(asked.capture());
+        assertTrue("must ask for the metadata model", asked.getValue().contains("MD")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("must not wait for validation", //$NON-NLS-1$
+            asked.getValue().contains("L_CHECKS_SEGMENT")); //$NON-NLS-1$
+    }
+
+    private static IDerivedDataManager managerThatAnswers(boolean computed, boolean syncActive)
+    {
+        DerivedDataStatus status = mock(DerivedDataStatus.class);
+        when(status.isModelSyncActive()).thenReturn(syncActive);
+        IDerivedDataManager manager = mock(IDerivedDataManager.class);
+        when(manager.getDerivedDataStatus()).thenReturn(status);
+        when(manager.isComputed(ArgumentMatchers.<java.util.Collection<String>> any()))
+            .thenReturn(computed);
+        return manager;
     }
 }

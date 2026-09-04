@@ -49,10 +49,13 @@ import com._1c.g5.v8.dt.rights.tasks.EditRlsTask;
 import com._1c.g5.v8.dt.rights.tasks.EditRlsTemplateTask;
 import com._1c.g5.v8.dt.rights.tasks.SetIndependentRightsOfChildObjectsTask;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Writes a {@link Role}'s access rights (the {@code modify_metadata} Role branch): per-object right
@@ -80,14 +83,14 @@ import com.google.gson.JsonObject;
  * <p>The value / name / payload helpers are pure (no model, no UI) so they are unit-testable; the
  * model-touching apply methods run on the UI thread and go only through the BM boundary.</p>
  *
- * <p><b>Best-effort, non-atomic apply.</b> The payload is validated up front for shape errors (fail
- * fast, nothing written), but each entry is applied through its own BM task ({@code bmModel.execute}
- * per right value / RLS / template / role property), so there is no single rollback across entries. A
- * mid-run RESOLUTION failure (e.g. an {@code edit} / {@code delete} template whose name is not found,
- * or an unknown RLS field) fails the operation AFTER earlier entries have already committed - those
- * earlier entries stay applied. Order entries so any risky reference (edit/delete templates, RLS
- * fields) is validated by the caller before the batch, or accept that a partial mutation may remain
- * on failure.</p>
+ * <p><b>Resolution-atomic {@code rights[]}; otherwise best effort.</b> Every {@code rights[]} entry is
+ * fully resolved - object, right, value and RLS fields - before the first commit, and before a missing
+ * role description is bootstrapped. A refusal from that resolution phase therefore writes nothing at
+ * all. Applying the completed plan is still not one platform transaction: a rights task can fail
+ * mid-batch, and {@code templates[]} / {@code roleProperties} resolve or run only after the bootstrap
+ * and the rights plan has been applied. Those later failures can leave earlier entries committed; the
+ * refusal reports the counts that had already been applied and tells the caller how to reconcile the
+ * changed model.</p>
  */
 public final class RoleRightsWriter
 {
@@ -117,15 +120,20 @@ public final class RoleRightsWriter
 
     /**
      * The outcome of applying a role payload: either a JSON {@code error} or the per-section counts of
-     * what was applied. An up-front VALIDATION error means nothing was written; a mid-run RESOLUTION /
-     * task error may leave earlier entries already applied (the apply is best-effort, non-atomic - see
-     * the class javadoc).
+     * what was applied. An up-front validation error or any {@code rights[]} resolution refusal means
+     * nothing was written. A later task, {@code templates[]} or {@code roleProperties} failure may
+     * leave earlier entries applied; a failed result then carries their real counts and an error that
+     * describes how to reconcile the changed model (see the class javadoc).
      */
     public static final class Result
     {
         /** Non-null when the write failed / was rejected: a ready JSON error to return verbatim. */
         public final String error;
-        /** Number of right entries applied (value + optional RLS). */
+        /**
+         * Number of right-entry VALUES applied. On success their optional RLS tasks also completed;
+         * on failure the last counted entry may be the value that committed immediately before its
+         * RLS task failed.
+         */
         public final int rights;
         /** Number of template operations applied. */
         public final int templates;
@@ -159,12 +167,12 @@ public final class RoleRightsWriter
          * role-property task that ran to completion before the failure.
          *
          * <p>This, not {@link #rightsFqn}, is what a refusal is gated on. A refusal is not proof that
-         * nothing happened: the bootstrap commits before the first {@code rights[]} entry is
-         * resolved, and entries are applied one at a time, so an unknown object, an unknown right or
-         * a failing task can refuse with earlier work already committed. The force-export is what
-         * drains that work to disk AND what records the project in the call's {@code WriteScope}
-         * (issue #408), so a call that wrote without exporting would be declaring that it changed
-         * nothing.</p>
+         * nothing happened: although every {@code rights[]} reference is resolved before the
+         * bootstrap, entries are still applied one at a time, and templates / role properties run
+         * later. A task failure can therefore refuse with earlier work already committed. The
+         * force-export drains that work to disk AND records the project in the call's
+         * {@code WriteScope} (issue #408), so a call that wrote without exporting would be declaring
+         * that it changed nothing.</p>
          *
          * <p>Recorded only AFTER the transaction that made the write has returned: work that rolled
          * back is not work this call owes anyone a drain of.</p>
@@ -189,18 +197,24 @@ public final class RoleRightsWriter
         }
 
         /**
-         * A failed result that still reports what the call had already done, so the caller can drain
-         * it - and declare it - instead of leaving the model and the disk disagreeing. See
-         * {@link #rightsFqn} and {@link #rightsModelWritten}.
+         * A failed result that reports both what the call had already applied and whether any rights
+         * model write committed, so the caller can explain the partial change, drain it and declare it
+         * instead of leaving the model and the disk disagreeing. See {@link #rightsFqn} and
+         * {@link #rightsModelWritten}.
          *
          * @param error the ready JSON error to return verbatim
+         * @param rights number of committed right-entry values before the failure
+         * @param templates number of completed template operations before the failure
+         * @param roleProperties number of completed role-property changes before the failure
          * @param rightsFqn the FQN of the rights resource this call can name, or {@code null}
          * @param rightsModelWritten whether a write of this call had already committed
          * @return the failed result
          */
-        static Result failed(String error, String rightsFqn, boolean rightsModelWritten)
+        static Result failed(String error, int rights, int templates, int roleProperties,
+            String rightsFqn, boolean rightsModelWritten)
         {
-            return new Result(error, 0, 0, 0, rightsFqn, rightsModelWritten);
+            return new Result(error, rights, templates, roleProperties, rightsFqn,
+                rightsModelWritten);
         }
 
         static Result ok(int rights, int templates, int roleProperties, String rightsFqn,
@@ -306,6 +320,12 @@ public final class RoleRightsWriter
         String rightsFqn = null;
         try
         {
+            // Resolve the ENTIRE rights payload before the bootstrap commits anything. Neither the
+            // right-info lookup nor the DB-view RLS field pool depends on RoleDescription, so a
+            // resolution refusal can leave the role exactly as the call found it. Template resolution
+            // genuinely needs the description and therefore remains after the bootstrap.
+            List<RightPlan> rightsPlan = planRights(ctx, rights);
+
             // A RoleDescription must exist AND be registered as a BM top object before ANY rights task
             // runs (the tasks downcast Role.getRights() to RoleDescription without auto-creating it,
             // and a merely-referenced description fails the next commit - issue #452). Seed and attach
@@ -315,15 +335,18 @@ public final class RoleRightsWriter
             Bootstrap bootstrap = ensureRoleDescription(ctx, fqnGenerator);
             rightsFqn = bootstrap.fqn;
 
-            int appliedRights = applyRights(ctx, rights);
-            int appliedTemplates = applyTemplates(ctx, templates);
-            int appliedProps = applyRoleProperties(ctx, roleProperties);
-            return Result.ok(appliedRights, appliedTemplates, appliedProps, rightsFqn,
-                ctx.hasWritten());
+            applyRights(ctx, rightsPlan);
+            applyTemplates(ctx, templates);
+            applyRoleProperties(ctx, roleProperties);
+            return Result.ok(ctx.appliedRights, ctx.appliedTemplates, ctx.appliedRoleProperties,
+                rightsFqn, ctx.hasWritten());
         }
         catch (RoleWriteException e)
         {
-            return Result.failed(e.getErrorJson(), rightsFqn, ctx.hasWritten());
+            String error = reportPartialApplication(e.getErrorJson(), ctx.appliedRights,
+                ctx.appliedTemplates, ctx.appliedRoleProperties);
+            return Result.failed(error, ctx.appliedRights, ctx.appliedTemplates,
+                ctx.appliedRoleProperties, rightsFqn, ctx.hasWritten());
         }
         catch (RuntimeException e)
         {
@@ -334,34 +357,48 @@ public final class RoleRightsWriter
             // services and so cannot be reached headless, and the scrubbing it performs has to stay
             // pinnable by a unit test.
             Activator.logError("Failed to apply role rights to " + roleName, e); //$NON-NLS-1$
-            return Result.failed(applyFailure(roleName, e), rightsFqn, ctx.hasWritten());
+            String error = reportPartialApplication(applyFailure(roleName, e), ctx.appliedRights,
+                ctx.appliedTemplates, ctx.appliedRoleProperties);
+            return Result.failed(error, ctx.appliedRights, ctx.appliedTemplates,
+                ctx.appliedRoleProperties, rightsFqn, ctx.hasWritten());
         }
     }
 
     // ---- rights[] -----------------------------------------------------------------------------
 
-    /**
-     * Applies every {@code rights[]} entry: resolves the object + the {@link Right} (bilingually), sets
-     * the value via {@code AddRightValuesTask}, and, when an RLS condition is present, resolves the
-     * field pool via {@link DbViewUtil} and runs {@code AddRlsTask} (or {@code EditRlsTask} when an Rls
-     * already exists for that object + right). Each task is its own {@code bmModel.execute}.
-     *
-     * <p><b>The returned count is entries SUBMITTED, not cells written.</b>
-     * {@code AddRightValuesTask} goes through {@code RightsModelUtil.changeObjectRight}, which does
-     * not author an {@code ObjectRight} whose value equals {@code getDefaultRightValue(object, role)}
-     * - a cell that only restates the default is pruned. The role-wide flags decide that default
-     * ({@code setForNewObjects} for a top object, {@code setForAttributesByDefault} for an attribute /
-     * tabular section / dimension / resource), and a role bootstrapped by
-     * {@link #attachRoleDescription} has BOTH {@code false}, so on such a role a top-object entry
-     * whose value is the default lands nowhere while this method still counts it. What actually
-     * landed is read back with {@code get_metadata_details}; the count says what the payload asked
-     * for. Note also the order inside a single {@link #apply}: this method runs BEFORE
-     * {@link #applyRoleProperties}, so a flag sent in the same call does not change the default the
-     * cells were measured against - send it in an earlier call.</p>
-     */
-    private static int applyRights(Context ctx, List<JsonObject> rights)
+    /** Everything the apply phase needs for one fully resolved {@code rights[]} entry. */
+    private static final class RightPlan
     {
-        int applied = 0;
+        final EObject target;
+        final Right right;
+        final RightValue value;
+        final String rls;
+        final Collection<DbViewFieldDef> rlsFields;
+
+        RightPlan(EObject target, Right right, RightValue value, String rls,
+            Collection<DbViewFieldDef> rlsFields)
+        {
+            this.target = target;
+            this.right = right;
+            this.value = value;
+            this.rls = rls;
+            this.rlsFields = rlsFields;
+        }
+    }
+
+    /**
+     * Resolves every {@code rights[]} entry before any write: the target object, bilingual
+     * {@link Right}, parsed value, and (when an RLS condition is present) its bilingual DB-view field
+     * collection. The returned plan contains task inputs only and this method commits nothing.
+     *
+     * @param ctx the resolved per-call context
+     * @param rights the validated {@code rights[]} payload
+     * @return one fully resolved plan item per payload entry
+     * @throws RoleWriteException when an object, right or requested RLS field does not resolve
+     */
+    private static List<RightPlan> planRights(Context ctx, List<JsonObject> rights)
+    {
+        List<RightPlan> plan = new ArrayList<>(rights.size());
         for (JsonObject entry : rights)
         {
             String objectFqn = str(entry.get(KEY_OBJECT));
@@ -384,16 +421,58 @@ public final class RoleRightsWriter
             }
 
             RightValue value = parseRightValue(entry.get(KEY_VALUE));
-            setRightValue(ctx, target, right, value);
-
-            String rls = str(entry.get("rls")); //$NON-NLS-1$
-            if (rls != null && !rls.isEmpty())
+            String rls = emptyToNull(str(entry.get("rls"))); //$NON-NLS-1$
+            Collection<DbViewFieldDef> fields = Collections.emptyList();
+            if (rls != null)
             {
-                applyRls(ctx, targetMd, target, right, entry, rls);
+                List<String> fieldNames = strList(entry.get("rlsFields")); //$NON-NLS-1$
+                // DbViewUtil.getRlsFields reads DB-view derived data - a model read - so resolve inside
+                // a read boundary; only the resolved field collection (a task input) escapes.
+                fields = BmTransactions.read(ctx.model, "ResolveRlsFields", //$NON-NLS-1$
+                    (tx, pm) -> resolveRlsFields(targetMd, fieldNames));
+                if (fields == null)
+                {
+                    throw new RoleWriteException(BmTransactions.read(ctx.model, "RlsFieldsNotFound", //$NON-NLS-1$
+                        (tx, pm) -> rlsFieldsNotFound(targetMd, fieldNames)));
+                }
             }
-            applied++;
+            plan.add(new RightPlan(target, right, value, rls, fields));
         }
-        return applied;
+        return plan;
+    }
+
+    /**
+     * Applies a fully resolved rights plan. For each entry the value task runs first, followed by the
+     * Add/Edit RLS task when the plan carries a condition; each task is its own
+     * {@code bmModel.execute}.
+     *
+     * <p><b>The applied count is value tasks COMMITTED, not cells written.</b>
+     * {@code AddRightValuesTask} goes through {@code RightsModelUtil.changeObjectRight}, which does
+     * not author an {@code ObjectRight} whose value equals {@code getDefaultRightValue(object, role)}
+     * - a cell that only restates the default is pruned. The role-wide flags decide that default
+     * ({@code setForNewObjects} for a top object, {@code setForAttributesByDefault} for an attribute /
+     * tabular section / dimension / resource), and a role bootstrapped by
+     * {@link #attachRoleDescription} has BOTH {@code false}, so on such a role a top-object entry
+     * whose value is the default lands nowhere while this method still counts it. What actually
+     * landed is read back with {@code get_metadata_details}; the count says what the payload asked
+     * for. Note also the order inside a single {@link #apply}: this method runs BEFORE
+     * {@link #applyRoleProperties}, so a flag sent in the same call does not change the default the
+     * cells were measured against - send it in an earlier call.</p>
+     */
+    private static void applyRights(Context ctx, List<RightPlan> rights)
+    {
+        for (RightPlan entry : rights)
+        {
+            setRightValue(ctx, entry.target, entry.right, entry.value);
+            // Count the value as soon as its own task commits. The optional RLS task intentionally
+            // follows it and can fail; retaining this count is how that residual non-atomic window
+            // reports the right value that really landed.
+            ctx.appliedRights++;
+            if (entry.rls != null)
+            {
+                applyRls(ctx, entry);
+            }
+        }
     }
 
     /** Runs {@code AddRightValuesTask} for a single object + right + value. */
@@ -411,45 +490,33 @@ public final class RoleRightsWriter
     }
 
     /**
-     * Applies the RLS restriction condition for one object + right: resolves the field collection
-     * (empty {@code rlsFields} = whole-object restriction), then runs {@code EditRlsTask} when an Rls
-     * already exists for that object + right, else {@code AddRlsTask}. Every model read (the field pool
-     * and the Add / Edit decision) runs INSIDE a {@link BmTransactions#read read} boundary that
-     * re-resolves handles by bm id; only the resolved handles the task consumes escape the boundary.
+     * Applies the already-resolved RLS restriction for one object + right. The existing-RLS Add/Edit
+     * decision runs INSIDE a {@link BmTransactions#read read} boundary that re-resolves the role by BM
+     * id; only the resolved handles the task consumes escape the boundary.
      */
-    private static void applyRls(Context ctx, MdObject targetMd, EObject target, Right right,
-        JsonObject entry, String rls)
+    private static void applyRls(Context ctx, RightPlan entry)
     {
-        List<String> fieldNames = strList(entry.get("rlsFields")); //$NON-NLS-1$
-        // DbViewUtil.getRlsFields reads DB-view derived data - a model read - so resolve inside a read
-        // boundary; only the resolved DbViewFieldDef collection (a task input) escapes.
-        Collection<DbViewFieldDef> fields = BmTransactions.read(ctx.model, "ResolveRlsFields", //$NON-NLS-1$
-            (tx, pm) -> resolveRlsFields(targetMd, fieldNames));
-        if (fields == null)
-        {
-            throw new RoleWriteException(BmTransactions.read(ctx.model, "RlsFieldsNotFound", //$NON-NLS-1$
-                (tx, pm) -> rlsFieldsNotFound(targetMd, fieldNames)));
-        }
-
         // Resolve the role description and the Add/Edit decision INSIDE a read boundary (re-fetching the
         // role by bm id), so getRights()/getRestrictionsByCondition() are never walked on the bare
-        // calling thread. The plan carries only the handles the Add/Edit task consumes.
+        // calling thread. Deliberately keep this RlsPlan in the APPLY phase: an earlier entry in the
+        // same batch can add or edit the RLS state on which this Add-vs-Edit decision depends.
         RlsPlan plan = BmTransactions.read(ctx.model, "ResolveRlsPlan", (tx, pm) -> //$NON-NLS-1$
         {
             RoleDescription roleDescription = roleDescriptionInTx(tx, ctx.roleBmId);
-            Rls existing = findExistingRls(roleDescription, target, right);
+            Rls existing = findExistingRls(roleDescription, entry.target, entry.right);
             return new RlsPlan(roleDescription, existing);
         });
 
         IBmTask<?> task;
         if (plan.existing != null)
         {
-            task = EditRlsTask.create(plan.existing, fields, rls, ctx.project, ctx.eventBroker);
+            task = EditRlsTask.create(plan.existing, entry.rlsFields, entry.rls, ctx.project,
+                ctx.eventBroker);
         }
         else
         {
-            task = AddRlsTask.create(plan.roleDescription, target, right, fields, rls, ctx.project,
-                ctx.eventBroker, ctx.sorter);
+            task = AddRlsTask.create(plan.roleDescription, entry.target, entry.right, entry.rlsFields,
+                entry.rls, ctx.project, ctx.eventBroker, ctx.sorter);
         }
         ctx.execute(task);
     }
@@ -500,13 +567,12 @@ public final class RoleRightsWriter
      * Applies every {@code templates[]} entry: {@code add} / {@code edit} / {@code delete} an RLS
      * restriction template on the role description, each via its own BM task.
      */
-    private static int applyTemplates(Context ctx, List<JsonObject> templates)
+    private static void applyTemplates(Context ctx, List<JsonObject> templates)
     {
         if (templates.isEmpty())
         {
-            return 0;
+            return;
         }
-        int applied = 0;
         for (JsonObject entry : templates)
         {
             String op = templateOp(entry);
@@ -521,9 +587,8 @@ public final class RoleRightsWriter
                 return buildTemplateTask(ctx, roleDescription, op, name, condition);
             });
             ctx.execute(task);
-            applied++;
+            ctx.appliedTemplates++;
         }
-        return applied;
     }
 
     /**
@@ -581,17 +646,16 @@ public final class RoleRightsWriter
      * extra constructor dependencies ({@code IBmEmfIndexManager} / {@code IQualifiedNameProvider} /
      * per-EClass right suppliers) that are not wired here; the flags themselves are the whole change.
      */
-    private static int applyRoleProperties(Context ctx, JsonObject roleProperties)
+    private static void applyRoleProperties(Context ctx, JsonObject roleProperties)
     {
         if (roleProperties == null)
         {
-            return 0;
+            return;
         }
         Boolean setForNewObjects = boolProp(roleProperties, "setForNewObjects"); //$NON-NLS-1$
         Boolean setForAttributesByDefault = boolProp(roleProperties, "setForAttributesByDefault"); //$NON-NLS-1$
         Boolean independentRights = boolProp(roleProperties, "independentRightsOfChildObjects"); //$NON-NLS-1$
 
-        int applied = 0;
         if (independentRights != null)
         {
             // Resolve the role description by bm id inside a read boundary; the task then re-opens its
@@ -600,20 +664,19 @@ public final class RoleRightsWriter
                 (tx, pm) -> roleDescriptionInTx(tx, ctx.roleBmId));
             ctx.execute(
                 SetIndependentRightsOfChildObjectsTask.create(roleDescription, independentRights));
-            applied++;
+            ctx.appliedRoleProperties++;
         }
         if (setForNewObjects != null)
         {
             setBooleanRoleProperty(ctx, RolePropertyKind.FOR_NEW_OBJECTS, setForNewObjects);
-            applied++;
+            ctx.appliedRoleProperties++;
         }
         if (setForAttributesByDefault != null)
         {
             setBooleanRoleProperty(ctx, RolePropertyKind.FOR_ATTRIBUTES_BY_DEFAULT,
                 setForAttributesByDefault);
-            applied++;
+            ctx.appliedRoleProperties++;
         }
-        return applied;
     }
 
     /** The two role flags set via the direct RoleDescription setter (E4 fallback). */
@@ -892,6 +955,64 @@ public final class RoleRightsWriter
             + PlatformFailures.withoutObjectIdentity(PlatformFailures.describe(cause))
             + ". Re-read the role with get_metadata_details to see what landed, then retry; if the " //$NON-NLS-1$
             + "failure repeats, run clean_project on the project and retry.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Adds the completed per-section counts and an explicit reconciliation warning to a ready error
+     * JSON after a partial apply. Pure and package-visible so its defensive response-shape contract is
+     * unit-testable without EDT services.
+     *
+     * <p>Only an explicit {@code success:false} object with a string {@code error} is changed, and
+     * only when at least one count is non-zero. A success, malformed JSON, malformed error object or a
+     * zero-count refusal passes through byte-for-byte.</p>
+     *
+     * @param errorJson the ready error JSON
+     * @param rights committed right-entry values
+     * @param templates completed template operations
+     * @param roleProperties completed role-property changes
+     * @return the enriched error, or {@code errorJson} unchanged when it is not eligible
+     */
+    static String reportPartialApplication(String errorJson, int rights, int templates,
+        int roleProperties)
+    {
+        if (errorJson == null || (rights == 0 && templates == 0 && roleProperties == 0))
+        {
+            return errorJson;
+        }
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(errorJson);
+            if (!parsed.isJsonObject())
+            {
+                return errorJson;
+            }
+            JsonObject object = parsed.getAsJsonObject();
+            JsonElement success = object.get("success"); //$NON-NLS-1$
+            JsonElement error = object.get(McpKeys.ERROR);
+            if (success == null || !success.isJsonPrimitive()
+                || !success.getAsJsonPrimitive().isBoolean() || success.getAsBoolean()
+                || error == null || !error.isJsonPrimitive()
+                || !error.getAsJsonPrimitive().isString())
+            {
+                return errorJson;
+            }
+
+            JsonObject applied = new JsonObject();
+            applied.addProperty("rights", rights); //$NON-NLS-1$
+            applied.addProperty("templates", templates); //$NON-NLS-1$
+            applied.addProperty("roleProperties", roleProperties); //$NON-NLS-1$
+            object.add("applied", applied); //$NON-NLS-1$
+            object.addProperty(McpKeys.ERROR, error.getAsString()
+                + " Before it failed, this call had already applied rights=" + rights //$NON-NLS-1$
+                + ", templates=" + templates + ", roleProperties=" + roleProperties //$NON-NLS-1$ //$NON-NLS-2$
+                + "; the model was changed, so re-read the role with get_metadata_details, then " //$NON-NLS-1$
+                + "undo or complete the remaining changes by hand."); //$NON-NLS-1$
+            return GsonProvider.toJson(object);
+        }
+        catch (RuntimeException e)
+        {
+            return errorJson;
+        }
     }
 
     /** {@code null} for a null or empty string, the string itself otherwise. */
@@ -1324,6 +1445,14 @@ public final class RoleRightsWriter
 
         /** Set the moment a write of this call RETURNS from the model, i.e. has committed. */
         private boolean written;
+
+        /**
+         * Committed payload units. Rights count after the value task (before optional RLS); templates
+         * and properties count after their complete entry task returns.
+         */
+        private int appliedRights;
+        private int appliedTemplates;
+        private int appliedRoleProperties;
 
         Context(IProject project, Configuration config, IBmModel model, Role role, long roleBmId, // NOSONAR cohesive per-call context; a holder would not improve clarity
             IRightInfosService rightInfos, IEventBroker eventBroker,

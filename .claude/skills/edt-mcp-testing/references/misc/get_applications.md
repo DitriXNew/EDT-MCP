@@ -1,6 +1,6 @@
 # get_applications — how to test
 
-**Purpose.** List the 1C applications (infobases / launch targets) defined for an EDT project, with each application's `id`, `name`, `type`, and update state. Read-only. The returned application `id` is the value you pass as the application identifier to `update_database` and `debug_launch`, so this tool is the discovery step before those operations. Source: `GetApplicationsTool` → `IApplicationManager.getApplications(project)`.
+**Purpose.** List the 1C applications (infobases / launch targets) defined for an EDT project, with each application's `id`, `name`, `type`, and update state. Read-only. The returned application `id` is the value you pass as the application identifier to `update_database` and `launch`, so this tool is the discovery step before those operations. Source: `GetApplicationsTool` → `IApplicationManager.getApplications(project)`.
 
 > Note: this returns the applications *configured for the project* (their `updateState` reflects whether the infobase schema is up to date vs the model), **not** a live list of OS processes currently running. An app appears here whether or not it is started.
 
@@ -40,7 +40,7 @@ Field meaning (from `GetApplicationsTool`):
 - **`count`** — number of applications.
 - **`defaultApplicationId`** — id of the project's default application (`IApplicationManager.getDefaultApplication`); omitted if none / on error.
 - **`applications[]`** — one object per application:
-  - **`id`** — application id (a GUID for an infobase app). Pass this to `update_database` / `debug_launch`.
+  - **`id`** — application id (a GUID for an infobase app). Pass this to `update_database` / `launch`.
   - **`name`** — application name.
   - **`type`** — application type id, e.g. `com.e1c.g5.dt.applications.type.infobase`. Omitted only if the type is null.
   - **`updateState`** — `ApplicationUpdateState` enum name: one of `UNKNOWN`, `INCREMENTAL_UPDATE_REQUIRED`, `FULL_UPDATE_REQUIRED`, `UPDATED`, `BEING_UPDATED`. If reading the state throws, the value is `ERROR` plus an `updateStateError` field with the message.
@@ -64,6 +64,6 @@ Field meaning (from `GetApplicationsTool`):
 - **Error contract.** Genuine failures use `ToolResult.error(...)` → `{success:false,error:"…"}` with `isError:true`. These are returned for: missing/empty `projectName` (`"projectName is required"`), project not `ready` (the `ProjectStateChecker` message), `"Project not found: <name>"`, `"Project is closed: <name>"`, `"IApplicationManager service is not available"`, and `"Error getting applications: <msg>"` (a caught `ApplicationException`). A per-application `getUpdateState` failure is *not* a tool-level error — it is captured inline as `updateState:"ERROR"` + `updateStateError` on that one app, and the call still succeeds.
 - **State gate.** Because of `checkReadyOrError`, calling against a project that is still indexing returns the not-ready error, not partial data. Re-poll `list_projects` until `State=ready`.
 - **Inheritance for dependent projects.** External-objects and extension projects do not own applications. When the named project owns none and its `IV8Project` is an `IDependentProject` (resolved via the canonical `ExtensionOriginUtils.resolveV8Project` chain), the tool re-runs the lookup against the base project (`IDependentProject.getParentProject()`) and surfaces `inheritedFromProject` = base project name; `project` still echoes the named project. To test, call against an external-objects/extension project that has no applications of its own but whose base project does, and assert `inheritedFromProject` equals the base project name and `applications` matches the base project's list. Configuration projects are never `IDependentProject`: their output is byte-identical to before and `inheritedFromProject` is absent.
-- **ids are for the write/debug tools.** Treat `id` (and `defaultApplicationId`) as opaque GUIDs to feed into `update_database` / `debug_launch`. Do not synthesize or guess them.
+- **ids are for the write/debug tools.** Treat `id` (and `defaultApplicationId`) as opaque GUIDs to feed into `update_database` / `launch`. Do not synthesize or guess them.
 - **Flaky output channel.** If the result comes back garbled/empty (a bare `Error`/`Done` instead of the JSON), do **not** retry-spam. Re-verify independently via the EDT log at `D:\WS\EDT\.metadata\.log`, which records the full request/response.
 - **No bilingual concern.** Field keys, type ids, and state enum names are fixed English/programmatic identifiers; the application `name` is the configured app name, not a translatable 1C synonym. Nothing here goes through the synonym / TYPE-token bilingual path.

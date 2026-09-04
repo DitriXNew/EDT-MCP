@@ -17,6 +17,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.BasicFeature;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTabularSection;
 import com._1c.g5.v8.dt.metadata.mdclass.CharacteristicsDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonAttributeContentItem;
 import com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
@@ -48,6 +49,9 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
 
     /** Table column label for an origin cell. */
     private static final String ORIGIN_TOKEN = "Origin"; //$NON-NLS-1$
+
+    /** Explicit marker for a common-attribute content item whose owner no longer resolves. */
+    private static final String UNRESOLVED_METADATA = "[unresolved metadata]"; //$NON-NLS-1$
 
     /**
      * Gets the singleton instance.
@@ -247,6 +251,10 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
             // Handle EMap collections like Synonym, ObjectPresentation
             formatMapEntryCollection(sb, collectionName, collection);
         }
+        else if (firstItem instanceof CommonAttributeContentItem)
+        {
+            formatCommonAttributeContentCollection(sb, collectionName, collection);
+        }
         else if (firstItem instanceof MdObject)
         {
             formatMdObjectCollection(sb, collectionName, collection, full, language);
@@ -254,6 +262,29 @@ public class UniversalMetadataFormatter extends AbstractMetadataFormatter // NOS
         else if (firstItem instanceof EObject)
         {
             formatEObjectCollection(sb, collectionName, collection);
+        }
+    }
+
+    /**
+     * Formats the owners and per-owner use values of a common attribute. Owner FQNs use the same
+     * {@code Type.Name} representation accepted by {@code modify_metadata}'s {@code content}
+     * payload. A missing owner is rendered explicitly because an empty cell would make a dangling
+     * content entry look valid.
+     */
+    private void formatCommonAttributeContentCollection(StringBuilder sb, String name, Collection<?> items)
+    {
+        addSectionHeader(sb, name);
+        startTable(sb, "Metadata", "Use"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (Object item : items)
+        {
+            if (item instanceof CommonAttributeContentItem)
+            {
+                CommonAttributeContentItem contentItem = (CommonAttributeContentItem)item;
+                MdObject metadata = contentItem.getMetadata();
+                String metadataFqn = metadata == null ? UNRESOLVED_METADATA : formatEObjectReference(metadata);
+                addTableRow(sb, metadataFqn, formatEnum(contentItem.getUse()));
+            }
         }
     }
     

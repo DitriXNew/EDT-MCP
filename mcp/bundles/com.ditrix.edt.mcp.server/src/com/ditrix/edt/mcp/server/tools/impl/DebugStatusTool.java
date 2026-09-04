@@ -76,7 +76,7 @@ public class DebugStatusTool implements IMcpTool
             .integerProperty("debugServerTargetCount", "Number of debug-server targets returned") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("recentLaunchFailures", //$NON-NLS-1$
                 "Failures of asynchronous (fire-and-forget) launches from the last hour, which the " //$NON-NLS-1$
-                    + "debug_launch call itself could not report because it had already returned: " //$NON-NLS-1$
+                    + "launch call itself could not report because it had already returned: " //$NON-NLS-1$
                     + "{launchConfiguration, applicationId, message, ageSeconds}. Filtered by " //$NON-NLS-1$
                     + "applicationId like the launches above (strictly: call without it to see " //$NON-NLS-1$
                     + "failures whose application could not be resolved). Includes an external-changes " //$NON-NLS-1$
@@ -338,7 +338,7 @@ public class DebugStatusTool implements IMcpTool
     /**
      * The recent failures of fire-and-forget launches, as plain maps for the JSON result.
      *
-     * <p>{@code debug_launch} answers {@code status: "launching"} and returns; anything that fails
+     * <p>{@code launch} answers {@code status: "launching"} and returns; anything that fails
      * afterwards - including an external-changes conflict the call's policy declined to resolve
      * while EDT performed the DB update inside the launch - would otherwise reach the caller only
      * as an absent session. This is the follow-up call an agent already makes, so it is where the

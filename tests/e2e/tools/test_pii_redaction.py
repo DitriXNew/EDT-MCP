@@ -218,7 +218,7 @@ def test_on_path_redaction_is_manual_live():
          (Leave EDT_MCP_PII_REDACTION UNSET so the preference decides — the env
           override is bidirectional and wins over the preference: on/true/1/yes/enabled
           force redaction ON, off/false/0/no/disabled force it OFF.)
-      2. debug_launch a config whose infobase holds real personal data; set a
+      2. launch a config whose infobase holds real personal data; set a
          breakpoint on a line where a local binds a person's ФИО / СНИЛС / passport.
       3. wait_for_break, then get_variables / evaluate_expression on that frame.
       4. Confirm the personal-data value comes back PSEUDONYMIZED (stable `<Prefix>#hhhhhhhh`,

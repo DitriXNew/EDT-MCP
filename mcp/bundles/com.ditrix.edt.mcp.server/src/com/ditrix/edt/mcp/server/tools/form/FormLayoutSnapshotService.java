@@ -29,6 +29,8 @@ import com.google.gson.JsonParser;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
+import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
 /**
@@ -149,7 +151,8 @@ public class FormLayoutSnapshotService
             int elementsWithBounds = countElementsWithBounds(elements);
             if (elementsWithBounds == 0)
             {
-                warnings.add("No calculated element bounds were found. The form may not be fully rendered yet."); //$NON-NLS-1$
+                warnings.add(buildNoBoundsWarning(elementsWithBounds,
+                    NativeRenderModeProbe.getNativeRenderMode()));
             }
 
             Map<String, Object> formSize = getFormSize(wysiwygViewer, refresh);
@@ -175,6 +178,45 @@ public class FormLayoutSnapshotService
         {
             Activator.logError("Failed to capture form layout snapshot", e); //$NON-NLS-1$
             return errorYaml("Failed to capture form layout snapshot: " + e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Builds the no-bounds diagnosis without requiring a workbench or probing EDT internals.
+     *
+     * @param elementsWithBounds number of returned elements with calculated bounds
+     * @param renderMode effective native render mode from {@link NativeRenderModeProbe}
+     * @return the diagnosis, or {@code null} when calculated bounds were found
+     */
+    public static String buildNoBoundsWarning(int elementsWithBounds, NativeRenderMode renderMode)
+    {
+        if (elementsWithBounds != 0)
+        {
+            return null;
+        }
+
+        NativeRenderMode effectiveMode = renderMode == null ? NativeRenderMode.UNKNOWN : renderMode;
+        switch (effectiveMode)
+        {
+        case ON:
+            return "No calculated element bounds were found because EDT does not produce Java-side " //$NON-NLS-1$
+                + "per-element bounds in native render mode. EDT computes the layout in its C++ visualizer " //$NON-NLS-1$
+                + "and does not return per-element rectangles to Java. This is structural rather than transient, " //$NON-NLS-1$
+                + "so retrying the call or setting refresh to true will not help. Per-element bounds require " //$NON-NLS-1$
+                + "relaunching EDT with -DnativeFormLayoutRender=false, which is a trade-off: native render is " //$NON-NLS-1$
+                + "the mode get_form_screenshot's image path uses. If you only need the element tree and its " //$NON-NLS-1$
+                + "nesting, call get_metadata_details with the form FQN instead."; //$NON-NLS-1$
+        case OFF:
+            return "No calculated element bounds were found. Native render mode is off, so the form may not " //$NON-NLS-1$
+                + "have finished rendering. Retry the call or ensure refresh is true."; //$NON-NLS-1$
+        case UNKNOWN:
+        default:
+            return "No calculated element bounds were found, and EDT's effective native render mode could not be read. " //$NON-NLS-1$
+                + "Two causes are possible: when native render mode is on, EDT does not produce Java-side " //$NON-NLS-1$
+                + "per-element bounds; when native render mode is off, the form may not have finished rendering. " //$NON-NLS-1$
+                + "Call get_metadata_details with the form FQN to inspect the element tree regardless of render mode. " //$NON-NLS-1$
+                + "EDT uses native render by default when -DnativeFormLayoutRender is not set explicitly, so an " //$NON-NLS-1$
+                + "installation with no such setting is most likely in the structural case."; //$NON-NLS-1$
         }
     }
 

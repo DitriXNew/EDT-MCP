@@ -4,7 +4,7 @@
  * Licensed under AGPL-3.0-or-later
  */
 
-package com.ditrix.edt.mcp.server.tools.impl;
+package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -24,7 +24,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.junit.Test;
 
-import com.ditrix.edt.mcp.server.tools.impl.StandaloneServerSupport.RegistryCleanup;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport.RegistryCleanup;
 
 /**
  * Tests for {@link StandaloneServerSupport}.

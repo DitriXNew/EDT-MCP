@@ -2,7 +2,7 @@ Places a line breakpoint on a BSL module so the 1C application suspends there wh
 
 ## When to use
 - You want execution to pause at a specific line so you can inspect variables and step through code.
-- Setting up a debug session before `debug_launch` (or before attaching to a running infobase).
+- Setting up a debug session before `launch` (or before attaching to a running infobase).
 
 ## Parameter details
 - `modulePath` (required) - the module identifier: either an EDT module path like `CommonModules/Foo/Module.bsl` or an absolute filesystem path to a `.bsl` file. (`module` is a deprecated alias.)
@@ -14,6 +14,6 @@ JSON: `breakpointId` (the Eclipse marker id - keep it to remove the breakpoint l
 
 ## Notes & gotchas
 - **`degraded: true` means the breakpoint may NOT actually suspend execution** (the EDT BSL breakpoint class wasn't available, so it fell back to a plain marker). Verify it appears in EDT's Breakpoints view.
-- Requires a debug session to be useful: pair with `debug_launch` (or an Attach config), then `wait_for_break`. Inspect with `get_variables` / `evaluate_expression`, move with `step`, continue with `resume`.
+- Requires a debug session to be useful: pair with `launch` (or an Attach config), then `wait_for_break`. Inspect with `get_variables` / `evaluate_expression`, move with `step`, continue with `resume`.
 - Setting on an EDT module path while the project is still building returns a clear "still building" error - wait for it to settle.
 - Remove it with `remove_breakpoint` (by `breakpointId`, or by the same coordinates); list active ones with `list_breakpoints`.

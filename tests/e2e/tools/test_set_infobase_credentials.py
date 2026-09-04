@@ -9,7 +9,7 @@ launch configuration, into that configuration's own client-user attributes as we
 (see TWO CONSUMERS below). The store path is
 DESIGNER-FREE: it commits via IInfobaseAccessManager.updateSettings and never opens,
 connects to, or validates a designer session. Those stored credentials are later read
-by EDT when update_database / debug_launch authenticate the designer agent against an
+by EDT when update_database / launch authenticate the designer agent against an
 infobase that has a user list (issue #194) — but that authentication happens in those
 other tools, not here. The tool selects an EXISTING infobase user (does not create
 users); an empty password is valid (demo bases). Target by launchConfigurationName

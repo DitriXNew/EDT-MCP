@@ -3,7 +3,7 @@ e2e tests for get_metadata_objects (kind: read).
 
 Read tool: returns a MARKDOWN table (Name, Synonym, Comment, Type, ObjectModule,
 ManagerModule) of the configuration's metadata objects, with optional filtering by
-metadataType / nameFilter. ResponseType is MARKDOWN, so the payload is in r.text
+metadataType / nameFilter / textFilter. ResponseType is MARKDOWN, so the payload is in r.text
 (NOT r.structured).
 
 Happy paths assert that real fixture objects appear in the table; every test ends
@@ -29,6 +29,7 @@ Fixture inventory used (TestConfiguration, English Names):
   Catalog.Catalog, CommonModule.Error, CommonModule.OK,
   CommonForm.Form, CommonTemplate.PrintForm, HTTPService.ProbeService,
   Subsystem.Subsystem, CommonAttribute.CommonAttribute, SessionParameter.SessionParameter.
+  CommonTemplate.PrintForm has the English Synonym "Print Form".
 """
 
 from harness import (
@@ -127,6 +128,19 @@ def test_namefilter_narrows_results():
 
 
 @e2e_test(tool="get_metadata_objects", kind="read")
+def test_textfilter_matches_fixture_synonym_in_selected_language():
+    # CommonTemplate.PrintForm has Name="PrintForm" but Synonym(en)="Print Form" in the
+    # checked-in fixture. The space makes this a synonym-only match, not a Name match.
+    r = call("get_metadata_objects",
+             {"projectName": PROJECT, "metadataType": "commonTemplates",
+              "textFilter": "print form", "language": "en"})
+    assert_ok(r, "get_metadata_objects textFilter=print form language=en")
+    assert_contains(r.text, "| PrintForm | Print Form |",
+                    "textFilter must match the fixture's effective-language synonym")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_objects", kind="read")
 def test_filter_by_english_type_name_token_returns_only_that_type():
     # issue #289 fix: metadataType now ALSO accepts a standard type-name token (the FQN
     # form, e.g. "CommonModule"), not just the legacy category token ("commonModules").
@@ -163,6 +177,42 @@ def test_filter_by_russian_type_name_token_returns_only_that_type():
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix (mandatory)
 # ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_namefilter_still_ignores_the_synonym():
+    """The other half of the additive contract: nameFilter must NOT have gained Synonym.
+
+    Same object, same text, same language as the textFilter test above - only the parameter
+    differs. "print form" occurs solely in CommonTemplate.PrintForm's Synonym, never in its
+    Name, so a nameFilter hit here would mean the published Name-only contract silently
+    widened. Without this the textFilter test alone would pass just as happily on a build
+    that made BOTH parameters search synonyms.
+    """
+    r = call("get_metadata_objects",
+             {"projectName": PROJECT, "metadataType": "commonTemplates",
+              "nameFilter": "print form", "language": "en"})
+    assert_ok(r, "get_metadata_objects nameFilter=print form language=en")
+    assert_not_contains(r.text, "| PrintForm |",
+                        "nameFilter matches the programmatic Name only, never the Synonym")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_namefilter_and_textfilter_are_mutually_exclusive():
+    name_value = "PrintForm"
+    text_value = "Print Form"
+    r = call("get_metadata_objects",
+             {"projectName": PROJECT, "nameFilter": name_value,
+              "textFilter": text_value, "language": "en"})
+    err = assert_error(r, "nameFilter and textFilter together")
+    assert_error_quality(
+        err,
+        names=["nameFilter", name_value, "textFilter", text_value],
+        suggests=["Use either", "programmatic Name", "effective language"],
+        ctx="mutually exclusive filters name both values and explain their roles",
+    )
+    assert_no_diff("an invalid call must not touch the project on disk")
+
 
 @e2e_test(tool="get_metadata_objects", kind="read")
 def test_missing_projectname_errors_clearly():

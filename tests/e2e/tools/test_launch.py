@@ -1,10 +1,10 @@
 """
-e2e tests for debug_launch (kind: read).
+e2e tests for launch (kind: read).
 
 What the tool does
 ------------------
-debug_launch starts an EDT debug session. It has TWO mutually-reachable modes,
-selected by which params are present (see DebugLaunchTool.execute):
+launch starts an EDT session in debug mode (default) or regular run mode. It has
+TWO target-selection forms, selected by which params are present (see LaunchTool.execute):
 
   Mode 1 — launchConfigurationName: start any existing EDT debug launch
            configuration by its EXACT name (runtime client OR an
@@ -15,9 +15,9 @@ selected by which params are present (see DebugLaunchTool.execute):
 
 ENVIRONMENT (why these are sentinel/negative tests, not a real launch)
 ----------------------------------------------------------------------
-This is a DEBUG/RUNTIME tool. In THIS EDT there is NO running infobase for
+This is a RUNTIME tool. In THIS EDT there is NO running infobase for
 TestConfiguration, NO registered application, and NO pre-created EDT launch
-configuration. Actually starting a debug session is heavy, spawns a 1C client,
+configuration. Actually starting a session is heavy, spawns a 1C client,
 and is not configured here — so we deliberately do NOT drive a real launch.
 
 The realistic, CORRECT contract in this environment is that EVERY reachable call
@@ -28,7 +28,7 @@ that no-oped, returned a bogus success, or emitted a vague/blank error would fai
 
 Response shape (IMPORTANT)
 --------------------------
-DebugLaunchTool.getResponseType() == JSON, so the payload is a JSON envelope. On
+LaunchTool.getResponseType() == JSON, so the payload is a JSON envelope. On
 error the envelope is {"success": false, "error": "<message>"} and the protocol
 layer flags the Result isError; assert_error returns that error string (the harness
 reads structuredContent.error first). For a JSON tool r.text is only a placeholder.
@@ -39,7 +39,7 @@ assertion below matches DELIMITER-FREE substrings (the bad bareword, "not found"
 "is required", "Use get_applications", "Create it in EDT") — never a raw "'...'"
 or a ">=" that Gson would have rewritten to \\uXXXX.
 
-DIFF: debug_launch operates on the EDT launch manager / a (would-be) running
+DIFF: launch operates on the EDT launch manager / a (would-be) running
 infobase — NOT the git-tracked TestConfiguration/ source tree. So a non-destructive
 guardrail applies to EVERY test: assert_no_diff() (the project source must never
 change as a side effect of trying to launch a debugger).
@@ -59,7 +59,7 @@ Negative matrix coverage (all reachable branches in execute())
             application IDs."
   - Mode 2: non-existent projectName (+ some applicationId)
         -> readiness pre-check now refuses only the transient BUILDING state, so a
-            missing project falls through to launchDebug's value-naming branch (the
+            missing project falls through to LaunchTool.launch's value-naming branch (the
             shared ProjectContext.notFoundMessage):
             "Project not found: <name>. Use list_projects to see available projects."
   - empty-string projectName behaves like missing (execute() checks isEmpty()).
@@ -78,6 +78,7 @@ from harness import (
     assert_ok,
     e2e_test,
     requires_live_infobase,
+    _post,
     PROJECT,
 )
 
@@ -85,7 +86,7 @@ from harness import (
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY / SENTINEL
 #
-# There is no precondition-free success path for debug_launch in this environment
+# There is no precondition-free success path for launch in this environment
 # (no infobase, no application, no launch config — and we must NOT spawn a real
 # client). The realistic happy contract is therefore the CLEAR SENTINEL: the most
 # common real call (Mode 1 by config name) names the missing config + tells you to
@@ -93,11 +94,52 @@ from harness import (
 # assert that actionable shape; a broken tool that silently "succeeded" (claimed a
 # session it could not start) or returned a blank error fails this.
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
+def test_run_mode_is_advertised_accepted_and_echoed():
+    """The wire schema exposes debug/run and a run request survives mode validation.
+
+    A real 1C launch is intentionally not required: the non-existent configuration
+    reaches the normal configuration sentinel, whose structured response echoes the
+    accepted mode.
+    """
+    raw = _post("tools/list", {})
+    advertised = (raw.get("result", {}) or {}).get("tools", []) or []
+    launches = [tool for tool in advertised if tool.get("name") == "launch"]
+    if len(launches) != 1:
+        raise AssertionError("tools/list must advertise launch exactly once: %r" % launches)
+    descriptor = launches[0]
+    mode_schema = ((descriptor.get("inputSchema") or {}).get("properties") or {}).get("mode") or {}
+    if mode_schema.get("enum") != ["debug", "run"]:
+        raise AssertionError("launch.mode must advertise enum [debug, run]: %r" % mode_schema)
+    output_mode = ((descriptor.get("outputSchema") or {}).get("properties") or {}).get("mode") or {}
+    if output_mode.get("type") != "string":
+        raise AssertionError("launch outputSchema must declare the mode echo: %r" % output_mode)
+
+    bad_cfg = "NoSuchRunLaunchConfig_ZZZ_e2e"
+    r = call("launch", {"launchConfigurationName": bad_cfg, "mode": "run"})
+    err = assert_error(r, "run mode reaches the normal configuration sentinel")
+    assert_error_quality(err, names=[bad_cfg, "not found"], suggests=["Create it in EDT"],
+                         ctx="run is accepted before configuration resolution")
+    if (r.structured or {}).get("mode") != "run":
+        raise AssertionError("the response must echo mode=run: %r" % (r.structured,))
+    assert_no_diff("a rejected run launch must not touch the project source")
+
+
+@e2e_test(tool="launch", kind="read")
+def test_unknown_launch_mode_is_rejected_with_allowed_values():
+    bad = "profile"
+    r = call("launch", {"mode": bad})
+    err = assert_error(r, "unknown launch mode")
+    assert_error_quality(err, names=[bad], suggests=["debug", "run"],
+                         ctx="unknown mode names the bad value and both accepted values")
+    assert_no_diff("mode validation must fail before any launch side effect")
+
+
+@e2e_test(tool="launch", kind="read")
 def test_launch_by_unknown_config_name_returns_actionable_sentinel():
     """Mode 1 with a config name that does not exist -> the canonical sentinel.
 
-    DebugLaunchTool.launchByConfigName: findLaunchConfigByName returns null, so the
+    LaunchTool.launchByConfigName: findLaunchConfigByName returns null, so the
     tool returns "Launch configuration not found: '<name>'. Create it in EDT first."
     and ALSO attaches an `availableConfigurations` diagnostic array (the configs the
     client CAN choose from). This is the actionable, no-session contract: it names
@@ -107,7 +149,7 @@ def test_launch_by_unknown_config_name_returns_actionable_sentinel():
     success, or that returned a bare "Error", fails assert_error / the quality check.
     """
     bad_cfg = "NoSuchLaunchConfig_ZZZ_e2e"
-    r = call("debug_launch", {"launchConfigurationName": bad_cfg})
+    r = call("launch", {"launchConfigurationName": bad_cfg})
     err = assert_error(r, "Mode 1: unknown launch configuration name")
     # Names the bad bareword + is actionable (the "create it in EDT" next step).
     # Match delimiter-free substrings so Gson's apostrophe-escaping can't break it.
@@ -133,13 +175,13 @@ def test_launch_by_unknown_config_name_returns_actionable_sentinel():
     assert_no_diff("trying to launch a debugger must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_mode2_unknown_application_points_at_get_applications():
     """Mode 2 against the REAL, ready fixture project but a non-existent applicationId.
 
     The project IS ready, so the BUILDING-only readiness gate
     (ProjectStateChecker.buildingErrorOrNull) returns null and control reaches
-    launchDebug -> ctx.exists() passes -> appManager.getApplication(project, id)
+    LaunchTool.launch -> ctx.exists() passes -> appManager.getApplication(project, id)
     returns empty ->
     "Application not found: <id>. Use get_applications to get valid application IDs."
     This is the no-infobase sentinel for the legacy path: it names the bad id and
@@ -150,7 +192,7 @@ def test_mode2_unknown_application_points_at_get_applications():
     produce this named, actionable error.
     """
     bad_app = "NoSuchApplicationId_ZZZ_e2e"
-    r = call("debug_launch", {"projectName": PROJECT, "applicationId": bad_app})
+    r = call("launch", {"projectName": PROJECT, "applicationId": bad_app})
     err = assert_error(r, "Mode 2: unknown applicationId on a ready project")
     assert_error_quality(
         err,
@@ -164,7 +206,7 @@ def test_mode2_unknown_application_points_at_get_applications():
 # ──────────────────────────────────────────────────────────────────────────────
 # NEGATIVE MATRIX — missing required params
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_no_params_at_all_requires_project_or_config_name():
     """Neither mode selected: no launchConfigurationName AND no projectName.
 
@@ -174,7 +216,7 @@ def test_no_params_at_all_requires_project_or_config_name():
     actionable: it names the missing param AND points at the alternative entry
     point (launchConfigurationName) that selects Mode 1.
     """
-    r = call("debug_launch", {})
+    r = call("launch", {})
     err = assert_error(r, "no params -> neither launch mode is satisfiable")
     assert_error_quality(
         err,
@@ -185,7 +227,7 @@ def test_no_params_at_all_requires_project_or_config_name():
     assert_no_diff("an invalid call must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_empty_project_name_behaves_like_missing():
     """Boundary: projectName="" (and no config name). execute() guards with
     `projectName == null || projectName.isEmpty()`, so the empty string is treated
@@ -193,7 +235,7 @@ def test_empty_project_name_behaves_like_missing():
     coerced into a real project. (extractStringArgument returns the raw value, no
     trim, and the guard uses isEmpty(), so "" is caught here.)
     """
-    r = call("debug_launch", {"projectName": "", "applicationId": "x"})
+    r = call("launch", {"projectName": "", "applicationId": "x"})
     err = assert_error(r, "empty-string projectName")
     assert_error_quality(
         err,
@@ -204,7 +246,7 @@ def test_empty_project_name_behaves_like_missing():
     assert_no_diff("an invalid call must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_mode2_missing_application_id_points_at_get_applications():
     """Mode 2 partial: projectName present but applicationId missing.
 
@@ -215,7 +257,7 @@ def test_mode2_missing_application_id_points_at_get_applications():
     Conditional-required coverage for the Mode-2 branch: the message names the
     missing param AND offers both next steps (get_applications, launchConfigurationName).
     """
-    r = call("debug_launch", {"projectName": PROJECT})
+    r = call("launch", {"projectName": PROJECT})
     err = assert_error(r, "Mode 2 missing applicationId")
     assert_error_quality(
         err,
@@ -237,7 +279,7 @@ def test_mode2_missing_application_id_points_at_get_applications():
 # ──────────────────────────────────────────────────────────────────────────────
 # NEGATIVE MATRIX — invalid / non-existent values
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_mode2_nonexistent_project_is_rejected_before_launch():
     """Mode 2 with a syntactically valid but NON-EXISTENT projectName (+ some
     applicationId). The readiness pre-check in execute() now refuses ONLY the
@@ -253,7 +295,7 @@ def test_mode2_nonexistent_project_is_rejected_before_launch():
     carries the actionable list_projects discovery tail — asserted via suggests below.
     """
     bad_proj = "NoSuchProject_ZZZ_e2e"
-    r = call("debug_launch", {"projectName": bad_proj, "applicationId": "AppId"})
+    r = call("launch", {"projectName": bad_proj, "applicationId": "AppId"})
     err = assert_error(r, "Mode 2 non-existent project")
     assert_error_quality(
         err,
@@ -264,7 +306,7 @@ def test_mode2_nonexistent_project_is_rejected_before_launch():
     assert_no_diff("a rejected launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_unknown_config_name_takes_precedence_over_project_mode():
     """Mode selection: when BOTH launchConfigurationName and projectName+applicationId
     are supplied, execute() takes Mode 1 (config name wins — the `configName != null
@@ -275,7 +317,7 @@ def test_unknown_config_name_takes_precedence_over_project_mode():
     reorders the modes (and silently ignored launchConfigurationName) is caught.
     """
     bad_cfg = "NoSuchLaunchConfig_PRECEDENCE_e2e"
-    r = call("debug_launch", {
+    r = call("launch", {
         "launchConfigurationName": bad_cfg,
         "projectName": PROJECT,
         "applicationId": "SomeAppId",
@@ -297,14 +339,14 @@ def test_unknown_config_name_takes_precedence_over_project_mode():
     assert_no_diff("a rejected launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="action")
+@e2e_test(tool="launch", kind="action")
 def test_unknown_external_infobase_changes_value_is_rejected():
     """externalInfobaseChanges decides how the pre-launch update answers EDT's blocking
     "Infobase configuration changes" modal. An unrecognised token must be rejected with
     the accepted values rather than silently defaulting to 'override', which writes the
     infobase. Rejected before any launch is attempted, so nothing is started."""
     bad = "merge"
-    r = call("debug_launch", {
+    r = call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_e2e",
         "externalInfobaseChanges": bad,
     })
@@ -314,14 +356,14 @@ def test_unknown_external_infobase_changes_value_is_rejected():
     assert_no_diff("a rejected launch must not touch the project on disk")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_unknown_standalone_server_port_conflict_value_is_rejected():
     """standaloneServerPortConflict answers EDT's blocking "Standalone server port
     conflict" modal. One of its two answers makes EDT REWRITE the server configuration,
     so a typo must never resolve to it - nor silently fall back to the default. An
     unrecognised token is rejected up front, naming the bad value and the accepted ones."""
     bad = "find-free-port"
-    r = call("debug_launch", {
+    r = call("launch", {
         "launchConfigurationName": "no such configuration at all",
         "standaloneServerPortConflict": bad,
     })
@@ -340,7 +382,7 @@ def test_unknown_standalone_server_port_conflict_value_is_rejected():
 # LOGS when it cannot build the dump. So the refusals are the contract, and they
 # are asserted to happen BEFORE any launch configuration is even resolved.
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_external_object_half_address_is_refused_and_names_the_missing_half():
     """externalObjectProjectName and externalObjectName are one address in two fields.
 
@@ -352,7 +394,7 @@ def test_external_object_half_address_is_refused_and_names_the_missing_half():
     ordering is the safety property - both launch modes can terminate a live client session
     and update the infobase on their way to the launch.
     """
-    project_only = call("debug_launch", {
+    project_only = call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
     })
@@ -368,7 +410,7 @@ def test_external_object_half_address_is_refused_and_names_the_missing_half():
             "the argument check must run BEFORE the launch configuration is resolved, "
             "got the config-not-found sentinel instead: %s" % e)
 
-    object_only = call("debug_launch", {
+    object_only = call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectName": "ExtProc",
     })
@@ -382,7 +424,7 @@ def test_external_object_half_address_is_refused_and_names_the_missing_half():
     assert_no_diff("a refused launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_external_object_project_must_actually_be_an_external_objects_project():
     """Pointing externalObjectProjectName at the CONFIGURATION is the obvious first mistake.
 
@@ -391,7 +433,7 @@ def test_external_object_project_must_actually_be_an_external_objects_project():
     refusal has to say so, because "not found" would send the caller looking for a typo in
     the object name instead.
     """
-    r = call("debug_launch", {
+    r = call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": PROJECT,
         "externalObjectName": "ExtProc",
@@ -406,7 +448,7 @@ def test_external_object_project_must_actually_be_an_external_objects_project():
     assert_no_diff("a refused launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_unknown_external_object_lists_what_the_project_does_have():
     """A misspelt object name is answered with the names that exist.
 
@@ -415,7 +457,7 @@ def test_unknown_external_object_lists_what_the_project_does_have():
     /Execute - a launch that succeeds and runs nothing. Listing the real names turns that into
     a fixable error.
     """
-    r = call("debug_launch", {
+    r = call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
         "externalObjectName": "NoSuchProcessor_ZZZ_e2e",
@@ -448,7 +490,10 @@ def _assert_object_resolved(err, ctx):
     * on a bare CI runner the object still resolves, but EDT reports it cannot generate dumps
       at all ("parent project must have a developing application with an infobase") - the
       pre-launch gate firing exactly as designed, because a launch there really would start a
-      session with no /Execute.
+      session with no /Execute;
+    * on a runner whose external-objects project has dump generation switched OFF, the same
+      gate refuses for that reason instead. Which of the two gate refusals appears is a
+      property of the project's settings, not of the code under test.
 
     Pinning either one alone would make the test a statement about the environment. What must
     hold everywhere is the negative: the failure is NOT the object failing to resolve.
@@ -461,7 +506,9 @@ def _assert_object_resolved(err, ctx):
             raise AssertionError(
                 "%s: the external object must resolve, but the call failed on %r: %s"
                 % (ctx, resolution_failure, err))
-    for expected in ("Launch configuration not found", "cannot build the external object"):
+    for expected in ("Launch configuration not found",
+                     "cannot build the external object",
+                     "dump generation is switched OFF"):
         if expected in err:
             return
     raise AssertionError(
@@ -469,7 +516,7 @@ def _assert_object_resolved(err, ctx):
         "refusal, got: %s" % (ctx, err))
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_a_resolvable_external_object_gets_past_the_argument_check():
     """The positive half: a REAL object must not be refused by the argument check.
 
@@ -478,7 +525,7 @@ def test_a_resolvable_external_object_gets_past_the_argument_check():
     client), so the assertion is that the call proceeds PAST the overrides and fails on the
     launch configuration instead: the sentinel it reaches is the config-not-found one.
     """
-    r = call("debug_launch", {
+    r = call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
         "externalObjectName": "ExtProc",
@@ -489,7 +536,7 @@ def test_a_resolvable_external_object_gets_past_the_argument_check():
     assert_no_diff("a refused launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_external_object_name_may_be_qualified_by_kind():
     """A data processor and a report may share a programmatic name, so the name alone is not a key.
 
@@ -499,7 +546,7 @@ def test_external_object_name_may_be_qualified_by_kind():
     but the qualification it would tell the caller to use is exercised here in all three shapes.
     """
     # Right kind: resolves, so the call fails on something LATER (see _assert_object_resolved).
-    e = assert_error(call("debug_launch", {
+    e = assert_error(call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
         "externalObjectName": "ExternalDataProcessor.ExtProc",
@@ -507,7 +554,7 @@ def test_external_object_name_may_be_qualified_by_kind():
     _assert_object_resolved(e, "a correctly qualified object must pass the argument check")
 
     # Right name, WRONG kind: ExtProc is a data processor, not a report.
-    e = assert_error(call("debug_launch", {
+    e = assert_error(call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
         "externalObjectName": "ExternalReport.ExtProc",
@@ -520,7 +567,7 @@ def test_external_object_name_may_be_qualified_by_kind():
     )
 
     # A qualifier that is not an external object kind at all.
-    e = assert_error(call("debug_launch", {
+    e = assert_error(call("launch", {
         "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
         "externalObjectProjectName": "ExternalObjects",
         "externalObjectName": "Catalog.ExtProc",
@@ -534,7 +581,7 @@ def test_external_object_name_may_be_qualified_by_kind():
     assert_no_diff("a refused launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="read")
+@e2e_test(tool="launch", kind="read")
 def test_a_bare_name_resolves_the_same_way_a_qualified_one_does():
     """One address, two spellings - they must accept the same names.
 
@@ -545,7 +592,7 @@ def test_a_bare_name_resolves_the_same_way_a_qualified_one_does():
     stamped onto the launch, so the casing a caller types never reaches EDT either way.
     """
     for name in ("extproc", "EXTPROC", "ExternalDataProcessor.extproc"):
-        e = assert_error(call("debug_launch", {
+        e = assert_error(call("launch", {
             "launchConfigurationName": "NoSuchLaunchConfig_ZZZ_e2e",
             "externalObjectProjectName": "ExternalObjects",
             "externalObjectName": name,
@@ -554,7 +601,7 @@ def test_a_bare_name_resolves_the_same_way_a_qualified_one_does():
     assert_no_diff("a refused launch must not touch the project source")
 
 
-@e2e_test(tool="debug_launch", kind="action")
+@e2e_test(tool="launch", kind="action")
 def test_live_external_processor_is_actually_launched_with_execute():
     """ATTENDED: a REAL launch reaches EDT and starts a session with the overrides applied.
 
@@ -586,7 +633,7 @@ def test_live_external_processor_is_actually_launched_with_execute():
     assert_ok(created, "a throwaway runtime-client configuration to launch")
     app_id = None
     try:
-        r = call("debug_launch", {
+        r = call("launch", {
             "launchConfigurationName": cfg_name,
             "externalObjectProjectName": "ExternalObjects",
             "externalObjectName": "ExtProc",

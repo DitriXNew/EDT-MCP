@@ -1417,10 +1417,10 @@ public final class LaunchLifecycleUtils
      * {@code appManager}/application is reported, never thrown into the launch path).
      *
      * <p>This 3-arg overload runs WITHOUT the Phase-A settle wait — it is the plain
-     * "is the IB out of sync?" path used by {@code debug_launch} (and any caller that
+     * "is the IB out of sync?" path used by {@code launch} (and any caller that
      * did <em>not</em> just force a derived-data recompute). On a genuinely up-to-date
      * IB ({@code getUpdateState()==UPDATED}) it returns immediately, so a synced
-     * {@code debug_launch} never pays the settle window. The settle-before-decide wait
+     * {@code launch} never pays the settle window. The settle-before-decide wait
      * (warranted only right after a forced recompute, where the cached {@code UPDATED}
      * flag can lag the just-regenerated {@code .cfe}) is opt-in via the 4-arg overload
      * with {@code settleAfterPossibleRecompute=true}.
@@ -1446,7 +1446,7 @@ public final class LaunchLifecycleUtils
      *       trusting "no update needed". This is the YAXUnit fresh-launch path.</li>
      *   <li>{@code false} — no recompute happened this call, so a cached {@code UPDATED}
      *       is authoritative: we return immediately (no settle window). This restores the
-     *       fast path for a plain {@code debug_launch} against an already-synced IB
+     *       fast path for a plain {@code launch} against an already-synced IB
      *       (previously the async-launch benefit was undercut by an unconditional ~5s settle).</li>
      * </ul>
      *
@@ -1456,7 +1456,7 @@ public final class LaunchLifecycleUtils
      *
      * @param settleAfterPossibleRecompute {@code true} to wait out a possibly-lagging
      *            {@code UPDATED} on entry (YAXUnit post-recompute path); {@code false} to
-     *            trust an entry {@code UPDATED} and return immediately (plain debug_launch)
+     *            trust an entry {@code UPDATED} and return immediately (plain launch)
      */
     public static Optional<String> updateApplicationIfNeeded(IProject project, String applicationId,
             IApplicationManager appManager, boolean settleAfterPossibleRecompute)
@@ -1525,7 +1525,7 @@ public final class LaunchLifecycleUtils
                 {
                     // No recompute happened this call, so the cached UPDATED is
                     // authoritative — return immediately (no settle window). This is the
-                    // plain debug_launch / update_database path: a synced IB must not pay
+                    // plain launch / update_database path: a synced IB must not pay
                     // the ~5s settle wait the YAXUnit recompute path needs.
                     return Optional.empty();
                 }
@@ -1617,7 +1617,7 @@ public final class LaunchLifecycleUtils
         // configuration changes". Nothing presses them in an unattended run, so the worker
         // thread waits inside Display.syncCall forever: no launch, no report, no client,
         // until the tool times out. Arming HERE - rather than at each caller - covers every
-        // path that reaches the update (debug_launch's preflight and the YAXUnit auto-chain's
+        // path that reaches the update (launch's preflight and the YAXUnit auto-chain's
         // finalizeFreshLaunchPrep alike), which is exactly how this slipped through before:
         // only the launch itself was armed, never the update that precedes it.
         ApplicationUpdateState after;
@@ -2577,7 +2577,7 @@ public final class LaunchLifecycleUtils
         // (the per-(project, applicationId) lock does not serialise those), and this
         // application's cached UPDATED can still be lagging that regeneration. The
         // window costs ~5s; skipping it can cost a silently green run against a
-        // stale infobase. The plain debug_launch path passes false because it never
+        // stale infobase. The plain launch path passes false because it never
         // recomputes at all.
         // The blocking-modal arming lives in performUpdateAndAwaitApplied - the single point
         // where the update is actually issued - so every caller of the pre-launch update is
@@ -2614,13 +2614,13 @@ public final class LaunchLifecycleUtils
      * per the SWT contract it CREATES a display owned by the calling thread when
      * none exists, so it never returns {@code null}. On a headless MCP worker
      * that stray display is never pumped — an {@code asyncExec} queued on it
-     * silently never runs (see {@code DebugLaunchTool.performLaunch}),
+     * silently never runs (see {@code LaunchTool.performLaunch}),
      * and a later {@code syncExec} against it from a different thread blocks
      * forever (see {@link LaunchUpdateDialogAutoConfirmer}). The
      * workbench probe hands out only a display that a real UI thread is already
      * dispatching.
      *
-     * <p>Shared by {@code DebugLaunchTool} and
+     * <p>Shared by {@code LaunchTool} and
      * {@link LaunchUpdateDialogAutoConfirmer} so the probe idiom lives in
      * exactly one place.
      */
@@ -2654,7 +2654,7 @@ public final class LaunchLifecycleUtils
      * callers simply get {@code null} (no dialogs can appear there anyway).
      *
      * <p>Shared by every tool that builds an {@code ExecutionContext} before
-     * calling {@link IApplicationManager#update} (update_database, debug_launch,
+     * calling {@link IApplicationManager#update} (update_database, launch,
      * the YAXUnit auto-chain) so the SWT-grab logic lives in exactly one place.
      */
     public static Shell grabActiveShell()
@@ -2681,7 +2681,7 @@ public final class LaunchLifecycleUtils
 
     // ==================================================================================
     // Existing-CLIENT-session layer. Moved here from
-    // DebugLaunchTool so EVERY tool that spawns a 1C client (debug_launch, the YAXUnit
+    // LaunchTool so EVERY tool that spawns a 1C client (launch, the YAXUnit
     // debug path) shares ONE detect+terminate policy: a session counts as an existing
     // CLIENT session only with ≥1 live CLIENT-typed thread (the type-aware
     // discriminator, DebugServerTargetSupport.findFirstLiveClientThread), so a
@@ -2698,7 +2698,7 @@ public final class LaunchLifecycleUtils
      * {@code (project, applicationId)} resolves to AT MOST one
      * {@link ExistingClientSession} via {@link #resolveExistingClientSession}, and
      * every call site funnels that result through one policy point (the
-     * {@code restartIfRunning} handler in {@code DebugLaunchTool}, or
+     * {@code restartIfRunning} handler in {@code LaunchTool}, or
      * {@link #ensureNoExistingClientSession} for the always-fresh YAXUnit debug
      * path), so the decision is honored identically in EVERY path — by-name and
      * by-project+application, and BOTH the {@link DebugSessionRegistry}
@@ -3078,7 +3078,7 @@ public final class LaunchLifecycleUtils
     /**
      * Detects and non-interactively terminates ANY existing live CLIENT session of
      * {@code (project, delegateAppId)} — the fresh-run guarantee of the YAXUnit
-     * debug path, equivalent to {@code debug_launch}'s
+     * debug path, equivalent to {@code launch}'s
      * {@code restartIfRunning=true} semantics. Detection runs over BOTH sources,
      * each with the type-aware CLIENT discriminator:
      * <ol>

@@ -122,58 +122,7 @@ public final class EditorScreenshotHelper
      */
     public static void ensureBufferedNativeRenderMode()
     {
-        final String nativeRenderServiceClass = "com._1c.g5.v8.dt.form.layout.service.NativeRenderService"; //$NON-NLS-1$
-        final String bufferedFlagField = "NATIVE_FORM_BUFFERED_LAYOUT_RENDER"; //$NON-NLS-1$
-        final String propertyName = "nativeFormBufferedLayoutRender"; //$NON-NLS-1$
-
-        try
-        {
-            System.setProperty(propertyName, "true"); //$NON-NLS-1$
-
-            Class<?> serviceClass = Class.forName(nativeRenderServiceClass);
-            Method isNativeRenderMethod = serviceClass.getMethod("isNativeRender"); //$NON-NLS-1$
-            Method isBufferedRenderMethod = serviceClass.getMethod("isBufferedRender"); //$NON-NLS-1$
-
-            boolean nativeRender = (Boolean)isNativeRenderMethod.invoke(null);
-            boolean bufferedBefore = (Boolean)isBufferedRenderMethod.invoke(null);
-
-            if (nativeRender && !bufferedBefore)
-            {
-                forceBufferedRenderFlag(serviceClass, bufferedFlagField);
-            }
-
-            boolean bufferedAfter = (Boolean)isBufferedRenderMethod.invoke(null);
-            if (!bufferedAfter)
-            {
-                Activator.logWarning("Buffered native render is still disabled. " + //$NON-NLS-1$
-                    "Restart EDT with VM option: -DnativeFormBufferedLayoutRender=true"); //$NON-NLS-1$
-            }
-        }
-        catch (Exception e)
-        {
-            Activator.logWarning("Failed to ensure buffered native render mode: " + e.getMessage()); //$NON-NLS-1$
-        }
-    }
-
-    /**
-     * Forces the static buffered-render flag field to {@code true}, first via a plain reflective
-     * field set and, if that fails, via {@link ReflectionUtils#forceStaticFinalBoolean}.
-     *
-     * @param serviceClass the native render service class declaring the flag
-     * @param bufferedFlagField the name of the static boolean flag field
-     */
-    private static void forceBufferedRenderFlag(Class<?> serviceClass, String bufferedFlagField)
-    {
-        try
-        {
-            Field bufferedField = serviceClass.getDeclaredField(bufferedFlagField);
-            bufferedField.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-            bufferedField.setBoolean(null, true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-        }
-        catch (Exception e)
-        {
-            ReflectionUtils.forceStaticFinalBoolean(serviceClass, bufferedFlagField, true);
-        }
+        NativeRenderModeProbe.ensureBufferedNativeRenderMode();
     }
 
     // ==================== Editor opening ====================

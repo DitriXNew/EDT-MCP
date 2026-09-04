@@ -1,7 +1,7 @@
-Lists the applications (infobases) configured for a project, with each one's id, name, type and update state. The application **id** is the key input for `update_database` and `debug_launch`, so this is usually the step right before running or debugging.
+Lists the applications (infobases) configured for a project, with each one's id, name, type and update state. The application **id** is the key input for `update_database` and `launch`, so this is usually the step right before running or debugging.
 
 ## When to use
-- You need the `applicationId` to pass to `update_database`, `debug_launch`, `debug_yaxunit_tests`, profiling, etc.
+- You need the `applicationId` to pass to `update_database`, `launch`, `debug_yaxunit_tests`, profiling, etc.
 - Checking whether the infobase is up to date or needs a database update before launching.
 
 ## Parameter details

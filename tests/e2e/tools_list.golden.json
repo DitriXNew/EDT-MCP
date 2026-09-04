@@ -423,7 +423,7 @@
           "type": "boolean"
         },
         "user": {
-          "description": "Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create').",
+          "description": "Infobase connection user to store so update_database / launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create').",
           "type": "string"
         }
       },
@@ -939,102 +939,6 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run a 1C application under EDT debugging. An already-running session is NOT relaunched - the call short-circuits with alreadyRunning:true; restartIfRunning=true instead TERMINATES that live session first. Parameters and examples: get_tool_guide('debug_launch').",
-    "inputSchema": {
-      "properties": {
-        "applicationId": {
-          "type": "string"
-        },
-        "externalInfobaseChanges": {
-          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
-          "type": "string"
-        },
-        "externalObjectName": {
-          "type": "string"
-        },
-        "externalObjectProjectName": {
-          "type": "string"
-        },
-        "launchConfigurationName": {
-          "type": "string"
-        },
-        "projectName": {
-          "type": "string"
-        },
-        "restartIfRunning": {
-          "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
-          "type": "boolean"
-        },
-        "standaloneServerPortConflict": {
-          "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
-          "type": "string"
-        },
-        "startupOption": {
-          "type": "string"
-        },
-        "updateBeforeLaunch": {
-          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach.",
-          "type": "boolean"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "name": "debug_launch",
-    "outputSchema": {
-      "properties": {
-        "alreadyRunning": {
-          "type": "boolean"
-        },
-        "applicationId": {
-          "type": "string"
-        },
-        "attach": {
-          "type": "boolean"
-        },
-        "configurationType": {
-          "type": "string"
-        },
-        "externalObjectName": {
-          "type": "string"
-        },
-        "externalObjectProjectName": {
-          "type": "string"
-        },
-        "launchConfiguration": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "mode": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "startupOption": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
-        },
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "success"
-      ],
-      "type": "object"
-    }
-  },
-  {
-    "annotations": {
-      "destructiveHint": false,
-      "openWorldHint": false,
-      "readOnlyHint": false
-    },
     "description": "Check which EDT debug sessions are running or paused. Parameters and examples: get_tool_guide('debug_status').",
     "inputSchema": {
       "properties": {
@@ -1299,6 +1203,9 @@
         },
         "projectName": {
           "type": "string"
+        },
+        "timeout": {
+          "type": "integer"
         }
       },
       "required": [
@@ -2330,9 +2237,14 @@
           "type": "string"
         },
         "nameFilter": {
+          "description": "Case-insensitive substring matched against Name only (not Synonym)",
           "type": "string"
         },
         "projectName": {
+          "type": "string"
+        },
+        "textFilter": {
+          "description": "Case-insensitive substring matched against Name or Synonym selected by language; mutually exclusive with nameFilter",
           "type": "string"
         }
       },
@@ -3039,6 +2951,110 @@
     },
     "name": "import_configuration_from_xml",
     "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Start a 1C application in EDT debug (default) or run mode. An already-running session is NOT relaunched - the call short-circuits with alreadyRunning:true; restartIfRunning=true instead TERMINATES that live session first. Parameters and examples: get_tool_guide('launch').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "type": "string"
+        },
+        "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "type": "string"
+        },
+        "externalObjectName": {
+          "type": "string"
+        },
+        "externalObjectProjectName": {
+          "type": "string"
+        },
+        "launchConfigurationName": {
+          "type": "string"
+        },
+        "mode": {
+          "description": "Launch mode: debug (default) or run. Attach configurations support debug only.",
+          "enum": [
+            "debug",
+            "run"
+          ],
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "restartIfRunning": {
+          "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
+          "type": "boolean"
+        },
+        "standaloneServerPortConflict": {
+          "description": "Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration).",
+          "type": "string"
+        },
+        "startupOption": {
+          "type": "string"
+        },
+        "updateBeforeLaunch": {
+          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "launch",
+    "outputSchema": {
+      "properties": {
+        "alreadyRunning": {
+          "type": "boolean"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "attach": {
+          "type": "boolean"
+        },
+        "configurationType": {
+          "type": "string"
+        },
+        "externalObjectName": {
+          "type": "string"
+        },
+        "externalObjectProjectName": {
+          "type": "string"
+        },
+        "launchConfiguration": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "startupOption": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {
@@ -4095,7 +4111,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "STORE infobase credentials (user/password) in EDT settings so update_database and debug_launch can authenticate. The secret PERSISTS beyond this call, and addressing a launch configuration also rewrites that configuration's client authentication. Parameters and examples: get_tool_guide('set_infobase_credentials').",
+    "description": "STORE infobase credentials (user/password) in EDT settings so update_database and launch can authenticate. The secret PERSISTS beyond this call, and addressing a launch configuration also rewrites that configuration's client authentication. Parameters and examples: get_tool_guide('set_infobase_credentials').",
     "inputSchema": {
       "properties": {
         "access": {

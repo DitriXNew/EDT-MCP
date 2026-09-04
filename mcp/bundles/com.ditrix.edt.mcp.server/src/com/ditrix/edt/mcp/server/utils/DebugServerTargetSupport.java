@@ -401,7 +401,7 @@ public final class DebugServerTargetSupport
      * <p>{@code resolvedAppId} MUST already be resolved the delegate's way:
      * {@code ATTR_APPLICATION_ID} if the config has it, else the project's
      * {@code IApplicationManager.getDefaultApplication(project)} id — see
-     * {@code DebugLaunchTool} call sites. The synthetic {@code launch:<configName>}
+     * {@code LaunchTool} call sites. The synthetic {@code launch:<configName>}
      * id is NOT the delegate's key; passing one here never matches (that mismatch is
      * exactly what the earlier duplicate guard missed).
      *

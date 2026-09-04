@@ -72,6 +72,14 @@ public final class MetadataPropertyIntrospector
         LONG,
         /** An enum: only one of {@link PropertyInfo#allowedValues} is valid. */
         ENUM,
+        /**
+         * A many-valued enum attribute, set by replacing the whole list with enum literals. The EDT
+         * metamodel census found three such features in {@code MdClass.xcore}:
+         * {@code BasicForm.usePurposes}, {@code Configuration.usePurposes}, and
+         * {@code Configuration.requiredMobileApplicationPermissions}; {@code Form.xcore} has none.
+         * The measured rule is therefore generic across the shape rather than tied to one property.
+         */
+        MANY_ENUM,
         /** The localized synonym map, keyed by language code. */
         LOCALIZED_STRING,
         /** A 1C data type (mcore {@code TypeDescription}); set via the structured type form. */
@@ -142,7 +150,7 @@ public final class MetadataPropertyIntrospector
          * sides equal because neither could be read.
          */
         public final boolean readFailed;
-        /** For {@link ValueKind#ENUM}: the allowed literal names; empty otherwise. */
+        /** For {@link ValueKind#ENUM} / {@link ValueKind#MANY_ENUM}: allowed literal names. */
         public final List<String> allowedValues;
         /** The owning {@link EStructuralFeature} (for the applier; not serialized). */
         public final EStructuralFeature feature;
@@ -504,13 +512,13 @@ public final class MetadataPropertyIntrospector
         return null;
     }
 
-    /** Classifies an attribute feature into a scalar {@link ValueKind}. */
+    /** Classifies an attribute feature by its data type and, for enum attributes, multiplicity. */
     private static ValueKind classifyAttribute(EAttribute feature)
     {
         EClassifier type = feature.getEAttributeType();
         if (type instanceof EEnum)
         {
-            return ValueKind.ENUM;
+            return feature.isMany() ? ValueKind.MANY_ENUM : ValueKind.ENUM;
         }
         String typeName = type != null ? type.getInstanceClassName() : null;
         if ("boolean".equals(typeName) || "java.lang.Boolean".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
@@ -710,10 +718,10 @@ public final class MetadataPropertyIntrospector
         return null;
     }
 
-    /** The schema "allowed values" column: enum literals for ENUM, the target type for a reference. */
+    /** The schema "allowed values" column: enum literals for enum kinds, reference target otherwise. */
     private static List<String> allowedValuesFor(EStructuralFeature feature, ValueKind kind)
     {
-        if (kind == ValueKind.ENUM)
+        if (kind == ValueKind.ENUM || kind == ValueKind.MANY_ENUM)
         {
             return enumLiterals(feature);
         }
@@ -788,6 +796,8 @@ public final class MetadataPropertyIntrospector
                     // Render via the literal NAME so "Current" shares the vocabulary of allowedValues.
                     return Rendered.of(value instanceof org.eclipse.emf.common.util.Enumerator enumerator
                         ? enumerator.getName() : String.valueOf(value));
+                case MANY_ENUM:
+                    return Rendered.of(renderEnumList(value));
                 case REFERENCE:
                     return Rendered.of(value instanceof MdObject ? ((MdObject)value).getName() : null);
                 case MANY_REFERENCE:
@@ -860,6 +870,25 @@ public final class MetadataPropertyIntrospector
             }
         }
         return sb.length() > 0 ? sb.toString() : null;
+    }
+
+    /** Renders a many-valued enum to the same JSON array of literal names accepted on the wire. */
+    private static String renderEnumList(Object value)
+    {
+        if (!(value instanceof EList<?>))
+        {
+            return null;
+        }
+        JsonArray rendered = new JsonArray();
+        for (Object element : (EList<?>)value)
+        {
+            if (!(element instanceof org.eclipse.emf.common.util.Enumerator))
+            {
+                return null;
+            }
+            rendered.add(((org.eclipse.emf.common.util.Enumerator)element).getName());
+        }
+        return rendered.toString();
     }
 
     /** Renders a contained mcore Value list to the same JSON array of strings accepted on the wire. */

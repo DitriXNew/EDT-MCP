@@ -47,7 +47,7 @@ profiling ON — the exact bug the branch guards against). The empty-but-well-fo
 "nothing to stop" envelope IS the sentinel here, so the happy-path tests assert
 assert_ok + that specific envelope (active:false, stopped:false, the echoed id, and
 the "nothing to stop" message). We deliberately do NOT start a real infobase /
-debug_launch + start_profiling (heavy, not configured for this fixture); the benign
+launch + start_profiling (heavy, not configured for this fixture); the benign
 idempotent branch + the negative matrix IS the coverage.
 
 Branches NOT reachable without a live session (documented, not silently skipped):
@@ -57,7 +57,7 @@ Branches NOT reachable without a live session (documented, not silently skipped)
   - the genuine toggle-OFF path (stopped:true, "Call get_profiling_results ...");
   - "Debug target does not support profiling", "IProfilingService not available", and
     the bundle-missing / outer-catch errors — all need a live target / are internal.
-  These require a real debug_launch + start_profiling against a running infobase,
+  These require a real launch + start_profiling against a running infobase,
   which this fixture does not provide; deferred to a live-session run. See the AUDIT
   notes below.
 

@@ -442,7 +442,7 @@ def test_live_debug_breakpoint_suspend_inspect_resume():
 # 3. Launch-id round-trip — id minted by debug launch, consumed by status + terminate
 # ──────────────────────────────────────────────────────────────────────────────
 @e2e_test(tool="debug_status", kind="read")
-def test_live_debug_launch_id_consumed_by_status_and_terminate():
+def test_live_launch_id_consumed_by_status_and_terminate():
     """The applicationId a DEBUG launch mints must round-trip through its siblings:
 
         debug launch -> handle carries applicationId

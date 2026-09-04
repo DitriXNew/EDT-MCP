@@ -66,7 +66,7 @@ public class ToolPresetTest
         assertNotNull(disabled);
 
         // Should disable applications, debug, BSL code, refactoring
-        assertTrue("Should disable debug_launch", disabled.contains("debug_launch"));
+        assertTrue("Should disable launch", disabled.contains("launch"));
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
         assertTrue("Should disable write_module_source", disabled.contains("write_module_source"));
         assertTrue("Should disable rename_metadata_object", disabled.contains("rename_metadata_object"));
