@@ -52,8 +52,9 @@ written to the project, and nothing is ever merged.
 - `waitSeconds` — how long THIS call may wait before returning its job snapshot;
   0 to 25, default 5. It never extends the job's own budget. A real configuration takes
   minutes, so the normal answer is `Pending` plus the `jobId`.
-- `limit` — how many top objects the report LISTS. The counters above the table always
-  describe the whole comparison, so a truncated list never shrinks a total.
+- `limit` — how many top objects the report LISTS, `1` to `1000` (default `100`); a value
+  outside that range is clamped into it rather than refused. The counters above the table
+  always describe the whole comparison, so a truncated list never shrinks a total.
 - `changedOnly` — defaults to `true`: only top objects that differ are listed. Objects
   that have not been compared yet are kept even under this filter, because "not
   answered yet" is not "equal".
