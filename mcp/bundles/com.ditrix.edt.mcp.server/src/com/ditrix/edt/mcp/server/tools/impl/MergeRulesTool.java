@@ -3027,6 +3027,11 @@ public class MergeRulesTool implements IMcpTool
      * The FIRST child carrying that key, exactly as the one-chain walk did: siblings are scanned in
      * the platform's own order and the first match wins. A key already taken at this level is not
      * matched again by a later sibling, so two children keyed alike cannot both claim one branch.
+     * <p>
+     * A level is left as soon as every key IT was asked for has been matched. That follows from
+     * first-wins and changes no answer - the siblings behind the last match could only carry keys
+     * nobody asked for, or keys already taken - it only stops a two-key request from reading a
+     * ten-thousand-element collection to the end.
      *
      * @param root the comparison tree's root node
      * @param relativePaths the chains of keys below the root; an EMPTY chain addresses the root
@@ -3077,6 +3082,16 @@ public class MergeRulesTool implements IMcpTool
         Set<String> taken = new HashSet<>();
         for (ComparisonNode child : childrenOf(node))
         {
+            if (child == null)
+            {
+                // The list is the PLATFORM's now, and its elements may be null. The filtering the
+                // copy used to do has to happen HERE instead, and it is not cosmetic: this loop
+                // does not test its element with instanceof and walk away, it keys it - and
+                // serializedKey hands anything it does not recognise to featureNameOf, which asks
+                // the live comparison view for the model feature of the node. There is no such
+                // question about nothing.
+                continue;
+            }
             String key = serializedKey(child, featureNameOf);
             PathNode next = key == null ? null : wanted.children.get(key);
             if (next == null || !taken.add(key))
@@ -3084,6 +3099,17 @@ public class MergeRulesTool implements IMcpTool
                 continue;
             }
             walk(child, next, featureNameOf, found);
+            if (taken.size() == wanted.children.size())
+            {
+                // Every key this level was asked for has now been matched, and 'taken' only ever
+                // receives keys that are in 'wanted', so the two sizes meeting means exactly that.
+                // Matching is first-wins per key, so a later sibling can carry only a key nobody
+                // asked for or one already taken - neither of which can add an answer. WHICH nodes
+                // resolve is therefore unchanged; only how many siblings are read to find them.
+                // Without this, addressing one common module read every common module in the
+                // configuration, and each of those reads goes to the BM store.
+                break;
+            }
         }
     }
 
@@ -3159,25 +3185,30 @@ public class MergeRulesTool implements IMcpTool
         return dot < 0 ? symlink : symlink.substring(dot + 1);
     }
 
+    /**
+     * Direct children of a node, tolerating a null node and a null child list.
+     * <p>
+     * <b>The platform's own list, not a copy of it</b> - the third site of the same fix, after
+     * {@code ComparisonNodeRenderer.childrenOf} and {@code SupportStateReader.children}. The copy
+     * charged the FULL width of every level to a walk that descends only where a requested chain
+     * still wants a child and now stops as soon as the level has nothing left to give: addressing
+     * one common module used to duplicate every common module in the configuration first, and
+     * these are BM-backed nodes, so each element is a store read rather than an array slot.
+     * <p>
+     * What the copy also did was drop nulls, and {@link #walk} does that itself now - it must,
+     * because unlike the other two sites its loop KEYS every element instead of testing it with
+     * {@code instanceof}.
+     *
+     * @param node the node to read
+     * @return the live child list, or an empty one; elements may be {@code null}
+     */
     private static List<ComparisonNode> childrenOf(ComparisonNode node)
     {
-        List<ComparisonNode> result = new ArrayList<>();
         if (node == null)
         {
-            return result;
+            return Collections.emptyList();
         }
         List<ComparisonNode> children = node.<ComparisonNode> getChildren();
-        if (children == null)
-        {
-            return result;
-        }
-        for (ComparisonNode child : children)
-        {
-            if (child != null)
-            {
-                result.add(child);
-            }
-        }
-        return result;
+        return children == null ? Collections.emptyList() : children;
     }
 }

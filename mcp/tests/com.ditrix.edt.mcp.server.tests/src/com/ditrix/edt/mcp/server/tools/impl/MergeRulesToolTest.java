@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -2757,6 +2758,100 @@ public class MergeRulesToolTest
         verify(collection, times(1)).<ComparisonNode> getChildren();
     }
 
+    /**
+     * The finding: the walk read - and duplicated into an {@code ArrayList} - every child of a
+     * level before it could match one, and then went on reading the rest of them after every key
+     * that level was asked for had already been matched. Addressing one common module therefore
+     * read every common module in the configuration, twice over, and these are BM-backed nodes, so
+     * each element is a store read rather than an array slot.
+     * <p>
+     * The count is what tells the two apart: copying a level and walking it to the end produce the
+     * same answer at the same price, and only the number of elements actually read distinguishes
+     * either from a level that is left as soon as it has nothing more to give.
+     */
+    @Test
+    public void testALevelIsLeftOnceEveryKeyItWasAskedForHasBeenMatched()
+    {
+        ComparisonNode[] children = new ComparisonNode[50];
+        children[0] = topNode("CommonModule.Alpha", "CommonModule.Alpha", null); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 1; i < children.length; i++)
+        {
+            children[i] = topNode("CommonModule.Filler" + i, "CommonModule.Filler" + i, null); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        ComparisonNode collection = plainNode();
+        CountingChildren siblings = withCountedChildren(collection, children);
+        ComparisonNode root = plainNode();
+        withChildren(root, collection);
+
+        List<String> chain = List.of("commonModules", "Alpha:Alpha:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<List<String>, ComparisonNode> found =
+            MergeRulesTool.findNodes(root, List.of(chain), node -> "commonModules"); //$NON-NLS-1$
+
+        assertSame("the chain must still resolve", children[0], found.get(chain)); //$NON-NLS-1$
+        assertEquals("addressing the first child must not read the 49 behind it", //$NON-NLS-1$
+            1, siblings.reads());
+    }
+
+    /**
+     * The control that keeps the exit above from being a truncation: leaving a level early may
+     * change how many siblings are READ and nothing else. Two keys, one first and one last, and
+     * the level is read to its end because that is where the second of them is.
+     */
+    @Test
+    public void testAKeyLastAmongItsSiblingsIsStillFound()
+    {
+        ComparisonNode[] children = new ComparisonNode[50];
+        children[0] = topNode("CommonModule.Alpha", "CommonModule.Alpha", null); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 1; i < children.length - 1; i++)
+        {
+            children[i] = topNode("CommonModule.Filler" + i, "CommonModule.Filler" + i, null); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        children[children.length - 1] = topNode("CommonModule.Omega", "CommonModule.Omega", null); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode collection = plainNode();
+        CountingChildren siblings = withCountedChildren(collection, children);
+        ComparisonNode root = plainNode();
+        withChildren(root, collection);
+
+        List<String> first = List.of("commonModules", "Alpha:Alpha:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> last = List.of("commonModules", "Omega:Omega:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<List<String>, ComparisonNode> found =
+            MergeRulesTool.findNodes(root, List.of(first, last), node -> "commonModules"); //$NON-NLS-1$
+
+        assertSame("a key at the head is found", children[0], found.get(first)); //$NON-NLS-1$
+        assertSame("and a key at the very end is found too - the exit waits for ALL of them", //$NON-NLS-1$
+            children[children.length - 1], found.get(last));
+        assertEquals("so this level is read to its end, because that is where the last key is", //$NON-NLS-1$
+            50, siblings.reads());
+    }
+
+    /**
+     * The second control: the copy also dropped nulls, and unlike the twin sites this loop KEYS
+     * every element instead of testing it with {@code instanceof} - {@code serializedKey} hands a
+     * node it does not recognise to the feature resolver, which asks the live comparison view
+     * about it. So the walk skips a null child itself, and a null sibling hides nothing behind it.
+     */
+    @Test
+    public void testANullChildIsSkippedWithoutBeingKeyed()
+    {
+        ComparisonNode alpha = topNode("CommonModule.Alpha", "CommonModule.Alpha", null); //$NON-NLS-1$ //$NON-NLS-2$
+        ComparisonNode collection = plainNode();
+        withCountedChildren(collection, null, alpha);
+        ComparisonNode root = plainNode();
+        withChildren(root, collection);
+
+        List<ComparisonNode> keyed = new ArrayList<>();
+        List<String> chain = List.of("commonModules", "Alpha:Alpha:NONE"); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<List<String>, ComparisonNode> found =
+            MergeRulesTool.findNodes(root, List.of(chain), node -> {
+                keyed.add(node);
+                return "commonModules"; //$NON-NLS-1$
+            });
+
+        assertSame("a null sibling must not hide the child behind it", alpha, found.get(chain)); //$NON-NLS-1$
+        assertFalse("nothing may be asked of the comparison view about a null node", //$NON-NLS-1$
+            keyed.contains(null));
+    }
+
     @Test
     public void testAChainNoChildCarriesIsAbsentWhileItsSiblingStillResolves()
     {
@@ -3441,6 +3536,66 @@ public class MergeRulesToolTest
         EList<ComparisonNode> list = new BasicEList<>();
         list.addAll(List.of(children));
         when(parent.<ComparisonNode> getChildren()).thenReturn(list);
+    }
+
+    /**
+     * @param parent the node to give children to
+     * @param children the children, in order; a {@code null} entry is allowed, because the
+     *            platform's own child list may hold one
+     * @return the list, so a test can ask how many of its elements were actually read
+     */
+    private static CountingChildren withCountedChildren(ComparisonNode parent,
+        ComparisonNode... children)
+    {
+        CountingChildren list = new CountingChildren();
+        for (ComparisonNode child : children)
+        {
+            list.add(child);
+        }
+        when(parent.<ComparisonNode> getChildren()).thenReturn(list);
+        return list;
+    }
+
+    /**
+     * A child list that counts how many of its elements a reader actually touched.
+     * <p>
+     * The count is the whole point: copying a level and walking a level to the end are
+     * indistinguishable from the answer, and identical in cost. Only the number of elements read
+     * tells them apart from a level that is left as soon as it has nothing more to give.
+     */
+    private static final class CountingChildren
+        extends BasicEList<ComparisonNode>
+    {
+        private static final long serialVersionUID = 1L;
+
+        private int reads;
+
+        @Override
+        public Iterator<ComparisonNode> iterator()
+        {
+            return new Iterator<>()
+            {
+                private int cursor;
+
+                @Override
+                public boolean hasNext()
+                {
+                    return cursor < size();
+                }
+
+                @Override
+                public ComparisonNode next()
+                {
+                    reads++;
+                    return get(cursor++);
+                }
+            };
+        }
+
+        int reads()
+        {
+            return reads;
+        }
     }
 
     /**

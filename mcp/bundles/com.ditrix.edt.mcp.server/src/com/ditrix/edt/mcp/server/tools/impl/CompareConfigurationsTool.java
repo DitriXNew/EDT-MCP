@@ -879,7 +879,17 @@ public class CompareConfigurationsTool implements IMcpTool
         boolean handedOver = false;
         try
         {
-            String id = handOver(request, progress, launch, claim);
+            // Prepared BELOW the claim and ABOVE the commit, and that second half is the whole of
+            // it. Resolving two git revisions, looking the project up and reading an optional
+            // rules file are READS: nothing has been handed to anything, so abandoning them costs
+            // the caller a retry and nothing else. The registry, meanwhile, stops enforcing this
+            // job's deadline the moment tryCommit() succeeds - a committed job is deliberately
+            // left to finish - so preparing after the commit put minutes of filesystem work into
+            // the one window nothing bounds at all, under a tool that advertises a two-hour
+            // budget. Here the budget covers the preparation, and the commit covers only what
+            // cannot be taken back.
+            Backend.Prepared prepared = backend.prepare(request, claim);
+            String id = handOver(prepared, progress, launch);
             handedOver = true;
             return conclude(request, progress, launch, id,
                 pollUntilConcluded(progress, launch, id));
@@ -900,23 +910,32 @@ public class CompareConfigurationsTool implements IMcpTool
     }
 
     /**
-     * Hands the prepared batch to EDT under a claim already granted, and publishes the launch to
-     * the cancellation handler.
+     * Hands an already prepared batch to EDT, and publishes the launch to the cancellation
+     * handler.
+     * <p>
+     * It takes a {@link Backend.Prepared} rather than the request, and that is the point: the
+     * commit below is what stops the job's deadline, so everything ABOVE it must be work the
+     * deadline may still interrupt. Preparation cannot be done here, because there is nothing
+     * here to do it with.
      *
-     * @param request the validated request
+     * @param prepared the batch this launch will hand over
      * @param progress the job's reporter
      * @param launch the state shared with the cancellation handler
-     * @param claim this launch's claim on EDT's single slot
      * @return this plugin's id for the started comparison
      * @throws ComparisonException when the comparison could not be started
      */
-    private String handOver(LaunchRequest request, ProgressReporter progress, Launch launch,
-        SlotClaim claim) throws ComparisonException
+    private String handOver(Backend.Prepared prepared, ProgressReporter progress, Launch launch)
+        throws ComparisonException
     {
         // Handing a batch to EDT cannot be taken back: the platform owns the comparison from
         // that moment, and a job published as a retryable timeout would invite a second launch
         // that the engine's one-at-a-time assertion refuses. Commit FIRST, in one step with the
         // deadline, and only start if this job is still the one allowed to.
+        //
+        // And commit here and NOWHERE EARLIER. The commit buys exactly one thing - the deadline
+        // may no longer publish a retryable failure over work the platform already owns - and it
+        // costs the whole rest of the job its bound. Every step that can still be abandoned
+        // therefore stays above this line, in the caller.
         if (!progress.tryCommit())
         {
             throw new ComparisonException("The comparison job ended before it reached EDT, so " //$NON-NLS-1$
@@ -937,7 +956,7 @@ public class CompareConfigurationsTool implements IMcpTool
         String id = null;
         try
         {
-            id = backend.start(request, claim);
+            id = prepared.start();
         }
         finally
         {
@@ -1232,9 +1251,16 @@ public class CompareConfigurationsTool implements IMcpTool
      * point: the latch is counted down on every path out of the launch, success and failure
      * alike, so this cannot hang, and {@code BackgroundJobs} already bounds this handler and
      * says so honestly when its own bound expires. A private bound here would expire on an
-     * ordinary slow launch - two git revision resolutions, a project lookup, an optional
-     * rules file - and then report a stop that never happened, while the comparison went on
-     * to take EDT's single slot with nothing left able to reach it.
+     * ordinary slow hand-over - the session registration and EDT's own scheduling of the batch -
+     * and then report a stop that never happened, while the comparison went on to take EDT's
+     * single slot with nothing left able to reach it.
+     * <p>
+     * What this waits for is the HAND-OVER and no longer the preparation, because it is only
+     * reachable once the job has committed: {@code BackgroundJobs} invokes an owner's
+     * cancellation capability for committed work alone, and cancels an uncommitted job itself,
+     * without this handler. A cancellation arriving while the two git revisions are still being
+     * resolved therefore ends the job outright - nothing has reached EDT, so there is nothing to
+     * stop - and the claim is withdrawn by the launch as it unwinds.
      *
      * @param launch the state shared with the launching job
      * @return what was actually stopped
@@ -2307,12 +2333,48 @@ public class CompareConfigurationsTool implements IMcpTool
         SlotClaim claimSlot(LaunchRequest request);
 
         /**
+         * Everything one launch needs to reach EDT, worked out without reaching it.
+         *
+         * <h2>Why a launch is TWO calls and not one</h2>
+         * They used to be one, and the whole of it ran after the job had committed - the step
+         * that tells {@code BackgroundJobs} to stop enforcing this job's deadline, because the
+         * work is past the point where a retryable timeout could be published over it. But most
+         * of a launch is not past that point at all: two git revision resolutions, a project
+         * lookup, an optional merge-rules file. Those are reads of a filesystem that can stall,
+         * and with the deadline already stood down a stalled one held a shared worker and this
+         * server's single comparison slot with NO bound of any kind, while the tool advertised a
+         * two-hour budget.
+         * <p>
+         * Splitting them puts the commit where the irreversibility actually starts. Preparation
+         * is abandonable by construction: it hands nothing to the platform, so the deadline may
+         * interrupt it and the claim is simply withdrawn.
+         *
          * @param request the validated request
          * @param claim this launch's granted claim; the started comparison keeps its id
-         * @return this plugin's id for the started comparison
-         * @throws ComparisonException when the comparison could not be started
+         * @return the batch and everything it will be started with
+         * @throws ComparisonException when the launch cannot be prepared at all
          */
-        String start(LaunchRequest request, SlotClaim claim) throws ComparisonException;
+        Prepared prepare(LaunchRequest request, SlotClaim claim) throws ComparisonException;
+
+        /**
+         * One prepared launch, and the ONE irreversible step left in it.
+         * <p>
+         * The type exists so that ordering cannot be got wrong by editing: {@link #start()} is
+         * reachable only through a value {@link Backend#prepare} produced, so no caller can hand
+         * a batch to EDT without having prepared it first, and none can prepare under the commit
+         * by accident either.
+         */
+        interface Prepared
+        {
+            /**
+             * Hands the batch to EDT. From the moment this returns the platform owns the
+             * comparison, which is why the job commits immediately before it and not sooner.
+             *
+             * @return this plugin's id for the started comparison
+             * @throws ComparisonException when the comparison could not be started
+             */
+            String start() throws ComparisonException;
+        }
 
         /**
          * Gives up a claim whose launch never reached the platform.
@@ -2460,7 +2522,7 @@ public class CompareConfigurationsTool implements IMcpTool
         }
 
         @Override
-        public String start(LaunchRequest request, SlotClaim claim) throws ComparisonException
+        public Prepared prepare(LaunchRequest request, SlotClaim claim) throws ComparisonException
         {
             ComparisonEngine engine = ComparisonEngine.get().orElseThrow(
                 () -> new ComparisonException(messageOf(ComparisonFailures.serviceUnavailable())));
@@ -2489,7 +2551,7 @@ public class CompareConfigurationsTool implements IMcpTool
             {
                 throw new ComparisonException(messageOf(scoping.errorJson()));
             }
-            return launch(engine, request, claim, other, ancestor, scopeObject(scoping));
+            return prepareLaunch(engine, request, claim, other, ancestor, scopeObject(scoping));
         }
 
         /**
@@ -2563,8 +2625,8 @@ public class CompareConfigurationsTool implements IMcpTool
         }
 
         /**
-         * Builds the batch and hands it to the engine, registering the session first so nothing
-         * can be started without something owning it.
+         * Builds the batch, and stops there: the registration and the hand-over are the returned
+         * {@link Prepared}'s job, because they are the half the job has to commit for.
          *
          * @param engine the read-only facade
          * @param request the validated request
@@ -2572,10 +2634,11 @@ public class CompareConfigurationsTool implements IMcpTool
          * @param other the resolved other revision
          * @param ancestor the resolved ancestor revision
          * @param scope the comparison scope
-         * @return this plugin's id for the started comparison
-         * @throws ComparisonException when the project is not a 1C project or the launch fails
+         * @return the batch and everything it will be started with
+         * @throws ComparisonException when the project is not a 1C project or the batch cannot be
+         *     built
          */
-        private static String launch(ComparisonEngine engine, LaunchRequest request,
+        private static Prepared prepareLaunch(ComparisonEngine engine, LaunchRequest request,
             SlotClaim claim, GitRevisionResolver.Revision other,
             GitRevisionResolver.Revision ancestor, ComparisonScope scope) throws ComparisonException
         {
@@ -2627,7 +2690,11 @@ public class CompareConfigurationsTool implements IMcpTool
 
             CompareMergeProcessBatch batch = new CompareMergeProcessBatch(
                 new CompareMergeProcessDescriptor(handle, settings));
-            return registerAndHandOver(engine, claim, handle, batch);
+            // The registration is INSIDE the prepared step and not above it: it has to exist
+            // before the platform can start anything under the id, so the two belong to the same
+            // committed window - and both of its rollbacks live in registerAndHandOver, which
+            // could not run them if the registration had happened somewhere else.
+            return () -> registerAndHandOver(engine, claim, handle, batch);
         }
 
         @Override

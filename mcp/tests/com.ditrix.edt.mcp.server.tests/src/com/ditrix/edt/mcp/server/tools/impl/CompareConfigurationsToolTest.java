@@ -66,6 +66,8 @@ import com.ditrix.edt.mcp.server.tools.impl.CompareConfigurationsTool.Progress;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressEntry;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonFailures;
@@ -1611,7 +1613,9 @@ public class CompareConfigurationsToolTest
 
         try
         {
-            new CompareConfigurationsTool.EngineBackend().start(
+            // Asked of the PREPARATION, which is where the facade lookup is: a launch that cannot
+            // even be prepared must be refused before the job commits, not after.
+            new CompareConfigurationsTool.EngineBackend().prepare(
                 new LaunchRequest("TestConfiguration", "HEAD", "HEAD~1", null, null, 100, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     true),
                 SlotClaims.granted("cmp-x-1")); //$NON-NLS-1$
@@ -1733,12 +1737,11 @@ public class CompareConfigurationsToolTest
     public void testACancellationArrivingDuringASlowLaunchStopsWhatTheLaunchStarted()
         throws Exception
     {
-        // The launch is held open for longer than any private wait this tool used to keep
-        // (two seconds), which is ordinary on a real repository: two git revision
-        // resolutions, a project lookup and an optional rules file all happen before the
-        // comparison id exists. The old handler gave up there, reported "there was nothing
-        // to stop", and left the comparison holding EDT's single slot with the job already
-        // terminal - so nothing could reach it again.
+        // The hand-over is held open for longer than any private wait this tool used to keep
+        // (two seconds), which is ordinary: the session registration and EDT's own scheduling
+        // of the batch both sit between the commit and the comparison id. The old handler gave
+        // up there, reported "there was nothing to stop", and left the comparison holding EDT's
+        // single slot with the job already terminal - so nothing could reach it again.
         backend.keepRunning();
         backend.blockStart();
         String jobId = jobId(tool.execute(request(Map.of("waitSeconds", "0")))); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1755,6 +1758,107 @@ public class CompareConfigurationsToolTest
         assertEquals(1, backend.handBacks());
         assertEquals(backend.lastComparisonId(), backend.lastHandedBack());
         assertEquals(CancellationOutcome.TERMINATED, cancellation.get().getOutcome());
+    }
+
+    // ====== the advertised budget bounds the PREPARATION, not only the wait after it ======
+
+    /**
+     * The finding, and the reason no wording of the tool could reveal it: {@code tryCommit()} is
+     * the step that tells {@code BackgroundJobs} to stop enforcing this job's deadline - a
+     * committed job's {@code fail} records a note and returns false instead of failing it - and
+     * the whole preparation used to run underneath that call. Two git revision resolutions, a
+     * project lookup and an optional merge-rules file are filesystem reads; one that does not
+     * answer held a shared worker and this server's single comparison slot with no bound of any
+     * kind, under a tool that advertises a two-hour budget.
+     * <p>
+     * The gate stands in for the stall. Nothing about it is special: it is the preparation not
+     * returning.
+     */
+    @Test
+    public void testAStalledPreparationIsStillFailedByTheJobsBudget() throws Exception
+    {
+        backend.blockPrepare();
+
+        JobSnapshot started = jobs.start(CompareConfigurationsTool.NAME, 2000L,
+            "Accepted the comparison request.", //$NON-NLS-1$
+            progress -> tool.runComparison(launchRequest(), progress, new Launch()));
+        assertTrue("the worker must be INSIDE the preparation, not merely past the claim", //$NON-NLS-1$
+            backend.awaitPrepareEntered());
+        JobSnapshot terminal = awaitTerminal(started.getId());
+
+        assertEquals("a preparation is abandonable work, so the budget must still end it", //$NON-NLS-1$
+            BackgroundJobs.Status.FAILED, terminal.getStatus());
+        assertContains(terminal.getErrorMessage(), "exceeded its total timeoutSeconds budget"); //$NON-NLS-1$
+    }
+
+    /**
+     * The other half of the same fact: a budget that expired while the launch was preparing must
+     * also stop the hand-over from happening afterwards, and must give EDT's single slot back.
+     * A job published as failed while its worker went on to start a comparison would leave that
+     * comparison holding the slot under an id no caller ever saw.
+     */
+    @Test
+    public void testAPreparationTheBudgetEndedNeverReachesEdtAndGivesItsClaimBack()
+        throws Exception
+    {
+        backend.blockPrepare();
+
+        JobSnapshot started = jobs.start(CompareConfigurationsTool.NAME, 2000L,
+            "Accepted the comparison request.", //$NON-NLS-1$
+            progress -> tool.runComparison(launchRequest(), progress, new Launch()));
+        assertTrue(backend.awaitPrepareEntered());
+        awaitTerminal(started.getId());
+        backend.releasePrepare();
+        awaitLaunchDecided();
+
+        assertEquals("nothing may be handed to EDT once the budget has published a failure", //$NON-NLS-1$
+            0, backend.starts());
+        assertEquals("and the claim this launch took goes back, or the slot stays held by a " //$NON-NLS-1$
+            + "job that no longer exists", 1, backend.withdrawnClaims().size()); //$NON-NLS-1$
+    }
+
+    /**
+     * The CONTROL that keeps the two above from being read as "drop the commit". Once the batch is
+     * being handed over the budget must NOT fail the job: that request cannot be taken back, and a
+     * retryable timeout published over it invites a second launch the engine refuses. The registry
+     * records a note instead, and the job stays running.
+     */
+    @Test
+    public void testTheBudgetLeavesACommittedHandOverToFinish() throws Exception
+    {
+        backend.keepRunning();
+        backend.blockStart();
+
+        JobSnapshot started = jobs.start(CompareConfigurationsTool.NAME, 2000L,
+            "Accepted the comparison request.", //$NON-NLS-1$
+            progress -> tool.runComparison(launchRequest(), progress, new Launch()));
+        assertTrue(backend.awaitStartEntered());
+        JobSnapshot afterBudget = awaitProgressLine(started.getId(),
+            "left to finish instead of being reported as failed"); //$NON-NLS-1$
+
+        assertEquals("a committed hand-over is left alone on purpose", //$NON-NLS-1$
+            BackgroundJobs.Status.RUNNING, afterBudget.getStatus());
+        assertNull("and it is NOT published as a retryable failure", //$NON-NLS-1$
+            afterBudget.getErrorMessage());
+    }
+
+    /**
+     * The boundary on the other side: a preparation that FAILS is an ordinary failed job. It
+     * withdraws its own claim - the {@code finally} covers the preparation too, not only the
+     * hand-over - and reaches no platform at all.
+     */
+    @Test
+    public void testALaunchThatFailedWhilePreparingWithdrawsItsClaimAndReachesNoPlatform()
+    {
+        backend.failPrepareWith("otherRevision 'no-such-branch' does not resolve to a commit."); //$NON-NLS-1$
+
+        String result = tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertContains(result, "# Background job: failed"); //$NON-NLS-1$
+        assertContains(result, "does not resolve to a commit"); //$NON-NLS-1$
+        assertEquals("nothing reached EDT", 0, backend.starts()); //$NON-NLS-1$
+        assertEquals("the claim this launch took is the claim this launch gives back", //$NON-NLS-1$
+            1, backend.withdrawnClaims().size());
     }
 
     // ============ Every ending goes through ONE exit ============
@@ -2517,6 +2621,70 @@ public class CompareConfigurationsToolTest
         when(parent.<ComparisonNode> getChildren()).thenReturn(list);
     }
 
+    /**
+     * @param jobId the job to watch
+     * @return the first snapshot that is no longer RUNNING, or the last one seen within the bound
+     */
+    private JobSnapshot awaitTerminal(String jobId) throws InterruptedException
+    {
+        long deadline = System.currentTimeMillis() + 10_000L;
+        JobSnapshot snapshot = jobs.get(jobId);
+        while (System.currentTimeMillis() < deadline
+            && snapshot.getStatus() == BackgroundJobs.Status.RUNNING)
+        {
+            Thread.sleep(20L);
+            snapshot = jobs.get(jobId);
+        }
+        // Returned rather than asserted on, so that a job which never ends fails its own test with
+        // the status it was stuck in instead of with a wait that timed out.
+        return snapshot;
+    }
+
+    /**
+     * @param jobId the job to watch
+     * @param line the progress text to wait for
+     * @return the snapshot that first carried it, or the last one seen within the bound
+     */
+    private JobSnapshot awaitProgressLine(String jobId, String line) throws InterruptedException
+    {
+        long deadline = System.currentTimeMillis() + 10_000L;
+        JobSnapshot snapshot = jobs.get(jobId);
+        while (System.currentTimeMillis() < deadline && !hasProgressLine(snapshot, line))
+        {
+            Thread.sleep(20L);
+            snapshot = jobs.get(jobId);
+        }
+        assertTrue("no progress line containing '" + line + "' within the wait", //$NON-NLS-1$ //$NON-NLS-2$
+            hasProgressLine(snapshot, line));
+        return snapshot;
+    }
+
+    private static boolean hasProgressLine(JobSnapshot snapshot, String line)
+    {
+        for (ProgressEntry entry : snapshot.getProgress())
+        {
+            if (entry.getMessage() != null && entry.getMessage().contains(line))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Waits until the launch has decided what to do with its claim - handed it to EDT, or given it
+     * back. Both outcomes are observable, so neither wait has to be a negative one.
+     */
+    private void awaitLaunchDecided() throws InterruptedException
+    {
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (System.currentTimeMillis() < deadline && backend.starts() == 0
+            && backend.withdrawnClaims().isEmpty())
+        {
+            Thread.sleep(20L);
+        }
+    }
+
     private static void assertContains(String haystack, String needle)
     {
         assertTrue("expected to find '" + needle + "' in:\n" + haystack, //$NON-NLS-1$ //$NON-NLS-2$
@@ -3094,6 +3262,12 @@ public class CompareConfigurationsToolTest
         private final CountDownLatch startEntered = new CountDownLatch(1);
         private final CountDownLatch startGate = new CountDownLatch(1);
         private volatile boolean blockStart;
+        /** The preparation half, gated separately: it runs BELOW the job's commit, not above it. */
+        private final AtomicInteger prepares = new AtomicInteger();
+        private final AtomicReference<String> prepareFailure = new AtomicReference<>();
+        private final CountDownLatch prepareEntered = new CountDownLatch(1);
+        private final CountDownLatch prepareGate = new CountDownLatch(1);
+        private volatile boolean blockPrepare;
         private final AtomicReference<Launch> handOverOnPoll = new AtomicReference<>();
         private final AtomicReference<Launch> requestStopDuringStart = new AtomicReference<>();
         private final AtomicReference<SlotHandback.Verdict> handBackVerdict =
@@ -3139,7 +3313,30 @@ public class CompareConfigurationsToolTest
         }
 
         @Override
-        public String start(LaunchRequest request, SlotClaim claim) throws ComparisonException
+        public Prepared prepare(LaunchRequest request, SlotClaim claim) throws ComparisonException
+        {
+            prepareEntered.countDown();
+            if (blockPrepare)
+            {
+                try
+                {
+                    prepareGate.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            prepares.incrementAndGet();
+            String failure = prepareFailure.get();
+            if (failure != null)
+            {
+                throw new ComparisonException(failure);
+            }
+            return () -> start(request, claim);
+        }
+
+        private String start(LaunchRequest request, SlotClaim claim) throws ComparisonException
         {
             lastClaim.set(claim);
             lastRequest.set(request);
@@ -3331,6 +3528,37 @@ public class CompareConfigurationsToolTest
             startGate.countDown();
         }
 
+        /**
+         * Makes the PREPARATION hang - a stalled git revision, a filesystem that does not answer -
+         * which is the half that must still be interruptible.
+         */
+        void blockPrepare()
+        {
+            blockPrepare = true;
+        }
+
+        /** Lets the held preparation run on. */
+        void releasePrepare()
+        {
+            prepareGate.countDown();
+        }
+
+        void failPrepareWith(String message)
+        {
+            prepareFailure.set(message);
+        }
+
+        /** @return {@code true} once the worker is INSIDE the preparation, not merely past it */
+        boolean awaitPrepareEntered() throws InterruptedException
+        {
+            return prepareEntered.await(10, TimeUnit.SECONDS);
+        }
+
+        int prepares()
+        {
+            return prepares.get();
+        }
+
         /** Makes the hand-back report that nothing was registered under the id. */
         void refuseRelease()
         {
@@ -3348,6 +3576,7 @@ public class CompareConfigurationsToolTest
          */
         void finish()
         {
+            prepareGate.countDown();
             startGate.countDown();
             pollAnswer.set(Progress.finished("COMPARISON_PROCESS_FINISHED")); //$NON-NLS-1$
         }
