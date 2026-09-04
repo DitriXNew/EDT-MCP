@@ -52,7 +52,11 @@ import com._1c.g5.v8.dt.md.compare.UserSupportModeComparisonNode;
 import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
+import com._1c.g5.v8.dt.mcore.StringQualifiers;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
@@ -204,6 +208,100 @@ public class ComparisonNodeRendererTest
         Document document = MdClassFactory.eINSTANCE.createDocument();
         document.setName(name);
         return document;
+    }
+
+    // ============ Two types that RENDER alike are not thereby the same type ============
+
+    /**
+     * The same shape of wrong ANSWER as the reference rows above, one metamodel layer down. A
+     * {@code TypeDescription} is its type NAMES plus the qualifiers that bound them, and the cell
+     * prints the names only - so a {@code String} bounded at 10 characters and one bounded at 100
+     * are the same six letters. Comparing those cells reported two attributes EDT stores as
+     * different database columns as agreeing, and the document then stated that nothing differs.
+     */
+    @Test
+    public void testTwoStringLengthsThatRenderAlikeAreADifference()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(attributeTypedString(10), attributeTypedString(100),
+                null)));
+
+        assertTrue("10 and 100 characters are two column types: " + text, //$NON-NLS-1$
+            text.contains(" (1 differing)")); //$NON-NLS-1$
+    }
+
+    /** ...and the document must not then announce that nothing differs. */
+    @Test
+    public void testTheReportDoesNotClaimNoDifferencesOverTwoStringLengths()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(attributeTypedString(10), attributeTypedString(100),
+                null)));
+
+        assertFalse("a difference was found, so this claim is false: " + text, //$NON-NLS-1$
+            text.contains("No differences in the compared properties")); //$NON-NLS-1$
+    }
+
+    /**
+     * The display is NOT what changed. The cell keeps the bare type names - spelling the qualifiers
+     * into it would widen every type row in every report.
+     */
+    @Test
+    public void testTheTypeCellStillRendersJustTheTypeNames()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(attributeTypedString(10), attributeTypedString(100),
+                null)));
+
+        // Addressed by the PROPERTY cell - the LABEL the table prints, not the feature name -
+        // rather than by the value: matching on "String" would settle on whatever row happened
+        // to mention it first, and the assertion below would then be true of a row that never
+        // carried a qualifier in the first place.
+        String row = rowContaining(text, "| Type |"); //$NON-NLS-1$
+        assertNotNull("the type row must be rendered: " + text, row); //$NON-NLS-1$
+        assertTrue("...and it is the type that it names: " + row, row.contains("String")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the cell must not have grown its qualifiers: " + row, //$NON-NLS-1$
+            row.contains("length=")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control against the opposite error: two attributes bounded identically must not become a
+     * difference just because the comparison now reads the qualifiers.
+     */
+    @Test
+    public void testTwoIdenticallyBoundedStringsStillAgree()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(attributeTypedString(10), attributeTypedString(10),
+                null)));
+
+        assertTrue("one bound named twice is one value: " + text, //$NON-NLS-1$
+            text.contains(" (0 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * Two attributes identical in every property but the length their {@code String} is bounded at.
+     * The uuid is pinned rather than left to the factory so the only thing the counts above can be
+     * measuring is the type.
+     *
+     * @param length the bound, in characters
+     * @return the attribute
+     */
+    private static CatalogAttribute attributeTypedString(int length)
+    {
+        Type string = McoreFactory.eINSTANCE.createType();
+        string.setName("String"); //$NON-NLS-1$
+        StringQualifiers qualifiers = McoreFactory.eINSTANCE.createStringQualifiers();
+        qualifiers.setLength(length);
+        TypeDescription type = McoreFactory.eINSTANCE.createTypeDescription();
+        type.getTypes().add(string);
+        type.setStringQualifiers(qualifiers);
+
+        CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        attribute.setName("Code"); //$NON-NLS-1$
+        attribute.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000002")); //$NON-NLS-1$
+        attribute.setType(type);
+        return attribute;
     }
 
     // ============ A target the introspector ADMITS is a value, not an empty property ============

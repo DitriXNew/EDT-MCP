@@ -24,14 +24,19 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.BmUriUtil;
+import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
+import com._1c.g5.v8.dt.mcore.DateFractions;
+import com._1c.g5.v8.dt.mcore.DateQualifiers;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.NamedElement;
+import com._1c.g5.v8.dt.mcore.NumberQualifiers;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
 import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
+import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -154,6 +159,14 @@ public final class MetadataPropertyIntrospector
          * word {@code Foo} for both. A consumer that COMPARES two sides by their rendered text
          * therefore called two different targets equal. This field carries the target qualified by
          * its metadata type, so a comparison sees the difference the display legitimately hides.
+         * <p>
+         * A 1C type is the second such kind, and it hides more than a name. A
+         * {@link ValueKind#TYPE_DESCRIPTION} renders as its type names alone - {@code String},
+         * {@code Number} - while the value ALSO carries the qualifiers that say how long that
+         * string is and how many digits that number has. A {@code String} bounded at 10
+         * characters and an unbounded {@code String} are one word on the page and two different
+         * columns in the database, so this field spells the qualifiers out; see
+         * {@link MetadataPropertyIntrospector#renderTypeDescription}.
          * <p>
          * For every other kind it is the same string as {@link #currentValue}: those renderings
          * already distinguish the values they show. It is never {@code null} while
@@ -875,7 +888,8 @@ public final class MetadataPropertyIntrospector
                 case LOCALIZED_STRING:
                     return Rendered.of(renderLocalizedString(value));
                 case TYPE_DESCRIPTION:
-                    return Rendered.of(value instanceof TypeDescription ? renderType((TypeDescription)value) : null);
+                    return value instanceof TypeDescription
+                        ? renderTypeDescription((TypeDescription)value) : Rendered.ABSENT;
                 case ENUM:
                     // Render via the literal NAME so "Current" shares the vocabulary of allowedValues.
                     return Rendered.of(value instanceof org.eclipse.emf.common.util.Enumerator enumerator
@@ -1338,12 +1352,38 @@ public final class MetadataPropertyIntrospector
             : "{" + nsUri + "}" + name; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private static String renderType(TypeDescription typeDesc)
+    /**
+     * Renders a {@code TypeDescription} for a reader, and beside it - in the same walk - the form
+     * that says WHICH {@code TypeDescription} it is.
+     *
+     * <p>The two are not the same string, and the gap is not cosmetic. A {@code TypeDescription}
+     * is a set of type names PLUS the qualifiers that bound them: {@code String} carries a length
+     * and a fixed flag, {@code Number} a precision, a scale and a sign, {@code Date} which of the
+     * date and the time it stores, and a binary type its own length and fixed flag. The cell shows
+     * the names only, because that is what a type column is for - and it means a {@code String}
+     * bounded at 10 characters and a {@code String} bounded at 100 print the same six letters.
+     * Comparing those cells answered SAME for two attributes EDT stores as different columns.
+     * Both spellings occur side by side in an ordinary configuration: an attribute typed
+     * {@code String} with an empty {@code <stringQualifiers/>} and another with
+     * {@code <length>10</length>} sit in one {@code .mdo} file.</p>
+     *
+     * <p>A qualifier group whose every field still holds the model default is left OUT of the
+     * identity, and that is deliberate rather than an optimisation. EDT writes the empty element
+     * {@code <stringQualifiers/>} for an unbounded string, so one side can hold a defaulted
+     * qualifier object where the other holds none at all while both mean the same unbounded type.
+     * Spelling the group out unconditionally would turn that into a reported difference - the
+     * opposite error to the one this method exists to stop, and the more annoying of the two,
+     * because it would fire on ordinary configurations rather than on a specific pair of values.</p>
+     *
+     * @param typeDesc the value to render, never {@code null}
+     * @return the rendering, or {@link Rendered#ABSENT} when the description names no type
+     */
+    private static Rendered renderTypeDescription(TypeDescription typeDesc)
     {
         EList<TypeItem> types = typeDesc.getTypes();
         if (types == null || types.isEmpty())
         {
-            return null;
+            return Rendered.ABSENT;
         }
         StringBuilder sb = new StringBuilder();
         for (TypeItem item : types)
@@ -1355,6 +1395,58 @@ public final class MetadataPropertyIntrospector
             String name = McoreUtil.getTypeName(item);
             sb.append(name != null ? name : String.valueOf(item));
         }
+        String text = sb.toString();
+        String qualifiers = renderQualifiers(typeDesc);
+        // The separator is one no 1C type name can carry, so a type list and a qualifier list
+        // cannot be read as each other however either of them is spelled.
+        return Rendered.of(text, qualifiers.isEmpty() ? text : text + " | " + qualifiers); //$NON-NLS-1$
+    }
+
+    /**
+     * The qualifier half of {@link #renderTypeDescription}: every qualifier group the description
+     * holds that says anything, in the order {@code TypeDescription} declares them.
+     *
+     * @param typeDesc the description to read
+     * @return the qualifiers, or an empty string when none of them departs from the default
+     */
+    private static String renderQualifiers(TypeDescription typeDesc)
+    {
+        StringBuilder sb = new StringBuilder();
+        NumberQualifiers number = typeDesc.getNumberQualifiers();
+        if (number != null
+            && (number.getPrecision() != 0 || number.getScale() != 0 || number.isNonNegative()))
+        {
+            appendQualifier(sb, "numberQualifiers(precision=" + number.getPrecision() //$NON-NLS-1$
+                + ", scale=" + number.getScale() //$NON-NLS-1$
+                + ", nonNegative=" + number.isNonNegative() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        StringQualifiers string = typeDesc.getStringQualifiers();
+        if (string != null && (string.getLength() != 0 || string.isFixed()))
+        {
+            appendQualifier(sb, "stringQualifiers(length=" + string.getLength() //$NON-NLS-1$
+                + ", fixed=" + string.isFixed() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        DateQualifiers date = typeDesc.getDateQualifiers();
+        DateFractions fractions = date == null ? null : date.getDateFractions();
+        if (fractions != null && fractions != DateFractions.DATE_TIME)
+        {
+            appendQualifier(sb, "dateQualifiers(dateFractions=" + fractions.getName() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        BinaryQualifiers binary = typeDesc.getBinaryQualifiers();
+        if (binary != null && (binary.getLength() != 0 || binary.isFixed()))
+        {
+            appendQualifier(sb, "binaryQualifiers(length=" + binary.getLength() //$NON-NLS-1$
+                + ", fixed=" + binary.isFixed() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return sb.toString();
+    }
+
+    private static void appendQualifier(StringBuilder sb, String qualifier)
+    {
+        if (sb.length() > 0)
+        {
+            sb.append(", "); //$NON-NLS-1$
+        }
+        sb.append(qualifier);
     }
 }

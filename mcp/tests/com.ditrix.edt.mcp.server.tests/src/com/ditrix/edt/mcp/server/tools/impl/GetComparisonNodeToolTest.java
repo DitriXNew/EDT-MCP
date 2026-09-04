@@ -1799,6 +1799,8 @@ public class GetComparisonNodeToolTest
 
         assertError(result);
         assertNull("nothing may be looked up on digits two ids share", source.requestedNodeId); //$NON-NLS-1$
+        assertTrue("the refusal must name the real limit, not call a whole number fractional: " + result, //$NON-NLS-1$
+            errorMessage(result).contains("below 2^53")); //$NON-NLS-1$
     }
 
     /**

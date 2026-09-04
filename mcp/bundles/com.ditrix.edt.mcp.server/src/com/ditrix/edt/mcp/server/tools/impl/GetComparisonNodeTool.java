@@ -411,7 +411,8 @@ public class GetComparisonNodeTool implements IMcpTool
             explicitNodeId = parseNodeId(rawNodeId);
             if (explicitNodeId == null)
             {
-                return ToolResult.error("nodeId must be a whole number, but was '" + rawNodeId //$NON-NLS-1$
+                return ToolResult.error("nodeId must be a whole number, and as a JSON number it must be " //$NON-NLS-1$
+                    + "below 2^53 (larger integers arrive rounded), but was '" + rawNodeId //$NON-NLS-1$
                     + "'. Copy the Node id column from the compare_configurations report.").toJson(); //$NON-NLS-1$
             }
         }
@@ -762,6 +763,13 @@ public class GetComparisonNodeTool implements IMcpTool
      * tell the two apart, and a wrong node answered silently is worse than a refusal. Exact digits
      * - a nodeId sent as a JSON STRING - never reach this check at all, so that caller still has a
      * spelling that works.
+     * <p>
+     * No comparison hands out an id near this boundary. A BM id is composed ({@code BmIdUtil}: 8
+     * bits of store id, 24 bits of resource index, 32 bits of object index within the resource),
+     * and only TOP comparison nodes are resources, so a top node is {@code k * 2^32} and its
+     * contained nodes {@code k * 2^32 + j}. The boundary is therefore the 2^21-th top node of ONE
+     * comparison - about two million top-level objects, where the largest shipped configurations
+     * hold of the order of a hundred thousand - which is why refusing it costs nobody a node.
      */
     private static final long EXACT_IN_DOUBLE = 1L << 53;
 

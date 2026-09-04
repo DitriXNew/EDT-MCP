@@ -29,13 +29,20 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
 import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
+import com._1c.g5.v8.dt.mcore.DateFractions;
+import com._1c.g5.v8.dt.mcore.DateQualifiers;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.NumberQualifiers;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
 import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
+import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -323,6 +330,273 @@ public class MetadataPropertyIntrospectorTest
         subsystem.setName("Sales"); //$NON-NLS-1$
         subsystem.setParentSubsystem(parent);
         return subsystem;
+    }
+
+    // ====== A 1C type is its qualifiers as well as its names ======
+
+    /**
+     * The type cell prints the type NAMES and nothing else, so a {@code String} bounded at 10
+     * characters and one bounded at 100 are the same six letters on the page. That is right for a
+     * reader and wrong for anything that compares the cells: EDT stores the two as different
+     * database columns, and a report built on the rendered text called them one value.
+     * <p>
+     * The pair is not hypothetical. One ordinary catalog {@code .mdo} carries an attribute typed
+     * {@code String} with an empty {@code <stringQualifiers/>} beside another with
+     * {@code <length>10</length>}.
+     */
+    @Test
+    public void testTwoStringLengthsThatPrintAlikeAreTwoIdentities()
+    {
+        String shortString = typeIdentity(stringTypeBounded(10, false));
+        String longString = typeIdentity(stringTypeBounded(100, false));
+
+        assertFalse("two string lengths must not be one value: " + shortString, //$NON-NLS-1$
+            shortString.equals(longString));
+    }
+
+    /** The other half of the same statement, on the qualifier the length does not cover. */
+    @Test
+    public void testAFixedStringIsNotTheSameValueAsAVariableOne()
+    {
+        String variable = typeIdentity(stringTypeBounded(10, false));
+        String fixed = typeIdentity(stringTypeBounded(10, true));
+
+        assertFalse("fixed and variable are two column types: " + variable, //$NON-NLS-1$
+            variable.equals(fixed));
+    }
+
+    /**
+     * A number differs the same way, and by the qualifier a reader is likeliest to care about: the
+     * scale is what says whether the column holds whole roubles or kopecks.
+     */
+    @Test
+    public void testTwoNumberScalesThatPrintAlikeAreTwoIdentities()
+    {
+        String whole = typeIdentity(numberType(10, 0, false));
+        String fractional = typeIdentity(numberType(10, 2, false));
+
+        assertFalse("two scales must not be one value: " + whole, whole.equals(fractional)); //$NON-NLS-1$
+    }
+
+    /** ...and by its sign, which is a constraint on the stored values rather than on their width. */
+    @Test
+    public void testANonNegativeNumberIsNotTheSameValueAsASignedOne()
+    {
+        String signed = typeIdentity(numberType(10, 2, false));
+        String nonNegative = typeIdentity(numberType(10, 2, true));
+
+        assertFalse("the sign is part of the type: " + signed, signed.equals(nonNegative)); //$NON-NLS-1$
+    }
+
+    /** A date that stores only the date is not a date that stores the time as well. */
+    @Test
+    public void testTwoDateFractionsThatPrintAlikeAreTwoIdentities()
+    {
+        String dateOnly = typeIdentity(dateType(DateFractions.DATE));
+        String timeOnly = typeIdentity(dateType(DateFractions.TIME));
+
+        assertFalse("two date fractions must not be one value: " + dateOnly, //$NON-NLS-1$
+            dateOnly.equals(timeOnly));
+    }
+
+    /**
+     * The fourth qualifier group {@code TypeDescription} declares. It is not in the note this work
+     * started from - it was read out of {@code model/Mcore.xcore} - and it is carried for the same
+     * reason as the other three.
+     */
+    @Test
+    public void testTwoBinaryLengthsThatPrintAlikeAreTwoIdentities()
+    {
+        TypeDescription small = typeDescriptionOf("ValueStorage"); //$NON-NLS-1$
+        small.setBinaryQualifiers(binaryQualifiers(64, false));
+        TypeDescription large = typeDescriptionOf("ValueStorage"); //$NON-NLS-1$
+        large.setBinaryQualifiers(binaryQualifiers(128, false));
+
+        assertFalse("two binary lengths must not be one value: " + typeIdentity(small), //$NON-NLS-1$
+            typeIdentity(small).equals(typeIdentity(large)));
+    }
+
+    /**
+     * The many-valued case: a composite type holds several alternatives AND a qualifier group per
+     * primitive among them. Walking only the names loses every one of those groups at once.
+     */
+    @Test
+    public void testACompositeTypeCarriesEveryQualifierGroupItHolds()
+    {
+        TypeDescription whole = typeDescriptionOf("String", "Number", "Date"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        whole.setStringQualifiers(stringQualifiers(10, false));
+        whole.setNumberQualifiers(numberQualifiers(10, 0, false));
+        whole.setDateQualifiers(dateQualifiers(DateFractions.DATE));
+        TypeDescription fractional = typeDescriptionOf("String", "Number", "Date"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        fractional.setStringQualifiers(stringQualifiers(10, false));
+        fractional.setNumberQualifiers(numberQualifiers(10, 2, false));
+        fractional.setDateQualifiers(dateQualifiers(DateFractions.DATE));
+
+        assertEquals("the cell is the alternatives, unchanged", "String, Number, Date", //$NON-NLS-1$ //$NON-NLS-2$
+            typeCell(whole));
+        assertFalse("a group behind the first one still separates the two: " + typeIdentity(whole), //$NON-NLS-1$
+            typeIdentity(whole).equals(typeIdentity(fractional)));
+    }
+
+    /**
+     * The composite case again, with the difference moved OFF the first group the identity emits.
+     * <p>
+     * The test above cannot see this: its two sides differ in the number scale, and the number
+     * group is the first one written - so an identity that stopped after ONE group still separated
+     * them, and the measured mutation "only the first group reaches the identity" survived. Here
+     * the two sides share their string bound and differ only in the date fractions, which is
+     * written last.
+     */
+    @Test
+    public void testACompositeTypeSeparatesOnAGroupThatIsNotTheFirstWritten()
+    {
+        TypeDescription dateOnly = typeDescriptionOf("String", "Date"); //$NON-NLS-1$ //$NON-NLS-2$
+        dateOnly.setStringQualifiers(stringQualifiers(10, false));
+        dateOnly.setDateQualifiers(dateQualifiers(DateFractions.DATE));
+        TypeDescription timeOnly = typeDescriptionOf("String", "Date"); //$NON-NLS-1$ //$NON-NLS-2$
+        timeOnly.setStringQualifiers(stringQualifiers(10, false));
+        timeOnly.setDateQualifiers(dateQualifiers(DateFractions.TIME));
+
+        assertFalse("the LAST group written still separates the two: " + typeIdentity(dateOnly), //$NON-NLS-1$
+            typeIdentity(dateOnly).equals(typeIdentity(timeOnly)));
+    }
+
+    /**
+     * The display is NOT what changed. Spelling the qualifiers into the cell would widen every type
+     * row in every report to fix something nobody reads out of the table.
+     */
+    @Test
+    public void testAQualifiedTypeStillPrintsJustTheTypeName()
+    {
+        assertEquals("the reader still sees the short type", "String", //$NON-NLS-1$ //$NON-NLS-2$
+            typeCell(stringTypeBounded(10, false)));
+    }
+
+    /**
+     * The control against the opposite error: two types qualified identically are ONE value, and
+     * qualifying the comparison must not make every type row differ.
+     */
+    @Test
+    public void testTwoIdenticallyQualifiedTypesStillAgree()
+    {
+        assertEquals("one type described twice is one value", //$NON-NLS-1$
+            typeIdentity(stringTypeBounded(10, true)), typeIdentity(stringTypeBounded(10, true)));
+    }
+
+    /**
+     * The second control, and the one that keeps the fix from being worse than the defect. EDT
+     * writes an EMPTY {@code <stringQualifiers/>} element for an unbounded string, so one side can
+     * hold a defaulted qualifier object where the other holds none at all - and both mean the same
+     * unbounded type. An identity that spelled the group out unconditionally would report that as a
+     * difference on ordinary configurations.
+     */
+    @Test
+    public void testADefaultedQualifierGroupIsTheSameValueAsNoneAtAll()
+    {
+        TypeDescription defaulted = typeDescriptionOf("String"); //$NON-NLS-1$
+        defaulted.setStringQualifiers(stringQualifiers(0, false));
+
+        assertEquals("an empty <stringQualifiers/> is not a difference from none", //$NON-NLS-1$
+            typeIdentity(typeDescriptionOf("String")), typeIdentity(defaulted)); //$NON-NLS-1$
+    }
+
+    /** The same control on the date group, whose default is the fractions literal rather than a zero. */
+    @Test
+    public void testADefaultedDateGroupIsTheSameValueAsNoneAtAll()
+    {
+        assertEquals("DateTime is the model default, so it says nothing", //$NON-NLS-1$
+            typeIdentity(typeDescriptionOf("Date")), //$NON-NLS-1$
+            typeIdentity(dateType(DateFractions.DATE_TIME)));
+    }
+
+    /**
+     * @param typeNames the alternatives the description names, in order
+     * @return a detached {@code TypeDescription} naming them
+     */
+    private static TypeDescription typeDescriptionOf(String... typeNames)
+    {
+        TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String typeName : typeNames)
+        {
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            description.getTypes().add(type);
+        }
+        return description;
+    }
+
+    private static StringQualifiers stringQualifiers(int length, boolean fixed)
+    {
+        StringQualifiers qualifiers = McoreFactory.eINSTANCE.createStringQualifiers();
+        qualifiers.setLength(length);
+        qualifiers.setFixed(fixed);
+        return qualifiers;
+    }
+
+    private static NumberQualifiers numberQualifiers(int precision, int scale, boolean nonNegative)
+    {
+        NumberQualifiers qualifiers = McoreFactory.eINSTANCE.createNumberQualifiers();
+        qualifiers.setPrecision(precision);
+        qualifiers.setScale(scale);
+        qualifiers.setNonNegative(nonNegative);
+        return qualifiers;
+    }
+
+    private static DateQualifiers dateQualifiers(DateFractions fractions)
+    {
+        DateQualifiers qualifiers = McoreFactory.eINSTANCE.createDateQualifiers();
+        qualifiers.setDateFractions(fractions);
+        return qualifiers;
+    }
+
+    private static BinaryQualifiers binaryQualifiers(int length, boolean fixed)
+    {
+        BinaryQualifiers qualifiers = McoreFactory.eINSTANCE.createBinaryQualifiers();
+        qualifiers.setLength(length);
+        qualifiers.setFixed(fixed);
+        return qualifiers;
+    }
+
+    private static TypeDescription stringTypeBounded(int length, boolean fixed)
+    {
+        TypeDescription description = typeDescriptionOf("String"); //$NON-NLS-1$
+        description.setStringQualifiers(stringQualifiers(length, fixed));
+        return description;
+    }
+
+    private static TypeDescription numberType(int precision, int scale, boolean nonNegative)
+    {
+        TypeDescription description = typeDescriptionOf("Number"); //$NON-NLS-1$
+        description.setNumberQualifiers(numberQualifiers(precision, scale, nonNegative));
+        return description;
+    }
+
+    private static TypeDescription dateType(DateFractions fractions)
+    {
+        TypeDescription description = typeDescriptionOf("Date"); //$NON-NLS-1$
+        description.setDateQualifiers(dateQualifiers(fractions));
+        return description;
+    }
+
+    /** What a comparison sees of an attribute typed {@code type}. */
+    private static String typeIdentity(TypeDescription type)
+    {
+        return typeProperty(type).valueIdentity;
+    }
+
+    /** What a reader sees of the same attribute. */
+    private static String typeCell(TypeDescription type)
+    {
+        return typeProperty(type).currentValue;
+    }
+
+    private static PropertyInfo typeProperty(TypeDescription type)
+    {
+        CatalogAttribute attribute = newAttribute();
+        attribute.setType(type);
+        PropertyInfo info = MetadataPropertyIntrospector.find(attribute, "type"); //$NON-NLS-1$
+        assertNotNull("the type property must be introspected", info); //$NON-NLS-1$
+        return info;
     }
 
     // ==================== A failed read is not an empty value ====================

@@ -659,6 +659,10 @@ public final class ComparisonNodeRenderer
          * supplies the qualified form beside the rendered one for exactly this; see
          * {@code PropertyInfo.valueIdentity}.
          * <p>
+         * A 1C type is the other kind that renders shorter than it is: the cell names the types
+         * and drops the qualifiers, so a {@code String} bounded at 10 characters and an
+         * unbounded one are the same six letters. Its identity carries the qualifiers.
+         * <p>
          * An EMPTY identity here means one thing only: the side HAS the property and set nothing in
          * it. It is not a fallback for "there is a value but it prints as nothing" - a reference
          * pointing at an unnamed object renders a blank CELL and still arrives with the target's
@@ -928,7 +932,8 @@ public final class ComparisonNodeRenderer
      * bare {@code Name}, which makes {@code Catalog.Foo} and {@code Document.Foo} the same cell -
      * two genuinely different targets answering SAME, a row missing from the differing list, and a
      * document telling the caller that nothing differs. The table still prints the short name; only
-     * the comparison uses the qualified one.
+     * the comparison uses the qualified one. The same holds for a 1C type, whose cell names the
+     * types and omits the qualifiers that bound them.
      *
      * @param row the three rendered cells and, beside them, what each stands for and which
      *            reads failed
