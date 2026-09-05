@@ -1999,19 +1999,16 @@ def _print_failed_settle_evidence(last_list_projects):
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
         display_order = backup_paths + [current]
-        # Drop the current source only when what a readable backup will actually show contains
-        # every byte its section would have shown. If a backup holds those bytes outside its
-        # displayed tail, both sources stay: duplication costs line budget, but never the failure
-        # line.
+        # Drop the current source when a readable backup contains every byte held from it. A
+        # rotation after the .log read moves those bytes under the backup while a new file takes
+        # the .log path, so retaining the stale snapshot both mislabels it and splits the display
+        # budget away from the longer, more recent suffix already held in the backup.
         current_text = by_path.get(current)
         readable_backups = [log_path for log_path in backup_paths if log_path in by_path]
         if current_text and readable_backups:
-            base_share = max(
-                _EVIDENCE_TAIL_MIN_LINES, _EVIDENCE_TAIL_LINES // len(readable_backups))
             current_section = "\n".join(current_text.splitlines()).rstrip()
             if current_section and any(
-                    current_section in "\n".join(
-                        by_path[log_path].splitlines()[-base_share:]).rstrip()
+                    current_section in "\n".join(by_path[log_path].splitlines()).rstrip()
                     for log_path in readable_backups):
                 display_order.remove(current)
                 by_path.pop(current, None)
@@ -2207,8 +2204,8 @@ def _reset_model_project(project, revert, verify):
                                       failure_details=failure_details, progress=progress):
             _failed_settle_evidence(progress.get("last_list_projects", ""))
             raise E2EModelResetFailed(
-                "clean_project succeeded, but %s, so the model is not guaranteed to be back in "
-                "sync." % failure_details[0])
+                "clean_project succeeded, but %s; %s, so the model is not guaranteed to be back "
+                "in sync." % (failure_details[0], _settle_progress_note(progress)))
         mismatch = verify()
         if mismatch is None:
             return
@@ -2383,8 +2380,9 @@ def final_cleanup():
                                   ignore_projects={EXT_OBJECTS_PROJECT}):
         _failed_settle_evidence(progress.get("last_list_projects", ""))
         raise E2EModelResetFailed(
-            "clean_project succeeded for every project, but %s, so the model is not guaranteed "
-            "to be back in sync." % failure_details[0])
+            "clean_project succeeded for every project, but %s; %s, so the model is not "
+            "guaranteed to be back in sync."
+            % (failure_details[0], _settle_progress_note(progress)))
 
     # ExternalObjects is not installed/loaded on every stand. Keep its attempt completely outside
     # the mandatory projects' outcome above, but retain their full revert+clean+settle contract

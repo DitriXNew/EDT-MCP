@@ -958,6 +958,56 @@ class ResetSettleEvidenceTest(unittest.TestCase):
         self.assertEqual([snapshot], collected,
                          "the final snapshot must be handed off before final_cleanup raises")
 
+    def test_reset_model_final_settle_failure_reports_its_progress(self):
+        def failed_wait(*, timeout, failure_details, progress=None, ignore_projects=()):
+            failure_details[:] = ["projects not ready after %ds: P=building" % timeout]
+            progress.update({
+                "changed": True,
+                "observed": [[("P", "building")], [("P", "not_available")]],
+                "polls": 17,
+                "elapsed": 23,
+                "last_list_projects": "| P | building | reset final settle |",
+            })
+            return False
+
+        with mock.patch.object(HARNESS, "_revert_and_clean",
+                               return_value=(True, 1, 0, None)), \
+                mock.patch.object(HARNESS, "wait_for_project_ready",
+                                  side_effect=failed_wait), \
+                mock.patch.object(HARNESS, "_failed_settle_evidence"):
+            with self.assertRaises(HARNESS.E2EModelResetFailed) as raised:
+                HARNESS._reset_model_project("P", mock.Mock(), mock.Mock())
+
+        self.assertIn(
+            "project state changed during the wait (17 polls over 23s)",
+            str(raised.exception))
+
+    def test_final_cleanup_final_settle_failure_reports_its_progress(self):
+        def failed_wait(*, timeout, failure_details, progress=None, ignore_projects=()):
+            failure_details[:] = ["projects not ready after %ds: P=building" % timeout]
+            progress.update({
+                "changed": False,
+                "observed": [[("P", "building")]],
+                "polls": 19,
+                "elapsed": 31,
+                "last_list_projects": "| P | building | cleanup final settle |",
+            })
+            return False
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean",
+                                  return_value=(True, 1, 0, None)), \
+                mock.patch.object(HARNESS, "wait_for_project_ready",
+                                  side_effect=failed_wait), \
+                mock.patch.object(HARNESS, "_failed_settle_evidence"):
+            with self.assertRaises(HARNESS.E2EModelResetFailed) as raised:
+                HARNESS.final_cleanup()
+
+        self.assertIn(
+            "project state never changed in 19 polls over 31s (a coarse state, so this does not "
+            "by itself distinguish a stalled queue from a slow one)",
+            str(raised.exception))
+
     def test_a_settle_call_timeout_collects_the_last_completed_poll_before_reraising(self):
         snapshot = ("| Name | State | X | Open | EDT Project |\n"
                     "|---|---|---|---|---|\n"
@@ -1914,7 +1964,12 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FAILURE MOMENT", out[first_start:second_start])
         self.assertNotIn("INCOMPLETE", out)
 
-    def test_a_backup_that_will_not_display_the_current_bytes_keeps_both_sources(self):
+    def test_a_backup_containing_all_held_current_bytes_replaces_the_stale_current_source(self):
+        """A post-read rotation makes the captured .log bytes belong to the backup.
+
+        Keeping the same stream under the now-new .log path would mislabel it and split the line
+        budget away from the backup's newer suffix.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
@@ -1940,12 +1995,34 @@ class EvidenceLogTailTest(unittest.TestCase):
 
         out = printed.getvalue()
         headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
-        self.assertEqual(2, len(headings))
+        self.assertEqual(1, len(headings))
         self.assertIn(".metadata/.bak_2.log", headings[0])
-        self.assertIn(".metadata/.log", headings[1])
-        current_start = out.index(headings[1])
-        self.assertIn("FAILURE MOMENT", out[current_start:])
+        self.assertNotIn("EDT log tail: .metadata/.log", out)
+        self.assertIn("later backup line 79", out)
         self.assertNotIn("INCOMPLETE", out)
+
+    def test_a_backup_that_grew_after_current_was_read_keeps_the_failure_marker(self):
+        """Keeping both copies splits the budget and hides L5 from both displayed tails."""
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current_lines = ["L%d" % index for index in range(1, 52)]
+            marker = "UNIQUE FAILURE MARKER AT L5"
+            current_lines[4] = marker
+            backup_lines = current_lines + ["A%d" % index for index in range(1, 31)]
+            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+                handle.write("\n".join(current_lines) + "\n")
+            with open(os.path.join(metadata, ".bak_2.log"), "w", encoding="utf-8") as handle:
+                handle.write("\n".join(backup_lines) + "\n")
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn(marker, out)
+        self.assertNotIn("EDT log tail: .metadata/.log", out)
 
     def test_a_backup_tail_that_does_not_cover_current_keeps_both_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
