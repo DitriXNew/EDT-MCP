@@ -1985,8 +1985,8 @@ def _print_failed_settle_evidence(last_list_projects):
         # read as well:
         #   rotation before the read -> .log comes back empty, but the rotated-out file is in the
         #                               `after` snapshot and gets read;
-        #   rotation after the read  -> the failure is already in hand; when a selected backup's
-        #                               displayed text contains it, that backup keeps the bytes;
+        #   rotation after the read  -> the failure is already in hand, and both successful reads
+        #                               keep their own sections because the timing is ambiguous;
         #   two in a row             -> BOTH new backups are in the snapshot diff, so the failure
         #                               stays in the covering backup's chronological slot.
         # Choosing a single "newest backup" survived none of these fully, and choosing it BEFORE
@@ -1995,7 +1995,6 @@ def _print_failed_settle_evidence(last_list_projects):
         before_rotation = scan_backups("before reading .log")
         read_into(current)
         after_rotation = scan_backups("after reading .log")
-        rotated_backups = _rotated_during(before_rotation, after_rotation)
         backup_paths = _backups_covering(before_rotation, after_rotation, failures)
         backups = [(path, after_rotation.get(path, before_rotation.get(path)))
                    for path in backup_paths]
@@ -2005,22 +2004,21 @@ def _print_failed_settle_evidence(last_list_projects):
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
         display_order = backup_paths + [current]
-        # Drop the current source only when a backup that rotated during the bracketed read contains
-        # every byte held from it. That backup continues the same stream under its new name, so
-        # retaining the stale snapshot would mislabel it and split the display budget. An unchanged
-        # pre-existing backup is a different generation, where matching text cannot justify losing
-        # the live evidence.
-        current_text = by_path.get(current)
-        readable_rotated_backups = [
-            log_path for log_path in backup_paths
-            if log_path in by_path and log_path in rotated_backups]
-        if current_text and readable_rotated_backups:
-            current_section = "\n".join(current_text.splitlines()).rstrip()
-            if current_section and any(
-                    current_section in "\n".join(by_path[log_path].splitlines()).rstrip()
-                    for log_path in readable_rotated_backups):
-                display_order.remove(current)
-                by_path.pop(current, None)
+        # Every successfully read member keeps one section in this order. The snapshots can show
+        # that a backup path changed, but not whether rotation happened before or after .log was
+        # opened; text equality or containment cannot settle that either, because distinct log
+        # generations may have identical text or one may contain the other. There is therefore no
+        # sound predicate for dropping an observed source.
+        #
+        # THE PRICE IS PAID DELIBERATELY, so do not "optimise" it away: when a rotation really did
+        # move the bytes in hand, one stream prints under two headings and the budget below splits
+        # between them - two 40-line tails of the same 81-line capture show 80 rendered rows but
+        # only 40 DISTINCT lines, and an early failure marker can fall outside both. That cost is
+        # visible in the output, both headings state their line counts, and a test pins it. Every
+        # rule that bought those lines back instead removed the live .log section outright on a
+        # textual coincidence, silently and with no INCOMPLETE marker. Buying them back needs a
+        # new source of proof - a writer-supplied generation id, or handles held across the
+        # rotation - not another predicate over these snapshots and these strings.
         texts = []
         for log_path in display_order:
             if log_path in by_path:

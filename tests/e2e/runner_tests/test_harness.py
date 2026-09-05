@@ -1798,14 +1798,17 @@ class EvidenceLogTailTest(unittest.TestCase):
         # EARLIER rotation would have put a failure.
         self.assertIn(".bak_2.log", out)
 
-    def test_a_rotated_current_log_is_not_charged_twice_against_the_line_budget(self):
+    def test_a_rotated_current_log_pays_duplicate_budget_with_two_sections(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
             current = os.path.join(metadata, ".log")
+            stream_lines = [
+                "STREAM L%02d%s" %
+                (index, " EARLY FAILURE MARKER" if index == 1 else "")
+                for index in range(1, HARNESS._EVIDENCE_TAIL_LINES + 1)]
             with open(current, "w", encoding="utf-8") as handle:
-                handle.write("FAILURE MOMENT\n")
-                handle.write("".join("noise line %d\n" % index for index in range(50)))
+                handle.write("\n".join(stream_lines) + "\n")
 
             real_read = HARNESS._read_log_tail
             rotated = []
@@ -1827,21 +1830,27 @@ class EvidenceLogTailTest(unittest.TestCase):
                 HARNESS._print_failed_settle_evidence("| P | building |")
 
         out = printed.getvalue()
-        self.assertIn("FAILURE MOMENT", out,
-                      "one generation that fits the budget must not be charged twice")
         headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
-        self.assertEqual(1, len(headings))
+        self.assertEqual(2, len(headings))
         self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertIn(".metadata/.log", headings[1])
+        displayed = [line for line in out.splitlines() if line.startswith("STREAM ")]
+        self.assertEqual(80, len(displayed), "the split spends 40 rendered lines per source")
+        self.assertEqual(stream_lines[40:], list(dict.fromkeys(displayed)),
+                         "duplicate charging leaves only 40 distinct stream lines out of 80")
+        self.assertNotIn(stream_lines[0], displayed,
+                         "the accepted duplicate budget loses the early marker")
         self.assertNotIn("INCOMPLETE", out)
 
-    def test_a_grown_rotated_log_supersedes_the_bytes_read_from_current(self):
+    def test_a_grown_rotated_log_pays_duplicate_budget_with_two_sections(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
             current = os.path.join(metadata, ".log")
             backup = os.path.join(metadata, ".bak_2.log")
+            marker = "EARLY FAILURE MARKER"
             with open(current, "w", encoding="utf-8") as handle:
-                handle.write("FAILURE MOMENT\n")
+                handle.write(marker + "\n")
                 handle.write("".join("noise line %d\n" % index for index in range(50)))
 
             real_read = HARNESS._read_log_tail
@@ -1867,10 +1876,12 @@ class EvidenceLogTailTest(unittest.TestCase):
 
         out = printed.getvalue()
         headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
-        self.assertEqual(1, len(headings))
+        self.assertEqual(2, len(headings))
         self.assertIn(".metadata/.bak_2.log", headings[0])
-        self.assertIn("FAILURE MOMENT", out)
+        self.assertIn(".metadata/.log", headings[1])
         self.assertIn("APPENDED BEFORE ROTATION", out)
+        self.assertNotIn(marker, out,
+                         "the accepted duplicate budget loses the early marker")
         self.assertNotIn("INCOMPLETE", out)
 
     def test_a_reused_rotated_backup_keeps_the_current_bytes_and_marks_incomplete(self):
@@ -1956,112 +1967,135 @@ class EvidenceLogTailTest(unittest.TestCase):
 
         out = printed.getvalue()
         headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
-        self.assertEqual(2, len(headings))
+        self.assertEqual(3, len(headings))
         self.assertIn(".metadata/.bak_2.log", headings[0])
         self.assertIn(".metadata/.bak_3.log", headings[1])
+        self.assertIn(".metadata/.log", headings[2])
         first_start = out.index(headings[0])
         second_start = out.index(headings[1])
+        current_start = out.index(headings[2])
         self.assertIn("FAILURE MOMENT", out[first_start:second_start])
+        self.assertIn("NEWER GENERATION", out[second_start:current_start])
+        self.assertIn("FAILURE MOMENT", out[current_start:])
         self.assertNotIn("INCOMPLETE", out)
 
-    def test_a_backup_containing_all_held_current_bytes_replaces_the_stale_current_source(self):
-        """A post-read rotation makes the captured .log bytes belong to the backup.
-
-        Keeping the same stream under the now-new .log path would mislabel it and split the line
-        budget away from the backup's newer suffix.
-        """
+    def test_a_rotation_before_current_is_opened_keeps_the_new_current_source(self):
+        """P2(b): an appeared backup does not prove the captured current bytes moved into it."""
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
             current = os.path.join(metadata, ".log")
             backup = os.path.join(metadata, ".bak_2.log")
-            identity = (1_000_000_000, 100, 42)
-            current_text = "FAILURE MOMENT\nCURRENT TAIL\n"
-            backup_text = current_text + "".join(
-                "later backup line %d\n" % index
-                for index in range(HARNESS._EVIDENCE_TAIL_LINES))
+            shared = "COINCIDENTAL LINE ONE\nCOINCIDENTAL LINE TWO\n"
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("OLD GENERATION ONLY\n" + shared + "OLD SUFFIX ONLY\n")
 
-            def read_tail(path, capture_identity=False):
-                text = current_text if path == current else backup_text
-                return (text, identity) if capture_identity else text
+            real_read = HARNESS._read_log_tail
+            rotated = []
+
+            def rotate_before_open_then_read(path, *args):
+                if path == current and not rotated:
+                    # The first snapshot is already complete, but .log has not been opened yet.
+                    rotated.append(True)
+                    os.replace(current, backup)
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write(shared)
+                return real_read(path, *args)
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
-                    mock.patch.object(HARNESS, "_backup_identities",
-                                      side_effect=(({}, None), ({backup: identity}, None))), \
-                    mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_tail), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=rotate_before_open_then_read), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("| P | building |")
 
         out = printed.getvalue()
         headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
-        self.assertEqual(1, len(headings))
+        self.assertEqual(2, len(headings))
         self.assertIn(".metadata/.bak_2.log", headings[0])
-        self.assertNotIn("EDT log tail: .metadata/.log", out)
-        self.assertIn("later backup line 79", out)
+        self.assertIn(".metadata/.log", headings[1])
+        backup_start = out.index(headings[0])
+        current_start = out.index(headings[1])
+        self.assertIn("OLD GENERATION ONLY", out[backup_start:current_start])
+        self.assertNotIn("OLD GENERATION ONLY", out[current_start:])
+        self.assertIn("COINCIDENTAL LINE ONE", out[current_start:])
         self.assertNotIn("INCOMPLETE", out)
 
-    def test_a_rotation_that_only_duplicates_the_stream_does_not_change_what_is_displayed(self):
-        """The 80-line budget drops old lines whether or not rotation happened.
+    def test_log_tail_sections_are_exactly_the_successfully_read_ordered_sources(self):
+        """No equality, containment, emptiness, or race inference may remove an observed source."""
+        cases = (
+            ("P2(a) same identity", "same", "P2A BACKUP\n", "P2A CURRENT\n", None),
+            ("P2(b) rotation before open", "appeared",
+             "SHARED AFTER ROTATION\nOLDER SUFFIX\n", "SHARED AFTER ROTATION\n", None),
+            ("identical text", "appeared", "IDENTICAL\n", "IDENTICAL\n", None),
+            ("prefix containment", "appeared", "PREFIX\nBACKUP SUFFIX\n", "PREFIX\n", None),
+            ("empty text", "same", "", "", None),
+            ("failed read", "same", "UNREADABLE BACKUP\n", "READABLE CURRENT\n", "backup"),
+        )
 
-        Dedupe must therefore make rotation invisible to the displayed stream, not evade the
-        budget by charging one generation as two sources.
-        """
-        stream_lines = (["STREAM S01 OLD END"] +
-                        ["STREAM S%02d" % index for index in range(2, 82)] +
-                        ["STREAM S82 NEW END"])
-        stream_text = "\n".join(stream_lines) + "\n"
-        displayed_by_case = []
-        tail_section_counts = []
-
-        for current_line_count in (None, 2, 51, len(stream_lines)):
-            with tempfile.TemporaryDirectory() as tmp:
+        for name, snapshot_case, backup_text, current_text, failed_source in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 metadata = os.path.join(tmp, ".metadata")
                 current = os.path.join(metadata, ".log")
                 backup = os.path.join(metadata, ".bak_2.log")
-                identity = (1_000_000_000, len(stream_text), 42)
-                current_text = (stream_text if current_line_count is None else
-                                "\n".join(stream_lines[:current_line_count]) + "\n")
-                after = {} if current_line_count is None else {backup: identity}
+                identity = (1_000_000_000, len(backup_text), 42)
+                before = {backup: identity} if snapshot_case == "same" else {}
+                after = {backup: identity}
+                bodies = {backup: backup_text, current: current_text}
+                failed_path = backup if failed_source == "backup" else None
 
                 def read_tail(path, capture_identity=False):
-                    text = current_text if path == current else stream_text
+                    if path == failed_path:
+                        raise OSError("planned failed read")
+                    text = bodies[path]
                     return (text, identity) if capture_identity else text
 
                 printed = io.StringIO()
                 with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
                         mock.patch.object(HARNESS, "_backup_identities",
-                                          side_effect=(({}, None), (after, None))), \
+                                          side_effect=((before, None), (after, None))), \
                         mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_tail), \
                         contextlib.redirect_stdout(printed):
                     HARNESS._print_failed_settle_evidence("| P | building |")
 
-            output_lines = printed.getvalue().splitlines()
-            displayed_by_case.append(
-                [line for line in output_lines if line.startswith("STREAM ")])
-            tail_section_counts.append(sum(
-                line.startswith("--- EDT log tail:") for line in output_lines))
+                output_lines = printed.getvalue().splitlines()
+                heading_lines = [
+                    line for line in output_lines if line.startswith("--- EDT log tail:")]
+                actual_sources = [
+                    line.split("--- EDT log tail: ", 1)[1].split(" (last ", 1)[0]
+                    for line in heading_lines]
+                ordered_paths = HARNESS._backups_covering(before, after) + [current]
+                successful_paths = [path for path in ordered_paths if path != failed_path]
+                expected_sources = [
+                    ".metadata/" + os.path.basename(path) for path in successful_paths]
 
-        self.assertEqual(stream_lines[-HARNESS._EVIDENCE_TAIL_LINES:], displayed_by_case[0])
-        self.assertEqual(displayed_by_case[0], displayed_by_case[1])
-        self.assertEqual(displayed_by_case[0], displayed_by_case[2])
-        self.assertEqual(displayed_by_case[0], displayed_by_case[3])
-        self.assertEqual([1, 1, 1], tail_section_counts[1:])
+                self.assertEqual(expected_sources, actual_sources,
+                                 "successful reads keep their multiplicity and display order")
+                for source in expected_sources:
+                    self.assertEqual(1, actual_sources.count(source))
+                for path, heading in zip(successful_paths, heading_lines):
+                    if not bodies[path]:
+                        self.assertEqual("<empty log>",
+                                         output_lines[output_lines.index(heading) + 1])
 
-    def test_current_text_inside_an_unchanged_backup_remains_live_evidence(self):
-        """A pre-existing generation can match coincidentally, so it cannot replace `.log`."""
+    def test_p2a_unchanged_backup_identity_keeps_its_own_section_alongside_current(self):
+        """P2(a): a backup observed unchanged in both snapshots remains a separate source."""
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
-            os.makedirs(metadata)
             current = os.path.join(metadata, ".log")
             backup = os.path.join(metadata, ".bak_1.log")
-            with open(backup, "w", encoding="utf-8") as handle:
-                handle.write("".join("OLD B%02d\n" % index for index in range(1, 101)))
-            with open(current, "w", encoding="utf-8") as handle:
-                handle.write("OLD B05\nOLD B06\n")
+            identity = (1_000_000_000, 100, 42)
+
+            def read_tail(path, capture_identity=False):
+                text = ("BACKUP GENERATION\n" if path == backup else
+                        "CURRENT GENERATION\n")
+                return (text, identity) if capture_identity else text
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_backup_identities", side_effect=(
+                        ({backup: identity}, None), ({backup: identity}, None))), \
+                    mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_tail), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("| P | building |")
 
@@ -2072,14 +2106,12 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn(".metadata/.log", headings[1])
         backup_start = out.index(headings[0])
         current_start = out.index(headings[1])
-        self.assertNotIn("OLD B05", out[backup_start:current_start])
-        self.assertNotIn("OLD B06", out[backup_start:current_start])
-        self.assertIn("OLD B05", out[current_start:])
-        self.assertIn("OLD B06", out[current_start:])
+        self.assertIn("BACKUP GENERATION", out[backup_start:current_start])
+        self.assertIn("CURRENT GENERATION", out[current_start:])
         self.assertNotIn("INCOMPLETE", out)
 
-    def test_a_backup_that_grew_after_current_was_read_keeps_the_failure_marker(self):
-        """Keeping both copies splits the budget and hides L5 from both displayed tails."""
+    def test_a_log_that_grows_before_rotation_loses_its_early_marker_to_the_split(self):
+        """The file grows while still .log, then is renamed; backups are not append targets."""
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
@@ -2091,30 +2123,35 @@ class EvidenceLogTailTest(unittest.TestCase):
             appended_lines = ["A%d" % index for index in range(1, 31)]
             with open(current, "w", encoding="utf-8") as handle:
                 handle.write("\n".join(current_lines) + "\n")
-            with open(backup, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(current_lines) + "\n")
 
             real_read = HARNESS._read_log_tail
-            grew = []
+            rotated = []
 
-            def read_then_grow_backup(path, *args):
+            def read_grow_then_rotate(path, *args):
                 text = real_read(path, *args)
-                if path == current and not grew:
-                    grew.append(True)
-                    with open(backup, "a", encoding="utf-8") as handle:
+                if path == current and not rotated:
+                    rotated.append(True)
+                    with open(current, "a", encoding="utf-8") as handle:
                         handle.write("\n".join(appended_lines) + "\n")
+                    os.replace(current, backup)
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
                 return text
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
                     mock.patch.object(HARNESS, "_read_log_tail",
-                                      side_effect=read_then_grow_backup), \
+                                      side_effect=read_grow_then_rotate), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("| P | building |")
 
         out = printed.getvalue()
-        self.assertIn(marker, out)
-        self.assertNotIn("EDT log tail: .metadata/.log", out)
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(2, len(headings))
+        self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertIn(".metadata/.log", headings[1])
+        self.assertIn("A30", out)
+        self.assertNotIn(marker, out)
 
     def test_a_backup_tail_that_does_not_cover_current_keeps_both_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
