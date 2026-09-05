@@ -1988,7 +1988,7 @@ class EvidenceLogTailTest(unittest.TestCase):
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
                     mock.patch.object(HARNESS, "_backup_identities",
-                                      return_value=({backup: identity}, None)), \
+                                      side_effect=(({}, None), ({backup: identity}, None))), \
                     mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_tail), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("| P | building |")
@@ -2014,7 +2014,7 @@ class EvidenceLogTailTest(unittest.TestCase):
         displayed_by_case = []
         tail_section_counts = []
 
-        for current_line_count in (None, 2, 51):
+        for current_line_count in (None, 2, 51, len(stream_lines)):
             with tempfile.TemporaryDirectory() as tmp:
                 metadata = os.path.join(tmp, ".metadata")
                 current = os.path.join(metadata, ".log")
@@ -2045,24 +2045,70 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertEqual(stream_lines[-HARNESS._EVIDENCE_TAIL_LINES:], displayed_by_case[0])
         self.assertEqual(displayed_by_case[0], displayed_by_case[1])
         self.assertEqual(displayed_by_case[0], displayed_by_case[2])
-        self.assertEqual([1, 1], tail_section_counts[1:])
+        self.assertEqual(displayed_by_case[0], displayed_by_case[3])
+        self.assertEqual([1, 1, 1], tail_section_counts[1:])
+
+    def test_current_text_inside_an_unchanged_backup_remains_live_evidence(self):
+        """A pre-existing generation can match coincidentally, so it cannot replace `.log`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            backup = os.path.join(metadata, ".bak_1.log")
+            with open(backup, "w", encoding="utf-8") as handle:
+                handle.write("".join("OLD B%02d\n" % index for index in range(1, 101)))
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("OLD B05\nOLD B06\n")
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(2, len(headings))
+        self.assertIn(".metadata/.bak_1.log", headings[0])
+        self.assertIn(".metadata/.log", headings[1])
+        backup_start = out.index(headings[0])
+        current_start = out.index(headings[1])
+        self.assertNotIn("OLD B05", out[backup_start:current_start])
+        self.assertNotIn("OLD B06", out[backup_start:current_start])
+        self.assertIn("OLD B05", out[current_start:])
+        self.assertIn("OLD B06", out[current_start:])
+        self.assertNotIn("INCOMPLETE", out)
 
     def test_a_backup_that_grew_after_current_was_read_keeps_the_failure_marker(self):
         """Keeping both copies splits the budget and hides L5 from both displayed tails."""
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            backup = os.path.join(metadata, ".bak_2.log")
             current_lines = ["L%d" % index for index in range(1, 52)]
             marker = "UNIQUE FAILURE MARKER AT L5"
             current_lines[4] = marker
-            backup_lines = current_lines + ["A%d" % index for index in range(1, 31)]
-            with open(os.path.join(metadata, ".log"), "w", encoding="utf-8") as handle:
+            appended_lines = ["A%d" % index for index in range(1, 31)]
+            with open(current, "w", encoding="utf-8") as handle:
                 handle.write("\n".join(current_lines) + "\n")
-            with open(os.path.join(metadata, ".bak_2.log"), "w", encoding="utf-8") as handle:
-                handle.write("\n".join(backup_lines) + "\n")
+            with open(backup, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(current_lines) + "\n")
+
+            real_read = HARNESS._read_log_tail
+            grew = []
+
+            def read_then_grow_backup(path, *args):
+                text = real_read(path, *args)
+                if path == current and not grew:
+                    grew.append(True)
+                    with open(backup, "a", encoding="utf-8") as handle:
+                        handle.write("\n".join(appended_lines) + "\n")
+                return text
 
             printed = io.StringIO()
             with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=read_then_grow_backup), \
                     contextlib.redirect_stdout(printed):
                 HARNESS._print_failed_settle_evidence("| P | building |")
 

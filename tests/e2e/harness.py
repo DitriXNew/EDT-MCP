@@ -1809,6 +1809,11 @@ def _backup_identities(metadata):
     return (seen, None)
 
 
+def _rotated_during(before, after):
+    """Backups that APPEARED or CHANGED between snapshots: each was `.log` moments ago."""
+    return [path for path, identity in after.items() if before.get(path) != identity]
+
+
 def _backups_covering(before, after, failures=None):
     """The backups that can still hold the failure moment, oldest first.
 
@@ -1831,7 +1836,7 @@ def _backups_covering(before, after, failures=None):
     newest-first and truncating would throw away precisely the file being looked for, which is the
     mistake the previous revision made.
     """
-    appeared = [path for path, identity in after.items() if before.get(path) != identity]
+    appeared = _rotated_during(before, after)
     pre_existing = [path for path in before if path not in appeared]
     overwritten = sorted(path for path in appeared if path in before)
 
@@ -1990,6 +1995,7 @@ def _print_failed_settle_evidence(last_list_projects):
         before_rotation = scan_backups("before reading .log")
         read_into(current)
         after_rotation = scan_backups("after reading .log")
+        rotated_backups = _rotated_during(before_rotation, after_rotation)
         backup_paths = _backups_covering(before_rotation, after_rotation, failures)
         backups = [(path, after_rotation.get(path, before_rotation.get(path)))
                    for path in backup_paths]
@@ -1999,17 +2005,20 @@ def _print_failed_settle_evidence(last_list_projects):
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
         display_order = backup_paths + [current]
-        # Drop the current source when a readable backup contains every byte held from it. A
-        # rotation after the .log read moves those bytes under the backup while a new file takes
-        # the .log path, so retaining the stale snapshot both mislabels it and splits the display
-        # budget away from the longer, more recent suffix already held in the backup.
+        # Drop the current source only when a backup that rotated during the bracketed read contains
+        # every byte held from it. That backup continues the same stream under its new name, so
+        # retaining the stale snapshot would mislabel it and split the display budget. An unchanged
+        # pre-existing backup is a different generation, where matching text cannot justify losing
+        # the live evidence.
         current_text = by_path.get(current)
-        readable_backups = [log_path for log_path in backup_paths if log_path in by_path]
-        if current_text and readable_backups:
+        readable_rotated_backups = [
+            log_path for log_path in backup_paths
+            if log_path in by_path and log_path in rotated_backups]
+        if current_text and readable_rotated_backups:
             current_section = "\n".join(current_text.splitlines()).rstrip()
             if current_section and any(
                     current_section in "\n".join(by_path[log_path].splitlines()).rstrip()
-                    for log_path in readable_backups):
+                    for log_path in readable_rotated_backups):
                 display_order.remove(current)
                 by_path.pop(current, None)
         texts = []
