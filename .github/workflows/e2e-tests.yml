@@ -26,9 +26,10 @@ name: E2E Tests (reusable)
 # defaults below are the newest supported EDT's tuple, so a caller pinning an OLDER EDT
 # must pass its matching java / eclipse-archive / eclipse-p2 too.
 #
-# Note the `build` job deliberately stays on JDK 17: the plugin is COMPILED against the
-# 2026.1 target platform (the OLDEST supported EDT) so one artifact resolves on both
-# 2026.1 and 2026.2. Only the job that RUNS EDT needs the newer JDK.
+# Note the `build` job runs on JDK 25 while the plugin it builds is still Java 17. The target
+# platform is EDT 2026.2 (its bundles are Java 25, and Tycho 5 is needed to read them), but
+# tycho-compiler pins release 17 and MANIFEST.MF keeps BREE JavaSE-17, so one artifact still
+# resolves on both 2026.1 and 2026.2. The JDK that BUILDS and the level built TO are separate.
 
 on:
   workflow_call:
@@ -77,11 +78,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up JDK 17
+      # The MCP plugin is BUILT on 25: Tycho 5 needs Maven on JDK 21+, and tycho-surefire runs
+      # the EDT 2026.2 platform bundles, which are Java 25. The bundle itself still compiles to
+      # release 17 (mcp/bom/pom.xml), so one artifact keeps loading on EDT 2026.1.
+      - name: Set up JDK 25
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 25
           cache: maven
 
       - name: Cache Tycho P2 repositories

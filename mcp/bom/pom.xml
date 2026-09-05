@@ -23,8 +23,14 @@
   </prerequisites>
 
   <properties>
-    <tycho.version>4.0.5</tycho.version>
-    <tycho.extras.version>4.0.5</tycho.extras.version>
+    <!--
+      Tycho 5 is required by the target platform, not by taste: EDT 2026.2 ships class files of
+      major version 69 (Java 25), and the ECJ inside Tycho 4.0.x (3.36) cannot read them. Tycho
+      5.0.4 carries ECJ 3.46, and needs Maven on JDK 21+ to run - the JDK that RUNS the build,
+      not the level this bundle compiles to, which stays 17 (see tycho-compiler-plugin below).
+    -->
+    <tycho.version>5.0.4</tycho.version>
+    <tycho.extras.version>5.0.4</tycho.extras.version>
 
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -49,7 +55,15 @@
           <artifactId>target-platform-configuration</artifactId>
           <version>${tycho.version}</version>
           <configuration>
-            <executionEnvironment>JavaSE-17</executionEnvironment>
+            <!--
+              RESOLUTION environment only. EDT 2026.2's bundles require osgi.ee JavaSE-25, so a
+              JavaSE-17 context cannot satisfy them - and dropping the constraint instead removes
+              the JRE provider altogether, which satisfies nothing. What the plugin COMPILES to is
+              set separately, and stays 17: tycho-compiler-plugin below pins release 17, and
+              MANIFEST.MF keeps Bundle-RequiredExecutionEnvironment JavaSE-17, so one artifact
+              still installs on EDT 2026.1 (Eclipse 4.30 / Java 17).
+            -->
+            <executionEnvironment>JavaSE-25</executionEnvironment>
             <target>
               <artifact>
                 <groupId>com.ditrix.edt.mcp</groupId>
@@ -68,6 +82,18 @@
                   <type>eclipse-plugin</type>
                   <id>org.apache.aries.spifly.dynamic.bundle</id>
                   <versionRange>1.3.7</versionRange>
+                </requirement>
+                <!--
+                  Nothing REQUIRES this bundle by name: org.eclipse.ui and org.eclipse.jface (4.38)
+                  ask for the capability eclipse.swt;(image.format=svg), and only this bundle
+                  offers it. A capability provider is not part of anyone's dependency closure, so
+                  the test runtime was assembled without it and the whole workbench stack failed
+                  to resolve at launch while the compile stayed green.
+                -->
+                <requirement>
+                  <type>eclipse-plugin</type>
+                  <id>org.eclipse.swt.svg</id>
+                  <versionRange>0.0.0</versionRange>
                 </requirement>
               </extraRequirements>
             </dependency-resolution>
@@ -101,6 +127,13 @@
           <artifactId>tycho-compiler-plugin</artifactId>
           <version>${tycho.version}</version>
           <configuration>
+            <!--
+              The bytecode level, kept apart from the resolution environment above: the target
+              platform is Java 25, this bundle is Java 17. Both supported EDTs can then load one
+              artifact - 2026.1 runs Java 17 - and no Java 18+ API can slip in, because release
+              (unlike source/target) also restricts the JDK API surface the compiler offers.
+            -->
+            <release>17</release>
             <encoding>UTF-8</encoding>
             <strictCompilerTarget>true</strictCompilerTarget>
             <useProjectSettings>true</useProjectSettings>
