@@ -43,7 +43,7 @@ def _read_content_hash(module=MODULE):
     return m.group(1)
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_append_lands_on_disk():
     r = call("write_module_source", {
         "projectName": PROJECT, "modulePath": MODULE,
@@ -94,7 +94,7 @@ def test_searchreplace_stale_oldsource_errors_and_no_write():
 _SEED = "Процедура Demo() Экспорт\n\tЗначение = 1;\nКонецПроцедуры\n"
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_replace_overwrites_whole_file_and_readback_matches():
     # OK is empty-but-existing in the baseline, so a full replace needs the explicit
     # lost-update override (overwrite=true); the blind case is rejected (test below).
@@ -113,7 +113,7 @@ def test_replace_overwrites_whole_file_and_readback_matches():
     assert_contains(src.text, "Значение = 1;", "read-back shows the replaced body line")
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_searchreplace_swaps_found_fragment_and_readback_matches():
     # Seed known content first (replace needs overwrite over the empty-existing OK).
     seed = call("write_module_source", {
@@ -172,7 +172,7 @@ def test_replace_over_existing_without_precondition_is_rejected_and_no_write():
 # via read-back, NOT assert_no_diff (the seed already dirtied the tree).
 # ──────────────────────────────────────────────────────────────────────────────
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_replace_with_matching_expectedsource_succeeds():
     # Optimistic-lock HAPPY path: a guarded replace whose expectedSource equals the
     # current content proceeds without overwrite=true. Proves the guard ACCEPTS a
@@ -193,7 +193,7 @@ def test_replace_with_matching_expectedsource_succeeds():
     assert_not_contains(src.text, "Demo", "the previous Demo procedure was replaced")
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_replace_with_stale_expectedsource_rejected_and_keeps_content():
     # Lost-update REJECT: expectedSource no longer matches current content (a concurrent
     # edit happened) -> the replace is refused and the seeded content must survive intact.
@@ -217,7 +217,7 @@ def test_replace_with_stale_expectedsource_rejected_and_keeps_content():
                         "the rejected replace must not have written its payload")
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_searchreplace_ambiguous_oldsource_rejected_and_keeps_content():
     # Ambiguity guard: an oldSource that matches more than once is refused (the tool
     # cannot know which occurrence to swap) and nothing is partially applied.
@@ -245,7 +245,7 @@ def test_searchreplace_ambiguous_oldsource_rejected_and_keeps_content():
 # Both branches: a matching token ACCEPTS, a stale token REJECTS without clobbering.
 # ──────────────────────────────────────────────────────────────────────────────
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_replace_with_matching_expectedhash_succeeds():
     # Round-trip: seed -> read the contentHash -> guarded replace with that exact token.
     # The token still matches the unchanged file, so the write proceeds WITHOUT
@@ -267,7 +267,7 @@ def test_replace_with_matching_expectedhash_succeeds():
     assert_not_contains(src.text, "Demo", "the previous Demo procedure was replaced")
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_replace_with_stale_expectedhash_rejected_and_keeps_content():
     # A wrong/stale token means the file changed since the agent read it: the write is
     # refused with a re-read steer and the seeded content must survive untouched.
@@ -290,7 +290,7 @@ def test_replace_with_stale_expectedhash_rejected_and_keeps_content():
                         "the rejected replace must not have written its payload")
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_searchreplace_with_matching_expectedhash_succeeds():
     # expectedHash is mode-agnostic: it also guards searchReplace. A matching token plus
     # a found oldSource swaps the fragment; proves the cheap guard does not block the
@@ -324,7 +324,7 @@ _SINGLE_LINE_IF = (
 )
 
 
-@e2e_test(tool="write_module_source", kind="write")
+@e2e_test(tool="write_module_source", kind="write-metadata")
 def test_single_line_if_is_not_blocked_by_the_syntax_check():
     # The one-line Если ... Тогда ... КонецЕсли; is a whole block. It used to be
     # counted as unclosed, which then mismatched КонецПроцедуры and blocked the write.

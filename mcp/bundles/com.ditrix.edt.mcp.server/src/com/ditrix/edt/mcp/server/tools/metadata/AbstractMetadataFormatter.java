@@ -312,7 +312,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             }
 
             Object value = eObject.eGet(feature);
-            String valueStr = formatDynamicValue(value, language);
+            String valueStr = formatDynamicValue(value, language, true);
 
             // Show all properties, even empty ones - use empty string for null/empty values
             if (valueStr == null || valueStr.equals(DASH))
@@ -664,6 +664,19 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
      */
     protected String formatDynamicValue(Object value, String language)
     {
+        return formatDynamicValue(value, language, false);
+    }
+
+    /**
+     * Format a dynamic value based on its type.
+     *
+     * @param value the value to format
+     * @param language language for synonym rendering
+     * @param unboundedCollections whether collections should be rendered without the compact size limit
+     * @return the formatted value
+     */
+    protected String formatDynamicValue(Object value, String language, boolean unboundedCollections)
+    {
         if (value == null)
         {
             return DASH;
@@ -710,7 +723,7 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
         // Handle collections
         if (value instanceof Collection)
         {
-            return formatCollectionValue((Collection<?>) value);
+            return formatCollectionValue((Collection<?>) value, unboundedCollections);
         }
 
         // Default: toString
@@ -752,21 +765,22 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
 
     /**
      * Formats a collection value for {@link #formatDynamicValue}: empty yields
-     * {@link #DASH}; up to five items are joined inline (per-item via
-     * {@link #formatCollectionItem}); larger collections collapse to an
-     * {@code [N items]} count. Behavior is identical to the inline collection branch.
+     * {@link #DASH}; items are joined inline (per-item via
+     * {@link #formatCollectionItem}), unless the compact size limit applies, in which
+     * case larger collections collapse to an {@code [N items]} count.
      *
      * @param coll the collection to render (non-{@code null})
+     * @param unboundedCollections whether to render every collection item
      * @return the formatted value string
      */
-    private String formatCollectionValue(Collection<?> coll)
+    private String formatCollectionValue(Collection<?> coll, boolean unboundedCollections)
     {
         if (coll.isEmpty())
         {
             return DASH;
         }
-        // For small collections, show inline
-        if (coll.size() <= 5)
+        // Full-only All Properties needs every item; compact paths keep the five-item limit.
+        if (unboundedCollections || coll.size() <= 5)
         {
             StringBuilder sb = new StringBuilder();
             for (Object item : coll)
@@ -776,7 +790,6 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             }
             return sb.toString();
         }
-        // For larger collections, just show count
         return "[" + coll.size() + " items]"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 

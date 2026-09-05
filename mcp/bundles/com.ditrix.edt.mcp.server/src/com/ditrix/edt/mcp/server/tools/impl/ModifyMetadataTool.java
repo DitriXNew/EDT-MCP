@@ -4623,10 +4623,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return methodRefErr;
         }
-        // A VALID reference is re-written to its canonical stored form (resolved module casing;
-        // methodName without a type prefix, handler with the English CommonModule prefix) so a
-        // tolerated variant like 'CommonModule.Calc.Add' / 'ОбщийМодуль.Calc.Add' never serializes
-        // verbatim into the model where the platform's own resolution would miss it.
+        // A VALID reference is re-written to its canonical stored form (English CommonModule prefix;
+        // resolved module casing) so a tolerated variant like 'Calc.Add' / 'ОбщийМодуль.Calc.Add'
+        // never serializes verbatim into the model where the platform's own resolution would miss it.
         value = canonicalMethodReference(ctx.config, target, name, value);
 
         // findFeature classifies ONLY the matched feature and skips the current-value rendering
@@ -4705,7 +4704,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
         {
             return MethodReferenceValidator.validate(project, config, value, PROP_METHOD_NAME,
-                "'CommonModuleName.MethodName'", "Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+                "'CommonModule.ModuleName.MethodName'", "CommonModule.Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
         {
@@ -4717,10 +4716,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Canonicalizes an ALREADY-VALIDATED method reference for the two guarded combos (see
-     * {@link #validateMethodReference}): a ScheduledJob's {@code methodName} stores
-     * {@code Module.Method} (no type prefix), an EventSubscription's {@code handler} stores
-     * {@code CommonModule.Module.Method}, both with the RESOLVED module's exact metadata name.
-     * Any other target/property - or a defensive resolution failure - returns the value unchanged.
+     * {@link #validateMethodReference}): both a ScheduledJob's {@code methodName} and an
+     * EventSubscription's {@code handler} store {@code CommonModule.Module.Method}, with the RESOLVED
+     * module's exact metadata name. Any other target/property - or a defensive resolution failure -
+     * returns the value unchanged.
      */
     static String canonicalMethodReference(Configuration config, EObject target, String name, String value)
     {
@@ -4729,13 +4728,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return value;
         }
         String canonical = null;
-        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        if ((target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+            || (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name)))
         {
-            canonical = MethodReferenceValidator.canonicalReference(config, value, false);
-        }
-        else if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
-        {
-            canonical = MethodReferenceValidator.canonicalReference(config, value, true);
+            canonical = MethodReferenceValidator.canonicalReference(config, value);
         }
         return canonical != null ? canonical : value;
     }
@@ -4949,10 +4945,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * platform version) and, on success, appends the prepared scalar change to {@code out}. Returns a
      * JSON error on failure, or {@code null} on success. Read-only: it only builds and queues the
      * change (no model mutation). {@code isExtensionProject} is forwarded to
-     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean,
+     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, MetadataScope, Version, boolean,
      * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
      * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
-     * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295).
+     * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295),
+     * with the one feature-level exception for an event subscription's runtime-object source (#543).
      */
     private String prepareTypeDescription(PrepareContext ctx, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
@@ -4962,14 +4959,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        MetadataTypeBuilder.TypeTarget typeTarget = typeTargetForFeature(ctx.typeTarget, info.feature);
         MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
-            ctx.version, isExtensionProject, ctx.typeTarget);
+            ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;
+    }
+
+    /** Adds the sole feature-level exception on top of the call site's form-vs-mdclass target. */
+    static MetadataTypeBuilder.TypeTarget typeTargetForFeature(
+        MetadataTypeBuilder.TypeTarget contextTarget, EStructuralFeature feature)
+    {
+        return contextTarget == MetadataTypeBuilder.TypeTarget.METADATA
+            && feature == MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE
+                ? MetadataTypeBuilder.TypeTarget.EVENT_SOURCE : contextTarget;
     }
 
     /**

@@ -7,13 +7,17 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -119,13 +123,60 @@ public final class FormStructureReader
     /**
      * Upper bound on total visited item nodes for {@link #render}, guarding a pathological form.
      * Shared with the other whole-form walks (the delete prompt's content count) so one form-wide
-     * traversal budget is stated once: an unbounded recursion would raise a {@code StackOverflowError},
-     * which is an {@link Error} and would escape every {@code catch (Exception)} on the way out.
+     * traversal budget is stated once.
+     *
+     * <p><b>It bounds VISITS, not DEPTH, and the difference is not academic.</b> When the elements
+     * are nested in a chain the two are the same number, so a walk that re-enters itself once per
+     * element can stand this many frames deep before the budget declines anything - and the failure
+     * that follows is not a truncated table: {@code StackOverflowError} is an {@link Error}, it
+     * escapes every {@code catch (Exception)} and every {@code catch (RuntimeException)} on the way
+     * out, and the caller gets no result at all rather than a short one.</p>
+     *
+     * <p><b>Both walks that descend a form therefore use an explicit stack</b> and take this only
+     * for the node cap it is: {@link #collectHandlers} for the Event-handlers section and
+     * {@link #appendItem} for the item outline. Neither leans on the caller's {@code rowLimit} to
+     * keep it shallow, and that was never a bound to lean on: {@code get_metadata_details} renders
+     * a form through the three-argument {@link #render}, which hands down exactly this ceiling, so
+     * the shallow limit the comparison report happens to pass is one caller's choice and not a
+     * property of this reader. What is left is a cap on how many elements are LOOKED AT, honoured
+     * identically by both walks, on a form of any depth.</p>
      */
     public static final int MAX_NODES = 5000;
 
     /** The root-owner label used in the Event handlers table for a form-level handler. */
     private static final String FORM_OWNER_LABEL = "(form)"; //$NON-NLS-1$
+
+    /**
+     * What the Event-handlers section says when its own walk stopped at {@link #MAX_NODES} visited
+     * elements.
+     *
+     * <p>This bound is INDEPENDENT of the caller's row limit and has to be reported independently.
+     * The row cap bites on rows the walk DECLINED TO KEEP, and it is visible in the numbers;
+     * this one bites on elements that were never LOOKED AT, so it can leave the section holding
+     * fewer handlers than the caller asked for - or none at all - and every surface that would have
+     * betrayed it stays silent: no row was declined, so no cap note is due, and a shorter table is
+     * indistinguishable from a complete one. The worst case was the empty one, where the section
+     * went on to state {@code _(no event handlers)_} about a form whose handler-bearing elements the
+     * walk had never reached.</p>
+     */
+    private static final String HANDLER_WALK_CUT_SHORT =
+        "the handler walk stopped after visiting " + MAX_NODES //$NON-NLS-1$
+            + " elements, so elements past that point were never looked at"; //$NON-NLS-1$
+
+    /**
+     * The Event-handlers section's line when the walk was cut short having found no handler.
+     * <p>
+     * It deliberately does not carry the words the complete walk uses: "no event handlers" is a
+     * statement about the FORM, and nothing here observed the form - only the part of it the walk
+     * got through.
+     */
+    private static final String HANDLERS_NONE_FOUND_WALK_CUT_SHORT =
+        "_(no handler was found, but " + HANDLER_WALK_CUT_SHORT //$NON-NLS-1$
+            + " - whether this form has event handlers is not established)_"; //$NON-NLS-1$
+
+    /** The line printed under a handler table whose walk was cut short. */
+    private static final String HANDLERS_WALK_CUT_SHORT_NOTE =
+        "_(" + HANDLER_WALK_CUT_SHORT + " and their handlers are not in this table)_"; //$NON-NLS-1$ //$NON-NLS-2$
 
     private FormStructureReader()
     {
@@ -250,15 +301,63 @@ public final class FormStructureReader
      */
     public static String render(String formPath, EObject formModel, String language)
     {
+        return render(formPath, formModel, language, MAX_NODES);
+    }
+
+    /**
+     * The same document, with every table and the item outline capped at {@code rowLimit} rows and
+     * every cap SAID where it bites.
+     *
+     * <p>This overload exists because a caller can own a row budget of its own. The comparison
+     * report does: {@code get_comparison_node} promises "maximum rows per table" and prints a form
+     * node's structure inside its own document, so without a cap here that promise held for the
+     * report's own tables and quietly failed for the six this reader writes - a {@code limit} of 1
+     * would still have produced every attribute, command, parameter and handler the form has, plus
+     * an item outline of up to {@link #MAX_NODES} lines.</p>
+     *
+     * <p>{@link #MAX_NODES} stays the ceiling: it is the guard against a pathological form, not a
+     * caller preference, so a larger {@code rowLimit} does not raise it. The three-argument entry
+     * point passes exactly that ceiling, which is what the reader already applied, so the document
+     * it produces is unchanged.</p>
+     *
+     * @param formPath the (normalized) form FQN path, for the heading
+     * @param formModel the editable form model EObject (must still be inside the read transaction)
+     * @param language the resolved title/event language CODE (may be {@code null})
+     * @param rowLimit the maximum number of rows per table and lines in the item outline; values
+     *            below 1 are read as 1, values above {@link #MAX_NODES} as {@link #MAX_NODES}
+     * @return the enriched Markdown document
+     */
+    public static String render(String formPath, EObject formModel, String language, int rowLimit)
+    {
+        int limit = Math.min(Math.max(1, rowLimit), MAX_NODES);
         StringBuilder sb = new StringBuilder();
         sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        renderItems(sb, formModel, language);
-        renderAttributes(sb, formModel, language);
-        renderAttributeColumns(sb, formModel, language);
-        renderCommands(sb, formModel, language);
-        renderParameters(sb, formModel);
-        renderEventHandlers(sb, formModel, language);
+        renderItems(sb, formModel, language, limit);
+        renderAttributes(sb, formModel, language, limit);
+        renderAttributeColumns(sb, formModel, language, limit);
+        renderCommands(sb, formModel, language, limit);
+        renderParameters(sb, formModel, limit);
+        renderEventHandlers(sb, formModel, language, limit);
         return sb.toString();
+    }
+
+    /**
+     * The ONE line this document prints when a cap dropped rows, so a short table is never read as
+     * a complete one.
+     *
+     * <p>It states the cap and nothing else. It deliberately does NOT tell the reader to raise a
+     * {@code limit}: this reader is called both from a tool that has such a parameter and from one
+     * whose only cap is the internal {@link #MAX_NODES} guard, and a remedy that exists in only one
+     * of the two callers would be wrong wherever it is not offered.</p>
+     *
+     * @param sb the output buffer
+     * @param what what was capped, as the sentence's subject
+     * @param limit the cap that was reached
+     */
+    private static void appendCapNote(StringBuilder sb, String what, int limit)
+    {
+        sb.append("\n_(").append(what).append(" truncated: only the first ").append(limit) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" are shown)_\n"); //$NON-NLS-1$
     }
 
     /**
@@ -266,7 +365,7 @@ public final class FormStructureReader
      * form root's items), capped at {@link #MAX_NODES} nodes with a truncation note. Falls back to
      * {@code _(no items)_} when the form carries neither items nor an auto command bar.
      */
-    private static void renderItems(StringBuilder sb, EObject formModel, String language)
+    private static void renderItems(StringBuilder sb, EObject formModel, String language, int limit)
     {
         sb.append("## Items\n\n"); //$NON-NLS-1$
         List<EObject> items = getReferenceList(formModel, FEATURE_ITEMS);
@@ -276,7 +375,7 @@ public final class FormStructureReader
             sb.append("_(no items)_\n\n"); //$NON-NLS-1$
             return;
         }
-        int[] budget = {MAX_NODES};
+        int[] budget = {limit};
         boolean[] truncated = {false};
         if (autoCommandBar != null)
         {
@@ -284,7 +383,21 @@ public final class FormStructureReader
         }
         for (EObject item : items)
         {
-            appendItem(sb, item, 0, language, budget, truncated);
+            if (budget[0] <= 0)
+            {
+                // The item in hand is itself the proof that something was dropped, which is all
+                // the flag claims - and with nothing left to spend, reading the rest of the list
+                // could add neither a line to the outline nor a fact to the report. Each of these
+                // items used to be pushed and popped to raise the same flag again.
+                truncated[0] = true;
+                break;
+            }
+            // A null element is an absent child, not a child that renders as nothing. See
+            // getReferenceList for when the model's list can hold one at all.
+            if (item != null)
+            {
+                appendItem(sb, item, 0, language, budget, truncated);
+            }
         }
         // Gate the note on the explicit flag (set only when a node was actually dropped), NOT on an
         // exhausted budget: a form with EXACTLY MAX_NODES nodes drains the budget to 0 yet renders
@@ -292,7 +405,7 @@ public final class FormStructureReader
         if (truncated[0])
         {
             sb.append("- _(item outline truncated: more than ") //$NON-NLS-1$
-                .append(MAX_NODES).append(" nodes)_\n"); //$NON-NLS-1$
+                .append(limit).append(" nodes)_\n"); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -301,7 +414,8 @@ public final class FormStructureReader
      * Renders the {@code ## Attributes} table (Name / Synonym / Type / Main / SavedData), or
      * {@code _(no attributes)_} when the form has no attributes.
      */
-    private static void renderAttributes(StringBuilder sb, EObject formModel, String language)
+    private static void renderAttributes(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         sb.append("## Attributes\n\n"); //$NON-NLS-1$
         List<EObject> attributes = getReferenceList(formModel, FEATURE_ATTRIBUTES);
@@ -312,11 +426,21 @@ public final class FormStructureReader
         }
         sb.append(MarkdownUtils.tableHeader(
             "Name", "Synonym", "Type", "Main", "SavedData")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-        for (EObject attribute : attributes)
+        int shown = Math.min(limit, attributes.size());
+        for (int i = 0; i < shown; i++)
         {
+            EObject attribute = attributes.get(i);
+            if (attribute == null)
+            {
+                continue;
+            }
             sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
                 valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
                 Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
+        }
+        if (shown < attributes.size())
+        {
+            appendCapNote(sb, "attributes", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -330,7 +454,7 @@ public final class FormStructureReader
      * paid for on every form read. No language argument - a parameter has no title, only a
      * comment (issue #396).</p>
      */
-    private static void renderParameters(StringBuilder sb, EObject formModel)
+    private static void renderParameters(StringBuilder sb, EObject formModel, int limit)
     {
         List<EObject> parameters = getReferenceList(formModel, FEATURE_PARAMETERS);
         if (parameters.isEmpty())
@@ -339,12 +463,22 @@ public final class FormStructureReader
         }
         sb.append("## Parameters\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Name", "Type", "Key", "Comment")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        for (EObject parameter : parameters)
+        int shown = Math.min(limit, parameters.size());
+        for (int i = 0; i < shown; i++)
         {
+            EObject parameter = parameters.get(i);
+            if (parameter == null)
+            {
+                continue;
+            }
             Object comment = getValue(parameter, FEATURE_COMMENT);
             sb.append(MarkdownUtils.tableRow(nameOf(parameter), valueTypeOf(parameter),
                 Boolean.toString(booleanFeature(parameter, FEATURE_KEY_PARAMETER)),
                 comment instanceof String ? (String)comment : "")); //$NON-NLS-1$
+        }
+        if (shown < parameters.size())
+        {
+            appendCapNote(sb, "parameters", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -359,29 +493,56 @@ public final class FormStructureReader
      * @param formModel the form content model
      * @param language the language code for the title column
      */
-    private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language)
+    private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
-        List<EObject> owners = new ArrayList<>();
+        // ONE pass, into a buffer of its own. Whether the section exists at all is a claim about
+        // every attribute, so nothing can shorten the walk in the case where no attribute carries
+        // a column; what used to be paid for regardless was a LIST of the ones that do, built in
+        // full before the row cap could admit its first row. The cap now ends the pass, and the
+        // only rows held are the ones it admitted.
+        StringBuilder rows = new StringBuilder();
+        int shown = 0;
+        boolean capped = false;
         for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
         {
-            if (!getReferenceList(attribute, FEATURE_COLUMNS).isEmpty())
+            if (attribute == null)
             {
-                owners.add(attribute);
+                continue;
+            }
+            for (EObject column : getReferenceList(attribute, FEATURE_COLUMNS))
+            {
+                if (column == null)
+                {
+                    continue;
+                }
+                if (shown >= limit)
+                {
+                    capped = true;
+                    break;
+                }
+                rows.append(MarkdownUtils.tableRow(nameOf(attribute), nameOf(column),
+                    titleOf(column, language), valueTypeOf(column)));
+                shown++;
+            }
+            if (capped)
+            {
+                break;
             }
         }
-        if (owners.isEmpty())
+        if (shown == 0)
         {
+            // No attribute carries a column, and that is the only thing this can mean: render
+            // clamps the limit to at least 1, so a form that has a column always produces a row
+            // before the cap can bite.
             return;
         }
         sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        for (EObject owner : owners)
+        sb.append(rows);
+        if (capped)
         {
-            for (EObject column : getReferenceList(owner, FEATURE_COLUMNS))
-            {
-                sb.append(MarkdownUtils.tableRow(nameOf(owner), nameOf(column),
-                    titleOf(column, language), valueTypeOf(column)));
-            }
+            appendCapNote(sb, "attribute columns", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -390,7 +551,8 @@ public final class FormStructureReader
      * Renders the {@code ## Commands} table (Name / Title / Action handler), or {@code _(no commands)_}
      * when the form has no commands.
      */
-    private static void renderCommands(StringBuilder sb, EObject formModel, String language)
+    private static void renderCommands(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         sb.append("## Commands\n\n"); //$NON-NLS-1$
         List<EObject> commands = getReferenceList(formModel, FEATURE_FORM_COMMANDS);
@@ -400,10 +562,20 @@ public final class FormStructureReader
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Name", "Title", "Action handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        for (EObject command : commands)
+        int shown = Math.min(limit, commands.size());
+        for (int i = 0; i < shown; i++)
         {
+            EObject command = commands.get(i);
+            if (command == null)
+            {
+                continue;
+            }
             sb.append(MarkdownUtils.tableRow(nameOf(command), titleOf(command, language),
                 actionHandlerOf(command)));
+        }
+        if (shown < commands.size())
+        {
+            appendCapNote(sb, "commands", limit); //$NON-NLS-1$
         }
         sb.append('\n');
     }
@@ -411,47 +583,161 @@ public final class FormStructureReader
     /**
      * Renders the {@code ## Event handlers} table (Element / Event / Handler) for the BSL handler bound
      * to each event of the form root and every element, or {@code _(no event handlers)_} when none.
+     *
+     * <p>TWO independent bounds can narrow this section, and each is reported on its own. The
+     * caller's {@code limit} declines rows and is announced by {@link #appendCapNote}; the
+     * walk's {@link #MAX_NODES} ceiling stops the traversal and is announced by
+     * {@link #HANDLERS_WALK_CUT_SHORT_NOTE}. Neither implies the other: a walk cut short usually
+     * collects FEWER rows than the limit, so gating the report on the row cap - which is what this
+     * section used to do - hid the walk's bound exactly in the cases where it mattered. The absence
+     * sentence is therefore reserved for a walk that COMPLETED; a cut-short walk that found nothing
+     * says {@link #HANDLERS_NONE_FOUND_WALK_CUT_SHORT} instead, which claims nothing about the
+     * form.</p>
+     *
+     * <p><b>The row cap is applied by the WALK, not here.</b> It used to be applied here, over a
+     * list the walk had filled without one, and {@link #MAX_NODES} did not stand in for it: that
+     * budget counts ELEMENTS, and one element carries as many handler rows as it has bound events,
+     * so a form with hundreds of thousands of them - on one element or spread over the 5000 the
+     * budget allows - was materialised in full and then had all but {@code limit} of its rows
+     * thrown away. {@link HandlerRows} declines them as they are found instead, which is the same
+     * bound the walk already puts on what it QUEUES, applied to what it KEEPS.</p>
      */
-    private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language)
+    private static void renderEventHandlers(StringBuilder sb, EObject formModel, String language,
+        int limit)
     {
         sb.append("## Event handlers\n\n"); //$NON-NLS-1$
-        List<String[]> handlers = new ArrayList<>();
-        // collectHandlers recurses the form root's 'items' AND its singular containments (the form-wide
+        HandlerRows handlers = new HandlerRows(limit);
+        boolean[] walkCutShort = {false};
+        // collectHandlers walks the form root's 'items' AND its singular containments (the form-wide
         // auto command bar, context menus, tooltips), so the whole element tree is covered from here. It
         // shares the same MAX_NODES bound as the item-outline pass (its own fresh budget, since it is an
         // independent walk) so the Event-handlers section honours the same cap on a pathological form.
-        collectHandlers(formModel, FORM_OWNER_LABEL, language, handlers, new int[] {MAX_NODES});
-        if (handlers.isEmpty())
+        collectHandlers(formModel, FORM_OWNER_LABEL, language, handlers, new int[] {MAX_NODES},
+            walkCutShort);
+        if (handlers.kept().isEmpty())
         {
-            sb.append("_(no event handlers)_\n\n"); //$NON-NLS-1$
+            sb.append(walkCutShort[0] ? HANDLERS_NONE_FOUND_WALK_CUT_SHORT
+                : "_(no event handlers)_").append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
         sb.append(MarkdownUtils.tableHeader("Element", "Event", "Handler")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        for (String[] row : handlers)
+        for (String[] row : handlers.kept())
         {
             sb.append(MarkdownUtils.tableRow(row[0], row[1], row[2]));
+        }
+        if (handlers.declined())
+        {
+            appendCapNote(sb, "event handlers", limit); //$NON-NLS-1$
+        }
+        // NOT an 'else': the two bounds are independent and can both have bitten on one form.
+        if (walkCutShort[0])
+        {
+            sb.append('\n').append(HANDLERS_WALK_CUT_SHORT_NOTE).append('\n');
         }
         sb.append('\n');
     }
 
     /**
-     * Appends one item (and recursively its child items) as a nested outline line: beyond name / type /
-     * id / title it appends visibility (only when {@code false}), the bound dataPath, and per-kind
+     * Appends {@code item} and its whole subtree as nested outline lines: beyond name / type / id /
+     * title each line carries visibility (only when {@code false}), the bound dataPath, and per-kind
      * extras (group layout, field type+editMode, button command). The item NAME is the stable
      * programmatic id; the integer id and item type are shown alongside, and the title (by language
      * code) is appended when present. A shared {@code budget} caps the total node count for a
      * pathological form; when it is hit the shared {@code truncated} flag is raised so the caller can
      * record that nodes were actually dropped.
+     *
+     * <h2>The descent uses an explicit stack, for the reason {@link #collectHandlers} does</h2>
+     * This walk used to re-enter itself once per element, and {@code budget} does not bound the DEPTH
+     * it can reach - it bounds the number of elements VISITED. The bound that was offered instead was
+     * the caller's {@code rowLimit}, which the comparison report keeps small; but the ordinary read
+     * does not go through the comparison report. {@code get_metadata_details} calls the
+     * three-argument {@link #render}, which passes {@link #MAX_NODES}, so a form nested that deep ran
+     * the rendering thread out of stack - and a {@code StackOverflowError} is not a truncated
+     * outline: it is an {@link Error}, it escapes the {@code catch (Exception)} between here and the
+     * caller, and the request came back with no result at all. Widening a catch to {@code Error} is
+     * not the answer; not needing one is.
+     * <p>
+     * <b>The ORDER and the INDENTATION are the recursion's own, and they are what the outline
+     * prints.</b> An element's line comes first, then the whole subtree under each {@code items}
+     * child in list order, then the subtree under each singular containment in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - plain depth-first pre-order, each child one
+     * level deeper than its parent. A stack that pushed siblings forward would reverse every one of
+     * those orderings, and a stack that recomputed depth from anything but its own entry would flatten
+     * the outline; {@link #pushOutlineChildren} therefore pushes children in REVERSE and each entry
+     * carries the depth its own line is indented to.
+     * <p>
+     * <b>{@code budget} and {@code truncated} keep their exact meaning</b>, including WHICH element
+     * trips the cut: an element is charged when it is VISITED, and the stack visits elements in the
+     * very order the recursion did. An element the budget cannot reach raises {@code truncated}
+     * whether it is declined at the pop or left off the stack by {@link #pushOutlineChildren} -
+     * see there for why those are the same elements.
+     * <p>
+     * <b>The budget bounds the PENDING work too, and that is the whole reason it is stated.</b> The
+     * first de-recursion pushed every child before the outer loop could look at the budget again,
+     * so a single element with far more children than {@link #MAX_NODES} allocated a
+     * {@link PendingItem} for each of them even at {@code limit=1} - the recursion had returned at
+     * the budget instead, so the conversion traded stack depth for heap. The stack now holds at
+     * most {@code budget} entries (or the single root entry when the budget is already gone), which
+     * is the bound the guard advertises.
+     *
+     * @param sb the output buffer
+     * @param item the item to render, together with everything below it
+     * @param depth the indentation level of {@code item}'s own line
+     * @param language the title language CODE
+     * @param budget the shared per-visited-element node budget
+     * @param truncated raised when the budget actually DECLINED an element
      */
     private static void appendItem(StringBuilder sb, EObject item, int depth, String language,
         int[] budget, boolean[] truncated)
     {
-        if (budget[0] <= 0)
+        appendItem(sb, item, depth, language, budget, truncated, new ArrayDeque<>());
+    }
+
+    /**
+     * The outline walk itself, with its stack handed in.
+     * <p>
+     * The stack is a parameter for ONE reason: the bound above is a statement about a structure
+     * that is otherwise a local, and a test that could only read the rendered outline would be
+     * pinning the symptom (an allocation) instead of the bound. Production creates its own on every
+     * call - {@link #appendItem(StringBuilder, EObject, int, String, int[], boolean[])} - and
+     * nothing outside this class can reach this overload.
+     *
+     * @param sb the output buffer
+     * @param item the item to render, together with everything below it
+     * @param depth the indentation level of {@code item}'s own line
+     * @param language the title language CODE
+     * @param budget the shared per-visited-element node budget
+     * @param truncated raised when the budget actually DECLINED an element
+     * @param pending the walk's stack, empty on entry and drained on exit
+     */
+    static void appendItem(StringBuilder sb, EObject item, int depth, String language,
+        int[] budget, boolean[] truncated, Deque<PendingItem> pending)
+    {
+        pending.push(new PendingItem(item, depth));
+        while (!pending.isEmpty())
         {
-            truncated[0] = true;
-            return;
+            PendingItem current = pending.pop();
+            if (budget[0] <= 0)
+            {
+                truncated[0] = true;
+                continue;
+            }
+            budget[0]--;
+            appendItemLine(sb, current.item, current.depth, language);
+            pushOutlineChildren(current.item, current.depth, language, pending, budget, truncated);
         }
-        budget[0]--;
+    }
+
+    /**
+     * Writes the ONE outline line an element gets, indented to its own depth.
+     *
+     * @param sb the output buffer
+     * @param item the item whose line this is
+     * @param depth the indentation level
+     * @param language the title language CODE
+     */
+    private static void appendItemLine(StringBuilder sb, EObject item, int depth, String language)
+    {
         for (int i = 0; i < depth; i++)
         {
             sb.append("  "); //$NON-NLS-1$
@@ -483,60 +769,230 @@ public final class FormStructureReader
             sb.append(", ").append(escapeOutline(extras)); //$NON-NLS-1$
         }
         sb.append(")\n"); //$NON-NLS-1$
+    }
 
-        // Recurse into containers (groups / tables expose the same 'items' feature).
-        for (EObject child : getReferenceList(item, FEATURE_ITEMS))
+    /**
+     * Puts as many of one element's children on the outline walk's stack as the budget can still
+     * reach, in the order that reproduces the descent the recursion made: REVERSED, and the
+     * singular containments BEFORE the {@code items} children, so that the first {@code items}
+     * child is the next one popped and the singular ones come out last. Every child is pushed one
+     * level deeper than its parent, which is the depth its own line will be indented to.
+     *
+     * <p>The singular item-bearing containments live OUTSIDE {@code items} (a table's command bar, an
+     * item's context menu / extended tooltip). Their names occupy the form-wide namespace, so they
+     * must be discoverable - but a designer-default child (no nested items, no title) is noise and is
+     * skipped to keep the outline lean. That test is applied HERE, at push time, exactly where the
+     * recursion applied it before calling itself: a child that fails it is never visited, so it is
+     * never charged to the budget either - and it is not counted against the room the budget has,
+     * for the same reason.</p>
+     *
+     * @param element the element whose children are to be walked
+     * @param depth the indentation level of {@code element}'s own line
+     * @param language the title language CODE, for the designer-default test
+     * @param pending the walk's stack
+     * @param budget the shared per-visited-element node budget, already charged for {@code element}
+     * @param truncated raised when a child this element has is left off the stack
+     */
+    private static void pushOutlineChildren(EObject element, int depth, String language,
+        Deque<PendingItem> pending, int[] budget, boolean[] truncated)
+    {
+        List<EObject> items = getReferenceList(element, FEATURE_ITEMS);
+        List<EObject> singular = outlineSingularChildren(element, language);
+        int reachable =
+            makeRoomForReachableChildren(items.size() + singular.size(), pending, budget, truncated);
+        int keptItems = Math.min(items.size(), reachable);
+        int childDepth = depth + 1;
+        for (int i = reachable - keptItems - 1; i >= 0; i--)
         {
-            appendItem(sb, child, depth + 1, language, budget, truncated);
+            pending.push(new PendingItem(singular.get(i), childDepth));
         }
-        // Singular item-bearing containments OUTSIDE 'items' (a table's command bar, an item's
-        // context menu / extended tooltip). Their names occupy the form-wide namespace, so they must
-        // be discoverable - but a designer-default child (no nested items, no title) is noise and is
-        // skipped to keep the outline lean.
-        for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
+        for (int i = keptItems - 1; i >= 0; i--)
         {
-            EObject child = getSingleReference(item, featureName);
-            if (child != null
-                && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
-                    || !titleOf(child, language).isEmpty()))
+            // Read one at a time, and only the ones there is room for: the list is the model's
+            // own, so this is where an element far past the budget stops being paid for at all.
+            EObject child = items.get(i);
+            if (child != null)
             {
-                appendItem(sb, child, depth + 1, language, budget, truncated);
+                pending.push(new PendingItem(child, childDepth));
             }
+        }
+    }
+
+    /**
+     * The singular item-bearing containments of one element that the outline shows, in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - which is the order they are VISITED in, after
+     * the {@code items} children.
+     *
+     * @param element the element whose singular containments these are
+     * @param language the title language CODE, for the designer-default test
+     * @return the eligible children, at most {@link #SINGULAR_ITEM_CONTAINMENTS}{@code .length} of
+     *         them
+     */
+    private static List<EObject> outlineSingularChildren(EObject element, String language)
+    {
+        List<EObject> eligible = new ArrayList<>(SINGULAR_ITEM_CONTAINMENTS.length);
+        for (String containment : SINGULAR_ITEM_CONTAINMENTS)
+        {
+            EObject child = getSingleReference(element, containment);
+            if (child != null && (!getReferenceList(child, FEATURE_ITEMS).isEmpty()
+                || !titleOf(child, language).isEmpty()))
+            {
+                eligible.add(child);
+            }
+        }
+        return eligible;
+    }
+
+    /**
+     * How many of one element's children the budget can still reach, with the stack trimmed to
+     * leave room for exactly those.
+     *
+     * <h2>Why this drops nothing the walk would have shown</h2>
+     * Children are popped in visit order, so reaching the child at index {@code i} means popping
+     * children {@code 0..i-1} first; each of those pops either spends a unit of budget or finds the
+     * budget already gone, in which case every pop after it does too. A child at index {@code i}
+     * can therefore be VISITED only when {@code i} is below the remaining budget, and the ones past
+     * that point are exactly the ones the old walk pushed, popped, and declined. Leaving them off
+     * the stack changes nothing but the heap - which is why {@code truncated} is raised here
+     * instead: the pop that used to raise it no longer happens.
+     * <p>
+     * The same argument runs down the stack. Entries already on it are popped only AFTER the new
+     * children and everything below them, so an entry lying more than {@code budget} pops from the
+     * top cannot be visited either, and the surplus is removed from the BOTTOM. That is what keeps
+     * the bound a bound: capping each push alone would still let one push per level accumulate.
+     *
+     * @param childCount how many children the element has, singular containments included
+     * @param pending the walk's stack, holding the entries pushed by ancestors
+     * @param budget the shared per-visited-element node budget, already charged for the element
+     *            whose children these are
+     * @param dropped raised when anything was left off the stack or removed from it
+     * @return how many of the children to push, counted from the first in visit order
+     */
+    private static int makeRoomForReachableChildren(int childCount, Deque<?> pending, int[] budget,
+        boolean[] dropped)
+    {
+        int reachable = Math.min(childCount, budget[0]);
+        if (reachable < childCount)
+        {
+            dropped[0] = true;
+        }
+        int room = budget[0] - reachable;
+        while (pending.size() > room)
+        {
+            pending.removeLast();
+            dropped[0] = true;
+        }
+        return reachable;
+    }
+
+    /**
+     * One item waiting on the outline walk's stack, with the indentation level its own line is
+     * written at.
+     *
+     * <p>The depth is carried rather than derived at pop time because a stack holds elements from
+     * several levels at once: the next pop is not one level below the previous one, it is one level
+     * below whichever element pushed it.</p>
+     *
+     * <p>Package-private so a test can hand the walk a stack it can measure; see
+     * {@link FormStructureReader#appendItem(StringBuilder, EObject, int, String, int[], boolean[], Deque)}.</p>
+     */
+    static final class PendingItem
+    {
+        final EObject item;
+
+        final int depth;
+
+        PendingItem(EObject item, int depth)
+        {
+            this.item = item;
+            this.depth = depth;
         }
     }
 
     // ==================== EMF reflection helpers ====================
 
     /**
-     * Reads a containment/reference list feature by name, returning the contained {@link EObject}s.
-     * Returns an empty list when the feature is absent or not a many-valued reference, so callers never
-     * have to null-check.
+     * Reads a many-valued reference feature by name as a READ-ONLY VIEW of the model's own list -
+     * nothing is copied and no element is touched until a caller asks for it. Returns an empty
+     * list when the feature is absent or is not a many-valued reference, so callers never have to
+     * null-check the list itself.
+     *
+     * <h2>Why a view and not the copy this used to return</h2>
+     * Every caller here is capped - by a row limit, by the walk's node budget, or by nothing more
+     * than {@code isEmpty()} - and the copy was taken BEFORE the cap could look at it. A form
+     * whose element carries a hundred thousand handlers therefore cost a hundred thousand reads
+     * and a second list of that size to answer {@code limit=1}: a cap that is paid for in full
+     * bounds the OUTPUT and not the work, which is the one thing it is there for. The cost is
+     * gone at the accessor rather than at one call site, because all of them have that shape.
+     * <p>
+     * What makes the view exact rather than hopeful is that neither list this reader is ever handed
+     * has to be materialised to answer {@code size()} or {@code get(i)}, and the two are different
+     * classes - which is why the property is stated and not the hierarchy. A form object in EDT is
+     * a {@code BmObject}, and its many-valued features answer with {@code BmBasicEStoreEList}
+     * (EMF's {@code EStoreEObjectImpl.BasicEStoreEList}), which delegates both the size and each
+     * index straight to the BM store - so the copy was N store reads to answer a question about
+     * one. The dynamic EMF objects the unit tests build answer with {@code BasicEList}, which is
+     * array-backed. A RESOLVING list, either way, resolves the elements that are read and no
+     * others, which the copy denied it.
+     *
+     * <h2>What the elements are, measured against the platform</h2>
+     * The gate is {@link EReference} rather than "is many", and that is what makes the elements
+     * {@link EObject}s without a filter. A stored reference list refuses both a wrong type and a
+     * null as they go IN, in both of the families above - read out of the 2026.1 bytecode rather
+     * than assumed:
+     * <ul>
+     * <li>{@code EcoreEList.validate} throws {@code ArrayStoreException} for an element outside
+     * the reference's instance class, and {@code EObjectEList.canContainNull()} answers
+     * {@code false}, which makes {@code AbstractEList.validate} refuse a null with "The 'no null'
+     * constraint is violated";</li>
+     * <li>{@code DelegatingEcoreEList.validate} throws the same {@code ArrayStoreException}, and
+     * its {@code canContainNull()} answers {@code false} for every feature whose type is an
+     * EClass - which a reference's always is.</li>
+     * </ul>
+     * So on the features this class reads, all of them stored containments, the filter the copy
+     * performed could never drop anything, and dropping the filter drops no behaviour.
+     * <p>
+     * The guards at the call sites are for the case that reasoning does not reach: a DERIVED or
+     * volatile feature answering with a list built by neither path -
+     * {@code EcoreEList.UnmodifiableEList} wraps a raw {@code Object[]} and validates nothing, and
+     * EMF's own {@code addUnique} bypasses {@code validate} - and this reader is reflective, so it
+     * is handed whatever the feature answers. On such a list the guards keep a null out of the
+     * accessors that would dereference it, and that is ALL they restore: its place is still
+     * counted by {@code size()}, so a cap or a budget can be spent on it and a truncation reported
+     * for a member that was never a child, and an element of the wrong type would surface as a
+     * {@code ClassCastException} instead of being skipped. Both are strictly beyond what any
+     * feature here can produce, and buying the guarantee back would mean walking every list on
+     * every read - the cost this method exists to remove. A many-valued EAttribute (a feature map
+     * included) answers empty, which is what the filter did for it.
+     *
+     * <h2>It is LIVE, and it is read-only</h2>
+     * The list is the model's, so it must be read inside the same transaction as the object it
+     * came from - the class's own rule already - and it must not be retained past it. Writing
+     * through it would be writing to the model behind {@link FormElementWriter}'s back, so the
+     * view refuses it.
+     *
+     * @param object the object to read, or {@code null}
+     * @param featureName the feature's name
+     * @return the view, never {@code null}, and never modifiable
      */
     @SuppressWarnings("unchecked")
     public static List<EObject> getReferenceList(EObject object, String featureName)
     {
-        List<EObject> result = new ArrayList<>();
         if (object == null)
         {
-            return result;
+            return List.of();
         }
         EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature == null || !feature.isMany())
+        if (!(feature instanceof EReference) || !feature.isMany())
         {
-            return result;
+            return List.of();
         }
         Object value = object.eGet(feature);
-        if (value instanceof List<?>)
+        if (!(value instanceof List<?>))
         {
-            for (Object element : (List<?>)value)
-            {
-                if (element instanceof EObject)
-                {
-                    result.add((EObject)element);
-                }
-            }
+            return List.of();
         }
-        return result;
+        return Collections.unmodifiableList((List<EObject>)value);
     }
 
     /**
@@ -627,7 +1083,10 @@ public final class FormStructureReader
         List<String> names = new ArrayList<>();
         for (EObject type : types)
         {
-            names.add(typeItemName(type));
+            if (type != null)
+            {
+                names.add(typeItemName(type));
+            }
         }
         return String.join(", ", names); //$NON-NLS-1$
     }
@@ -892,42 +1351,297 @@ public final class FormStructureReader
     }
 
     /**
-     * Appends one {@code [owner, event, handler]} row per bound event handler of {@code element} to
-     * {@code rows}, then recurses into the element's child items (and singular item containments) so the
-     * whole subtree is covered. Each handler exposes its own {@code name} (the BSL procedure) and a
-     * single {@code event} reference whose {@code name} (en) / {@code nameRu} (ru) is the event name.
+     * Appends one {@code [owner, event, handler]} row per bound event handler of {@code root} to
+     * {@code rows}, then covers the whole subtree below it - the child items and the singular item
+     * containments alike. Each handler exposes its own {@code name} (the BSL procedure) and a
+     * single {@code event} reference whose {@code name} (en) / {@code nameRu} (ru) is the event
+     * name.
      *
-     * @param element the form root or a form item whose {@code handlers} list is read
-     * @param ownerLabel the Element-column label for handlers directly on {@code element}
+     * <h2>The descent uses an explicit stack, and that is not a matter of taste</h2>
+     * This walk used to re-enter itself once per element, and {@code budget} does not bound the
+     * DEPTH it can reach - it bounds the number of elements VISITED. A form whose elements are
+     * nested deeply enough therefore ran the walking thread out of stack before the budget could
+     * decline anything, and a {@code StackOverflowError} is not a truncated table: it is an
+     * {@code Error}, {@code GetComparisonNodeTool} catches {@code RuntimeException}, and the MCP
+     * request ended with no result at all. Widening that catch is not the answer either - an
+     * {@code Error} leaves the JVM in a state this bundle cannot reason about, and the comparison
+     * feature deliberately rethrows one rather than turning it into a JSON error. Heap is a bound
+     * the workbench can be given more of; the walking thread's stack is not. This is the same
+     * conversion, for the same reason, as {@code CompareConfigurationsTool.collectTopNodes}.
+     * <p>
+     * <b>The ORDER is the recursion's own, and it is what the rendered table prints.</b> An
+     * element's own handler rows come first, then the whole subtree under each {@code items} child
+     * in list order, then the subtree under each singular containment in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - plain depth-first pre-order.
+     * {@link #pushHandlerChildren} reproduces it by pushing children in REVERSE, so the first child
+     * is the next one popped.
+     * <p>
+     * <b>{@code budget} and {@code cutShort} keep their exact meaning</b>, including WHICH element
+     * trips the cut: an element is charged when it is VISITED, and the stack visits elements in the
+     * very order the recursion did. An element the budget cannot reach raises {@code cutShort}
+     * whether it is declined at the pop or left off the stack by {@link #pushHandlerChildren} -
+     * see {@link #makeRoomForReachableChildren} for why those are the same elements.
+     * <p>
+     * <b>The budget bounds the PENDING work too.</b> The first de-recursion pushed every child
+     * before the outer loop could look at the budget again, so one element with far more children
+     * than {@link #MAX_NODES} allocated a {@link PendingElement} for each of them - the recursion
+     * had returned at the budget instead, so the conversion traded stack depth for heap. The stack
+     * now holds at most {@code budget} entries (or the single root entry when the budget is already
+     * gone), which is the bound the guard advertises.
+     *
+     * <p>
+     * <b>And the ROWS are bounded too, by {@link HandlerRows} rather than by this budget.</b> The
+     * budget counts elements; the rows are what the elements carry, and one element carries a row
+     * per bound event, so neither number bounds the other. The walk keeps going after the rows are
+     * full - it has to, because whether the ELEMENT budget ran out is a different statement from
+     * "there were more rows than shown", and only a walk that reaches the end of the budget can
+     * make the first one honestly.
+     *
+     * @param root the form root, whose {@code handlers} list is read first
+     * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
      * @param language the event-name language CODE
-     * @param rows the accumulator receiving {@code {owner, event, handler}} rows
+     * @param rows the accumulator receiving {@code {owner, event, handler}} rows, which keeps at
+     *            most the caller's row cap of them
      * @param budget the shared per-visited-element node budget, capping the walk on a pathological form
+     * @param cutShort raised when the budget actually DECLINED an element, so the caller can report
+     *            a walk that stopped early instead of publishing a short list as a complete one.
+     *            Set only on the budget branch: a {@code null} element drops nothing, and a form with
+     *            exactly {@link #MAX_NODES} elements drains the budget to zero while every element
+     *            is still visited - the same off-by-one the item outline is gated against
      */
-    private static void collectHandlers(EObject element, String ownerLabel, String language,
-        List<String[]> rows, int[] budget)
+    private static void collectHandlers(EObject root, String rootOwnerLabel, String language,
+        HandlerRows rows, int[] budget, boolean[] cutShort)
     {
-        if (element == null || budget[0] <= 0)
+        collectHandlers(root, rootOwnerLabel, language, rows, budget, cutShort, new ArrayDeque<>());
+    }
+
+    /**
+     * The handler walk itself, with its stack handed in.
+     * <p>
+     * The stack is a parameter for the reason it is one on the outline walk: the bound above is a
+     * statement about a structure that is otherwise a local, and only a test that can measure that
+     * structure pins the bound rather than a symptom of it. Production creates its own on every
+     * call and nothing outside this class can reach this overload.
+     *
+     * @param root the form root, whose {@code handlers} list is read first
+     * @param rootOwnerLabel the Element-column label for handlers directly on {@code root}
+     * @param language the event-name language CODE
+     * @param rows the accumulator receiving {@code {owner, event, handler}} rows, bounded by its own
+     *            row cap
+     * @param budget the shared per-visited-element node budget
+     * @param cutShort raised when the budget actually DECLINED an element
+     * @param pending the walk's stack, empty on entry and drained on exit
+     */
+    static void collectHandlers(EObject root, String rootOwnerLabel, String language,
+        HandlerRows rows, int[] budget, boolean[] cutShort, Deque<PendingElement> pending)
+    {
+        if (root == null)
         {
             return;
         }
-        budget[0]--;
-        for (EObject handler : getReferenceList(element, FEATURE_HANDLERS))
+        pending.push(new PendingElement(root, rootOwnerLabel));
+        while (!pending.isEmpty())
         {
-            String procName = stringValue(getValue(handler, FEATURE_NAME));
-            String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
-            rows.add(new String[] {ownerLabel, eventName, procName});
+            PendingElement current = pending.pop();
+            if (budget[0] <= 0)
+            {
+                cutShort[0] = true;
+                continue;
+            }
+            budget[0]--;
+            for (EObject handler : getReferenceList(current.element, FEATURE_HANDLERS))
+            {
+                if (handler == null)
+                {
+                    // Never a row, and never counted as one: the cap decides between handlers
+                    // this element HAS, and the model's list may legally hold a null.
+                    continue;
+                }
+                // Asked BEFORE the row is built: past the cap the strings would be read off the
+                // model only to be dropped, and the whole point of the cap is that nothing past it
+                // is retained. Leaving the loop still RECORDS the decline - there is a handler in
+                // hand, so "there were more rows than are shown" is established - and it leaves
+                // only this element's remaining handlers; the WALK carries on, because the element
+                // budget is a separate statement (see this method's own doc).
+                if (rows.full())
+                {
+                    rows.decline();
+                    break;
+                }
+                String procName = stringValue(getValue(handler, FEATURE_NAME));
+                String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
+                rows.add(current.ownerLabel, eventName, procName);
+            }
+            pushHandlerChildren(current.element, pending, budget, cutShort);
         }
-        for (EObject child : getReferenceList(element, FEATURE_ITEMS))
+    }
+
+    /**
+     * The Event-handlers table's rows, capped at the caller's row limit as they are collected.
+     *
+     * <h2>Why the cap lives here and not at the render</h2>
+     * The walk's {@link FormStructureReader#MAX_NODES} budget counts ELEMENTS. A row is a bound
+     * event, and one element carries as many of them as it has events bound, so a form can hold
+     * hundreds of thousands of rows within a budget of 5000 elements - on a single element or
+     * spread across them. Collecting them all and then rendering the first {@code limit} kept every
+     * one of those rows alive for the length of the walk, which is precisely the accumulation the
+     * budget was put on the pending stack to prevent. So this keeps {@code cap} rows and counts
+     * nothing else.
+     *
+     * <h2>{@link #declined()} is a different statement from the walk's cut-short flag</h2>
+     * This one says "there were more rows than are shown"; the walk's says "the element budget ran
+     * out, so elements were never looked at". A form can produce either, both or neither, and the
+     * section prints them independently - which is why the walk carries on collecting elements
+     * after this accumulator is full rather than stopping: stopping would leave the element budget
+     * unspent and the second statement unanswerable.
+     */
+    static final class HandlerRows
+    {
+        private final List<String[]> rows = new ArrayList<>();
+
+        private final int cap;
+
+        private boolean declined;
+
+        /**
+         * @param cap the most rows to keep; read as at least 1, because an accumulator that keeps
+         *            nothing would make "no handler was found" indistinguishable from "no handler
+         *            was kept", and the section says something quite different about each
+         */
+        HandlerRows(int cap)
         {
-            collectHandlers(child, nameOf(child), language, rows, budget);
+            this.cap = Math.max(1, cap);
         }
-        for (String featureName : SINGULAR_ITEM_CONTAINMENTS)
+
+        /** @return whether the cap is reached, so nothing more will be kept */
+        boolean full()
         {
-            EObject child = getSingleReference(element, featureName);
+            return rows.size() >= cap;
+        }
+
+        /**
+         * Keeps one row, or declines it and records that it did.
+         *
+         * @param owner the Element-column label
+         * @param event the event name
+         * @param handler the BSL procedure name
+         */
+        void add(String owner, String event, String handler)
+        {
+            if (full())
+            {
+                decline();
+                return;
+            }
+            rows.add(new String[] {owner, event, handler});
+        }
+
+        /**
+         * Records that a row was found and not kept, without building it.
+         * <p>
+         * The caller that leaves its loop at {@link #full()} still holds the handler that did not
+         * fit, so the fact this flag reports - that there are more rows than are shown - is
+         * established there; building the row it is about only to drop it is not.
+         */
+        void decline()
+        {
+            declined = true;
+        }
+
+        /** @return the rows kept, in collection order; never more than the cap */
+        List<String[]> kept()
+        {
+            return rows;
+        }
+
+        /** @return whether a row was found and NOT kept, which is what the cap note reports */
+        boolean declined()
+        {
+            return declined;
+        }
+    }
+
+    /**
+     * Puts as many of one element's children on the handler walk's stack as the budget can still
+     * reach, in the order that reproduces the descent the recursion made: REVERSED, and the
+     * singular containments BEFORE the {@code items} children, so that the first {@code items}
+     * child is the next one popped and the singular ones come out last - which is the order the
+     * recursion visited them in.
+     *
+     * @param element the element whose children are to be walked
+     * @param pending the walk's stack
+     * @param budget the shared per-visited-element node budget, already charged for {@code element}
+     * @param cutShort raised when a child this element has is left off the stack
+     */
+    private static void pushHandlerChildren(EObject element, Deque<PendingElement> pending,
+        int[] budget, boolean[] cutShort)
+    {
+        List<EObject> items = getReferenceList(element, FEATURE_ITEMS);
+        List<EObject> singular = handlerSingularChildren(element);
+        int reachable =
+            makeRoomForReachableChildren(items.size() + singular.size(), pending, budget, cutShort);
+        int keptItems = Math.min(items.size(), reachable);
+        for (int i = reachable - keptItems - 1; i >= 0; i--)
+        {
+            EObject child = singular.get(i);
+            pending.push(new PendingElement(child, nameOf(child)));
+        }
+        for (int i = keptItems - 1; i >= 0; i--)
+        {
+            EObject child = items.get(i);
             if (child != null)
             {
-                collectHandlers(child, nameOf(child), language, rows, budget);
+                pending.push(new PendingElement(child, nameOf(child)));
             }
+        }
+    }
+
+    /**
+     * The singular item-bearing containments of one element, in the order
+     * {@link #SINGULAR_ITEM_CONTAINMENTS} declares - which is the order they are VISITED in, after
+     * the {@code items} children. Unlike the outline walk, the handler walk keeps every one of
+     * them: a designer-default command bar shows nothing in an outline but may still carry a bound
+     * handler.
+     *
+     * @param element the element whose singular containments these are
+     * @return the children present, at most {@link #SINGULAR_ITEM_CONTAINMENTS}{@code .length} of
+     *         them
+     */
+    private static List<EObject> handlerSingularChildren(EObject element)
+    {
+        List<EObject> present = new ArrayList<>(SINGULAR_ITEM_CONTAINMENTS.length);
+        for (String containment : SINGULAR_ITEM_CONTAINMENTS)
+        {
+            EObject child = getSingleReference(element, containment);
+            if (child != null)
+            {
+                present.add(child);
+            }
+        }
+        return present;
+    }
+
+    /**
+     * One element waiting on the handler walk's stack, with the Element-column label its own
+     * handler rows are written under.
+     *
+     * <p>The label is carried rather than recomputed at pop time because the form ROOT's label is
+     * not its name - it is {@link #FORM_OWNER_LABEL} - and a walk that re-derived the label would
+     * have to recognise the root by identity to keep that one row right.</p>
+     *
+     * <p>Package-private so a test can hand the walk a stack it can measure; see
+     * {@link FormStructureReader#collectHandlers(EObject, String, String, List, int[], boolean[], Deque)}.</p>
+     */
+    static final class PendingElement
+    {
+        final EObject element;
+
+        final String ownerLabel;
+
+        PendingElement(EObject element, String ownerLabel)
+        {
+            this.element = element;
+            this.ownerLabel = ownerLabel;
         }
     }
 

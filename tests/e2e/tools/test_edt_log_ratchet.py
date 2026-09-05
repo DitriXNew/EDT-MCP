@@ -107,7 +107,7 @@ def _emit_log_probe():
     the time this returns - there is nothing to wait for.
     """
     token = "edtmcplogprobe%s" % uuid.uuid4().hex
-    call("get_project_errors", {"project": token})
+    call("get_project_errors", {"projectName": token})
     return token
 
 

@@ -21,6 +21,11 @@ public final class NativeRenderModeProbe
     private static final String BUFFERED_FLAG_FIELD = "NATIVE_FORM_BUFFERED_LAYOUT_RENDER"; //$NON-NLS-1$
     private static final String BUFFERED_PROPERTY_NAME = "nativeFormBufferedLayoutRender"; //$NON-NLS-1$
     private static final AtomicBoolean PROBE_FAILURE_LOGGED = new AtomicBoolean();
+    private static final AtomicBoolean STARTUP_MODES_CAPTURE_ATTEMPTED = new AtomicBoolean();
+
+    private static volatile NativeRenderMode startupNativeRenderMode = NativeRenderMode.UNKNOWN;
+    private static volatile NativeRenderMode startupBufferedRenderMode = NativeRenderMode.UNKNOWN;
+    private static volatile boolean startupModesCaptured;
 
     /** Tri-state result of probing EDT's native form render mode. */
     public enum NativeRenderMode
@@ -36,6 +41,61 @@ public final class NativeRenderModeProbe
     }
 
     /**
+     * Captures EDT's native and buffered form render modes once, before this plugin can mutate
+     * either mode at runtime: the only mutator is {@link #ensureBufferedNativeRenderMode()},
+     * reached from a tool call, which cannot run before this bundle has activated.
+     *
+     * <p>The bundle is lazily activated, so this is the state at MCP ACTIVATION rather than at
+     * JVM start. The distinction is only theoretical for these two flags: both are private
+     * static finals initialised from system properties at class-init, and no EDT code writes
+     * them afterwards - the sole reflective writer is ours. Reflection failures are logged once
+     * and leave both snapshots as {@link NativeRenderMode#UNKNOWN}; they never escape into
+     * plugin startup.
+     */
+    public static void captureStartupModes()
+    {
+        if (!STARTUP_MODES_CAPTURE_ATTEMPTED.compareAndSet(false, true))
+        {
+            return;
+        }
+
+        try
+        {
+            NativeRenderServiceAccessor accessor = createAccessor();
+            NativeRenderMode nativeMode = toMode(accessor.isNativeRender());
+            NativeRenderMode bufferedMode = toMode(accessor.isBufferedRender());
+            startupNativeRenderMode = nativeMode;
+            startupBufferedRenderMode = bufferedMode;
+            startupModesCaptured = true;
+        }
+        catch (Exception | LinkageError e)
+        {
+            logProbeFailure(
+                "Could not capture EDT form render modes at startup via NativeRenderService", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Returns the native form render mode captured at plugin startup.
+     *
+     * @return the startup mode, or {@code UNKNOWN} when capture was not attempted or failed
+     */
+    public static NativeRenderMode getStartupNativeRenderMode()
+    {
+        return startupModesCaptured ? startupNativeRenderMode : NativeRenderMode.UNKNOWN;
+    }
+
+    /**
+     * Returns the buffered form render mode captured at plugin startup.
+     *
+     * @return the startup mode, or {@code UNKNOWN} when capture was not attempted or failed
+     */
+    public static NativeRenderMode getStartupBufferedRenderMode()
+    {
+        return startupModesCaptured ? startupBufferedRenderMode : NativeRenderMode.UNKNOWN;
+    }
+
+    /**
      * Returns EDT's effective native form render mode. Reflection failures are logged once and
      * reported as {@link NativeRenderMode#UNKNOWN}; they never escape into a caller.
      *
@@ -45,15 +105,30 @@ public final class NativeRenderModeProbe
     {
         try
         {
-            return createAccessor().isNativeRender() ? NativeRenderMode.ON : NativeRenderMode.OFF;
+            return toMode(createAccessor().isNativeRender());
         }
         catch (Exception | LinkageError e)
         {
-            if (PROBE_FAILURE_LOGGED.compareAndSet(false, true))
-            {
-                Activator.logWarning("Could not determine EDT native form render mode via NativeRenderService: " //$NON-NLS-1$
-                    + e.getClass().getSimpleName() + ": " + e.getMessage()); //$NON-NLS-1$
-            }
+            logProbeFailure("Could not determine EDT native form render mode via NativeRenderService", e); //$NON-NLS-1$
+            return NativeRenderMode.UNKNOWN;
+        }
+    }
+
+    /**
+     * Returns EDT's effective buffered form render mode. Reflection failures are logged once and
+     * reported as {@link NativeRenderMode#UNKNOWN}; they never escape into a caller.
+     *
+     * @return the effective buffered render mode, or {@code UNKNOWN} when EDT's internal API changed
+     */
+    public static NativeRenderMode getBufferedRenderMode()
+    {
+        try
+        {
+            return toMode(createAccessor().isBufferedRender());
+        }
+        catch (Exception | LinkageError e)
+        {
+            logProbeFailure("Could not determine EDT buffered form render mode via NativeRenderService", e); //$NON-NLS-1$
             return NativeRenderMode.UNKNOWN;
         }
     }
@@ -96,6 +171,20 @@ public final class NativeRenderModeProbe
         Method isNativeRenderMethod = serviceClass.getMethod(IS_NATIVE_RENDER_METHOD);
         Method isBufferedRenderMethod = serviceClass.getMethod(IS_BUFFERED_RENDER_METHOD);
         return new NativeRenderServiceAccessor(serviceClass, isNativeRenderMethod, isBufferedRenderMethod);
+    }
+
+    private static NativeRenderMode toMode(boolean enabled)
+    {
+        return enabled ? NativeRenderMode.ON : NativeRenderMode.OFF;
+    }
+
+    private static void logProbeFailure(String message, Throwable failure)
+    {
+        if (PROBE_FAILURE_LOGGED.compareAndSet(false, true))
+        {
+            Activator.logWarning(message + ": " + failure.getClass().getSimpleName() //$NON-NLS-1$
+                + ": " + failure.getMessage()); //$NON-NLS-1$
+        }
     }
 
     /**

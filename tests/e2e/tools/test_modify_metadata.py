@@ -710,6 +710,145 @@ def test_set_typed_ref_shorthand():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_source_accepts_concrete_document_object():
+    document_name = "E2EProducedSourceDocument"
+    subscription_name = "E2EProducedSourceSubscription"
+    subscription_fqn = "EventSubscription." + subscription_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Document." + document_name,
+    }), "seed the Document whose produced Object type will be assigned")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": subscription_fqn,
+    }), "seed the EventSubscription")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": subscription_fqn,
+        "properties": [{
+            "name": "source",
+            "value": {"types": [{"kind": "DocumentObject", "ref": document_name}]},
+        }],
+    })
+    assert_ok(r, "set EventSubscription.source to a concrete DocumentObject")
+    assert "source" in (r.structured.get("applied") or []), \
+        "source must be reported as applied: %r" % (r.structured,)
+
+    # DISK FIRST: compare the isolated <source>/<types> element by exact value. A substring check
+    # would accept a malformed token with an extra prefix/suffix, which is the regression this case
+    # must catch.
+    relative_path = "src/EventSubscriptions/%s/%s.mdo" % (
+        subscription_name, subscription_name)
+    root = ET.fromstring(read_disk(relative_path))
+    source_elements = [element for element in root.iter()
+                       if element.tag.rsplit("}", 1)[-1] == "source"]
+    assert len(source_elements) == 1, \
+        "the EventSubscription .mdo must contain exactly one <source>: %r" % source_elements
+    type_elements = [element for element in source_elements[0].iter()
+                     if element.tag.rsplit("}", 1)[-1] == "types"]
+    assert len(type_elements) == 1, \
+        "EventSubscription.source must contain exactly one <types>: %r" % type_elements
+    type_element = type_elements[0]
+    assert not type_element.attrib and len(type_element) == 0, \
+        "EventSubscription.source <types> must be a plain text element: %s" % \
+        ET.tostring(type_element, encoding="unicode")
+    expected_element = "<types>DocumentObject.%s</types>" % document_name
+    serialized_element = "<types>%s</types>" % (type_element.text or "")
+    assert serialized_element == expected_element, \
+        "EventSubscription.source must serialize exactly as %s, got %s" % (
+            expected_element, serialized_element)
+
+    row = _assignable_row(subscription_fqn, "source")
+    assert row is not None, "EventSubscription.source must remain readable through assignable:true"
+    assert_contains(row, "DocumentObject." + document_name,
+                    "MODEL read-back must expose the concrete produced type")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_source_accepts_abstract_nested_produced_type():
+    subscription_name = "E2ENestedProducedSourceSubscription"
+    subscription_fqn = "EventSubscription." + subscription_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": subscription_fqn,
+    }), "seed the EventSubscription")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": subscription_fqn,
+        "properties": [{
+            "name": "source",
+            "value": {"types": [
+                {"kind": "InformationRegisterRecordSet"},
+                {"kind": "RecalculationRecordSet"},
+            ]},
+        }],
+    })
+    assert_ok(r, "set EventSubscription.source to top-level and nested abstract RecordSets")
+    assert "source" in (r.structured.get("applied") or []), \
+        "source must be reported as applied: %r" % (r.structured,)
+
+    relative_path = "src/EventSubscriptions/%s/%s.mdo" % (
+        subscription_name, subscription_name)
+    root = ET.fromstring(read_disk(relative_path))
+    source_elements = [element for element in root.iter()
+                       if element.tag.rsplit("}", 1)[-1] == "source"]
+    assert len(source_elements) == 1, \
+        "the EventSubscription .mdo must contain exactly one <source>: %r" % source_elements
+    type_elements = [element for element in source_elements[0].iter()
+                     if element.tag.rsplit("}", 1)[-1] == "types"]
+    assert len(type_elements) == 2, \
+        "EventSubscription.source must contain exactly two <types>: %r" % type_elements
+    expected_types = {"InformationRegisterRecordSet", "RecalculationRecordSet"}
+    actual_types = {element.text or "" for element in type_elements}
+    assert actual_types == expected_types, \
+        "EventSubscription.source types must be %r, got %r" % (expected_types, actual_types)
+
+    row = _assignable_row(subscription_fqn, "source")
+    assert row is not None, "EventSubscription.source must remain readable through assignable:true"
+    assert_contains(row, "InformationRegisterRecordSet",
+                    "MODEL read-back must expose the top-level abstract produced type")
+    assert_contains(row, "RecalculationRecordSet",
+                    "MODEL read-back must expose the nested abstract produced type")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_persisted_catalog_attribute_refuses_concrete_document_object():
+    document_name = "E2EProducedStoredDocument"
+    attribute_name = "E2EProducedStoredAttribute"
+    attribute_fqn = "Catalog.Catalog.Attribute." + attribute_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Document." + document_name,
+    }), "seed the Document whose runtime Object type will be refused")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+    }), "seed the persisted Catalog attribute")
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute_fqn,
+        "properties": [{
+            "name": "type",
+            "value": {"types": [{"kind": "DocumentObject", "ref": document_name}]},
+        }],
+    })
+    e = assert_error(r, "a runtime DocumentObject on a persisted Catalog attribute")
+    assert_error_quality(e, names=["DocumentObject"],
+                         suggests=["runtime object type", "event subscription", "source", "Ref"],
+                         ctx="the refusal must name the legal runtime and persisted alternatives")
+    assert_tree_unchanged(before, "a rejected produced type must not touch the persisted attribute")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_valuestorage_type():
     # ValueStorage - a platform simple type with no qualifiers.
     _seed_attr_and_set_type("E2ETypeVSAttr", {"types": [{"kind": "ValueStorage"}]})
@@ -1263,6 +1402,23 @@ def test_modify_form_attribute_type():
         "the type alias must apply to valueType: %r" % (r.structured,)
     poll_diff_contains("precision",
                        ctx="the form attribute's Number(10,2) type must land in the .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_attribute_concrete_produced_type():
+    attr = "MFProducedCatalogObject"
+    _seed_form_attribute(attr)
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {
+            "types": [{"kind": "CatalogObject", "ref": "Catalog"}]}}],
+    })
+    assert_ok(r, "set a form attribute's type to a concrete CatalogObject")
+    assert "valueType" in (r.structured.get("applied") or []), \
+        "the type alias must apply the concrete produced type to valueType: %r" % (r.structured,)
+    poll_diff_contains("<types>CatalogObject.Catalog</types>",
+                       ctx="the concrete produced type must land in the form's .form on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2536,7 +2692,14 @@ def test_scheduled_job_method_name_accepts_existing_exported_server_method():
     assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
     assert "methodName" in (r.structured.get("applied") or []), \
         "methodName must be applied: %r" % (r.structured,)
-    poll_diff_contains("Calc.Add", ctx="the methodName must land in the ScheduledJob .mdo on disk")
+    # The EXACT stored form, not a substring of it. A bare "Calc.Add" is accepted as INPUT and
+    # normalized to the platform's three-segment form; the short form serialized verbatim is what
+    # made an extension unloadable ("reference to an unknown method"). Asserting the substring
+    # "Calc.Add" is what let that ship - it matches both spellings.
+    poll_diff_contains("<methodName>CommonModule.Calc.Add</methodName>",
+                       ctx="the methodName must land in the .mdo in the platform's stored form")
+    assert "<methodName>Calc.Add</methodName>" not in diff(), \
+        "the short form must never reach the .mdo: %s" % diff()[:500]
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

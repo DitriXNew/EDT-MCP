@@ -41,6 +41,7 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
@@ -64,6 +65,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -91,6 +93,27 @@ public class ModifyMetadataToolTest
     public void testResponseType()
     {
         assertEquals(ResponseType.JSON, new ModifyMetadataTool().getResponseType());
+    }
+
+    @Test
+    public void testEventSubscriptionSourceSelectsEventSourceTypeTargetOnlyForThatFeature()
+    {
+        EStructuralFeature source = MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE;
+        assertSame(McorePackage.Literals.TYPE_DESCRIPTION, source.getEType());
+        assertSame(MetadataTypeBuilder.TypeTarget.EVENT_SOURCE,
+            ModifyMetadataTool.typeTargetForFeature(
+                MetadataTypeBuilder.TypeTarget.METADATA, source));
+
+        CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        EStructuralFeature attributeType = attribute.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
+        assertNotNull(attributeType);
+        assertSame(McorePackage.Literals.TYPE_DESCRIPTION, attributeType.getEType());
+        assertSame(MetadataTypeBuilder.TypeTarget.METADATA,
+            ModifyMetadataTool.typeTargetForFeature(
+                MetadataTypeBuilder.TypeTarget.METADATA, attributeType));
+        assertSame(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            ModifyMetadataTool.typeTargetForFeature(
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, source));
     }
 
     @Test
@@ -1512,13 +1535,28 @@ public class ModifyMetadataToolTest
         module.setName("Calc"); //$NON-NLS-1$
         config.getCommonModules().add(module);
         ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
-        assertEquals("a validated methodName must serialize WITHOUT the type prefix", //$NON-NLS-1$
-            "Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("a validated methodName must serialize with the English CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", //$NON-NLS-1$
+            ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
         EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
         assertEquals("a validated handler must serialize WITH the English CommonModule prefix", //$NON-NLS-1$
             "CommonModule.Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // Unguarded combo: value passes through unchanged.
         assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCanonicalMethodReferencePrefixesShortScheduledJobInput()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setName("Calc"); //$NON-NLS-1$
+        config.getCommonModules().add(module);
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+
+        assertEquals("a short ScheduledJob methodName must be stored with the CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", //$NON-NLS-1$
+            ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ===== XDTO package member payload dispatch guards (issue #183 stream 1) =========================

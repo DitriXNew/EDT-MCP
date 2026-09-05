@@ -4,9 +4,12 @@ import ast
 import datetime
 import importlib.util
 import inspect
+import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from unittest import mock
 
 
@@ -28,6 +31,27 @@ with mock.patch.dict("sys.modules", {"harness": HARNESS}):
 
 
 class RunAllRatchetTest(unittest.TestCase):
+    def _probe_token_from(self, captured_calls):
+        """The probe's token, read out of the call it actually made - after checking that call
+        against the published contract.
+
+        These runner tests never see the live server, so nothing here would notice the probe
+        naming an argument the tool does not read. That failure is silent in the worst way: the
+        tool would answer normally, log no error line, and the ratchet would SKIP on every run
+        rather than fail. `tools_list.golden.json` is the half of the contract the fake cannot
+        supply, so the tool and its argument are looked up there. Both are taken from the captured
+        call, so this tracks whatever the probe sends instead of restating it.
+        """
+        probe_tool, probe_arguments = captured_calls[-1]
+        with open(os.path.join(E2E_DIR, "tools_list.golden.json"),
+                  encoding="utf-8") as handle:
+            contracts = {tool["name"]: tool for tool in json.load(handle)}
+        self.assertIn(probe_tool, contracts)
+        probe_argument_key, = probe_arguments
+        self.assertIn(probe_argument_key,
+                      contracts[probe_tool]["inputSchema"]["properties"])
+        return probe_arguments[probe_argument_key]
+
     def test_a_located_workspace_must_contain_the_server_log_probe(self):
         def entry_at(plugin, severity, message, epoch=None):
             if epoch is None:
@@ -46,7 +70,7 @@ class RunAllRatchetTest(unittest.TestCase):
             def fake_call(tool, arguments):
                 captured_calls.append((tool, arguments))
                 if write_probe["enabled"]:
-                    token = arguments["project"]
+                    token, = arguments.values()
                     with open(log_path, "a", encoding="utf-8") as handle:
                         handle.write(entry_at(
                             RATCHET.OUR_PLUGIN, "2",
@@ -83,9 +107,7 @@ class RunAllRatchetTest(unittest.TestCase):
                 write_probe["enabled"] = True
                 self.assertIsNone(
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log())
-                probe_tool, probe_arguments = captured_calls[-1]
-                self.assertEqual("get_project_errors", probe_tool)
-                probe_token = probe_arguments["project"]
+                probe_token = self._probe_token_from(captured_calls)
                 self.assertTrue(probe_token.startswith("edtmcplogprobe"))
                 with open(log_path, encoding="utf-8") as handle:
                     self.assertIn("Project not found: %s" % probe_token, handle.read())
@@ -96,11 +118,114 @@ class RunAllRatchetTest(unittest.TestCase):
                 with self.assertRaises(HARNESS.E2EAssertion) as failed:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
                 self.assertIn(failure_message, str(failed.exception))
-                probe_tool, probe_arguments = captured_calls[-1]
-                self.assertEqual("get_project_errors", probe_tool)
-                probe_token = probe_arguments["project"]
+                probe_token = self._probe_token_from(captured_calls)
                 with open(log_path, encoding="utf-8") as handle:
                     self.assertIn("Project not found: %s" % probe_token, handle.read())
+
+    @staticmethod
+    def _mutation_harness():
+        harness = mock.Mock()
+        harness.PROJECT = "Base"
+        harness.EXT_OBJECTS_PROJECT = "ExternalObjects"
+        harness.ALL_FIXTURE_PROJECTS = ["Base", "Extension", "ExternalObjects"]
+        harness.external_objects_model_synced.return_value = True
+        harness.confirmed_mutation_tools.return_value = frozenset({"modify_metadata"})
+        harness.mutation_kind_violation_tools.return_value = ("modify_metadata",)
+        harness.mutations_unresolved.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset()
+        harness.evidenced_mutation_fixture_projects.return_value = frozenset()
+        harness.mutation_could_have_cascaded.return_value = False
+        harness.reset_all_fixtures.return_value = True
+        return harness
+
+    def test_kind_violation_resets_every_fixture_through_model_reset_and_prints_advisory(self):
+        harness = self._mutation_harness()
+        output = StringIO()
+
+        with redirect_stdout(output):
+            RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(harness.ALL_FIXTURE_PROJECTS)
+        harness.call.assert_not_called()
+        self.assertIn("[kind-advisory]", output.getvalue())
+
+    def test_kind_violation_skips_unsynced_external_objects_named_only_by_refused_call(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        # Another call produced the confirmed mutation that triggered this branch. The refused
+        # call only named ExternalObjects, so it is present in the attempted-target union but not
+        # in the per-call outcome-evidenced set.
+        harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_kind_violation_resets_unsynced_external_objects_named_by_evidenced_call(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
+        harness.evidenced_mutation_fixture_projects.return_value = frozenset(
+            {"ExternalObjects"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(harness.ALL_FIXTURE_PROJECTS)
+        harness.evidenced_mutation_fixture_projects.assert_called_once_with()
+
+    def test_kind_violation_skips_unsynced_external_objects_when_call_did_not_target_it(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"Base"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        # This case is deliberately indistinguishable from the pre-fix behaviour: an unsynced
+        # fixture the call never named stays skipped either way. It guards the OPPOSITE direction
+        # from its sibling above - that widening the set to "what the call targeted" did not
+        # quietly become "everything" - so it is a boundary test, not a discriminating one. The
+        # assertion is therefore on the decision, not on which accessor was consulted to reach it.
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_kind_violation_model_reset_failure_propagates(self):
+        class E2EModelResetFailed(Exception):
+            pass
+
+        harness = self._mutation_harness()
+        harness.E2EModelResetFailed = E2EModelResetFailed
+        harness.reset_model.side_effect = E2EModelResetFailed("could not restore fixture")
+
+        with self.assertRaisesRegex(E2EModelResetFailed, "could not restore fixture"):
+            RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+    def test_declared_write_resets_base_and_named_fixture_projects(self):
+        harness = self._mutation_harness()
+        harness.mutation_kind_violation_tools.return_value = ()
+        harness.model_is_pristine.return_value = False
+        harness.reset_fixture.return_value = True
+        harness.mutated_fixture_projects.return_value = frozenset({"Extension"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "write-metadata"})
+
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_declared_cascade_write_resets_every_available_fixture_project(self):
+        harness = self._mutation_harness()
+        harness.mutation_kind_violation_tools.return_value = ()
+        harness.model_is_pristine.return_value = False
+        harness.reset_fixture.return_value = True
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"Base"})
+        harness.mutation_could_have_cascaded.return_value = True
+
+        RUN_ALL._reset_after_write(
+            harness, {"name": "base delete", "kind": "write-metadata"})
+
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
 
     def test_every_shard_holds_its_own_log_ratchet_out_of_the_main_loop(self):
         first = {"tool": "alpha", "name": "first"}

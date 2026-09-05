@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**90 tools.**
+**93 tools.**
 
 ## Core
 
@@ -162,6 +162,16 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`switch_git_branch`](switch_git_branch.md) | Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/… |
 | [`update_database`](update_database.md) | Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + appl… |
 | [`validate_xdto_package`](validate_xdto_package.md) | Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and re… |
+
+## Comparison
+
+> Read a three-way configuration comparison: start one against two git revisions, expand a node's differences, and read or author the merge-rules file EDT re-applies. Nothing is ever merged - running a merge stays a human action in EDT's comparison window.
+
+| Tool | Description |
+|------|-------------|
+| [`compare_configurations`](compare_configurations.md) | Compare a project's working tree against two git revisions (three-way) and report which top objects differ. Read-only: it never merges and never writes the p… |
+| [`get_comparison_node`](get_comparison_node.md) | Expand one node of a comparison started by compare_configurations: three-way property table, form structure, module sections, support state and potential pro… |
+| [`merge_rules`](merge_rules.md) | Read or author EDT's merge-rules file - the per-node decisions a configuration comparison saves and re-applies when it is launched. Which container to write… |
 
 ## Git
 
