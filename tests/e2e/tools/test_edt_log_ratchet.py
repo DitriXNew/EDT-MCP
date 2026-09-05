@@ -102,7 +102,8 @@ def _collect_our_errors(workspace):
                 lines = handle.readlines()
         except OSError:
             continue
-        inspected = True
+        if lines:
+            inspected = True
         for index, line in enumerate(lines):
             match = _ENTRY.match(line)
             if not match:
@@ -136,7 +137,7 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
     found, inspected = _collect_our_errors(workspace)
     if not inspected:
         raise E2ESkip(
-            "EDT workspace found at %s but holds no readable EDT log to inspect "
+            "EDT workspace found at %s but holds no readable EDT log content to inspect "
             "(.metadata/.log or .metadata/.bak_*.log)" % workspace)
     accepted = _load_baseline()
     new = {msg: count for msg, count in found.items() if msg not in accepted}

@@ -27,7 +27,7 @@ with mock.patch.dict("sys.modules", {"harness": HARNESS}):
 
 
 class RunAllRatchetTest(unittest.TestCase):
-    def test_a_located_workspace_needs_a_readable_current_or_rotated_log(self):
+    def test_a_located_workspace_needs_readable_current_or_rotated_log_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
@@ -35,10 +35,18 @@ class RunAllRatchetTest(unittest.TestCase):
                 with self.assertRaises(HARNESS.E2ESkip) as skipped:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
                 self.assertIn("workspace found", str(skipped.exception))
-                self.assertIn("no readable EDT log to inspect", str(skipped.exception))
+                self.assertIn("no readable EDT log content to inspect", str(skipped.exception))
+                no_log_message = str(skipped.exception)
 
-                with open(os.path.join(metadata, ".bak_1.log"), "w", encoding="utf-8"):
+                backup = os.path.join(metadata, ".bak_1.log")
+                with open(backup, "w", encoding="utf-8"):
                     pass
+                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertEqual(no_log_message, str(skipped.exception))
+
+                with open(backup, "w", encoding="utf-8") as handle:
+                    handle.write("one line\n")
                 self.assertIsNone(
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log())
 
