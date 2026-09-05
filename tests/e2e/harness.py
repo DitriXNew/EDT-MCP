@@ -1491,6 +1491,7 @@ def _backups_covering(before, after, failures=None):
     """
     appeared = [path for path, identity in after.items() if before.get(path) != identity]
     pre_existing = [path for path in before if path not in appeared]
+    overwritten = sorted(path for path in appeared if path in before)
 
     def when(path):
         """Only the MTIME orders these files.
@@ -1507,6 +1508,13 @@ def _backups_covering(before, after, failures=None):
     # inventing a tie-break cannot prove that the omitted source was safe to omit. The honest
     # answer is to mark the evidence incomplete and tell the reader to inspect the raw workspace.
     if failures is not None:
+        if overwritten:
+            failures.append(
+                "%d pre-existing backup%s overwritten in place during collection, so %s earlier "
+                "contents are gone: %s"
+                % (len(overwritten), "" if len(overwritten) == 1 else "s",
+                   "its" if len(overwritten) == 1 else "their",
+                   ", ".join(os.path.basename(path) for path in overwritten)))
         slots_left = max(0, _EVIDENCE_LOG_MAX_BACKUPS - len(appeared))
         omitted_pre_existing = max(0, len(pre_existing) - slots_left)
         if omitted_pre_existing:
@@ -1537,7 +1545,10 @@ def _backups_covering(before, after, failures=None):
         if len(chosen) >= _EVIDENCE_LOG_MAX_BACKUPS:
             break
         chosen.append(path)
-    chosen.sort(key=when)    # oldest first, which is also the display order
+    # Oldest first, which is also the display order. A tie between the two snapshot groups is
+    # broken by the group, since a pre-existing backup can never be the later one.
+    pre_existing_set = set(pre_existing)
+    chosen.sort(key=lambda path: (when(path), 0 if path in pre_existing_set else 1))
     return chosen
 
 
@@ -1602,16 +1613,18 @@ def _print_failed_settle_evidence(last_list_projects):
                 failures.append("backup scan %s: %s" % (when, failure))
             return identities
 
-        def read_into(log_path, selected_identity=None):
+        def read_into(log_path, selected_identity=None, capture_identity=False):
             try:
-                if selected_identity is None:
+                opened_identity = None
+                if selected_identity is None and not capture_identity:
                     text = _read_log_tail(log_path)
                 else:
                     text, opened_identity = _read_log_tail(log_path, True)
-                    if opened_identity != selected_identity:
+                    if selected_identity is not None and opened_identity != selected_identity:
                         failures.append(
                             "selected backup identity changed at read time: %s" % log_path)
                 by_path[log_path] = text
+                return opened_identity
             except Exception as exc:
                 # Rotation may remove a path before it can be opened, so one failed read must not
                 # hide evidence that remains available in the other file. This also contains a
@@ -1627,18 +1640,25 @@ def _print_failed_settle_evidence(last_list_projects):
         # read as well:
         #   rotation before the read -> .log comes back empty, but the rotated-out file is in the
         #                               `after` snapshot and gets read;
-        #   rotation after the read  -> the failure is already in hand, and the same content is
-        #                               read again from its new backup, so lines appear twice;
+        #   rotation after the read  -> the failure is already in hand, and its captured identity
+        #                               keeps its new backup name from becoming a duplicate source;
         #   two in a row             -> BOTH new backups are in the snapshot diff, so the failure
         #                               is not pushed out by the second rotation.
         # Choosing a single "newest backup" survived none of these fully, and choosing it BEFORE
         # the read survived neither of the first two. Re-scanning at the end alone is no fix - it
         # races the writer the same way; the pair of snapshots is what makes the window observable.
-        # Duplicated lines in an 80-line tail are harmless; a missing failure is the whole problem.
         before_rotation = scan_backups("before reading .log")
-        read_into(current)
+        current_identity = read_into(current, capture_identity=True)
         after_rotation = scan_backups("after reading .log")
         backup_paths = _backups_covering(before_rotation, after_rotation, failures)
+        # A generation read as .log can reappear under a backup name after a rename. Keeping both
+        # names would charge the same lines twice against the per-source budget. Identity equality
+        # proves they are the same generation; a zero inode leaves the existing behavior unchanged.
+        if current_identity is not None and current_identity[2]:
+            backup_paths = [
+                path for path in backup_paths
+                if after_rotation.get(path, before_rotation.get(path)) != current_identity
+            ]
         backups = [(path, after_rotation.get(path, before_rotation.get(path)))
                    for path in backup_paths]
         for log_path, selected_identity in backups:

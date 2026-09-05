@@ -466,6 +466,73 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FAILURE MOMENT", printed.getvalue(),
                       "a same-name, same-mtime replacement must still register as a rotation")
 
+    def test_an_in_place_rotation_marks_the_overwritten_generation_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            reused = os.path.join(metadata, ".bak_1.log")
+            stamp = 2_000_000_000
+            with open(reused, "w", encoding="utf-8") as handle:
+                handle.write("STALE GENERATION\n")
+            os.utime(reused, (stamp, stamp))
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+
+            real_read = HARNESS._read_log_tail
+            rotations = []
+
+            def rotate_in_place_then_read(path, *args):
+                if not rotations:
+                    rotations.append(True)
+                    os.replace(current, reused)
+                    os.utime(reused, (stamp, stamp))
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
+                return real_read(path, *args)
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=rotate_in_place_then_read), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE MOMENT", out)
+        self.assertIn("INCOMPLETE", out)
+        self.assertIn(
+            "1 pre-existing backup overwritten in place during collection, so its earlier "
+            "contents are gone: .bak_1.log",
+            out)
+
+    def test_overwritten_and_cap_omitted_backups_report_both_losses(self):
+        reused = os.path.join("metadata", ".bak_1.log")
+        omitted = os.path.join("metadata", ".bak_9.log")
+        appeared_2 = os.path.join("metadata", ".bak_2.log")
+        appeared_3 = os.path.join("metadata", ".bak_3.log")
+        before = {
+            reused: (1_000, 10, 11),
+            omitted: (500, 10, 19),
+        }
+        after = {
+            reused: (2_000, 99, 77),
+            appeared_2: (2_001, 5, 21),
+            appeared_3: (2_002, 5, 22),
+            omitted: (500, 10, 19),
+        }
+        failures = []
+
+        chosen = HARNESS._backups_covering(before, after, failures)
+
+        self.assertEqual([reused, appeared_2, appeared_3], chosen)
+        self.assertEqual([
+            "1 pre-existing backup overwritten in place during collection, so its earlier "
+            "contents are gone: .bak_1.log",
+            "backup cap of %d omitted 1 pre-existing backup for want of room"
+            % HARNESS._EVIDENCE_LOG_MAX_BACKUPS,
+        ], failures)
+
     def test_a_selected_backup_replaced_before_read_marks_its_path_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
@@ -841,24 +908,14 @@ class EvidenceLogTailTest(unittest.TestCase):
         # EARLIER rotation would have put a failure.
         self.assertIn(".bak_2.log", out)
 
-    def test_a_rotation_between_the_two_reads_costs_a_duplicate_not_the_failure(self):
-        """The current log is read FIRST, which is why this race cannot lose evidence.
-
-        EDT rotates by renaming .log to a .bak_N and starting an empty .log. Reading the backup
-        first, a rotation before the second read leaves the failure moment in a NEW backup that
-        neither chosen path points at, and the tail looks clean. Reading .log first, the same
-        rotation only duplicates lines. Re-scanning after the reads would race the writer the same
-        way, so the ORDER is the fix.
-        """
+    def test_a_rotated_current_log_is_not_charged_twice_against_the_line_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
-            older = os.path.join(metadata, ".bak_1.log")
             current = os.path.join(metadata, ".log")
-            with open(older, "w", encoding="utf-8") as handle:
-                handle.write("OLDER BACKUP LINE\n")
             with open(current, "w", encoding="utf-8") as handle:
                 handle.write("FAILURE MOMENT\n")
+                handle.write("".join("noise line %d\n" % index for index in range(50)))
 
             real_read = HARNESS._read_log_tail
             rotated = []
@@ -881,7 +938,10 @@ class EvidenceLogTailTest(unittest.TestCase):
 
         out = printed.getvalue()
         self.assertIn("FAILURE MOMENT", out,
-                      "a rotation caught mid-collection must not lose the failure moment")
+                      "one generation that fits the budget must not be charged twice")
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(1, len(headings))
+        self.assertIn(".metadata/.log", headings[0])
 
     def test_a_noisy_current_log_cannot_crowd_the_rotated_failure_out(self):
         """The whole reason the backup is collected is that the failure is IN it.
@@ -956,6 +1016,20 @@ class EvidenceLogTailTest(unittest.TestCase):
         }
 
         self.assertEqual(["first.log", "second.log"], HARNESS._backups_covering(before, after))
+
+    def test_a_pre_existing_backup_precedes_an_appeared_backup_on_an_mtime_tie(self):
+        stamp = 1_700_000_000_000_000_000
+        pre_existing = "bak7"
+        appeared = "bak8"
+        before = {pre_existing: (stamp, 10, 1)}
+        after = {
+            pre_existing: (stamp, 10, 1),
+            appeared: (stamp, 20, 2),
+        }
+
+        self.assertEqual(
+            [pre_existing, appeared],
+            HARNESS._backups_covering(before, after))
 
     def test_backups_that_rotated_before_collection_are_still_reachable(self):
         """Two rotations completed before the collector started leave nothing in the diff.
