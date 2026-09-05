@@ -1738,23 +1738,24 @@ def _non_base_mismatch(project, rel):
     create, delete or rename did not survive clean_project; the DETAIL catches changes inside an
     existing object.
 
-    When no inventory baseline was readable before the run, only the disk check remains. That is
-    deliberately weaker: there is no captured in-memory state against which to compare the model.
+    Each model brace is applied when its own baseline was captured. Only when neither baseline was
+    captured does the disk check stand alone. This prevents a fixture whose inventory listing
+    failed during setup but whose detail baseline was captured from being certified as restored
+    while a nested change survives. This also admits one new abort path: such a fixture can abort
+    reset when the live detail probe cannot be read, exactly as this verifier already permits when
+    the inventory baseline exists and as the base-project verifier does.
     """
     disk_mismatch = _disk_mismatch(rel)
     if disk_mismatch is not None:
         # Disk evidence is checked first, so it is also the reported cause when both checks fail.
         return disk_mismatch
     baseline = _BASELINE_INVENTORY_BY_PROJECT.get(project)
-    if baseline is None:
-        # No baseline was readable for this optional fixture, so a clean disk is the only evidence
-        # available. Accepting it preserves the pre-inventory degradation instead of aborting.
-        return None
-    inventory = _top_object_inventory(project)
-    if inventory is None:
-        return "the top-object inventory for %s could not be read" % project
-    if inventory != baseline:
-        return _inventory_difference_against(inventory, baseline)
+    if baseline is not None:
+        inventory = _top_object_inventory(project)
+        if inventory is None:
+            return "the top-object inventory for %s could not be read" % project
+        if inventory != baseline:
+            return _inventory_difference_against(inventory, baseline)
     detail_baseline = _BASELINE_DETAILS_BY_PROJECT.get(project)
     if detail_baseline is None:
         return None

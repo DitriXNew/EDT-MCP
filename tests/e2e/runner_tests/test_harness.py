@@ -836,15 +836,35 @@ class FixtureResetTest(unittest.TestCase):
         details.assert_called_once_with(
             HARNESS.TESTS_PROJECT, HARNESS.NON_BASE_PROBE_FQNS[HARNESS.TESTS_PROJECT])
 
+    def test_non_base_verify_uses_the_detail_baseline_it_captured(self):
+        with mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(
+                    HARNESS._BASELINE_DETAILS_BY_PROJECT,
+                    {HARNESS.TESTS_PROJECT: "baseline details"}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(HARNESS, "_top_object_inventory") as inventory, \
+                mock.patch.object(HARNESS, "_probe_details",
+                                  return_value="changed nested details") as details:
+            mismatch = HARNESS._non_base_mismatch(
+                HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNotNone(mismatch)
+        inventory.assert_not_called()
+        details.assert_called_once_with(
+            HARNESS.TESTS_PROJECT, HARNESS.NON_BASE_PROBE_FQNS[HARNESS.TESTS_PROJECT])
+
     def test_non_base_verify_degrades_to_clean_disk_without_inventory_baseline(self):
         with mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True), \
                 mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
-                mock.patch.object(HARNESS, "_top_object_inventory") as inventory:
+                mock.patch.object(HARNESS, "_top_object_inventory") as inventory, \
+                mock.patch.object(HARNESS, "_probe_details") as details:
             mismatch = HARNESS._non_base_mismatch(
                 HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
 
         self.assertIsNone(mismatch)
         inventory.assert_not_called()
+        details.assert_not_called()
 
 
 if __name__ == "__main__":
