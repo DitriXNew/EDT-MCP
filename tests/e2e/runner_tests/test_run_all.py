@@ -28,38 +28,79 @@ with mock.patch.dict("sys.modules", {"harness": HARNESS}):
 
 
 class RunAllRatchetTest(unittest.TestCase):
-    def test_a_located_workspace_needs_a_log_entry_from_this_run(self):
-        def entry_at(epoch):
+    def test_a_located_workspace_must_contain_the_server_log_probe(self):
+        def entry_at(plugin, severity, message, epoch=None):
+            if epoch is None:
+                epoch = HARNESS.RUN_STARTED_AT
             stamp = datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
-            return "!ENTRY org.eclipse.core.runtime 1 0 %s.000\n!MESSAGE status\n" % stamp
+            return "!ENTRY %s %s 0 %s.000\n!MESSAGE %s\n" % (
+                plugin, severity, stamp, message)
 
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
-            with mock.patch.dict(os.environ, {"EDT_MCP_EDT_WORKSPACE": tmp}):
+            log_path = os.path.join(metadata, ".log")
+            captured_calls = []
+            write_probe = {"enabled": False}
+
+            def fake_call(tool, arguments):
+                captured_calls.append((tool, arguments))
+                if write_probe["enabled"]:
+                    token = arguments["project"]
+                    with open(log_path, "a", encoding="utf-8") as handle:
+                        handle.write(entry_at(
+                            RATCHET.OUR_PLUGIN, "2",
+                            "Failed tools/call: get_project_errors - Project not found: %s"
+                            % token,
+                            datetime.datetime.now().timestamp()))
+
+            with mock.patch.object(RATCHET, "call", side_effect=fake_call), \
+                    mock.patch.dict(os.environ, {"EDT_MCP_EDT_WORKSPACE": tmp}):
                 with self.assertRaises(HARNESS.E2ESkip) as skipped:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
-                self.assertIn("workspace found", str(skipped.exception))
-                self.assertIn("logs show no entries from this run", str(skipped.exception))
-                no_log_message = str(skipped.exception)
+                self.assertIn("does not carry this server's own log output",
+                              str(skipped.exception))
+                self.assertFalse(os.path.exists(log_path))
 
-                backup = os.path.join(metadata, ".bak_1.log")
-                with open(backup, "w", encoding="utf-8"):
+                with open(log_path, "w", encoding="utf-8") as handle:
+                    handle.write(entry_at(
+                        "org.eclipse.core.runtime", "1", "unrelated platform status"))
+                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertIn("does not carry this server's own log output",
+                              str(skipped.exception))
+
+                with open(log_path, "w", encoding="utf-8") as handle:
+                    handle.write(entry_at(
+                        RATCHET.OUR_PLUGIN, "2", "another server instance was here"))
+                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertIn("does not carry this server's own log output",
+                              str(skipped.exception))
+
+                with open(log_path, "w", encoding="utf-8"):
                     pass
-                with self.assertRaises(HARNESS.E2ESkip) as skipped:
-                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
-                self.assertEqual(no_log_message, str(skipped.exception))
-
-                with open(backup, "w", encoding="utf-8") as handle:
-                    handle.write(entry_at(HARNESS.RUN_STARTED_AT - 60))
-                with self.assertRaises(HARNESS.E2ESkip) as skipped:
-                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
-                self.assertEqual(no_log_message, str(skipped.exception))
-
-                with open(backup, "w", encoding="utf-8") as handle:
-                    handle.write(entry_at(HARNESS.RUN_STARTED_AT))
+                write_probe["enabled"] = True
                 self.assertIsNone(
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log())
+                probe_tool, probe_arguments = captured_calls[-1]
+                self.assertEqual("get_project_errors", probe_tool)
+                probe_token = probe_arguments["project"]
+                self.assertTrue(probe_token.startswith("edtmcplogprobe"))
+                with open(log_path, encoding="utf-8") as handle:
+                    self.assertIn("Project not found: %s" % probe_token, handle.read())
+
+                failure_message = "Runner probe gate found an unbaselined plugin error"
+                with open(log_path, "w", encoding="utf-8") as handle:
+                    handle.write(entry_at(RATCHET.OUR_PLUGIN, "4", failure_message))
+                with self.assertRaises(HARNESS.E2EAssertion) as failed:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertIn(failure_message, str(failed.exception))
+                probe_tool, probe_arguments = captured_calls[-1]
+                self.assertEqual("get_project_errors", probe_tool)
+                probe_token = probe_arguments["project"]
+                with open(log_path, encoding="utf-8") as handle:
+                    self.assertIn("Project not found: %s" % probe_token, handle.read())
 
     def test_every_shard_holds_its_own_log_ratchet_out_of_the_main_loop(self):
         first = {"tool": "alpha", "name": "first"}

@@ -17,6 +17,10 @@ only place that failure was visible was the EDT log.
 
 WHAT IT CHECKS
 --------------
+The ratchet first makes the server write a run-unique line of its own and refuses to certify
+anything unless it finds that line back. Locating a workspace does not establish that its logs
+are the ones this server writes; a live workspace can belong to a different EDT instance.
+
 Only entries whose plugin is `com.ditrix.edt.mcp.server` at severity 4 (ERROR), and only
 those stamped at or after this run started. Platform noise is deliberately out of scope: EDT
 logs plenty of its own errors (its Moxel editor touching a stopped namespace, its Xtext
@@ -35,9 +39,10 @@ Adding a line to the baseline is a deliberate act. Prefer fixing the log call.
 import glob
 import os
 import re
+import uuid
 
 from harness import (
-    RUN_STARTED_AT, HARNESS_DIR, E2ESkip, e2e_test, _fail, _workspace_dir,
+    RUN_STARTED_AT, HARNESS_DIR, E2ESkip, call, e2e_test, _fail, _workspace_dir,
 )
 
 OUR_PLUGIN = "com.ditrix.edt.mcp.server"
@@ -85,15 +90,36 @@ def _load_baseline():
     return accepted
 
 
-def _collect_our_errors(workspace):
-    """Every ERROR entry of ours stamped this run, plus whether any entry was stamped this run."""
+def _emit_log_probe():
+    """Make the server under test write a run-unique line into ITS OWN log; return the token.
+
+    Locating a workspace does not establish whose logs are in it, and nothing on the filesystem
+    can: a live .metadata belongs to whichever EDT is running, which need not be the one serving
+    this suite. Only the server can answer that, so it is asked. Every tools/call that ends in an
+    error outcome is logged once, at WARNING, by our own plugin, with the tool's error message
+    attached (McpProtocolHandler.formatErrorLogLine), and get_project_errors names the project it
+    could not find - so a project name nothing else could produce comes straight back out in the
+    log. Finding it proves these files are the ones this server writes.
+
+    That refusal is logged at WARNING and never at severity 4, so the probe cannot appear among
+    the ERROR entries this ratchet reports. And the log call happens before the response is
+    written, with Equinox flushing each entry as it writes it, so the line is already on disk by
+    the time this returns - there is nothing to wait for.
+    """
+    token = "edtmcplogprobe%s" % uuid.uuid4().hex
+    call("get_project_errors", {"project": token})
+    return token
+
+
+def _collect_our_errors(workspace, token):
+    """Every ERROR entry of ours stamped this run, plus whether our probe was found."""
     metadata = os.path.join(workspace, ".metadata")
     # The log rotates at ~1 MB, so one run can span .log plus several .bak_N.log.
     files = sorted(glob.glob(os.path.join(metadata, ".bak_*.log"))) + \
         [os.path.join(metadata, ".log")]
 
     found = {}
-    saw_run_entry = False
+    saw_probe = False
     for path in files:
         if not os.path.isfile(path):
             continue
@@ -112,19 +138,20 @@ def _collect_our_errors(workspace):
                     continue
             except ValueError:
                 continue
-            saw_run_entry = True
-            if plugin != OUR_PLUGIN or severity != SEVERITY_ERROR:
+            if plugin != OUR_PLUGIN:
                 continue
             message = ""
             for follow in lines[index + 1:index + 3]:
                 if follow.startswith("!MESSAGE"):
                     message = follow[len("!MESSAGE"):]
                     break
+            if token in message:
+                saw_probe = True
+            if severity != SEVERITY_ERROR or token in message:
+                continue
             key = _normalize(message) or "(no message)"
             found[key] = found.get(key, 0) + 1
-    # A current entry proves the logs are live, not that EDT writes this server's logs to
-    # this workspace; the locator cannot establish that.
-    return found, saw_run_entry
+    return found, saw_probe
 
 
 @e2e_test(tool="_edt_log_ratchet", kind="read", last=True)
@@ -135,11 +162,15 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
             "EDT workspace not found: set EDT_MCP_EDT_WORKSPACE to the -data directory "
             "so the log ratchet can read <workspace>/.metadata/.log")
 
-    found, saw_run_entry = _collect_our_errors(workspace)
-    if not saw_run_entry:
+    token = _emit_log_probe()
+    found, saw_probe = _collect_our_errors(workspace, token)
+    if not saw_probe:
         raise E2ESkip(
-            "EDT workspace found at %s but its logs show no entries from this run "
-            "(.metadata/.log or .metadata/.bak_*.log)" % workspace)
+            "EDT workspace was located at %s but does not carry this server's own log output: "
+            "the run-unique probe sent through get_project_errors was not found in "
+            ".metadata/.log or .metadata/.bak_*.log. These logs belong to a different EDT "
+            "instance (or the plugin is not logging), so nothing about them can be certified."
+            % workspace)
     accepted = _load_baseline()
     new = {msg: count for msg, count in found.items() if msg not in accepted}
     if not new:
