@@ -139,11 +139,14 @@ public final class PlatformFailures
      * four words) is prefixed only when a terminal exception genuinely owns it. Text selected from a
      * status carries no wrapper provenance.
      *
-     * <p>{@link CoreException#getCause()} exposes the exception carried by its status. EDT aggregate
-     * statuses likewise synthesize their exception from failing children when they have no exception
-     * of their own. Any exception known to those statuses is therefore already represented on the
-     * {@code getCause()} chain. As a known limitation, a plain {@code MultiStatus} with no root
-     * exception contributes no cause clause, even when its children contain additional detail.
+     * <p>A status-carried failure still reaches this walk, by two separate routes.
+     * {@link ApplicationException}, the shape the update path actually throws, passes its status's
+     * exception to its own cause when built from an {@link IStatus}; {@link CoreException#getCause()}
+     * exposes the same edge for that shape. EDT aggregate statuses in turn synthesize their exception
+     * from failing children when they have none of their own, and the publishing path returns exactly
+     * such an aggregate. Any exception known to those statuses is therefore already represented on the
+     * {@code getCause()} chain. As a known limitation, a plain {@code MultiStatus} with no exception of
+     * its own contributes no cause clause, even when its children carry one.
      *
      * <p>This method returns only the diagnosis. A caller that displays both messages should compose
      * English prose such as {@code describe(failure) + " Caused by: " + rootCause(failure)}.
