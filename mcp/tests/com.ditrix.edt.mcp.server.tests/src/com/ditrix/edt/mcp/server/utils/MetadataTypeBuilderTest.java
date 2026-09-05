@@ -764,35 +764,91 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
-    public void testConcreteGenericNestedProducedTypeRefusalExplainsOwnerAddressing()
+    public void testAbstractRecalculationRecordSetIsAcceptedOnBothTargets()
     {
-        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
-        JsonObject item = json(
-            "{\"kind\":\"ColumnList\",\"ref\":\"Anything\"}").getAsJsonObject(); //$NON-NLS-1$
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            Type expected = McoreFactory.eINSTANCE.createType();
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = addKind("RecalculationRecordSet", //$NON-NLS-1$
+                providerKnowing("RecalculationRecordSet", expected), td, target); //$NON-NLS-1$
 
-        String error = MetadataTypeBuilder.addType(td, item, "ColumnList", null, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false,
-            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
-
-        assertEquals("Type kind 'ColumnList' is a produced type of a NESTED object; a nested object " //$NON-NLS-1$
-            + "is addressed through its owner, not by ref. Pass {kind:'ColumnList'} without ref to " //$NON-NLS-1$
-            + "use its abstract form.", error); //$NON-NLS-1$
-        assertTrue(td.getTypes().isEmpty());
+            assertNull(target.name(), error);
+            assertEquals(target.name(), 1, td.getTypes().size());
+            assertSame(target.name(), expected, td.getTypes().get(0));
+        }
     }
 
     @Test
-    public void testUnpublishedNestedProducedTypeReportsItsPrefix()
+    public void testStructuralNestedKindPrefixesAreNotKnownProducedTypeObjects()
     {
-        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String kind : new String[] {"ColumnList", "ModuleObject", "FieldList", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "PackageManager"}) //$NON-NLS-1$
+        {
+            MetadataTypeBuilder.ProducedTypeKind split =
+                MetadataTypeBuilder.splitProducedTypeKind(kind);
 
-        String error = addKind("ColumnList", providerKnowing("NothingElse", //$NON-NLS-1$ //$NON-NLS-2$
-            McoreFactory.eINSTANCE.createType()), td,
-            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+            assertNotNull(kind, split);
+            assertFalse(kind, split.hasKnownMetadataType());
+            assertFalse(kind, split.isNested());
+        }
+    }
 
-        assertEquals("Type kind 'ColumnList' uses produced-type suffix 'List', but prefix 'Column' " //$NON-NLS-1$
-            + "is not a known metadata type token. Replace it with a supported English or Russian " //$NON-NLS-1$
-            + "metadata type token, for example {kind:'DocumentList', ref:'Invoice'}.", error); //$NON-NLS-1$
-        assertTrue(td.getTypes().isEmpty());
+    @Test
+    public void testColumnListReportsUnknownPrefixWithAndWithoutRefOnBothTargets()
+    {
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            for (String itemJson : new String[] {"{\"kind\":\"ColumnList\"}", //$NON-NLS-1$
+                "{\"kind\":\"ColumnList\",\"ref\":\"X\"}"}) //$NON-NLS-1$
+            {
+                TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+                JsonObject item = json(itemJson).getAsJsonObject();
+                String error = MetadataTypeBuilder.addType(td, item, "ColumnList", //$NON-NLS-1$
+                    providerKnowing("NothingElse", McoreFactory.eINSTANCE.createType()), //$NON-NLS-1$
+                    MdClassFactory.eINSTANCE.createConfiguration(), false, target);
+
+                assertEquals(target.name() + ": " + itemJson, //$NON-NLS-1$
+                    "Type kind 'ColumnList' uses produced-type suffix 'List', but prefix 'Column' " //$NON-NLS-1$
+                        + "is not a known metadata type token. Replace it with a supported English " //$NON-NLS-1$
+                        + "or Russian metadata type token, for example {kind:'DocumentList', " //$NON-NLS-1$
+                        + "ref:'Invoice'}.", error); //$NON-NLS-1$
+                assertTrue(target.name(), td.getTypes().isEmpty());
+            }
+        }
+    }
+
+    @Test
+    public void testUnpublishedRecalculationProducedTypeUsesGenericUnknownKindMessage()
+    {
+        MetadataTypeBuilder.ProducedTypeKind split =
+            MetadataTypeBuilder.splitProducedTypeKind("RecalculationObject"); //$NON-NLS-1$
+        assertNotNull(split);
+        assertTrue(split.hasKnownMetadataType());
+        assertTrue(split.isNested());
+
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = addKind("RecalculationObject", providerKnowing("NothingElse", //$NON-NLS-1$ //$NON-NLS-2$
+                McoreFactory.eINSTANCE.createType()), td, target);
+
+            assertEquals(target.name(), "Unknown type kind 'RecalculationObject'. Use String / " //$NON-NLS-1$
+                + "Number / Boolean / Date / ValueStorage / UUID, ValueTable / ValueTree (in-memory " //$NON-NLS-1$
+                + "collections - a FORM attribute only), a DefinedType ({kind:'DefinedType', " //$NON-NLS-1$
+                + "ref:'Name'} or {kind:'DefinedType.Name'}), a produced type " //$NON-NLS-1$
+                + "({kind:'DocumentObject', ref:'Invoice'} or {kind:'ExchangePlanObject'}), or a " //$NON-NLS-1$
+                + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type " //$NON-NLS-1$
+                + "name also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., " //$NON-NLS-1$
+                + "English or Russian) - this one names no type this platform version knows.", error); //$NON-NLS-1$
+            assertTrue(target.name(), td.getTypes().isEmpty());
+        }
     }
 
     @Test

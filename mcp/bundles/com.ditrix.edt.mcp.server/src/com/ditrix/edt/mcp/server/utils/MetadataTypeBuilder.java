@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -148,6 +149,14 @@ public final class MetadataTypeBuilder
         new ProducedTypeSuffix("Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", "refType") }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     /**
+     * English nested-kind tokens that may prefix a produced type. The nested-kind catalogue
+     * describes FQN segments, not runtime objects, so a segment belongs here only when the platform
+     * declares runtime types for it. Recalculation is the only such nested kind today.
+     */
+    private static final Set<String> NESTED_PRODUCED_TYPE_KINDS =
+        Collections.singleton("Recalculation"); //$NON-NLS-1$
+
+    /**
      * The platform narrows event-subscription source candidates through
      * {@code EventSourceTypeInfoCategory}, whose membership is platform data not readable from the
      * checked-in sources. This suffix list is anchored in a census of {@code <types>} values under
@@ -181,7 +190,7 @@ public final class MetadataTypeBuilder
             this.nested = nested;
         }
 
-        /** Whether the prefix appears in either the top-level or nested metadata-token catalogue. */
+        /** Whether the prefix names a top-level or runtime-type-publishing nested metadata object. */
         boolean hasKnownMetadataType()
         {
             return englishMetadataType != null;
@@ -680,12 +689,12 @@ public final class MetadataTypeBuilder
      * {@link MetadataTypeUtils#toEnglishSingular(String)}; this is what keeps long tokens such as
      * {@code ChartOfCalculationTypesObject} intact instead of guessing from a local token table.
      *
-     * <p>When the kind ends in a family suffix but no prefix occurs in either the top-level or nested
-     * metadata-token catalogue, the returned item carries a {@code null}
-     * {@link ProducedTypeKind#englishMetadataType}. A non-null value may still identify a nested kind,
-     * which top-level lookup and object resolution cannot resolve; {@link ProducedTypeKind#isNested()}
-     * distinguishes it. A DefinedType is deliberately excluded because its existing TypeSet grammar
-     * is separate.</p>
+     * <p>When the kind ends in a family suffix but no prefix names either a top-level metadata object
+     * or a nested object that publishes runtime types, the returned item carries a {@code null}
+     * {@link ProducedTypeKind#englishMetadataType}. A non-null value may still identify such a nested
+     * object, which top-level lookup and object resolution cannot resolve;
+     * {@link ProducedTypeKind#isNested()} distinguishes it. A DefinedType is deliberately excluded
+     * because its existing TypeSet grammar is separate.</p>
      *
      * @param kind the requested type kind
      * @return the split, or {@code null} when the kind does not have this family shape
@@ -736,7 +745,8 @@ public final class MetadataTypeBuilder
             String prefix = candidate.substring(0, split);
             MetadataTypeUtils.NestedKindInfo nestedKind =
                 MetadataTypeUtils.resolveNestedKind(prefix);
-            if (nestedKind == null)
+            if (nestedKind == null
+                || !NESTED_PRODUCED_TYPE_KINDS.contains(nestedKind.getEnglish()))
             {
                 continue;
             }
@@ -1052,8 +1062,7 @@ public final class MetadataTypeBuilder
             return null;
         }
 
-        if (producedKind != null
-            && (!producedKind.hasKnownMetadataType() || producedKind.isNested()))
+        if (producedKind != null && !producedKind.hasKnownMetadataType())
         {
             return unknownProducedTypePrefix(kind, producedKind);
         }
