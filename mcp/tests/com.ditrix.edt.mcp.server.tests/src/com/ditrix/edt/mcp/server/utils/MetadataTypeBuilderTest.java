@@ -691,6 +691,58 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testInlineDefinedTypeNameEndingInAProducedSuffixStillRefusesRef()
+    {
+        String error = MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"DefinedType.PriceList\",\"ref\":\"DifferentType\"}]}")); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("Unknown member 'ref'")); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.splitProducedTypeKind("DefinedType.PriceList")); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.splitProducedTypeKind(
+            russianDefinedTypeToken() + ".PriceList")); //$NON-NLS-1$
+        assertProducedTypeSplit("CatalogList", "Catalog", "Catalog", "List", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "listType"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRecalculationProducedTypeSplitsThroughTheNestedKindCatalogue()
+    {
+        assertProducedTypeSplit("RecalculationRecordSet", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MetadataTypeBuilder.splitProducedTypeKind(
+            "RecalculationRecordSet").isNested()); //$NON-NLS-1$
+
+        String russianRecalculation =
+            "\u041F\u0435\u0440\u0435\u0440\u0430\u0441\u0447\u0435\u0442"; //$NON-NLS-1$
+        String russianRecordSet = "\u041D\u0430\u0431\u043E\u0440" //$NON-NLS-1$
+            + "\u0417\u0430\u043F\u0438\u0441\u0435\u0439"; //$NON-NLS-1$
+        String russianKind = russianRecalculation + russianRecordSet;
+        assertProducedTypeSplit(russianKind, russianRecalculation, "Recalculation", //$NON-NLS-1$
+            "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MetadataTypeBuilder.splitProducedTypeKind(russianKind).isNested());
+    }
+
+    @Test
+    public void testConcreteRecalculationProducedTypeIsRefusedByName()
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"RecalculationRecordSet\"," //$NON-NLS-1$
+            + "\"ref\":\"CalculationRegister.R.Recalculation.Rc\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        String error = MetadataTypeBuilder.addType(td, item, "RecalculationRecordSet", null, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("RecalculationRecordSet")); //$NON-NLS-1$
+        assertTrue(error, error.contains("NESTED")); //$NON-NLS-1$
+        assertTrue(error, error.contains(
+            "Pass {kind:'RecalculationRecordSet'} without ref")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
     public void testFormAttributeProducedTypeShapeAcceptsRef()
     {
         MetadataTypeBuilder.Result result = MetadataTypeBuilder.build(json(
@@ -1048,7 +1100,8 @@ public class MetadataTypeBuilderTest
     public void testEventSourceAcceptsAbstractProducedTypeThePlatformKnows()
     {
         for (String kind : new String[] {"ExchangePlanObject", "InformationRegisterRecordSet", //$NON-NLS-1$ //$NON-NLS-2$
-            "InformationRegisterRecordManager", "ConstantValueManager"}) //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegisterRecordManager", "ConstantValueManager", //$NON-NLS-1$ //$NON-NLS-2$
+            "RecalculationRecordSet"}) //$NON-NLS-1$
         {
             Type abstractType = McoreFactory.eINSTANCE.createType();
             TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();

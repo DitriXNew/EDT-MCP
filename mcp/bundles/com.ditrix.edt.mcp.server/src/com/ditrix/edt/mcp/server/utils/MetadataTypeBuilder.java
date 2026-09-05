@@ -166,18 +166,26 @@ public final class MetadataTypeBuilder
         final String englishMetadataType;
         final String producedSuffix;
         final String featureName;
+        private final boolean nested;
 
-        ProducedTypeKind(String prefix, String englishMetadataType, ProducedTypeSuffix suffix)
+        ProducedTypeKind(String prefix, String englishMetadataType, ProducedTypeSuffix suffix,
+            boolean nested)
         {
             this.prefix = prefix;
             this.englishMetadataType = englishMetadataType;
             this.producedSuffix = suffix.english;
             this.featureName = suffix.featureName;
+            this.nested = nested;
         }
 
         boolean hasKnownMetadataType()
         {
             return englishMetadataType != null;
+        }
+
+        boolean isNested()
+        {
+            return nested;
         }
     }
 
@@ -684,7 +692,8 @@ public final class MetadataTypeBuilder
         // extension-adopt hint, and it is the most-used kind in the tool: rerouting it through this
         // family would silently change the behaviour of the thing most callers depend on, to reach a
         // type that branch already builds. The family exists for what Ref cannot name.
-        if (isRefKind(candidate))
+        // No produced-type prefix contains a dot, but an inline DefinedType name may end in a suffix.
+        if (isRefKind(candidate) || isInlineDefinedTypeKind(candidate))
         {
             return null;
         }
@@ -700,7 +709,23 @@ public final class MetadataTypeBuilder
             ProducedTypeSuffix suffix = producedTypeSuffix(candidate.substring(split));
             if (suffix != null && !DEFINED_TYPE_KIND.equals(englishMetadataType))
             {
-                return new ProducedTypeKind(prefix, englishMetadataType, suffix);
+                return new ProducedTypeKind(prefix, englishMetadataType, suffix, false);
+            }
+        }
+
+        for (int split = candidate.length() - 1; split > 0; split--)
+        {
+            String prefix = candidate.substring(0, split);
+            MetadataTypeUtils.NestedKindInfo nestedKind =
+                MetadataTypeUtils.resolveNestedKind(prefix);
+            if (nestedKind == null)
+            {
+                continue;
+            }
+            ProducedTypeSuffix suffix = producedTypeSuffix(candidate.substring(split));
+            if (suffix != null)
+            {
+                return new ProducedTypeKind(prefix, nestedKind.getEnglish(), suffix, true);
             }
         }
 
@@ -716,7 +741,7 @@ public final class MetadataTypeBuilder
         {
             return null;
         }
-        return prefix.isEmpty() ? null : new ProducedTypeKind(prefix, null, suffix);
+        return prefix.isEmpty() ? null : new ProducedTypeKind(prefix, null, suffix, false);
     }
 
     private static ProducedTypeSuffix producedTypeSuffix(String candidate)
@@ -1053,6 +1078,15 @@ public final class MetadataTypeBuilder
         if (typeTarget != TypeTarget.EVENT_SOURCE && typeTarget != TypeTarget.FORM_ATTRIBUTE)
         {
             return producedTypeRefusal(kind);
+        }
+        if (producedKind.isNested())
+        {
+            String parentKind = "Recalculation".equals(producedKind.englishMetadataType) //$NON-NLS-1$
+                ? "its owning register" : "its owner"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "Type kind '" + kind + "' is a produced type of a NESTED object (" //$NON-NLS-1$ //$NON-NLS-2$
+                + producedKind.englishMetadataType + " lives inside " + parentKind //$NON-NLS-1$
+                + "), which cannot be addressed by ref. Pass {kind:'" + kind //$NON-NLS-1$
+                + "'} without ref to use its abstract form."; //$NON-NLS-1$
         }
         String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
         if (rawRef == null || rawRef.trim().isEmpty())
