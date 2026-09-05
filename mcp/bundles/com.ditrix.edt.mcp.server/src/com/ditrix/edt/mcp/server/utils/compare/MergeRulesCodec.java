@@ -2350,7 +2350,9 @@ public final class MergeRulesCodec
      * <ul>
      * <li>{@code &#x1;} in character data or in an attribute value parses under a {@code 1.1}
      * declaration and arrives in the model as U+0001, and the same reference under a {@code 1.0}
-     * declaration is refused - {@code Character reference "&#x1" is an invalid XML character};</li>
+     * declaration is refused - {@code Character reference "&#x1" is an invalid XML character} on
+     * one reader, {@code Illegal character entity: expansion character (code 0x1} on another; the
+     * refusal is the platform's, and so is its wording;</li>
      * <li>a LITERAL U+0001 is refused under BOTH versions, in content and in a comment alike, so a
      * restricted character can only ever enter through a character reference;</li>
      * <li>a declaration of {@code 1.2} never reaches this method - the reader refuses it itself
