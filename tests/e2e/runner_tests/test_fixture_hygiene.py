@@ -14,6 +14,7 @@ import importlib.util
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -29,7 +30,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(HARN
 _SEEDED_COMPONENT = re.compile(r"(?:^|/)e2e", re.IGNORECASE)
 
 
-def _committed_seeded_names():
+def _committed_seeded_names(root=REPO_ROOT, rels=None):
     """Tracked fixture lines that DECLARE an E2E-prefixed object name.
 
     The path scan below cannot see a seeded CHILD. EDT serializes an attribute, a dimension or a
@@ -42,9 +43,10 @@ def _committed_seeded_names():
     the string in cell text (a print template reads "E2E Print Template"), and flagging prose would
     make this gate cry wolf until someone switched it off.
     """
-    rels = sorted(HARNESS.FIXTURE_REL_BY_PROJECT.values())
+    if rels is None:
+        rels = sorted(HARNESS.FIXTURE_REL_BY_PROJECT.values())
     out = subprocess.run(["git", "grep", "-I", "-n", "-i", "-E", "--cached", "<name>E2E", "--"]
-                         + rels, cwd=REPO_ROOT,
+                         + list(rels), cwd=root,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # git grep exits 1 for "no matches", which is the healthy case; anything else is a real error
     # and must not be read as a clean fixture.
@@ -54,7 +56,7 @@ def _committed_seeded_names():
     return out.stdout.decode("utf-8", "replace").splitlines()
 
 
-def _tracked_fixture_paths():
+def _tracked_fixture_paths(root=REPO_ROOT, rels=None):
     """Every path git TRACKS under the fixture projects the harness itself knows about.
 
     Tracked, not on-disk. An UNTRACKED leftover is what the end-of-run fixture-clean verdict
@@ -62,8 +64,9 @@ def _tracked_fixture_paths():
     committed one. Reading the directories out of FIXTURE_REL_BY_PROJECT keeps this from drifting
     the day a fourth fixture project is added.
     """
-    rels = sorted(HARNESS.FIXTURE_REL_BY_PROJECT.values())
-    out = subprocess.run(["git", "ls-files", "--"] + rels, cwd=REPO_ROOT,
+    if rels is None:
+        rels = sorted(HARNESS.FIXTURE_REL_BY_PROJECT.values())
+    out = subprocess.run(["git", "ls-files", "--"] + list(rels), cwd=root,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     return out.stdout.decode("utf-8", "replace").splitlines()
 
@@ -115,6 +118,22 @@ class FixtureHygieneTest(unittest.TestCase):
                          "tests/TestConfiguration/src/Configuration/Configuration.mdo"):
             self.assertIsNone(_SEEDED_COMPONENT.search(innocent),
                               "a genuine fixture path must not be flagged: " + innocent)
+
+    def test_the_scanner_flags_a_leftover_injected_into_a_scratch_fixture(self):
+        rel = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            path = os.path.join(root, *rel.split("/"))
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w", encoding="utf-8") as fixture:
+                fixture.write("<name>E2EScratchLeftover</name>\n")
+            subprocess.run(["git", "add", "--", rel], cwd=root, check=True)
+
+            self.assertEqual([rel], _tracked_fixture_paths(root=root, rels=["src"]))
+            declared = _committed_seeded_names(root=root, rels=["src"])
+
+        self.assertTrue(any(rel in line and "E2EScratchLeftover" in line
+                            for line in declared), declared)
 
     def test_the_scanned_directories_come_from_the_harness(self):
         """A fixture project the harness resets but this guard never scans is a blind spot."""

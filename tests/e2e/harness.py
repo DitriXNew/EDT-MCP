@@ -117,6 +117,22 @@ BASELINE_PROBE_FQNS = [
     if fqn.strip()
 ]
 
+NON_BASE_PROBE_FQNS = {
+    TESTS_PROJECT: [
+        fqn.strip() for fqn in os.environ.get(
+            "E2E_TESTS_BASELINE_PROBE_FQN",
+            "CommonModule.Calc,Catalog.Catalog.Form.ItemForm").split(",")
+        if fqn.strip()
+    ],
+    EXT_OBJECTS_PROJECT: [
+        fqn.strip() for fqn in os.environ.get(
+            "E2E_EXTERNAL_OBJECTS_BASELINE_PROBE_FQN",
+            "ExternalDataProcessor.ExtProc,"
+            "ExternalDataProcessor.ExtProc.Form.MainForm").split(",")
+        if fqn.strip()
+    ],
+}
+
 # Kept as the single-value alias some tests/messages still read.
 BASELINE_PROBE_FQN = BASELINE_PROBE_FQNS[0]
 
@@ -597,7 +613,7 @@ def _call_moves_the_fixture_model(tool, args, structured):
         return args.get("recordBuildTime", True) is not False
     return True
 _CALLED_TOOLS = set()
-# Whether a CONFIRMED call to a CASCADE_MUTATION_TOOLS member was issued during the current test.
+# Whether a confirmed CASCADE_MUTATION_TOOLS call supplied mutation evidence in the current test.
 _CASCADE_CONFIRMED_CALLED = False
 # Fixture projects named by mutating calls during the current test. This is recorded on the
 # attempt because a request that dies on the wire may already have changed the server-side model.
@@ -611,10 +627,14 @@ _EVIDENCED_MUTATION_PROJECTS = set()
 # call's still-unknown evidence. Unlike the per-test outcome set above, these survive
 # begin_test_calls() until either that call resolves or a verified model reset retires them.
 _UNRESOLVED_MUTATION_PROJECTS = {}
-# Inventory baselines are captured independently because each fixture has its own model. The
+# Confirmed cascade calls with no parsed outcome survive test boundaries because an unread
+# outcome is a fact about the model, not about the test that issued it.
+_UNRESOLVED_CASCADE_CALLS = 0
+# Model baselines are captured independently because each fixture has its own model. The
 # single-value name remains the base project's alias: the base-only shortcut and detail-backed
 # verification deliberately continue to read it exactly as before.
 _BASELINE_INVENTORY_BY_PROJECT = {}
+_BASELINE_DETAILS_BY_PROJECT = {}
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
 # ExternalObjects is optional, so final_cleanup cannot require its model refresh to succeed. Its
@@ -684,10 +704,10 @@ def _candidate_mutation_targets(tool, args):
 
 def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
-    global _MUTATIONS_UNRESOLVED, _CASCADE_CONFIRMED_CALLED
+    global _MUTATIONS_UNRESOLVED, _UNRESOLVED_CASCADE_CALLS
     _CALLED_TOOLS.add(tool)
     if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
-        _CASCADE_CONFIRMED_CALLED = True
+        _UNRESOLVED_CASCADE_CALLS += 1
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
             and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS):
         candidate_projects = _candidate_mutation_targets(tool, args)
@@ -706,7 +726,8 @@ def _record_outcome(tool, args, is_error, structured):
     ToolResult emits mutationCommitted for an observed commit and mutationOutcomeUnknown for an
     entered opaque/in-flight mutation, so wording changes cannot accidentally re-arm the shortcut.
     """
-    global _MUTATIONS_UNRESOLVED, _MUTATION_CONFIRMED
+    global _MUTATIONS_UNRESOLVED, _UNRESOLVED_CASCADE_CALLS
+    global _MUTATION_CONFIRMED, _CASCADE_CONFIRMED_CALLED
     written_fixture_projects = set()
     try:
         written_projects = structured.get("writtenProjects") \
@@ -721,6 +742,8 @@ def _record_outcome(tool, args, is_error, structured):
     except Exception:
         # A malformed or exotic structured response must not escape the call path.
         pass
+    if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
+        _UNRESOLVED_CASCADE_CALLS = max(0, _UNRESOLVED_CASCADE_CALLS - 1)
     if tool not in MODEL_MUTATION_TOOLS:
         return
     if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
@@ -740,6 +763,8 @@ def _record_outcome(tool, args, is_error, structured):
                           and _call_moves_the_fixture_model(tool, args, structured))
     if mutation_evidenced:
         _MUTATION_CONFIRMED = True
+        if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
+            _CASCADE_CONFIRMED_CALLED = True
         # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
         # stays conservative (any success forfeits it), while accusing a test of a mis-declared
         # kind has to be right about THIS call actually having moved the fixture's model.
@@ -760,8 +785,9 @@ def _mark_model_synced():
     That proof (reset_model verifying _baseline_mismatch) is what retires an
     unknown outcome: whatever the abandoned request may or may not have committed, the model has
     since been re-imported from the clean disk and checked. Nothing else may clear it."""
-    global _MUTATIONS_UNRESOLVED
+    global _MUTATIONS_UNRESOLVED, _UNRESOLVED_CASCADE_CALLS
     _MUTATIONS_UNRESOLVED = 0
+    _UNRESOLVED_CASCADE_CALLS = 0
     _UNRESOLVED_MUTATION_PROJECTS.clear()
 
 
@@ -797,9 +823,8 @@ def evidenced_mutation_fixture_projects():
 
 
 def mutation_could_have_cascaded():
-    """Whether this test issued a confirmed call to a writer whose targets the response does not
-    name."""
-    return _CASCADE_CONFIRMED_CALLED
+    """Whether a confirmed cascade call was evidenced or still has an unread outcome."""
+    return _CASCADE_CONFIRMED_CALLED or _UNRESOLVED_CASCADE_CALLS > 0
 
 
 def external_objects_model_synced():
@@ -849,8 +874,8 @@ def _top_object_inventory(project=PROJECT):
     return "\n".join(sorted(line.strip() for line in r.text.splitlines() if line.strip()))
 
 
-def _probe_details():
-    """The DETAIL text of BASELINE_PROBE_FQNS, or None when it cannot be read AS EVIDENCE.
+def _probe_details(project=PROJECT, fqns=None):
+    """The DETAIL text of the requested probe FQNs, or None when it cannot be read AS EVIDENCE.
 
     None means "no evidence", and every caller treats it as such. The distinction that matters is
     that an EMPTY body is also no evidence: an unexplained blank answer is not a fingerprint, and
@@ -861,9 +886,11 @@ def _probe_details():
     A TIMEOUT propagates, like every other probe's: it arms the global latch and means the request
     may still be running server-side, so absorbing it here would let the run continue and pin the
     latched failure on the next innocent test."""
+    if fqns is None:
+        fqns = BASELINE_PROBE_FQNS
     try:
         r = call("get_metadata_details",
-                 {"projectName": PROJECT, "objectFqns": list(BASELINE_PROBE_FQNS)})
+                 {"projectName": project, "objectFqns": list(fqns)})
     except E2ECallTimeout:
         raise
     except Exception:
@@ -904,10 +931,13 @@ def snapshot_model_baseline():
     @return (inventory_captured, details_captured) so the caller can say which brace it lost."""
     global _BASELINE_INVENTORY, _BASELINE_DETAILS
     _BASELINE_INVENTORY_BY_PROJECT.clear()
+    _BASELINE_DETAILS_BY_PROJECT.clear()
     _BASELINE_INVENTORY = _top_object_inventory()
     if _BASELINE_INVENTORY is not None:
         _BASELINE_INVENTORY_BY_PROJECT[PROJECT] = _BASELINE_INVENTORY
     _BASELINE_DETAILS = _probe_details()
+    if _BASELINE_DETAILS is not None:
+        _BASELINE_DETAILS_BY_PROJECT[PROJECT] = _BASELINE_DETAILS
     for project in (TESTS_PROJECT, EXT_OBJECTS_PROJECT):
         if project == EXT_OBJECTS_PROJECT and not _EXT_OBJECTS_MODEL_SYNCED:
             # Its disk was still reverted, but an absent, unloaded or otherwise uncleanable
@@ -929,6 +959,9 @@ def snapshot_model_baseline():
             continue
         if inventory is not None:
             _BASELINE_INVENTORY_BY_PROJECT[project] = inventory
+        details = _probe_details(project, NON_BASE_PROBE_FQNS[project])
+        if details is not None:
+            _BASELINE_DETAILS_BY_PROJECT[project] = details
     return (_BASELINE_INVENTORY is not None, _BASELINE_DETAILS is not None)
 
 
@@ -1025,7 +1058,7 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
-def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
+def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
     """True when every EDT project in the list_projects table reads 'ready'.
 
     Two kinds of row are skipped, because neither can ever become ready and neither can serve a
@@ -1048,7 +1081,8 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
     Falls back to a conservative substring scan when no row can be parsed (an output-format
     change must not degrade to a permanent "ready"). When `not_ready` is supplied,
     fill it with the blocking (project name, state) pairs from this same parse so timeout callers
-    can report which project prevented progress without parsing the table again.
+    can report which project prevented progress without parsing the table again. Project names
+    explicitly supplied in `ignore` are skipped before their state is checked.
     """
     rows = []
     for line in list_projects_markdown.splitlines():
@@ -1067,6 +1101,8 @@ def _all_edt_projects_ready(list_projects_markdown, not_ready=None):
         return not blocking_states
     blocking_projects = []
     for cells in rows:
+        if cells[0] in ignore:
+            continue
         state, is_open = cells[1].strip().lower(), cells[3].strip().lower()
         edt_project = cells[4].strip().lower()
         if edt_project == "no":
@@ -1085,7 +1121,7 @@ def _projects_not_ready_message(timeout, projects):
     return "projects not ready after %ds: %s" % (timeout, states or "states unavailable")
 
 
-def wait_for_project_ready(timeout=None, failure_details=None):
+def wait_for_project_ready(timeout=None, failure_details=None, ignore_projects=()):
     """Wait until every EDT project is fully indexed (state 'ready') — i.e. none is still
     'building' its derived data AND none is 'not_available' (mid (re)load). Non-EDT projects
     are ignored (see _all_edt_projects_ready): a standalone server's "Servers" container is
@@ -1109,7 +1145,7 @@ def wait_for_project_ready(timeout=None, failure_details=None):
     If `failure_details` is a list, a timeout replaces its contents with one diagnostic naming
     the last parsed blocking projects and their states. The per-tool ProjectStateChecker guard
     is the real safety net — this only removes the test-timing flake so a normal run starts on a
-    fully-indexed workspace.
+    fully-indexed workspace. Names in `ignore_projects` do not participate in this wait.
     """
     if timeout is None:
         timeout = int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180"))
@@ -1129,7 +1165,8 @@ def wait_for_project_ready(timeout=None, failure_details=None):
             text = call("list_projects", {}).text or ""
             if text:
                 not_ready = []
-                if _all_edt_projects_ready(text, not_ready=not_ready):
+                if _all_edt_projects_ready(
+                        text, not_ready=not_ready, ignore=ignore_projects):
                     return True
                 if not_ready:
                     last_not_ready = not_ready
@@ -1519,7 +1556,7 @@ def _baseline_mismatch():
     return None
 
 
-def _revert_and_clean(project, revert):
+def _revert_and_clean(project, revert, ignore_projects=()):
     """One revert + clean_project cycle for `project`, with SEPARATE budgets for its two failures.
 
     Settling and cleaning fail for different reasons and are fixed differently (see
@@ -1547,7 +1584,8 @@ def _revert_and_clean(project, revert):
         # verification the caller does afterwards is what finally decides.
         failure_details = []
         if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                      failure_details=failure_details):
+                                      failure_details=failure_details,
+                                      ignore_projects=ignore_projects):
             settle_failures += 1
             last_settle_failure = failure_details[0]
             continue
@@ -1675,9 +1713,9 @@ def _disk_mismatch(rel):
 def _non_base_mismatch(project, rel):
     """Why a non-base fixture is not back on its captured disk-and-model baseline.
 
-    The DETAIL half of the base check cannot be reused: BASELINE_PROBE_FQNS are objects of the
-    base fixture and do not exist in the other fixtures. Their INVENTORY is still direct evidence
-    that an in-memory create, delete or rename did not survive clean_project.
+    Each fixture has its own detail probes. The INVENTORY is direct evidence that an in-memory
+    create, delete or rename did not survive clean_project; the DETAIL catches changes inside an
+    existing object.
 
     When no inventory baseline was readable before the run, only the disk check remains. That is
     deliberately weaker: there is no captured in-memory state against which to compare the model.
@@ -1696,6 +1734,15 @@ def _non_base_mismatch(project, rel):
         return "the top-object inventory for %s could not be read" % project
     if inventory != baseline:
         return _inventory_difference_against(inventory, baseline)
+    detail_baseline = _BASELINE_DETAILS_BY_PROJECT.get(project)
+    if detail_baseline is None:
+        return None
+    # This is one extra get_metadata_details call per non-base reset to verify nested state.
+    details = _probe_details(project, NON_BASE_PROBE_FQNS[project])
+    if details is None:
+        return "the detail probes for %s could not be read as evidence" % project
+    if details != detail_baseline:
+        return "the detail probes for %s no longer match the baseline" % project
     return None
 
 
@@ -1796,7 +1843,8 @@ def final_cleanup():
     reset_all_fixtures()
     for proj in (PROJECT, TESTS_PROJECT):
         cleaned, clean_attempts, settle_failures, settle_failure = \
-            _revert_and_clean(proj, reset_all_fixtures)
+            _revert_and_clean(
+                proj, reset_all_fixtures, ignore_projects={EXT_OBJECTS_PROJECT})
         if not cleaned:
             raise E2EModelResetFailed(
                 "%s for project %r, so its in-memory model may still carry an unsynchronised "
@@ -1804,7 +1852,8 @@ def final_cleanup():
                 % (_clean_failure_cause(clean_attempts, settle_failures, settle_failure), proj))
     failure_details = []
     if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                  failure_details=failure_details):
+                                  failure_details=failure_details,
+                                  ignore_projects={EXT_OBJECTS_PROJECT}):
         raise E2EModelResetFailed(
             "clean_project succeeded for every project, but %s, so the model is not guaranteed "
             "to be back in sync." % failure_details[0])
@@ -1835,6 +1884,9 @@ def final_cleanup():
         # that the server may be unreachable.
         raise
     except Exception as e:
+        # A latched optional failure must surface before any later call inherits its abort.
+        if calls_aborted():
+            raise
         external_skip_reason = str(e) or type(e).__name__
     if not _EXT_OBJECTS_MODEL_SYNCED:
         print("!! optional project %r model synchronization skipped: %s"
