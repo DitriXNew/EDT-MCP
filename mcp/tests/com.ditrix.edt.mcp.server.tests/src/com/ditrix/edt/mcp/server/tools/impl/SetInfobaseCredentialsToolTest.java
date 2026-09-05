@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -20,6 +21,7 @@ import static org.mockito.Mockito.when;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -29,6 +31,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -36,6 +39,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.junit.Test;
 
@@ -60,6 +64,52 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
  */
 public class SetInfobaseCredentialsToolTest
 {
+    /** Reflective baseline-safe access to the new launch-target resolution seam. */
+    private static Object resolveLaunchTarget(ILaunchConfiguration config,
+            BiFunction<ILaunchConfiguration, String, String> applicationIdResolver)
+    {
+        try
+        {
+            Method method = SetInfobaseCredentialsTool.class.getDeclaredMethod(
+                "resolveLaunchConfigTarget", ILaunchConfiguration.class, BiFunction.class); //$NON-NLS-1$
+            method.setAccessible(true);
+            return method.invoke(null, config, applicationIdResolver);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError("the launch-target resolution seam is missing or unusable", e); //$NON-NLS-1$
+        }
+    }
+
+    /** Reads one no-argument accessor from the target-resolution result. */
+    private static Object resolutionValue(Object resolution, String accessor)
+    {
+        try
+        {
+            Method method = resolution.getClass().getDeclaredMethod(accessor);
+            method.setAccessible(true);
+            return method.invoke(resolution);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError("target-resolution accessor is missing: " + accessor, e); //$NON-NLS-1$
+        }
+    }
+
+    /** Runtime-client config with exactly the two target attributes under test. */
+    private static ILaunchConfiguration runtimeConfig(String name, String project,
+            String applicationId) throws CoreException
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        ILaunchConfigurationType type = mock(ILaunchConfigurationType.class);
+        when(config.getName()).thenReturn(name);
+        when(config.getType()).thenReturn(type);
+        when(type.getIdentifier()).thenReturn(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")).thenReturn(project); //$NON-NLS-1$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")).thenReturn(applicationId); //$NON-NLS-1$
+        return config;
+    }
+
     @Test
     public void testName()
     {
@@ -192,6 +242,121 @@ public class SetInfobaseCredentialsToolTest
         assertNotNull(result);
         assertTrue("missing applicationId must produce an error", //$NON-NLS-1$
             result.contains("applicationId is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingProjectBindingKeepsRebindRecommendation() throws CoreException
+    {
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "", "app-b"); //$NON-NLS-1$ //$NON-NLS-2$
+        Object resolution = resolveLaunchTarget(config, (cfg, project) ->
+        {
+            fail("application resolution must not run without a project"); //$NON-NLS-1$
+            return null;
+        });
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertEquals("{\"success\":false,\"error\":\"Launch configuration '" + configName //$NON-NLS-1$
+            + "' is missing ATTR_PROJECT_NAME (read project='', applicationId='app-b') — cannot " //$NON-NLS-1$
+            + "derive the target. Bind it to a project in EDT, or pass projectName + applicationId " //$NON-NLS-1$
+            + "explicitly.\"}", error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnreadableProjectBindingIsRefusedWithoutRebindRecommendation() throws CoreException
+    {
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "B", "app-other"); //$NON-NLS-1$ //$NON-NLS-2$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")) //$NON-NLS-1$
+            .thenThrow(new CoreException(new Status(IStatus.ERROR,
+                "com.ditrix.edt.mcp.server.tests", "attribute store is unreadable"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Object resolution = resolveLaunchTarget(config, (cfg, project) -> "app-wrong"); //$NON-NLS-1$
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertEquals("{\"success\":false,\"error\":\"The project binding could not be read from " //$NON-NLS-1$
+            + "launch configuration '" + configName //$NON-NLS-1$
+            + "' — refusing to derive a credential target. " //$NON-NLS-1$
+            + "Fix the configuration, or pass projectName + applicationId explicitly.\"}", error); //$NON-NLS-1$
+        assertFalse("an unreadable binding must not be reported as missing", //$NON-NLS-1$
+            error.contains("is missing ATTR_PROJECT_NAME")); //$NON-NLS-1$
+        assertFalse("an unreadable binding must not recommend rebinding it", //$NON-NLS-1$
+            error.contains("Bind it to a project in EDT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLaunchTargetNamesOnlyTheMissingApplicationIdAttribute() throws CoreException
+    {
+        ILaunchConfiguration config = runtimeConfig("B Thin Client", "B", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Object resolution = resolveLaunchTarget(config, (cfg, project) -> null);
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertTrue(error.contains("ATTR_APPLICATION_ID")); //$NON-NLS-1$
+        assertFalse(error.contains("missing ATTR_PROJECT_NAME")); //$NON-NLS-1$
+        assertTrue(error.contains("project='B'")); //$NON-NLS-1$
+        assertTrue(error.contains("applicationId=''")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSyntheticDerivedApplicationIdIsStillRefused() throws CoreException
+    {
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "B", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        Object resolution = resolveLaunchTarget(config,
+            (cfg, project) -> LaunchConfigUtils.LAUNCH_APP_ID_PREFIX + configName);
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertNotNull("a debug-tracking id must not be passed to IApplicationManager", error); //$NON-NLS-1$
+        assertTrue(error.contains("could not derive a project-default application")); //$NON-NLS-1$
+        assertTrue(error.contains("launch:" + configName)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testApplicationIdIsDerivedAndReportedWhenOnlyProjectIsPersisted() throws Exception
+    {
+        ILaunchConfiguration config = runtimeConfig("B Thin Client", "B", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Object resolution = resolveLaunchTarget(config, (cfg, project) -> "app-derived"); //$NON-NLS-1$
+
+        assertNull(resolutionValue(resolution, "error")); //$NON-NLS-1$
+        assertEquals("B", resolutionValue(resolution, "projectName")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("app-derived", resolutionValue(resolution, "applicationId")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, resolutionValue(resolution, "derivedApplicationId")); //$NON-NLS-1$
+
+        Method buildSuccess = SetInfobaseCredentialsTool.class.getDeclaredMethod("buildSuccess", //$NON-NLS-1$
+            String.class, String.class, boolean.class, String.class, String.class,
+            boolean.class, InfobaseAccess.class, String.class, String.class);
+        buildSuccess.setAccessible(true);
+        String success = (String)buildSuccess.invoke(null, "B", "app-derived", true, //$NON-NLS-1$ //$NON-NLS-2$
+            "Infobase B", "Admin", true, InfobaseAccess.INFOBASE, //$NON-NLS-1$ //$NON-NLS-2$
+            "B Thin Client", null); //$NON-NLS-1$
+        assertTrue("the caller must see exactly which application the tool derived", //$NON-NLS-1$
+            success.contains("project-default application 'app-derived' was derived for project 'B'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnreadableApplicationBindingIsRefusedWithoutDerivation() throws CoreException
+    {
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "B", "app-other"); //$NON-NLS-1$ //$NON-NLS-2$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")) //$NON-NLS-1$
+            .thenThrow(new CoreException(new Status(IStatus.ERROR,
+                "com.ditrix.edt.mcp.server.tests", "attribute store is unreadable"))); //$NON-NLS-1$ //$NON-NLS-2$
+        AtomicBoolean derived = new AtomicBoolean();
+
+        Object resolution = resolveLaunchTarget(config, (cfg, project) ->
+        {
+            derived.set(true);
+            return "app-wrong"; //$NON-NLS-1$
+        });
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertFalse("an unreadable binding must never be treated as an absent one", derived.get()); //$NON-NLS-1$
+        assertNotNull("the credential target must be refused before any write", error); //$NON-NLS-1$
+        assertTrue(error.contains("binding could not be read")); //$NON-NLS-1$
+        assertTrue(error.contains(configName));
+        assertTrue(error.contains("pass projectName + applicationId explicitly")); //$NON-NLS-1$
+        assertNull("a refused resolution exposes no configuration to the client writer", //$NON-NLS-1$
+            resolutionValue(resolution, "config")); //$NON-NLS-1$
     }
 
     // ==================== Pure storeOutcome seam (no live EDT, no jobs framework) ====================

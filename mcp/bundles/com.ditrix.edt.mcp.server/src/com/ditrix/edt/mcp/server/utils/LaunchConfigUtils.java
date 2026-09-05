@@ -64,6 +64,10 @@ public final class LaunchConfigUtils
     /** Attach to a locally spawned debug server. */
     public static final String TYPE_LOCAL_RUNTIME = "com._1c.g5.v8.dt.debug.core.LocalRuntime"; //$NON-NLS-1$
 
+    /** EDT standalone-server launch configuration type id. */
+    public static final String STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.launchConfigurationType"; //$NON-NLS-1$
+
     /** All debug-launch config types understood by this plugin. */
     public static final List<String> ALL_DEBUG_CONFIG_TYPE_IDS = Collections.unmodifiableList(
         Arrays.asList(LAUNCH_CONFIG_TYPE_ID, TYPE_REMOTE_RUNTIME, TYPE_LOCAL_RUNTIME));
@@ -389,25 +393,54 @@ public final class LaunchConfigUtils
         }
         for (String typeId : ALL_DEBUG_CONFIG_TYPE_IDS)
         {
-            ILaunchConfigurationType type = launchManager.getLaunchConfigurationType(typeId);
-            if (type == null)
+            ILaunchConfiguration config = findLaunchConfigByTypeAndName(launchManager, typeId, name);
+            if (config != null)
             {
-                continue;
+                return config;
             }
-            try
+        }
+        return null;
+    }
+
+    /**
+     * Searches one exact launch-configuration type for an exact configuration name.
+     *
+     * <p>This is deliberately separate from {@link #ALL_DEBUG_CONFIG_TYPE_IDS}: callers that only
+     * support runtime-client/Attach configurations keep their existing search domain, while a
+     * caller that needs to diagnose another known EDT type can look it up without hand-rolling the
+     * Eclipse launch-manager traversal.
+     *
+     * @param launchManager Eclipse launch manager (must not be {@code null})
+     * @param typeId exact launch-configuration type id
+     * @param name exact launch-configuration name
+     * @return the matching configuration, or {@code null}
+     */
+    public static ILaunchConfiguration findLaunchConfigByTypeAndName(ILaunchManager launchManager,
+            String typeId, String name)
+    {
+        if (launchManager == null || typeId == null || typeId.isEmpty()
+            || name == null || name.isEmpty())
+        {
+            return null;
+        }
+        ILaunchConfigurationType type = launchManager.getLaunchConfigurationType(typeId);
+        if (type == null)
+        {
+            return null;
+        }
+        try
+        {
+            for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(type))
             {
-                for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(type))
+                if (name.equals(config.getName()))
                 {
-                    if (name.equals(config.getName()))
-                    {
-                        return config;
-                    }
+                    return config;
                 }
             }
-            catch (CoreException e)
-            {
-                Activator.logError("Error searching launch configurations of type " + typeId, e); //$NON-NLS-1$
-            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error searching launch configurations of type " + typeId, e); //$NON-NLS-1$
         }
         return null;
     }

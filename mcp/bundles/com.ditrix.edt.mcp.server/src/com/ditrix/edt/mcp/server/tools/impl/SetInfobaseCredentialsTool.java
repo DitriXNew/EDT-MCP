@@ -11,8 +11,10 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
@@ -22,6 +24,7 @@ import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
 
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -30,6 +33,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
@@ -201,6 +205,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         // Stays null for a projectName + applicationId target: there is then no launch
         // configuration in play, which is an ANSWER configureClient returns — not a skipped step.
         ILaunchConfiguration clientConfig = null;
+        boolean derivedApplicationId = false;
         if (hasName)
         {
             // Resolve the project + applicationId from the launch configuration when a name was given.
@@ -212,6 +217,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             projectName = resolved.projectName();
             applicationId = resolved.applicationId();
             clientConfig = resolved.config();
+            derivedApplicationId = resolved.derivedApplicationId();
         }
         else
         {
@@ -229,7 +235,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
 
         return store(projectName, applicationId, user, password, access,
-            hasName ? configName : null, clientConfig);
+            hasName ? configName : null, clientConfig, derivedApplicationId);
     }
 
     /**
@@ -339,14 +345,105 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
                 + "' is not a runtime-client config — set_infobase_credentials requires one.").toJson()); //$NON-NLS-1$
         }
-        String cfgProject = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-        String cfgAppId = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
-        if (cfgProject.isEmpty() || cfgAppId.isEmpty())
+        return resolveLaunchConfigTarget(cfg, LaunchLifecycleUtils::resolveDelegateApplicationId);
+    }
+
+    /**
+     * Resolves the two target attributes of a runtime-client configuration, deriving the
+     * application exactly as EDT's launch delegate does when only the project was persisted.
+     *
+     * <p>The resolver is an argument solely to keep this decision headless-testable. Production
+     * passes {@link LaunchLifecycleUtils#resolveDelegateApplicationId(ILaunchConfiguration, String)};
+     * no target-resolution logic is duplicated here.
+     *
+     * @param cfg the configuration to inspect
+     * @param applicationIdResolver the existing EDT-delegate application resolver
+     * @return a resolved target or a truthful refusal naming the exact missing attribute
+     */
+    static TargetResolution resolveLaunchConfigTarget(ILaunchConfiguration cfg,
+            BiFunction<ILaunchConfiguration, String, String> applicationIdResolver)
+    {
+        String cfgProject;
+        try
+        {
+            cfgProject = cfg.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+        }
+        catch (CoreException e)
+        {
+            return TargetResolution.error(ToolResult.error("The project binding could not be " //$NON-NLS-1$
+                + "read from launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' — refusing to derive a credential target. Fix the configuration, or pass " //$NON-NLS-1$
+                + "projectName + applicationId explicitly.").toJson()); //$NON-NLS-1$
+        }
+        String cfgAppId;
+        try
+        {
+            // This path selects where a SECRET is written. LaunchConfigUtils.readAttribute is
+            // intentionally lenient and conflates a failed read with an absent attribute, so use
+            // the platform accessor directly here and preserve that distinction.
+            cfgAppId = cfg.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        }
+        catch (CoreException e)
+        {
+            return TargetResolution.error(ToolResult.error("The application binding could not be " //$NON-NLS-1$
+                + "read from launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' — refusing to derive a credential target. Fix the configuration, or pass " //$NON-NLS-1$
+                + "projectName + applicationId explicitly.").toJson()); //$NON-NLS-1$
+        }
+        if (cfgProject.isEmpty())
         {
             return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
-                + "' has no project or applicationId attribute — cannot derive the target.").toJson()); //$NON-NLS-1$
+                + "' is missing ATTR_PROJECT_NAME (read project='', applicationId='" + cfgAppId //$NON-NLS-1$
+                + "') — cannot derive the target. Bind it to a project in EDT, or pass " //$NON-NLS-1$
+                + "projectName + applicationId explicitly.").toJson()); //$NON-NLS-1$
         }
-        return TargetResolution.resolved(cfgProject, cfgAppId, cfg);
+        if (!cfgAppId.isEmpty())
+        {
+            return TargetResolution.resolved(cfgProject, cfgAppId, cfg, false);
+        }
+        String derived = null;
+        try
+        {
+            derived = applicationIdResolver.apply(cfg, cfgProject);
+        }
+        catch (Exception e) // NOSONAR resolution failure becomes the refusal below
+        {
+            // The resolver already owns platform access. Do not replace its decision with a
+            // hand-rolled fallback, and do not let an unchecked platform failure escape the tool.
+            // But do not swallow it in SILENCE either: this whole issue (#545) is about a caller
+            // being told one thing while the log says another, and a bare catch here would leave a
+            // platform API change looking exactly like a configuration that has no application -
+            // with nothing anywhere to tell the two apart. WARNING, not ERROR: the caller's own
+            // answer below is a legitimate refusal, not a server fault.
+            Activator.logWarning("Could not derive the application id for launch configuration '" //$NON-NLS-1$
+                + cfg.getName() + "' of project '" + cfgProject + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                + e.getClass().getName() + ": " + e.getMessage()); //$NON-NLS-1$
+        }
+        if (!isApplicationManagerId(derived))
+        {
+            String returned = derived == null || derived.isEmpty()
+                // Name what the id IS, not who produced it: EDT answers a synthetic
+                // "launch:<config name>" for a configuration that carries no application, and no
+                // application manager resolves that. Reporting it as a target would hand the caller
+                // an id that fails one call later - the exact shape of failure this issue is about.
+                ? "" : " EDT derived only the placeholder id '" + derived //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', which names no application."; //$NON-NLS-1$
+            return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' is missing ATTR_APPLICATION_ID (read project='" + cfgProject //$NON-NLS-1$
+                + "', applicationId=''); EDT could not derive a project-default application " //$NON-NLS-1$
+                + "from that project." + returned + " Cannot derive the target. Bind the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "configuration to an application in EDT, or pass projectName + applicationId " //$NON-NLS-1$
+                + "explicitly.").toJson()); //$NON-NLS-1$
+        }
+        return TargetResolution.resolved(cfgProject, derived, cfg, true);
+    }
+
+    /** Whether a derived id can be handed to {@code IApplicationManager.getApplication}. */
+    private static boolean isApplicationManagerId(String applicationId)
+    {
+        return applicationId != null && !applicationId.isEmpty()
+            && !applicationId.startsWith(LaunchConfigUtils.LAUNCH_APP_ID_PREFIX)
+            && !applicationId.startsWith(LaunchConfigUtils.ATTACH_APP_ID_PREFIX);
     }
 
     /**
@@ -360,19 +457,24 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         private final String error;
         /** The resolved configuration itself - the CLIENT's credentials are written onto it. */
         private final ILaunchConfiguration config;
+        /** Whether EDT's project-default application supplied the id. */
+        private final boolean derivedApplicationId;
 
         private TargetResolution(String projectName, String applicationId, String error,
-            ILaunchConfiguration config)
+            ILaunchConfiguration config, boolean derivedApplicationId)
         {
             this.projectName = projectName;
             this.applicationId = applicationId;
             this.error = error;
             this.config = config;
+            this.derivedApplicationId = derivedApplicationId;
         }
 
-        static TargetResolution resolved(String projectName, String applicationId, ILaunchConfiguration config)
+        static TargetResolution resolved(String projectName, String applicationId,
+                ILaunchConfiguration config, boolean derivedApplicationId)
         {
-            return new TargetResolution(projectName, applicationId, null, config);
+            return new TargetResolution(projectName, applicationId, null, config,
+                derivedApplicationId);
         }
 
         ILaunchConfiguration config()
@@ -382,7 +484,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
 
         static TargetResolution error(String error)
         {
-            return new TargetResolution(null, null, error, null);
+            return new TargetResolution(null, null, error, null, false);
         }
 
         String projectName()
@@ -399,10 +501,16 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         {
             return error;
         }
+
+        boolean derivedApplicationId()
+        {
+            return derivedApplicationId;
+        }
     }
 
     private String store(String projectName, String applicationId, String user, String password,
-            String access, String clientConfigName, ILaunchConfiguration clientConfig)
+            String access, String clientConfigName, ILaunchConfiguration clientConfig,
+            boolean derivedApplicationId)
     {
         // Prelude on the calling thread: resolving the IApplicationManager is a cheap service lookup.
         ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -419,6 +527,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         final String finalAccess = access;
         final String finalClientConfigName = clientConfigName;
         final ILaunchConfiguration finalClientConfig = clientConfig;
+        final boolean finalDerivedApplicationId = derivedApplicationId;
 
         // The model work (getApplication -> storeCredentials -> getName) runs in a bounded background
         // Job. Resolving an application can provoke EDT's background application-update-state recompute,
@@ -470,7 +579,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 // so this provisional record says so rather than claiming a configured client.
                 boolean passwordSet = finalPassword != null && !finalPassword.isEmpty();
                 String storedUser = finalUser == null ? "" : finalUser; //$NON-NLS-1$
-                jobResult.set(buildSuccess(finalProjectName, finalApplicationId, finalApplicationId,
+                jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
+                    finalDerivedApplicationId, finalApplicationId,
                     storedUser, passwordSet, accessKind, finalClientConfigName, CLIENT_WRITE_UNFINISHED));
 
                 // The agent half has committed, so now — and only now — the CLIENT half. Writing it
@@ -479,7 +589,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 String clientError = configureClient(callerAnswered, finalClientConfigName,
                     finalClientConfig, finalUser, finalPassword,
                     InfobaseAccessSupport.isOsAccess(finalAccess));
-                jobResult.set(buildSuccess(finalProjectName, finalApplicationId, finalApplicationId,
+                jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
+                    finalDerivedApplicationId, finalApplicationId,
                     storedUser, passwordSet, accessKind, finalClientConfigName, clientError));
 
                 // Best-effort enrich: replace the applicationId-named success with the real display name.
@@ -488,8 +599,9 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                     String name = application.getName();
                     if (name != null && !name.isEmpty())
                     {
-                        jobResult.set(buildSuccess(finalProjectName, finalApplicationId, name, storedUser,
-                            passwordSet, accessKind, finalClientConfigName, clientError));
+                        jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
+                            finalDerivedApplicationId, name, storedUser, passwordSet, accessKind,
+                            finalClientConfigName, clientError));
                     }
                 }
                 catch (Exception e) // NOSONAR cosmetic read-back — keep the applicationId-named success
@@ -556,6 +668,19 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             String storedUser, boolean passwordSet, InfobaseAccess accessKind, String clientConfigName,
             String clientError)
     {
+        return buildSuccess(projectName, applicationId, false, displayName, storedUser,
+            passwordSet, accessKind, clientConfigName, clientError);
+    }
+
+    /** Same success payload, explicitly reporting a project-default application derivation. */
+    static String buildSuccess(String projectName, String applicationId,
+            boolean derivedApplicationId, String displayName, String storedUser, boolean passwordSet,
+            InfobaseAccess accessKind, String clientConfigName, String clientError)
+    {
+        String derivedNote = derivedApplicationId
+            ? " The launch configuration had no applicationId attribute, so EDT's project-default " //$NON-NLS-1$
+                + "application '" + applicationId + "' was derived for project '" + projectName + "'." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            : ""; //$NON-NLS-1$
         return ToolResult.success()
             .put(KEY_CLIENT_CONFIGURED, clientConfigName != null && clientError == null)
             .put(McpKeys.PROJECT, projectName)
@@ -566,7 +691,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .put(KEY_PASSWORD_SET, passwordSet)
             .put(McpKeys.MESSAGE, "Stored infobase access credentials for application '" //$NON-NLS-1$
                 + displayName + "' (user '" + storedUser + "', access " //$NON-NLS-1$ //$NON-NLS-2$
-                + accessKind.getName() + "). The update agent used by update_database / " //$NON-NLS-1$
+                + accessKind.getName() + ")." + derivedNote //$NON-NLS-1$
+                + " The update agent used by update_database / " //$NON-NLS-1$
                 + "launch will now authenticate with them. " //$NON-NLS-1$
                 + clientNote(clientConfigName, clientError))
             .toJson();

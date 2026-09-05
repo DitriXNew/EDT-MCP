@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.IdentityHashMap;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,10 +35,18 @@ import com.e1c.g5.dt.applications.ApplicationException;
  *
  * <h2>What it does</h2>
  * {@link #describe(Throwable)} walks the failure — the exception chain, and for each hop the
- * {@link IStatus} it carries (message, then children, then the status's own exception) — and
+ * {@link IStatus} it carries (failing children first, then other children, its message, and its
+ * own exception) — and
  * returns the first non-blank message it finds. When the whole failure genuinely carries no text
  * it says so, naming the exception type and the status severity, because "CANCEL, no message" is
  * itself the diagnosis: something aborted the operation rather than failing it.
+ *
+ * <p>{@link #rootCause(Throwable)} answers a separate, complementary question: after
+ * {@code describe} has selected the headline, what does the deepest distinct bounded
+ * {@code getCause()} hop say? Child statuses are aggregate detail and are interpreted only by the
+ * per-hop selection rule at their owning throwable. Callers that need both compose them explicitly;
+ * the root-cause helper does not change {@code describe}'s established selection rule or invent an
+ * ordering among aggregate statuses.
  *
  * <p>{@link #withoutObjectIdentity(String)} answers a SEPARATE question and is meant to be
  * COMPOSED with {@code describe}, never substituted for it. {@code describe} selects the most
@@ -107,32 +116,159 @@ public final class PlatformFailures
         Throwable current = failure;
         for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
         {
-            // The status tree is consulted BEFORE the throwable's own message whenever that status
-            // HAS children: ApplicationException(IStatus) copies the root message into
-            // getMessage(), so trusting the exception first would again return the headline and
-            // never the child that names the cause.
-            IStatus status = statusOf(current);
-            if (hasChildren(status))
+            FailureMessage atHop = failureMessageAt(current);
+            if (atHop != null)
             {
-                String fromChildren = statusMessage(status, 0);
-                if (fromChildren != null)
-                {
-                    return fromChildren;
-                }
-            }
-            String own = trimToNull(current.getMessage());
-            if (own != null)
-            {
-                return own;
-            }
-            String fromStatus = statusMessage(status, 0);
-            if (fromStatus != null)
-            {
-                return fromStatus;
+                return atHop.message;
             }
             current = current.getCause();
         }
         return describeTextless(failure);
+    }
+
+    /**
+     * The deepest diagnosis on the bounded {@link Throwable#getCause()} path below the failure,
+     * when it adds information to {@link #describe(Throwable)}'s headline.
+     *
+     * <p>The walk follows only {@link Throwable#getCause()} and is capped at
+     * {@link #MAX_CAUSE_CHAIN_DEPTH}. At each cause hop, failing status children come first, then the
+     * throwable's own message and status fallback. Unlike {@code describe}, causation never falls
+     * back to a non-failing aggregate child merely because it has text. Messages whose raw or
+     * formatted form equals the headline are skipped at that hop, so a deeper repeat cannot erase
+     * the last distinct diagnosis. A short generic message (40 characters or fewer and no more than
+     * four words) is prefixed only when a terminal exception genuinely owns it. Text selected from a
+     * status carries no wrapper provenance.
+     *
+     * <p>A status-carried failure still reaches this walk, by two separate routes.
+     * {@link ApplicationException}, the shape the update path actually throws, passes its status's
+     * exception to its own cause when built from an {@link IStatus}; {@link CoreException#getCause()}
+     * exposes the same edge for that shape. EDT aggregate statuses in turn synthesize their exception
+     * from failing children when they have none of their own, and the publishing path returns exactly
+     * such an aggregate. Any exception known to those statuses is therefore already represented on the
+     * {@code getCause()} chain. As a known limitation, a plain {@code MultiStatus} with no exception of
+     * its own contributes no cause clause, even when its children carry one.
+     *
+     * <p>This method returns only the diagnosis. A caller that displays both messages should compose
+     * English prose such as {@code describe(failure) + " Caused by: " + rootCause(failure)}.
+     *
+     * @param failure the exception to inspect (may be {@code null})
+     * @return the deepest distinct diagnosis, or the empty string when there is no additional text
+     */
+    public static String rootCause(Throwable failure)
+    {
+        if (failure == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String selected = describe(failure);
+        String deepest = ""; //$NON-NLS-1$
+        Throwable current = failure.getCause();
+        for (int depth = 1; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
+        {
+            FailureMessage atHop = causalFailureMessageAt(current);
+            if (atHop != null)
+            {
+                String candidate = formatted(atHop);
+                // Both forms are compared HERE, not after the walk: a deeper hop whose formatted
+                // text recreates the headline must be skipped, leaving the last distinct candidate
+                // standing, rather than replacing it and then being dropped as a repeat.
+                if (!selected.equals(atHop.message) && !selected.equals(candidate))
+                {
+                    deepest = candidate;
+                }
+            }
+            current = current.getCause();
+        }
+        return deepest;
+    }
+
+    /**
+     * The message with its exception type prefixed when a terminal exception genuinely owns a
+     * short generic text: "Auth fail" alone is not actionable, "com.jcraft.jsch.JSchException:
+     * Auth fail" is. Text selected from a status carries no wrapper provenance.
+     *
+     * @param message the selected message and its source (never {@code null})
+     * @return the text to present
+     */
+    private static String formatted(FailureMessage message)
+    {
+        if (message.source != null && message.source.getCause() == null
+            && message.message.equals(trimToNull(message.source.getMessage()))
+            && isShortGenericMessage(message.message))
+        {
+            return message.source.getClass().getName() + ": " + message.message; //$NON-NLS-1$
+        }
+        return message.message;
+    }
+
+    /** The exact per-hop display rule used by {@link #describe(Throwable)}. */
+    private static FailureMessage failureMessageAt(Throwable failure)
+    {
+        return failureMessageAt(failure, true);
+    }
+
+    /** The per-hop causal rule: no unrelated non-failing child fallback. */
+    private static FailureMessage causalFailureMessageAt(Throwable failure)
+    {
+        return failureMessageAt(failure, false);
+    }
+
+    /** Shared per-hop selection, with message provenance. */
+    private static FailureMessage failureMessageAt(Throwable failure,
+            boolean allowNonFailingChildren)
+    {
+        IStatus status = statusOf(failure);
+        if (hasChildren(status))
+        {
+            String fromChildren = statusMessage(status, 0, allowNonFailingChildren);
+            if (fromChildren != null)
+            {
+                return new FailureMessage(fromChildren, null);
+            }
+        }
+        String own = trimToNull(failure.getMessage());
+        if (own != null)
+        {
+            boolean copiedFromStatus = status != null
+                && own.equals(trimToNull(status.getMessage()));
+            return new FailureMessage(own, copiedFromStatus ? null : failure);
+        }
+        String fromStatus = statusMessage(status, 0, allowNonFailingChildren);
+        return fromStatus == null ? null : new FailureMessage(fromStatus, null);
+    }
+
+    /** Deterministic proxy for a terse generic message that benefits from its exception type. */
+    private static boolean isShortGenericMessage(String message)
+    {
+        if (message.length() > 40)
+        {
+            return false;
+        }
+        int words = 0;
+        boolean inWord = false;
+        for (int index = 0; index < message.length(); index++)
+        {
+            boolean whitespace = Character.isWhitespace(message.charAt(index));
+            if (!whitespace && !inWord)
+            {
+                words++;
+            }
+            inWord = !whitespace;
+        }
+        return words <= 4;
+    }
+
+    /** Message plus the source needed for deterministic terminal formatting. */
+    private static final class FailureMessage
+    {
+        final String message;
+        final Throwable source;
+
+        FailureMessage(String message, Throwable source)
+        {
+            this.message = message;
+            this.source = source;
+        }
     }
 
     /**
@@ -292,9 +428,13 @@ public final class PlatformFailures
      * @param children the child statuses (never {@code null})
      * @param depth the parent's recursion depth
      * @param failingOnly {@code true} to consider only failing children
+     * @param allowNonFailingChildren whether nested aggregates may use their display fallback
+     * @param visitedStatuses shallowest depth already visited for each status identity
      * @return the message, or {@code null} when none of the considered children carries one
      */
-    private static String firstChildMessage(IStatus[] children, int depth, boolean failingOnly)
+    private static String firstChildMessage(IStatus[] children, int depth, boolean failingOnly,
+            boolean allowNonFailingChildren,
+            IdentityHashMap<IStatus, Integer> visitedStatuses)
     {
         for (IStatus child : children)
         {
@@ -302,7 +442,8 @@ public final class PlatformFailures
             {
                 continue;
             }
-            String message = statusMessage(child, depth + 1);
+            String message = statusMessage(child, depth + 1, allowNonFailingChildren,
+                visitedStatuses);
             if (message != null)
             {
                 return message;
@@ -328,10 +469,30 @@ public final class PlatformFailures
      */
     static String statusMessage(IStatus status, int depth)
     {
+        return statusMessage(status, depth, true);
+    }
+
+    /** Selects status text while optionally disabling display's non-failing child fallback. */
+    private static String statusMessage(IStatus status, int depth, boolean allowNonFailingChildren)
+    {
+        return statusMessage(status, depth, allowNonFailingChildren,
+            new IdentityHashMap<IStatus, Integer>());
+    }
+
+    /** Alias-aware implementation; a shallower path may expose children hidden by the depth cap. */
+    private static String statusMessage(IStatus status, int depth, boolean allowNonFailingChildren,
+            IdentityHashMap<IStatus, Integer> visitedStatuses)
+    {
         if (status == null || depth > MAX_STATUS_DEPTH)
         {
             return null;
         }
+        Integer previousDepth = visitedStatuses.get(status);
+        if (previousDepth != null && previousDepth.intValue() <= depth)
+        {
+            return null;
+        }
+        visitedStatuses.put(status, Integer.valueOf(depth));
         // CHILDREN FIRST when there are any. EDT wraps its results in a MultiStatus whose own
         // message is the generic headline ("Database update failed") while the reason — the busy
         // port, the rejected object — sits in a child. Returning the root first made this helper
@@ -339,18 +500,23 @@ public final class PlatformFailures
         IStatus[] children = status.getChildren();
         if (children != null)
         {
-            // FAILING children first: an aggregated EDT operation legitimately mixes informational
-            // or OK children with the one that failed, and a plain first-with-text rule could turn
-            // a database failure into an unrelated progress message.
-            String fromFailing = firstChildMessage(children, depth, true);
+            // "Failing" deliberately matches statusMessage's established display pass exactly:
+            // IStatus.matches(ERROR | CANCEL). Display and causation agree on that term; causation
+            // alone stops after this pass so an INFO/OK sibling cannot be presented as a cause.
+            String fromFailing = firstChildMessage(children, depth, true,
+                allowNonFailingChildren, visitedStatuses);
             if (fromFailing != null)
             {
                 return fromFailing;
             }
-            String fromAny = firstChildMessage(children, depth, false);
-            if (fromAny != null)
+            if (allowNonFailingChildren)
             {
-                return fromAny;
+                String fromAny = firstChildMessage(children, depth, false,
+                    allowNonFailingChildren, visitedStatuses);
+                if (fromAny != null)
+                {
+                    return fromAny;
+                }
             }
         }
         String own = trimToNull(status.getMessage());
