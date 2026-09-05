@@ -509,10 +509,26 @@ DEEP_MUTATION_TOOLS = frozenset({
     "clean_project", "create_project", "delete_project",
 })
 
-# The server-side WriteScope has a distinct cascade grade, but does not publish that grade in
-# writtenProjects. Keep this list tied to actual WriteScope.recordCascade call sites: today only
-# delete_metadata records dependent extensions after EDT's opaque delete refactoring.
-CASCADE_MUTATION_TOOLS = frozenset({"delete_metadata"})
+# These tools can confirm writes in fixture projects that the response does not name.
+# delete_metadata: the server records EDT's cascade participants but deliberately omits them from
+# writtenProjects.
+# rename_metadata_object: EDT builds one refactoring for the base plus every extension holding an
+# adopted counterpart, and the tool records no WriteScope - its MARKDOWN response has no
+# structuredContent to name them in.
+CASCADE_MUTATION_TOOLS = frozenset({"delete_metadata", "rename_metadata_object"})
+
+
+def _confirmed(args):
+    # The server's parse is the reference; this client rule is deliberately looser so an odd
+    # spelling that the server accepts as true still widens the reset.
+    if not isinstance(args, dict):
+        return True
+    value = args.get("confirm")
+    if value is None or value is False:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no")
+    return True
 
 # Tools that change the BM model. A SUCCESSFUL call, an observed post-commit error, or an error
 # whose mutating API cannot report rollback forfeits the shortcut, whatever later evidence says.
@@ -581,6 +597,8 @@ def _call_moves_the_fixture_model(tool, args, structured):
         return args.get("recordBuildTime", True) is not False
     return True
 _CALLED_TOOLS = set()
+# Whether a CONFIRMED call to a CASCADE_MUTATION_TOOLS member was issued during the current test.
+_CASCADE_CONFIRMED_CALLED = False
 # Fixture projects named by mutating calls during the current test. This is recorded on the
 # attempt because a request that dies on the wire may already have changed the server-side model.
 _MUTATED_PROJECTS = set()
@@ -627,9 +645,10 @@ _MUTATIONS_UNRESOLVED = 0
 
 # Only arguments whose schema says they NAME a project participate in target inference. Across the
 # fixture-model writers these are projectName and adopt_metadata_object's extensionProjectName;
-# fixture-looking text in source, fqn, or any other value is unrelated. An unresolved outcome
-# widens evidence only for a project named through one of these PROJECT-TYPED arguments, because
-# this branch already treats "outcome unknown" as "assume it moved".
+# fixture-looking text in source, fqn, or any other value is unrelated. The one exception is
+# `_implicit_extension_targets` below: an adoption whose omitted or empty extensionProjectName makes
+# the server select the single extension. An unresolved outcome widens evidence only for these
+# candidate projects, because this branch already treats "outcome unknown" as "assume it moved".
 _PROJECT_ARGUMENT_KEYS = frozenset({"projectName", "extensionProjectName"})
 
 
@@ -646,15 +665,34 @@ def _fixture_projects_named_in(args):
         return set()
 
 
+# The server selects the base's single extension when extensionProjectName is omitted or empty, so
+# the target is not in the arguments. Only the base project's own extension is inferable -
+# TESTS_PROJECT; any other projectName, fixture or not, implies nothing. A non-string value is
+# treated as omitted on purpose: that only widens the reset.
+def _implicit_extension_targets(tool, args):
+    if tool == "adopt_metadata_object" and isinstance(args, dict):
+        extension_project = args.get("extensionProjectName")
+        if (args.get("projectName") == PROJECT
+                and (not isinstance(extension_project, str) or extension_project == "")):
+            return {TESTS_PROJECT}
+    return set()
+
+
+def _candidate_mutation_targets(tool, args):
+    return _fixture_projects_named_in(args) | _implicit_extension_targets(tool, args)
+
+
 def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
-    global _MUTATIONS_UNRESOLVED
+    global _MUTATIONS_UNRESOLVED, _CASCADE_CONFIRMED_CALLED
     _CALLED_TOOLS.add(tool)
+    if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
+        _CASCADE_CONFIRMED_CALLED = True
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
             and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS):
-        named_projects = _fixture_projects_named_in(args)
-        _MUTATED_PROJECTS.update(named_projects)
-        for project in named_projects:
+        candidate_projects = _candidate_mutation_targets(tool, args)
+        _MUTATED_PROJECTS.update(candidate_projects)
+        for project in candidate_projects:
             _UNRESOLVED_MUTATION_PROJECTS[project] = \
                 _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) + 1
     if tool in MODEL_MUTATION_TOOLS:
@@ -686,7 +724,7 @@ def _record_outcome(tool, args, is_error, structured):
     if tool not in MODEL_MUTATION_TOOLS:
         return
     if tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS:
-        for project in _fixture_projects_named_in(args):
+        for project in _candidate_mutation_targets(tool, args):
             remaining = _UNRESOLVED_MUTATION_PROJECTS.get(project, 0) - 1
             if remaining > 0:
                 _UNRESOLVED_MUTATION_PROJECTS[project] = remaining
@@ -713,7 +751,7 @@ def _record_outcome(tool, args, is_error, structured):
     if (tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS
             and (written_fixture_projects or mutation_committed or mutation_unknown
                  or (not is_error and call_moves_fixture))):
-        _EVIDENCED_MUTATION_PROJECTS.update(_fixture_projects_named_in(args))
+        _EVIDENCED_MUTATION_PROJECTS.update(_candidate_mutation_targets(tool, args))
 
 
 def _mark_model_synced():
@@ -759,8 +797,9 @@ def evidenced_mutation_fixture_projects():
 
 
 def mutation_could_have_cascaded():
-    """Whether this test called a writer whose server-side scope records cascade participants."""
-    return bool(_CALLED_TOOLS & CASCADE_MUTATION_TOOLS)
+    """Whether this test issued a confirmed call to a writer whose targets the response does not
+    name."""
+    return _CASCADE_CONFIRMED_CALLED
 
 
 def external_objects_model_synced():
@@ -779,8 +818,9 @@ def begin_test_calls():
     """Start recording what a test invokes (the orchestrator calls this per test).
 
     Resets only what is genuinely per-test. _MUTATIONS_UNRESOLVED is not - see its comment."""
-    global _MUTATION_CONFIRMED
+    global _MUTATION_CONFIRMED, _CASCADE_CONFIRMED_CALLED
     _CALLED_TOOLS.clear()
+    _CASCADE_CONFIRMED_CALLED = False
     _MUTATED_PROJECTS.clear()
     _EVIDENCED_MUTATION_PROJECTS.clear()
     _MUTATION_CONFIRMED = False

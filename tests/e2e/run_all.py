@@ -309,7 +309,7 @@ def _reset_after_write(harness, t):
         return
     if harness.mutation_could_have_cascaded():
         # The server waits for EDT's cascade participants but deliberately leaves them out of
-        # writtenProjects: it knows only what EDT scanned, not what EDT rewrote. Do not invent a
+        # writtenProjects or, for a rename, publishes no write targets at all. Do not invent a
         # client-side target. Reset every fixture model known to be available instead; the optional
         # ExternalObjects project stays out unless setup synchronized it or call-correlated evidence
         # says a request may actually have reached it.

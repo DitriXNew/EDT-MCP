@@ -18,6 +18,7 @@ class MutationOutcomeTest(unittest.TestCase):
         self.old_confirmed = HARNESS._MUTATION_CONFIRMED
         self.old_confirmed_tools = set(HARNESS._CONFIRMED_MUTATION_TOOLS)
         self.old_called = set(HARNESS._CALLED_TOOLS)
+        self.old_cascade_confirmed_called = HARNESS._CASCADE_CONFIRMED_CALLED
         self.old_mutated_projects = set(HARNESS._MUTATED_PROJECTS)
         self.old_evidenced_projects = set(HARNESS._EVIDENCED_MUTATION_PROJECTS)
         self.old_unresolved_projects = dict(HARNESS._UNRESOLVED_MUTATION_PROJECTS)
@@ -25,6 +26,7 @@ class MutationOutcomeTest(unittest.TestCase):
         HARNESS._MUTATION_CONFIRMED = False
         HARNESS._CONFIRMED_MUTATION_TOOLS.clear()
         HARNESS._CALLED_TOOLS.clear()
+        HARNESS._CASCADE_CONFIRMED_CALLED = False
         HARNESS._MUTATED_PROJECTS.clear()
         HARNESS._EVIDENCED_MUTATION_PROJECTS.clear()
         HARNESS._UNRESOLVED_MUTATION_PROJECTS.clear()
@@ -36,6 +38,7 @@ class MutationOutcomeTest(unittest.TestCase):
         HARNESS._CONFIRMED_MUTATION_TOOLS.update(self.old_confirmed_tools)
         HARNESS._CALLED_TOOLS.clear()
         HARNESS._CALLED_TOOLS.update(self.old_called)
+        HARNESS._CASCADE_CONFIRMED_CALLED = self.old_cascade_confirmed_called
         HARNESS._MUTATED_PROJECTS.clear()
         HARNESS._MUTATED_PROJECTS.update(self.old_mutated_projects)
         HARNESS._EVIDENCED_MUTATION_PROJECTS.clear()
@@ -70,6 +73,135 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertEqual(
             frozenset({HARNESS.PROJECT, HARNESS.TESTS_PROJECT}),
             HARNESS.mutated_fixture_projects())
+
+    def test_rename_attempt_marks_possible_cascade_but_modify_does_not(self):
+        HARNESS._record_attempt("rename_metadata_object", {
+            "projectName": HARNESS.PROJECT,
+            "confirm": True,
+        })
+
+        self.assertTrue(HARNESS.mutation_could_have_cascaded())
+
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt("modify_metadata", {
+            "projectName": HARNESS.PROJECT,
+            "confirm": True,
+        })
+
+        self.assertFalse(HARNESS.mutation_could_have_cascaded())
+
+    def test_rename_cascade_tracking_handles_preview_and_string_confirm_arguments(self):
+        preview_args = (
+            {"projectName": HARNESS.PROJECT},
+            {"projectName": HARNESS.PROJECT, "confirm": False},
+            {"projectName": HARNESS.PROJECT, "confirm": "false"},
+        )
+
+        for args in preview_args:
+            with self.subTest(args=args):
+                HARNESS.begin_test_calls()
+                HARNESS._record_attempt("rename_metadata_object", args)
+                self.assertFalse(HARNESS.mutation_could_have_cascaded())
+
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt("rename_metadata_object", {
+            "projectName": HARNESS.PROJECT,
+            "confirm": "true",
+        })
+
+        self.assertTrue(HARNESS.mutation_could_have_cascaded())
+
+    def test_delete_cascade_tracking_requires_confirmation(self):
+        HARNESS._record_attempt("delete_metadata", {
+            "projectName": HARNESS.PROJECT,
+            "confirm": True,
+        })
+
+        self.assertTrue(HARNESS.mutation_could_have_cascaded())
+
+        HARNESS.begin_test_calls()
+        HARNESS._record_attempt(
+            "delete_metadata", {"projectName": HARNESS.PROJECT})
+
+        self.assertFalse(HARNESS.mutation_could_have_cascaded())
+
+    def test_adoption_without_extension_tracks_implicit_fixture_extension(self):
+        HARNESS._record_attempt(
+            "adopt_metadata_object", {"projectName": HARNESS.PROJECT})
+
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT, HARNESS.TESTS_PROJECT}),
+            HARNESS.mutated_fixture_projects())
+        self.assertIn(
+            HARNESS.TESTS_PROJECT,
+            HARNESS.evidenced_mutation_fixture_projects(),
+        )
+
+    def test_adoption_with_empty_extension_tracks_implicit_fixture_extension(self):
+        HARNESS._record_attempt("adopt_metadata_object", {
+            "projectName": HARNESS.PROJECT,
+            "extensionProjectName": "",
+        })
+
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT, HARNESS.TESTS_PROJECT}),
+            HARNESS.mutated_fixture_projects())
+        self.assertIn(
+            HARNESS.TESTS_PROJECT,
+            HARNESS.evidenced_mutation_fixture_projects(),
+        )
+
+    def test_adoption_with_non_string_extension_widens_to_implicit_extension(self):
+        HARNESS._record_attempt("adopt_metadata_object", {
+            "projectName": HARNESS.PROJECT,
+            "extensionProjectName": 123,
+        })
+
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT, HARNESS.TESTS_PROJECT}),
+            HARNESS.mutated_fixture_projects())
+
+    def test_implicit_adoption_does_not_infer_extension_for_non_fixture_base(self):
+        HARNESS._record_attempt(
+            "adopt_metadata_object", {"projectName": "UnrelatedBase"})
+
+        self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
+
+    def test_refused_implicit_adoption_retires_candidate_targets(self):
+        args = {"projectName": HARNESS.PROJECT}
+        HARNESS._record_attempt("adopt_metadata_object", args)
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT, HARNESS.TESTS_PROJECT}),
+            HARNESS.mutated_fixture_projects())
+
+        HARNESS._record_outcome(
+            "adopt_metadata_object", args, True, {"success": False})
+
+        self.assertEqual(
+            frozenset(), HARNESS.evidenced_mutation_fixture_projects())
+        self.assertFalse(HARNESS.mutations_unresolved())
+
+    def test_unknown_implicit_adoption_outcome_evidences_extension(self):
+        args = {"projectName": HARNESS.PROJECT}
+        HARNESS._record_attempt("adopt_metadata_object", args)
+        HARNESS._record_outcome("adopt_metadata_object", args, True, {
+            "success": False,
+            "mutationOutcomeUnknown": True,
+        })
+
+        self.assertIn(
+            HARNESS.TESTS_PROJECT,
+            HARNESS.evidenced_mutation_fixture_projects(),
+        )
+
+    def test_explicit_non_fixture_adoption_extension_is_not_second_guessed(self):
+        HARNESS._record_attempt("adopt_metadata_object", {
+            "projectName": HARNESS.PROJECT,
+            "extensionProjectName": "OtherExt",
+        })
+
+        self.assertEqual(
+            frozenset({HARNESS.PROJECT}), HARNESS.mutated_fixture_projects())
 
     def test_written_projects_outcome_tracks_fixture_missing_from_arguments(self):
         HARNESS._record_outcome(
