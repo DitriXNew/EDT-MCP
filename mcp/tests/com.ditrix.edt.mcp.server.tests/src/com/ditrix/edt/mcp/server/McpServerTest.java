@@ -6,9 +6,13 @@
 
 package com.ditrix.edt.mcp.server;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import java.io.IOException;
 
 import org.junit.Test;
 
@@ -62,5 +66,77 @@ public class McpServerTest
         assertNull(McpServer.remoteBindRefusal(false, "", PORT));
         assertNull(McpServer.remoteBindRefusal(false, null, PORT));
         assertNull(McpServer.remoteBindRefusal(false, "s3cret", PORT));
+    }
+
+    /**
+     * The preferences page persists the new settings and then RESTARTS, so a refusal that lived
+     * only inside {@code start()} would arrive after {@code stop()} had already taken a healthy
+     * loopback listener offline - failing open in the one way the refusal exists to prevent.
+     */
+    @Test
+    public void testARefusedRestartNeverStopsTheRunningServer()
+    {
+        RecordingServer server = new RecordingServer(new McpServer.BindConfig(true, ""));
+
+        try
+        {
+            server.restart(PORT);
+            fail("a restart into an unauthenticated remote bind must be refused");
+        }
+        catch (IOException refused)
+        {
+            assertTrue(refused.getMessage(), refused.getMessage().contains("auth token"));
+        }
+        assertEquals("a refused reconfiguration must leave the live server running", "",
+            server.calls());
+    }
+
+    @Test
+    public void testAPermittedRestartStopsAndThenStarts() throws IOException
+    {
+        RecordingServer server = new RecordingServer(new McpServer.BindConfig(true, "s3cret"));
+
+        server.restart(PORT);
+
+        assertEquals("stop start ", server.calls());
+    }
+
+    /**
+     * A server whose configuration is supplied rather than read, and whose lifecycle calls are
+     * recorded instead of performed - {@code start()} binds a socket, which a unit test must not.
+     */
+    private static final class RecordingServer
+        extends McpServer
+    {
+        private final BindConfig config;
+        private final StringBuilder calls = new StringBuilder();
+
+        RecordingServer(BindConfig config)
+        {
+            this.config = config;
+        }
+
+        String calls()
+        {
+            return calls.toString();
+        }
+
+        @Override
+        BindConfig readBindConfig()
+        {
+            return config;
+        }
+
+        @Override
+        public synchronized void stop()
+        {
+            calls.append("stop ");
+        }
+
+        @Override
+        public synchronized void start(int port)
+        {
+            calls.append("start ");
+        }
     }
 }

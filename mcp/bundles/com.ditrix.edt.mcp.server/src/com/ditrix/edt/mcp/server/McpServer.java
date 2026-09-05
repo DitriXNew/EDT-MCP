@@ -67,9 +67,14 @@ public class McpServer
      */
     public synchronized void start(int port) throws IOException
     {
+        // ONE read of the configuration decides both the refusal and the bind address below.
+        // Reading the preference twice would let a flip in between bind every interface on a
+        // snapshot that had just been validated as loopback.
+        BindConfig config = readBindConfig();
+
         // Fail CLOSED, and before anything is torn down or bound: a running server keeps
         // running, and a refused start never reaches the listening socket.
-        String refusal = remoteBindRefusal(readAllowRemoteAccess(), readAuthToken(), port);
+        String refusal = remoteBindRefusal(config.allowRemote, config.authToken, port);
         if (refusal != null)
         {
             throw new IOException(refusal);
@@ -102,7 +107,8 @@ public class McpServer
         // (evaluate_expression) and destructive tools, so it must not be reachable
         // from the network unless explicitly opted in. Set PREF_ALLOW_REMOTE_ACCESS
         // to expose on all interfaces (it REQUIRES PREF_AUTH_TOKEN - see the refusal above).
-        boolean allowRemote = readAllowRemoteAccess();
+        // This is the snapshot that passed that refusal, not a fresh read.
+        boolean allowRemote = config.allowRemote;
         InetSocketAddress bindAddress = allowRemote
             ? new InetSocketAddress(port)
             : new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
@@ -189,20 +195,37 @@ public class McpServer
             + "set an auth token, or turn 'Allow remote access' off to listen on loopback only."; //$NON-NLS-1$
     }
 
-    /** @return {@code PREF_ALLOW_REMOTE_ACCESS}, false when there is no preference store */
-    private static boolean readAllowRemoteAccess()
+    /** The bind-relevant configuration, read together so one decision cannot mix two reads. */
+    static final class BindConfig
     {
-        Activator activator = Activator.getDefault();
-        return activator != null && activator.getPreferenceStore()
-            .getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS);
+        final boolean allowRemote;
+        final String authToken;
+
+        BindConfig(boolean allowRemote, String authToken)
+        {
+            this.allowRemote = allowRemote;
+            this.authToken = authToken;
+        }
     }
 
-    /** @return {@code PREF_AUTH_TOKEN}, or {@code null} when there is no preference store */
-    private static String readAuthToken()
+    /**
+     * Reads the bind-relevant preferences in one go. Package-visible and overridable so a test can
+     * supply a configuration without a preference store - {@link #start} and {@link #restart} are
+     * otherwise undrivable headlessly, and what they owe is an ORDER, not a value.
+     *
+     * @return the current configuration; {@code allowRemote} is false and the token {@code null}
+     *         when there is no preference store (headless, or a shutdown race)
+     */
+    BindConfig readBindConfig()
     {
         Activator activator = Activator.getDefault();
-        return activator == null ? null
-            : activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN);
+        if (activator == null)
+        {
+            return new BindConfig(false, null);
+        }
+        return new BindConfig(
+            activator.getPreferenceStore().getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS),
+            activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN));
     }
 
     /**
@@ -239,13 +262,26 @@ public class McpServer
     }
 
     /**
-     * Restarts the MCP server.
-     * 
+     * Restarts the MCP server. A configuration that {@link #remoteBindRefusal} rejects is refused
+     * here, with the running server untouched.
+     *
      * @param port the port number
-     * @throws IOException if restart fails
+     * @throws IOException if restart fails, or if the new configuration would expose an
+     *             unauthenticated server to the network - in which case nothing was stopped
      */
     public void restart(int port) throws IOException
     {
+        // Decided BEFORE stop(), not inside start(): the preferences page persists the new
+        // settings and then restarts, so a reconfiguration that cannot be started would
+        // otherwise take a healthy loopback listener offline and report the refusal afterwards.
+        // start() checks again on its own snapshot; this one only keeps the running server alive.
+        BindConfig config = readBindConfig();
+        String refusal = remoteBindRefusal(config.allowRemote, config.authToken, port);
+        if (refusal != null)
+        {
+            throw new IOException(refusal);
+        }
+
         stop();
         start(port);
     }
