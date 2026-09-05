@@ -715,6 +715,26 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion6DoesNotRecognizeAReadOnlyPresetLoosenedByAShapeMember()
+    {
+        // The recognition shape is the preset's HISTORY - what that preset has disabled throughout
+        // its life - not a judgement about which of its members happen to be reads. Containment
+        // therefore tolerates TIGHTENING and not loosening, by ANY member: get_applications is only
+        // the example here, and the fact that it reads is beside the point. A profile that
+        // re-enabled a shape member is its author's own selection, so it keeps both destructive
+        // tools exactly as it has them today - and both remain behind the consent gate.
+        Set<String> loosened = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        loosened.remove("get_applications"); //$NON-NLS-1$
+        loosened.removeAll(READ_ONLY_V6_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(loosened, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals("a profile that re-enabled a shape member must come back exactly as it was",
+            loosened, disabledTools(store));
+    }
+
+    @Test
     public void testVersion6StillRecognizesAReadOnlyProfileThatReEnabledApplyQuickFix()
     {
         // apply_quick_fix is in NEITHER frozen shape, precisely so a user who deliberately turned

@@ -352,6 +352,12 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * this step exists to prevent. Unlike version 4 the two shapes are NOT tried in order of
      * restrictiveness, because both read-only presets are owed the SAME two names - so whichever
      * shape matches first gives the right answer, and a store matching both gets it once.
+     * <p>
+     * Containment tolerates TIGHTENING, not loosening: a store that re-enabled any shape member -
+     * {@code get_applications} included - is not recognized and keeps both tools exactly as it has
+     * them today, still behind the consent gate. The shape is the preset's history, not a judgement
+     * of which members are reads, and is deliberately not filtered by the {@code readOnlyHint}
+     * prefix heuristic (see {@code ToolPresetTest}).
      *
      * @param disabled the mutable stored disabled-tools set; modified in place
      * @return {@code true} when at least one name was added
