@@ -6,9 +6,7 @@
 
 package com.ditrix.edt.mcp.server.transport;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -22,6 +20,7 @@ import com.ditrix.edt.mcp.server.SseStreamRegistry;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -44,6 +43,40 @@ public class McpHttpHandler implements HttpHandler
     private static final String TEXT_EVENT_STREAM = "text/event-stream"; //$NON-NLS-1$
     private static final String CONNECTION = "Connection"; //$NON-NLS-1$
     private static final String KEEP_ALIVE = "keep-alive"; //$NON-NLS-1$
+
+    /**
+     * The path a POST body takes through this transport, decided by the PARSED method.
+     * <p>
+     * It used to be decided by a substring probe of the raw body, which reported "initialize" for
+     * any {@code tools/call} whose payload merely CONTAINED the quoted word - an argument whose
+     * value is that word, such as a search for {@code initialize} - and that answer carried a
+     * stray {@code Mcp-Session-Id} header on both the JSON and the SSE path. The real method is
+     * parsed either way, so nothing is paid for reading it instead of guessing.
+     */
+    enum Route
+    {
+        INITIALIZE,
+        TOOL_CALL,
+        OTHER;
+
+        /**
+         * @param request the parsed request, or {@code null} on a JSON syntax error
+         * @return the route this request takes; {@link #OTHER} for anything unparsed or unknown
+         */
+        static Route of(JsonRpcRequest request)
+        {
+            String method = request != null ? request.getMethod() : null;
+            if (McpConstants.METHOD_INITIALIZE.equals(method))
+            {
+                return INITIALIZE;
+            }
+            if (McpConstants.METHOD_TOOLS_CALL.equals(method))
+            {
+                return TOOL_CALL;
+            }
+            return OTHER;
+        }
+    }
 
     /** Event ID counter for SSE - AtomicLong for thread safety across concurrent SSE streams */
     private final AtomicLong eventIdCounter = new AtomicLong(0);
@@ -266,40 +299,46 @@ public class McpHttpHandler implements HttpHandler
 
         Activator.logInfo("MCP request received from " + exchange.getRemoteAddress()); //$NON-NLS-1$
 
-        // Read request body
+        // Read the request body, bounded: an unbounded read grows inside the EDT JVM while
+        // holding a worker, and the proxy in front of this server already caps it the same way.
         String requestBody;
         try
         {
-            StringBuilder body = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)))
-            {
-                String line;
-                while ((line = reader.readLine()) != null)
-                {
-                    body.append(line);
-                }
-            }
-            requestBody = body.toString();
+            requestBody = HttpTransport.readBody(exchange);
         }
         catch (IOException e)
         {
             Activator.logInfo("Connection lost while reading request body: " + e.getMessage()); //$NON-NLS-1$
             return;
         }
+        if (requestBody == null)
+        {
+            Activator.logInfo("Request body over the " + HttpTransport.MAX_BODY_BYTES //$NON-NLS-1$
+                + "-byte limit rejected with 413"); //$NON-NLS-1$
+            HttpTransport.sendResponse(exchange, 413, JsonUtils.buildJsonRpcError(
+                McpConstants.ERROR_INVALID_REQUEST, "Request body exceeds the " //$NON-NLS-1$
+                    + HttpTransport.MAX_BODY_BYTES + "-byte limit", null)); //$NON-NLS-1$
+            return;
+        }
 
         Activator.logDebug("MCP request body: " + requestBody); //$NON-NLS-1$
 
+        // Parse ONCE, here, and route on the parsed method. The parsed request is handed down so
+        // neither path below parses the same body again; a syntax error leaves it null and the
+        // protocol handler answers "invalid request" exactly as before.
+        JsonRpcRequest request = protocolHandler.parse(requestBody);
+        Route route = Route.of(request);
+
         String response;
-        boolean isInitialize = requestBody.contains("\"" + McpConstants.METHOD_INITIALIZE + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-        boolean isToolCall = requestBody.contains("\"" + McpConstants.METHOD_TOOLS_CALL + "\""); //$NON-NLS-1$ //$NON-NLS-2$
+        boolean isInitialize = route == Route.INITIALIZE;
+        boolean isToolCall = route == Route.TOOL_CALL;
 
         try
         {
             if (isToolCall)
             {
                 // Handle tool calls with interruptible execution
-                response = interruptibleExecutor.execute(exchange, requestBody);
+                response = interruptibleExecutor.execute(exchange, requestBody, request);
                 if (response == null)
                 {
                     // Response was already sent (user interrupted)
@@ -308,7 +347,7 @@ public class McpHttpHandler implements HttpHandler
             }
             else
             {
-                response = protocolHandler.processRequest(requestBody);
+                response = protocolHandler.processRequest(requestBody, request);
             }
 
             // null response means notification (no response needed)

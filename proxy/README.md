@@ -124,8 +124,8 @@ interfaces, or a specific interface address - opts into that exposure. Startup l
 is active (`loopback only` vs `remote (<host>)`), and a remote bind also logs a `SECURITY`
 warning.
 
-> **⚠️ The proxy has no authentication in v1.** Unlike the plugin (which pairs
-> `allowRemote` with an optional auth token), a remotely-bound proxy accepts every MCP request
+> **⚠️ The proxy has no authentication in v1.** Unlike the plugin (which refuses to start when
+> `allowRemote` is on with no auth token), a remotely-bound proxy accepts every MCP request
 > from any host that can reach the port - including `tools/call` routed to arbitrary BSL on
 > every EDT backend it discovers. Loopback is the security boundary; only bind beyond it on a
 > trusted, isolated network (e.g. behind your own reverse proxy that adds authentication).

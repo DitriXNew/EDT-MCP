@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.transport;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
@@ -22,9 +23,56 @@ import com.sun.net.httpserver.HttpExchange;
  */
 public final class HttpTransport
 {
+    /**
+     * The largest request body this transport will buffer. The same cap the proxy applies
+     * ({@code McpProxyHandler.MAX_BODY_BYTES}), so the two components answer the question the same
+     * way; the plugin needs it at least as badly, because it buffers inside the developer's IDE
+     * JVM and a body with no end would grow there while holding a worker.
+     */
+    public static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
+
     private HttpTransport()
     {
         // utility
+    }
+
+    /**
+     * Reads the request body, never buffering more than {@link #MAX_BODY_BYTES} plus one byte. A
+     * declared {@code Content-Length} over the cap is refused without reading the stream at all
+     * (the container drains it on {@link HttpExchange#close()}); an absent or understated
+     * {@code Content-Length} (chunked transfer) is caught by the bounded read itself.
+     *
+     * @param exchange the HTTP exchange
+     * @return the decoded UTF-8 body, or {@code null} when it exceeds {@link #MAX_BODY_BYTES} -
+     *         the caller must answer {@code 413} and MUST NOT read the exchange further
+     * @throws IOException if the client connection is lost while reading
+     */
+    public static String readBody(HttpExchange exchange) throws IOException
+    {
+        String contentLength = exchange.getRequestHeaders().getFirst("Content-Length"); //$NON-NLS-1$
+        if (contentLength != null)
+        {
+            try
+            {
+                if (Long.parseLong(contentLength.trim()) > MAX_BODY_BYTES)
+                {
+                    return null;
+                }
+            }
+            catch (NumberFormatException malformed)
+            {
+                // Fall through to the bounded read, which enforces the cap regardless.
+            }
+        }
+        try (InputStream in = exchange.getRequestBody())
+        {
+            byte[] bytes = in.readNBytes(MAX_BODY_BYTES + 1);
+            if (bytes.length > MAX_BODY_BYTES)
+            {
+                return null;
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
     }
 
     /**

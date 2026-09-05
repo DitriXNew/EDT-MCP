@@ -62,10 +62,19 @@ public class McpServer
      * Starts the MCP server on the specified port.
      * 
      * @param port the port number
-     * @throws IOException if startup fails
+     * @throws IOException if startup fails, or if the configuration would expose an
+     *             unauthenticated server to the network (see {@link #remoteBindRefusal})
      */
     public synchronized void start(int port) throws IOException
     {
+        // Fail CLOSED, and before anything is torn down or bound: a running server keeps
+        // running, and a refused start never reaches the listening socket.
+        String refusal = remoteBindRefusal(readAllowRemoteAccess(), readAuthToken(), port);
+        if (refusal != null)
+        {
+            throw new IOException(refusal);
+        }
+
         if (running)
         {
             stop();
@@ -92,14 +101,8 @@ public class McpServer
         // Bind to loopback only by default: the tool surface includes arbitrary-BSL
         // (evaluate_expression) and destructive tools, so it must not be reachable
         // from the network unless explicitly opted in. Set PREF_ALLOW_REMOTE_ACCESS
-        // to expose on all interfaces (pair it with PREF_AUTH_TOKEN).
-        boolean allowRemote = false;
-        Activator activator = Activator.getDefault();
-        if (activator != null)
-        {
-            allowRemote = activator.getPreferenceStore()
-                .getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS);
-        }
+        // to expose on all interfaces (it REQUIRES PREF_AUTH_TOKEN - see the refusal above).
+        boolean allowRemote = readAllowRemoteAccess();
         InetSocketAddress bindAddress = allowRemote
             ? new InetSocketAddress(port)
             : new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
@@ -107,18 +110,6 @@ public class McpServer
         Activator.logInfo("MCP Server binding to " //$NON-NLS-1$
             + (allowRemote ? "all interfaces (remote access enabled)" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$
             + " on port " + port); //$NON-NLS-1$
-        if (allowRemote)
-        {
-            String authToken = activator != null
-                ? activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN)
-                : ""; //$NON-NLS-1$
-            if (authToken == null || authToken.isEmpty())
-            {
-                Activator.logWarning("SECURITY: MCP server is bound to all interfaces with NO auth token. " //$NON-NLS-1$
-                    + "Any host that can reach this port can invoke every tool (including arbitrary BSL). " //$NON-NLS-1$
-                    + "Set an auth token in MCP preferences."); //$NON-NLS-1$
-            }
-        }
 
         // MCP endpoints. The transport handlers read the live executors and
         // execution state back through this server instance.
@@ -165,6 +156,53 @@ public class McpServer
         running = true;
         
         Activator.logInfo("MCP Server started on port " + port); //$NON-NLS-1$
+    }
+
+    /**
+     * Why a start must be refused, or {@code null} when this configuration is safe to start.
+     * <p>
+     * Remote access binds every interface, and the tool surface includes arbitrary BSL
+     * ({@code evaluate_expression}) and destructive tools. The shared-token check in
+     * {@code HttpTransport.isAuthorized} is the only thing standing in front of it, and that check
+     * is a no-op while the token is empty - so an opt-in to remote access with no token used to
+     * degrade, on a log warning nobody reads, into an unauthenticated remote shell. It is refused
+     * instead. A loopback bind is unaffected: the token stays optional there.
+     * <p>
+     * Pure and package-visible so the decision is unit-testable without a preference store.
+     *
+     * @param allowRemote whether {@code PREF_ALLOW_REMOTE_ACCESS} is set
+     * @param authToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
+     * @param port the port the server would listen on, named in the message
+     * @return the actionable refusal, or {@code null} when the start may proceed
+     */
+    static String remoteBindRefusal(boolean allowRemote, String authToken, int port)
+    {
+        if (!allowRemote || (authToken != null && !authToken.trim().isEmpty()))
+        {
+            return null;
+        }
+        // Both callers frame this message themselves ("Failed to start MCP Server: ..."), so it
+        // states the cause and the remedy without restating that the start failed.
+        return "remote access is enabled but no auth token is set, so port " //$NON-NLS-1$
+            + port + " would accept every tool call - including arbitrary BSL execution - from any " //$NON-NLS-1$
+            + "host that can reach it. Fix it in EDT Preferences \u2192 MCP Server \u2192 General: " //$NON-NLS-1$
+            + "set an auth token, or turn 'Allow remote access' off to listen on loopback only."; //$NON-NLS-1$
+    }
+
+    /** @return {@code PREF_ALLOW_REMOTE_ACCESS}, false when there is no preference store */
+    private static boolean readAllowRemoteAccess()
+    {
+        Activator activator = Activator.getDefault();
+        return activator != null && activator.getPreferenceStore()
+            .getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS);
+    }
+
+    /** @return {@code PREF_AUTH_TOKEN}, or {@code null} when there is no preference store */
+    private static String readAuthToken()
+    {
+        Activator activator = Activator.getDefault();
+        return activator == null ? null
+            : activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN);
     }
 
     /**

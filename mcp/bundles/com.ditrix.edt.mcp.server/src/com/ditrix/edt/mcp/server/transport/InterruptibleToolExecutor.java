@@ -48,7 +48,22 @@ public class InterruptibleToolExecutor
     public String execute(HttpExchange exchange, String requestBody) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         // Extract request ID and tool name for ActiveToolCall via the shared parser.
-        JsonRpcRequest request = protocolHandler.parse(requestBody);
+        return execute(exchange, requestBody, protocolHandler.parse(requestBody));
+    }
+
+    /**
+     * Same, for a caller that has already parsed the body. The transport parses once to decide
+     * which path a request takes, so re-parsing here would deserialize the same body twice.
+     *
+     * @param exchange the HTTP exchange
+     * @param requestBody the request body
+     * @param request the body parsed by the caller, or {@code null} on a JSON syntax error
+     * @return the response, or {@code null} if the response was already sent (interrupted)
+     * @throws Exception if tool execution failed (propagated to the caller for error mapping)
+     */
+    public String execute(HttpExchange exchange, String requestBody, JsonRpcRequest request) // NOSONAR propagates checked exceptions across the reflective boundary by design
+        throws Exception
+    {
         Object requestId = request != null ? McpProtocolHandler.normalizeId(request.getId()) : null;
         String toolName = request != null && request.getToolName() != null ? request.getToolName() : "unknown"; //$NON-NLS-1$
 
@@ -65,7 +80,7 @@ public class InterruptibleToolExecutor
         Thread executionThread = new Thread(() -> {
             try
             {
-                resultContainer[0] = protocolHandler.processRequest(requestBody);
+                resultContainer[0] = protocolHandler.processRequest(requestBody, request);
             }
             catch (Exception e)
             {
