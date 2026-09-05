@@ -10,8 +10,10 @@ import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -801,10 +803,15 @@ public class MergeRulesTool implements IMcpTool
      *
      * <h2>What it does NOT guarantee</h2>
      * <ul>
-     * <li><b>Nothing across processes.</b> It is a lock in this JVM only. Another EDT, an editor,
-     * or a person with a text editor can still write the file between this read and this write.
-     * The single filesystem step the codec performs keeps the file from being seen half-written;
-     * it cannot keep a foreign write from being lost.</li>
+     * <li><b>Nothing across processes - that is {@code targetChangedRefusal}'s job, not the
+     * mutex's.</b> It is a lock in this JVM only, so another EDT, an editor or a person with a
+     * text editor can still write the file between this read and this write; what keeps such a
+     * write from being LOST is the identity check taken after consent, which refuses when the
+     * target is no longer the file that was read. What is left afterwards is the interval that
+     * check cannot cover - the document is serialised, staged in a temporary and then moved - and
+     * it is WIDER than the residual the reservation accepts on the neighbouring branch, whose own
+     * check sits immediately before the move; closing that difference means asking the question
+     * inside the codec, which is a new {@code write} signature rather than a line here.</li>
      * <li><b>Nothing across spellings.</b> The key is the absolute, normalised path, so the same
      * file reached through a symbolic link, a junction, or - on a case-insensitive filesystem - a
      * different case is a DIFFERENT key and is not serialised against this one. Widening the key
@@ -839,6 +846,7 @@ public class MergeRulesTool implements IMcpTool
         // reads decides what this write produces.
         boolean zipped = MergeRulesCodec.isZip(file);
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
+        BasicFileAttributes targetAsRead = null;
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -856,6 +864,23 @@ public class MergeRulesTool implements IMcpTool
             if (detached != null)
             {
                 return detached;
+            }
+            // Taken BEFORE the document is read, and the order is the whole point: a change
+            // between this line and the read costs a REFUSAL, which is cheap, while the opposite
+            // order would let a change made between the read and the snapshot pass as
+            // "unchanged", which is the loss. Following symbolic links - readAttributes' default
+            // - is what matches the rest of this path: the Files.exists above follows too, and
+            // the codec resolves the link and replaces the file behind it.
+            try
+            {
+                targetAsRead = Files.readAttributes(file, BasicFileAttributes.class);
+            }
+            catch (IOException e)
+            {
+                return ToolResult.error("Nothing was written: what is on " + file //$NON-NLS-1$
+                    + " could not be read (" + describe(e) //$NON-NLS-1$
+                    + "), so this call could not later show that the file it replaces is the " //$NON-NLS-1$
+                    + "file it read. Check the path and re-send the write.").toJson(); //$NON-NLS-1$
             }
             targetPolicy = MergeRulesCodec.Target.MAY_BE_REPLACED;
         }
@@ -1099,6 +1124,15 @@ public class MergeRulesTool implements IMcpTool
                 return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME))
                     .toJson();
             }
+            // UNCONDITIONALLY, not only when the gate actually stopped to ask: the level that
+            // answers without a prompt still leaves the whole interval above - the read, the
+            // parse, the comparison's BM read - for a foreign writer to land in, and a check that
+            // ran only at the Ask level would guard the slow path and leave the fast one open.
+            String changed = targetChangedRefusal(file, targetAsRead);
+            if (changed != null)
+            {
+                return changed;
+            }
         }
 
         try
@@ -1195,8 +1229,97 @@ public class MergeRulesTool implements IMcpTool
                 + (entryCarriedMetadata
                     ? " Also lost: the merge-settings entry this write started from carried a zip " //$NON-NLS-1$
                         + "entry comment or an extra field, and that did not come across." //$NON-NLS-1$
-                    : ""), //$NON-NLS-1$
+                    : "") //$NON-NLS-1$
+                // A PROMISE, not a disclaimer: every number above was computed from the file as it
+                // stood before this dialog opened, and the sentence says what happens if that
+                // stops being true rather than warning that it might. See targetChangedRefusal.
+                + " The file is described as it was read; if it changes before this dialog is " //$NON-NLS-1$
+                + "answered, nothing is written.", //$NON-NLS-1$
             1, List.of(file.toString()));
+    }
+
+    /**
+     * Refuses the rewrite when the target is no longer the file this call read.
+     *
+     * <h2>Why the target is looked at again at all</h2>
+     * Everything the caller is shown and everything this call is about to write was derived from
+     * ONE reading of the target, and the consent gate can hold that reading open for up to two
+     * minutes - {@code ASK_ALWAYS} is the default level, so the prompt is the ordinary case rather
+     * than an unusual one. The path mutex does not help here: it is a lock in this JVM, and the
+     * writer this guards against is an EDT editor, a second workbench or a person with a text
+     * editor. Writing regardless would replace a file nobody looked at with a document assembled
+     * from a file that no longer exists, and report it as a success - the shape this tool refuses
+     * everywhere else.
+     * <p>
+     * The neighbouring branch already works this way: {@code MergeRulesCodec} records the identity
+     * of the empty file a {@code MUST_NOT_EXIST} write reserves and refuses at the move when the
+     * path stops holding it. {@code MAY_BE_REPLACED} moves unconditionally, which is what makes
+     * this the tool's question to ask.
+     *
+     * <h2>Attributes rather than content, and a refusal rather than a second prompt</h2>
+     * The comparison is {@link MergeRulesCodec#isTheFileRead} - the same identity the reservation
+     * is recognised by. Against the writer this exists to catch it is practically exact: a save
+     * stamps the file with the current instant, and the instant this call read it precedes the
+     * dialog by seconds at least, so even a store with two-second timestamp granularity cannot
+     * hide it. A content hash would be stricter and would have to cover the same bytes the parser
+     * consumed - for an archive, the whole file - which is a change to the codec for a case this
+     * threat model does not hold.
+     * <p>
+     * Re-prompting was the alternative and is worse: an honest second prompt means re-running the
+     * pipeline from the read - the sidecar check, the duplicate paths, the comparison's snapshot,
+     * the validation - and showing the operator a SECOND dialog with different numbers inside one
+     * call, which against an active writer is a loop. A refusal is one round trip and it is the
+     * shape this tool already uses for the mirror case, where a file appears on a path that was
+     * free.
+     *
+     * <h2>Absent is not the same observation as changed</h2>
+     * A target that is GONE is refused rather than created: the operator authorised replacing a
+     * file, not creating one where somebody has just removed it. A target that is no longer a
+     * regular file is named as that. A target that cannot be read at all is refused too -
+     * unverifiable is treated as changed, which is the direction {@code isSameFile} and the
+     * reservation's own clean-up already reason in.
+     *
+     * @param file the absolute, normalised target, as read before the gate
+     * @param asRead the target's description taken before the document was read, never
+     *            {@code null} for a rewrite
+     * @return the refusal, or {@code null} when the target is still the file that was read
+     */
+    private static String targetChangedRefusal(Path file, BasicFileAttributes asRead)
+    {
+        String observed;
+        try
+        {
+            BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
+            if (!present.isRegularFile())
+            {
+                observed = "what is on that path now is not a regular file"; //$NON-NLS-1$
+            }
+            else if (!MergeRulesCodec.isTheFileRead(asRead, present))
+            {
+                observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
+            }
+            else
+            {
+                return null;
+            }
+        }
+        catch (NoSuchFileException e) // NOSONAR the absence is the observation
+        {
+            observed = "it is no longer there"; //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            observed = "what is on that path now could not be read (" + describe(e) + ')'; //$NON-NLS-1$
+        }
+        return ToolResult.error("Nothing was written: " + file //$NON-NLS-1$
+            + " changed while consent was being asked - " + observed //$NON-NLS-1$
+            + ". The preview the operator authorized, and the decisions this call was about to " //$NON-NLS-1$
+            + "carry forward, describe the file as it was read BEFORE the prompt, so writing now " //$NON-NLS-1$
+            + "would discard whatever was saved to it since. Read what is on the path now with " //$NON-NLS-1$
+            + "mode '" + MODE_READ + "' and re-send this write against it: with " + KEY_BASED_ON //$NON-NLS-1$ //$NON-NLS-2$
+            + "='" + file + "' to carry its current decisions in, or without " + KEY_BASED_ON //$NON-NLS-1$ //$NON-NLS-2$
+            + " if it is gone and a fresh file is what you want. A fresh prompt then describes " //$NON-NLS-1$
+            + "the file as it is now.").toJson(); //$NON-NLS-1$
     }
 
     /**

@@ -907,15 +907,56 @@ public final class MergeRulesCodec
      */
     static boolean isTheSameFile(BasicFileAttributes taken, BasicFileAttributes present)
     {
-        if (!present.isRegularFile() || present.size() != 0
-            || !taken.creationTime().equals(present.creationTime())
-            || !taken.lastModifiedTime().equals(present.lastModifiedTime()))
+        // The size is the literal 0 and not taken.size(), because the reservation is an EMPTY file
+        // by construction - identifyReservation refuses to record anything else as an identity.
+        // This is the half that holds onto the case that costs something, whatever any key says: a
+        // replacement carrying rules is not empty.
+        return present.isRegularFile() && present.size() == 0 && sameStampsAndKey(taken, present);
+    }
+
+    /**
+     * Whether the file described by {@code present} is the file that was READ - the same question
+     * {@link #isTheSameFile} asks about a reservation, asked about a file of any size.
+     * <p>
+     * The two differ in one clause and share the rest: a reservation is known to be empty, so its
+     * size is compared against zero, while a file that was read is compared against the size it
+     * had when it was read. Everything the shared tail can and cannot tell apart is the same, and
+     * {@code releaseReservation} states it: the key only NARROWS the shape, because a
+     * delete-then-create can be handed back the very inode the first file held, and the residue
+     * the check cannot see is a replacement wearing the same size and both the same instants -
+     * which a POSIX store's inode reuse and NTFS file-system tunnelling both make reachable.
+     * <p>
+     * <b>The access time is deliberately not compared.</b> The caller that holds a description
+     * taken before a prompt has ordinarily READ the file in between - that is what it holds the
+     * description for - and a read updates the access time on the stores that keep one. Comparing
+     * it would refuse every such caller, which is a false refusal rather than a strict one.
+     *
+     * @param read the description taken when the file was read
+     * @param present the description read now
+     * @return whether they describe one unchanged file
+     */
+    public static boolean isTheFileRead(BasicFileAttributes read, BasicFileAttributes present)
+    {
+        return present.isRegularFile() && present.size() == read.size()
+            && sameStampsAndKey(read, present);
+    }
+
+    /**
+     * The half {@link #isTheSameFile} and {@link #isTheFileRead} share: both instants, and the key
+     * where the store answers one.
+     *
+     * @param before the description taken earlier
+     * @param present the description read now
+     * @return whether the two instants match and the key does not contradict them
+     */
+    private static boolean sameStampsAndKey(BasicFileAttributes before, BasicFileAttributes present)
+    {
+        if (!before.creationTime().equals(present.creationTime())
+            || !before.lastModifiedTime().equals(present.lastModifiedTime()))
         {
-            // Not the shape that was claimed, whatever any key says. This is the half that holds
-            // onto the case that costs something: a replacement carrying rules is not empty.
             return false;
         }
-        Object claimedKey = taken.fileKey();
+        Object claimedKey = before.fileKey();
         Object presentKey = present.fileKey();
         if (claimedKey == null && presentKey == null)
         {

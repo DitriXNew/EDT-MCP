@@ -18,12 +18,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -5060,6 +5063,271 @@ public class MergeRulesToolTest
         assertEquals("the refused rewrite must leave the file alone", FIXTURE, read(target)); //$NON-NLS-1$
     }
 
+    // ======== ALLOW authorizes replacing the file that was READ, and no other ========
+    //
+    // The gate can hold for up to 120 seconds, and ASK_ALWAYS is the default level, so the prompt
+    // is the ordinary case. Everything the operator is shown, and every decision the replacement
+    // carries, came from ONE reading taken before it opened. An editor or a second workbench that
+    // saves the file in the meantime is not serialised against this call - the path mutex is a
+    // lock in this JVM only - so the target is asked for its identity again after ALLOW, and a
+    // target that is no longer the file that was read is REFUSED rather than replaced.
+    //
+    // Each of these drives the change through the consent seam itself, which is the only place it
+    // can be driven from: the requester runs at exactly the moment a foreign writer would.
+
+    /**
+     * The plain case: a save lands on the target while the dialog is open, and the write that was
+     * authorized against the OLD file does not happen. The pin that carries the whole point is
+     * the last one - the writer's bytes are still on the path afterwards.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testASamePathRewriteRefusesWhenTheFileChangedWhileConsentWasBeingAsked()
+        throws IOException
+    {
+        Path target = seedFixture();
+        MergeRulesTool tool = toolWithConsent((t, p) -> {
+            saveDuringTheDialog(target, OTHER_FIXTURE.getBytes(StandardCharsets.UTF_8));
+            return DestructiveConsentGate.ConsentDecision.ALLOW;
+        });
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The way out is part of the refusal: read what is there NOW, then re-send against it.
+        assertErrorNaming(result, "changed while consent", "basedOn", "'read'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("the foreign save must still be on the path - a rewrite that went ahead " //$NON-NLS-1$
+            + "would have discarded it and reported a success", OTHER_FIXTURE, read(target)); //$NON-NLS-1$
+    }
+
+    /**
+     * A save that kept the LENGTH - one key edited into another of the same width. The size cannot
+     * see this one and the modification instant can, which is why the identity asks both.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAChangeThatKeptTheSizeIsStillRefused() throws IOException
+    {
+        Path target = seedFixture();
+        String sameLength = FIXTURE.replace("Alpha:Beta:Gamma", "Alpha:Beta:Delta"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("this case is only about the timestamps while the SIZE is unchanged - a " //$NON-NLS-1$
+            + "replacement of another length would be caught by the size and pin nothing", //$NON-NLS-1$
+            FIXTURE.getBytes(StandardCharsets.UTF_8).length,
+            sameLength.getBytes(StandardCharsets.UTF_8).length);
+        MergeRulesTool tool = toolWithConsent((t, p) -> {
+            saveDuringTheDialog(target, sameLength.getBytes(StandardCharsets.UTF_8));
+            return DestructiveConsentGate.ConsentDecision.ALLOW;
+        });
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "changed while consent"); //$NON-NLS-1$
+        assertEquals("the same-length save must survive too", sameLength, read(target)); //$NON-NLS-1$
+    }
+
+    /**
+     * And the mirror: a save that RESTORED the modification instant, which any writer can simply
+     * set. The timestamps cannot see this one and the size can.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAChangeThatKeptTheTimestampsIsStillRefused() throws IOException
+    {
+        Path target = seedFixture();
+        FileTime asSeeded = Files.getLastModifiedTime(target);
+        // Read back INSIDE the requester, at the instant the check runs. Asked after execute() it
+        // would be reading whatever the tool left behind, so a tool that wrongly wrote would move
+        // the instant itself and this pin would fail for the write rather than for the setup.
+        AtomicReference<FileTime> asTheWriterLeftIt = new AtomicReference<>();
+        MergeRulesTool tool = toolWithConsent((t, p) -> {
+            try
+            {
+                Files.write(target, OTHER_FIXTURE.getBytes(StandardCharsets.UTF_8));
+                Files.setLastModifiedTime(target, asSeeded);
+                asTheWriterLeftIt.set(Files.getLastModifiedTime(target));
+            }
+            catch (IOException e)
+            {
+                throw new UncheckedIOException(e);
+            }
+            return DestructiveConsentGate.ConsentDecision.ALLOW;
+        });
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the instant has to be genuinely back when the check runs, or the " //$NON-NLS-1$
+            + "timestamps would be deciding this and the size clause would pin nothing", //$NON-NLS-1$
+            asSeeded, asTheWriterLeftIt.get());
+        assertErrorNaming(result, "changed while consent"); //$NON-NLS-1$
+        assertEquals("the timestamp-preserving save must survive too", OTHER_FIXTURE, //$NON-NLS-1$
+            read(target));
+    }
+
+    /**
+     * The target REMOVED while the dialog was open. Refused, and - the half that matters - the
+     * file is not created either: the operator authorized replacing a file, not creating one on a
+     * path somebody has just cleared.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testASamePathRewriteRefusesWhenTheFileWasRemovedWhileConsentWasBeingAsked()
+        throws IOException
+    {
+        Path target = seedFixture();
+        MergeRulesTool tool = toolWithConsent((t, p) -> {
+            try
+            {
+                Files.delete(target);
+            }
+            catch (IOException e)
+            {
+                throw new UncheckedIOException(e);
+            }
+            return DestructiveConsentGate.ConsentDecision.ALLOW;
+        });
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "no longer there"); //$NON-NLS-1$
+        assertFalse("an absence is not an invitation to create the file", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    /**
+     * A DIRECTORY on the path where the file was. Named as what it is rather than left to the
+     * move to fail on: "not a regular file" tells the caller what to look at, and "Could not write
+     * ... Is a directory" does not.
+     *
+     * @throws IOException when the fixture cannot be written
+     */
+    @Test
+    public void testASamePathRewriteRefusesWhenADirectoryTookTheFilesPlaceWhileConsentWasBeingAsked()
+        throws IOException
+    {
+        Path target = seedFixture();
+        MergeRulesTool tool = toolWithConsent((t, p) -> {
+            try
+            {
+                Files.delete(target);
+                Files.createDirectory(target);
+            }
+            catch (IOException e)
+            {
+                throw new UncheckedIOException(e);
+            }
+            return DestructiveConsentGate.ConsentDecision.ALLOW;
+        });
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "changed while consent", "not a regular file"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the directory must still be there", Files.isDirectory(target)); //$NON-NLS-1$
+    }
+
+    /**
+     * The same proposition for an archive, and it needs saying because a '.zip' target invites the
+     * reading that only its merge-settings ENTRY is at stake. What is replaced is the archive AS A
+     * FILE, so an entry added to it during the dialog changes the file's size and instant and the
+     * rewrite is refused - which closes the second loss on this path too: the sidecar refusal
+     * above is judged by a reading taken BEFORE the prompt.
+     *
+     * @throws IOException when the archive cannot be written or read back
+     */
+    @Test
+    public void testAZipRewriteRefusesWhenTheArchiveChangedWhileConsentWasBeingAsked()
+        throws IOException
+    {
+        Path archive = file("changed-under-us.zip"); //$NON-NLS-1$
+        Files.write(archive, archiveOf(List.of(ENTRY_ID + ".xml"), List.of(FIXTURE))); //$NON-NLS-1$
+        byte[] withASidecar = archiveOf(List.of(ENTRY_ID + ".xml", "notes.txt"), //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(FIXTURE, SIDECAR_TEXT));
+        MergeRulesTool tool =
+            new MergeRulesTool(id -> Optional.of(authority("cmp-7", EVERY_RULE)), (t, p) -> { //$NON-NLS-1$
+                saveDuringTheDialog(archive, withASidecar);
+                return DestructiveConsentGate.ConsentDecision.ALLOW;
+            });
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "changed while consent"); //$NON-NLS-1$
+        // The entry added during the dialog is still in the archive. A rewrite that went ahead
+        // would have produced a fresh single-entry archive and destroyed it - and this call read
+        // the archive when it held one entry, so the sidecar refusal could not have seen it.
+        assertEquals("the archive the writer left must be the one on the path", //$NON-NLS-1$
+            List.of(ENTRY_ID + ".xml", "notes.txt"), zipEntryNames(archive)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A foreign save landing on the target while the consent dialog is open: the bytes, and then
+     * the modification instant moved explicitly forward.
+     * <p>
+     * The instant is SET rather than left to the clock because these tests save microseconds after
+     * the tool read the file, and a store keeping one- or two-second timestamp granularity would
+     * stamp the save with the very instant the read recorded. A real save - seconds or minutes
+     * into a 120-second prompt - cannot hide that way, so the adjustment models the ordinary case
+     * rather than an unusual one.
+     *
+     * @param file the target being saved over
+     * @param bytes what the writer puts there
+     */
+    private static void saveDuringTheDialog(Path file, byte[] bytes)
+    {
+        try
+        {
+            Files.write(file, bytes);
+            Files.setLastModifiedTime(file,
+                FileTime.fromMillis(Files.getLastModifiedTime(file).toMillis() + 60_000L));
+        }
+        catch (IOException e)
+        {
+            // The consent seam cannot declare IOException, and a failure to model the writer has
+            // to fail the test rather than quietly leave the file as it was - which would make
+            // the refusal under test unreachable and the test pass for the wrong reason.
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Builds an archive in memory, so a writer modelled inside the consent seam can put a complete
+     * one on the path in a single call.
+     *
+     * @param names the entry names, in order
+     * @param contents the entry contents, positionally matching {@code names}
+     * @return the archive's bytes
+     */
+    private static byte[] archiveOf(List<String> names, List<String> contents)
+    {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream out = new ZipOutputStream(bytes))
+        {
+            for (int i = 0; i < names.size(); i++)
+            {
+                out.putNextEntry(new ZipEntry(names.get(i)));
+                out.write(contents.get(i).getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+        }
+        catch (IOException e)
+        {
+            throw new UncheckedIOException(e);
+        }
+        return bytes.toByteArray();
+    }
+
     /**
      * What the human is shown. The preview is the whole point of asking: a dialog saying only
      * "merge_rules wants to write" gives nobody anything to decide with, so the file, what
@@ -5096,6 +5364,15 @@ public class MergeRulesToolTest
             subtitle.contains("3 of the 4 decision(s)")); //$NON-NLS-1$
         assertTrue("...and what is LOST: " + subtitle, //$NON-NLS-1$
             subtitle.contains("1 of which replace")); //$NON-NLS-1$
+        // Every number above was computed from ONE reading taken before this dialog opened, and
+        // the sentence is the only place the operator is told what that means. A dialog that
+        // promised it while the tool replaced whatever happened to be on the path would be the
+        // dishonesty this gate exists to remove; testASamePathRewriteRefusesWhenTheFileChanged...
+        // is what makes it good.
+        assertTrue("the preview must promise that the file it DESCRIBES is the file that gets " //$NON-NLS-1$
+            + "replaced: " + subtitle, //$NON-NLS-1$
+            subtitle.contains("The file is described as it was read; if it changes before this " //$NON-NLS-1$
+                + "dialog is answered, nothing is written.")); //$NON-NLS-1$
     }
 
     /**
