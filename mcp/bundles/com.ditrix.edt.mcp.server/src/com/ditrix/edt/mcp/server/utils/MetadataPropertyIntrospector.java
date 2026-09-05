@@ -24,11 +24,19 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.BmUriUtil;
+import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
 import com._1c.g5.v8.dt.mcore.ColorValue;
+import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
+import com._1c.g5.v8.dt.mcore.DateFractions;
+import com._1c.g5.v8.dt.mcore.DateQualifiers;
 import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.NamedElement;
+import com._1c.g5.v8.dt.mcore.NumberQualifiers;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
+import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -140,6 +148,54 @@ public final class MetadataPropertyIntrospector
         public final ValueKind valueKind;
         /** The current value rendered as text (may be {@code null} / empty). */
         public final String currentValue;
+        /**
+         * The same value in the form that answers "is this the SAME value?", which for some kinds
+         * is not the form that answers "what should a reader see?".
+         * <p>
+         * {@link #currentValue} is display text, and display text is allowed to drop what a reader
+         * does not need. A metadata reference renders as the target's bare {@code Name} - the
+         * shortest thing that reads well beside the property - so a broad reference holding
+         * {@code Catalog.Foo} on one side and {@code Document.Foo} on the other renders the same
+         * word {@code Foo} for both. A consumer that COMPARES two sides by their rendered text
+         * therefore called two different targets equal. This field carries the target qualified by
+         * its metadata type, so a comparison sees the difference the display legitimately hides.
+         * <p>
+         * A 1C type is the second such kind, and it hides more than a name. A
+         * {@link ValueKind#TYPE_DESCRIPTION} renders as its type names alone - {@code String},
+         * {@code Number} - while the value ALSO carries the qualifiers that say how long that
+         * string is and how many digits that number has. A {@code String} bounded at 10
+         * characters and an unbounded {@code String} are one word on the page and two different
+         * columns in the database, so this field spells the qualifiers out; see
+         * {@link MetadataPropertyIntrospector#renderTypeDescription}.
+         * <p>
+         * For every other kind it is the same string as {@link #currentValue}: those renderings
+         * already distinguish the values they show. It is never {@code null} while
+         * {@code currentValue} is not, so a caller needing an identity never needs a second branch.
+         * <p>
+         * <b>The reverse DOES happen, and it is the point of the field:</b> a reference target that
+         * is there but carries no printable name renders an EMPTY cell and still has an identity -
+         * its type. A blank cell is the right thing to print for a nameless target (a name column
+         * must not invent one), and it is the WRONG thing to compare, because an unset reference
+         * prints the same blank. Nothing but this field separates "points at an unnamed object" from
+         * "points at nothing". See {@link #referenceTarget(Object)}.
+         * <p>
+         * <b>What it does NOT establish:</b> two targets of the same metadata type carrying the
+         * same {@code Name} under different owners are still one string here. It is a SEMANTIC
+         * identity, and it has to be - the two sides of a comparison are different models, so an
+         * object-level identity (a resource URI, a BM id) would make every logically identical
+         * target look different, which is the opposite error and the worse one.
+         */
+        public final String valueIdentity;
+        /**
+         * Whether reading or rendering the value FAILED, as opposed to the property being empty.
+         * <p>
+         * Both outcomes leave {@link #currentValue} {@code null}, and until this flag existed they
+         * were the same answer to a reader: a dangling proxy whose {@code eGet} threw rendered as
+         * the same blank as a property nobody had set. A consumer that shows values side by side
+         * then presents a failure as a fact about the model - and one that COMPARES them calls two
+         * sides equal because neither could be read.
+         */
+        public final boolean readFailed;
         /** For {@link ValueKind#ENUM} / {@link ValueKind#MANY_ENUM}: allowed literal names. */
         public final List<String> allowedValues;
         /** The owning {@link EStructuralFeature} (for the applier; not serialized). */
@@ -161,13 +217,30 @@ public final class MetadataPropertyIntrospector
         PropertyInfo(String name, ValueKind valueKind, String currentValue, List<String> allowedValues,
             EStructuralFeature feature, boolean onExtInfo)
         {
+            this(name, valueKind, currentValue, allowedValues, feature, onExtInfo, false);
+        }
+
+        PropertyInfo(String name, ValueKind valueKind, String currentValue, List<String> allowedValues,
+            EStructuralFeature feature, boolean onExtInfo, boolean readFailed)
+        {
+            this(name, valueKind, currentValue, null, allowedValues, feature, onExtInfo, readFailed);
+        }
+
+        PropertyInfo(String name, ValueKind valueKind, String currentValue, String valueIdentity,
+            List<String> allowedValues, EStructuralFeature feature, boolean onExtInfo,
+            boolean readFailed)
+        {
             this.name = name;
             this.valueKind = valueKind;
             this.currentValue = currentValue;
+            // A kind with nothing to qualify identifies itself by what it renders. The fallback
+            // lives here rather than at each call site so the two fields cannot drift apart.
+            this.valueIdentity = valueIdentity == null ? currentValue : valueIdentity;
             this.allowedValues = allowedValues == null ? Collections.emptyList()
                 : Collections.unmodifiableList(allowedValues);
             this.feature = feature;
             this.onExtInfo = onExtInfo;
+            this.readFailed = readFailed;
         }
     }
 
@@ -200,8 +273,9 @@ public final class MetadataPropertyIntrospector
             {
                 continue;
             }
-            result.add(new PropertyInfo(feature.getName(), kind, renderCurrent(obj, feature, kind),
-                allowedValuesFor(feature, kind), feature));
+            Rendered current = renderCurrent(obj, feature, kind);
+            result.add(new PropertyInfo(feature.getName(), kind, current.text, current.identity,
+                allowedValuesFor(feature, kind), feature, false, current.failed));
         }
         return result;
     }
@@ -329,8 +403,8 @@ public final class MetadataPropertyIntrospector
         {
             return null;
         }
-        return new PropertyInfo(onExt.name, onExt.valueKind, onExt.currentValue, onExt.allowedValues,
-            onExt.feature, true);
+        return new PropertyInfo(onExt.name, onExt.valueKind, onExt.currentValue, onExt.valueIdentity,
+            onExt.allowedValues, onExt.feature, true, onExt.readFailed);
     }
 
     /**
@@ -441,9 +515,9 @@ public final class MetadataPropertyIntrospector
             ValueKind kind = classify(feature);
             if (kind != null)
             {
-                String current = extInfo != null ? renderCurrent(extInfo, feature, kind) : null;
-                result.add(new PropertyInfo(feature.getName(), kind, current,
-                    allowedValuesFor(feature, kind), feature, true));
+                Rendered current = extInfo != null ? renderCurrent(extInfo, feature, kind) : Rendered.ABSENT;
+                result.add(new PropertyInfo(feature.getName(), kind, current.text, current.identity,
+                    allowedValuesFor(feature, kind), feature, true, current.failed));
             }
         }
         return result;
@@ -531,8 +605,10 @@ public final class MetadataPropertyIntrospector
      * {@code MdObject}, e.g. {@code CommandGroup.Sales}) implement. The generic MdObject check above
      * would miss it (the DECLARED target type is the mcore interface, not the mdclass one), so a
      * reference declared against that mcore interface is admitted too - issue #262. Only the metadata
-     * {@code CommandGroup} resolves by FQN; a {@code StandardCommandGroup} value is out of scope (see
-     * {@code ModifyMetadataTool}'s reference-not-found handling).</p>
+     * {@code CommandGroup} resolves by FQN, so WRITING a {@code StandardCommandGroup} stays out of
+     * scope (see {@code ModifyMetadataTool}'s reference-not-found handling) - but what a feature
+     * admits, it must also READ: an admitted target that is present is rendered and identified by
+     * {@link #referenceTarget}, never reported as an empty property.</p>
      */
     private static ValueKind classifyReference(EReference ref)
     {
@@ -729,50 +805,122 @@ public final class MetadataPropertyIntrospector
         return values;
     }
 
-    private static String renderCurrent(EObject obj, EStructuralFeature feature, ValueKind kind)
+    /**
+     * One rendering attempt, kept apart from its result so that "nothing there" and "could not
+     * look" do not arrive at the caller as the same {@code null}.
+     */
+    private static final class Rendered
+    {
+        /** No value, and nothing went wrong: the property is genuinely empty. */
+        static final Rendered ABSENT = new Rendered(null, null, false);
+        /** Reading or rendering threw, so nothing is known about the value. */
+        static final Rendered FAILED = new Rendered(null, null, true);
+
+        final String text;
+        /** The same value as an identity; see {@link PropertyInfo#valueIdentity}. */
+        final String identity;
+        final boolean failed;
+
+        private Rendered(String text, String identity, boolean failed)
+        {
+            this.text = text;
+            this.identity = identity;
+            this.failed = failed;
+        }
+
+        /** A rendering that identifies itself: what it shows is exactly what it is. */
+        static Rendered of(String text)
+        {
+            return of(text, text);
+        }
+
+        /**
+         * A rendering whose displayed text is DELIBERATELY shorter than the value it stands for.
+         *
+         * @param text what a reader sees
+         * @param identity what the value is, for a caller that compares rather than prints
+         * @return the rendering, or {@link #ABSENT} when there is no value to show
+         */
+        static Rendered of(String text, String identity)
+        {
+            return text == null ? ABSENT : new Rendered(text, identity, false);
+        }
+
+        /**
+         * A value that IS there, whatever it renders as.
+         *
+         * <p>{@link #of(String, String)} folds a {@code null} text into {@link #ABSENT}, which is
+         * right for the kinds whose renderer returns {@code null} to mean "there is nothing here",
+         * and wrong for a reference: whether a reference is empty was already decided by
+         * {@code eGet} returning {@code null}, before any rendering. A target that is present but
+         * has no printable name is not an unset reference, and reporting it as one is the same
+         * mistake this class documents for a failed read - two sides that both say "nothing"
+         * compare equal.</p>
+         *
+         * @param text what a reader sees; {@code null} prints as an empty cell
+         * @param identity what the value IS; a blank one cannot be told from an unset reference
+         * @return the rendering, or {@link #FAILED} when nothing at all identifies the value
+         */
+        static Rendered present(String text, String identity)
+        {
+            // Not "absent": a value we cannot identify is a value we know nothing about, and the
+            // empty identity an ABSENT would carry is exactly the one an unset reference carries.
+            return identity == null || identity.isEmpty() ? FAILED
+                : new Rendered(text, identity, false);
+        }
+    }
+
+    private static Rendered renderCurrent(EObject obj, EStructuralFeature feature, ValueKind kind)
     {
         // The whole render is guarded: reading or rendering one feature (e.g. a dangling type proxy
         // whose name resolver is unavailable) must NOT abort introspecting the rest of the object.
+        // The guard REPORTS, though - answering ABSENT here would make a failed read look like an
+        // unset property, which is the one thing a side-by-side comparison must never do.
         try
         {
             Object value = obj.eGet(feature);
             if (value == null)
             {
-                return null;
+                return Rendered.ABSENT;
             }
             switch (kind)
             {
                 case LOCALIZED_STRING:
-                    return renderLocalizedString(value);
+                    return Rendered.of(renderLocalizedString(value));
                 case TYPE_DESCRIPTION:
-                    return value instanceof TypeDescription ? renderType((TypeDescription)value) : null;
+                    return value instanceof TypeDescription
+                        ? renderTypeDescription((TypeDescription)value) : Rendered.ABSENT;
                 case ENUM:
                     // Render via the literal NAME so "Current" shares the vocabulary of allowedValues.
-                    return value instanceof org.eclipse.emf.common.util.Enumerator enumerator
-                        ? enumerator.getName() : String.valueOf(value);
+                    return Rendered.of(value instanceof org.eclipse.emf.common.util.Enumerator enumerator
+                        ? enumerator.getName() : String.valueOf(value));
                 case MANY_ENUM:
-                    return renderEnumList(value);
+                    return Rendered.of(renderEnumList(value));
                 case REFERENCE:
-                    return value instanceof MdObject ? ((MdObject)value).getName() : null;
+                    return referenceTarget(value);
                 case MANY_REFERENCE:
                     return renderReferenceList(value);
                 case MCORE_VALUE_LIST:
+                    // The one kind here that answers with a Rendered of its own, because it is the
+                    // one whose "no text" does not mean "no value": eGet already handed back a
+                    // list, so anything the renderer cannot turn into text is a list it could not
+                    // READ. See renderMcoreValueList.
                     return renderMcoreValueList(value);
                 case STYLE_VALUE:
-                    return renderStyleValue(value);
+                    return Rendered.of(renderStyleValue(value));
                 case PICTURE:
-                    return renderPicture(value);
+                    return Rendered.of(renderPicture(value));
                 case QNAME:
-                    return value instanceof QName ? renderQName((QName)value) : null;
+                    return Rendered.of(value instanceof QName ? renderQName((QName)value) : null);
                 case ADJUSTABLE_BOOLEAN:
-                    return renderAdjustableBoolean(value);
+                    return Rendered.of(renderAdjustableBoolean(value));
                 default:
-                    return String.valueOf(value);
+                    return Rendered.of(String.valueOf(value));
             }
         }
         catch (Exception e)
         {
-            return null;
+            return Rendered.FAILED;
         }
     }
 
@@ -800,30 +948,179 @@ public final class MetadataPropertyIntrospector
         return sb.toString();
     }
 
-    private static String renderReferenceList(Object value)
+    /**
+     * The many-valued sibling of {@link #referenceTarget}, and deliberately narrower: it names
+     * {@link MdObject} elements only.
+     *
+     * <p>That is not the omission it looks like next to {@link #referenceTarget}. The MANY kind is
+     * reached only for a many-valued reference that {@link #classifyReference} admitted, and a
+     * census of the platform's own models - {@code model/MdClass.xcore} and {@code model/Form.xcore}
+     * inside the EDT bundles - finds every one of those declared against an {@code MdObject}
+     * subtype. The one non-{@code MdObject} family the classifier admits, the mcore
+     * {@code CommandGroup}, is referenced exactly three times and all three are SINGLE-valued
+     * ({@code StandardCommand.group}, {@code BasicCommand.group},
+     * {@code FormCommandInterfaceItem.group}). There is no many-valued shape to render, so widening
+     * this method would add a branch no model can enter and no test can redden.</p>
+     *
+     * @param value the feature value, expected to be an {@code EList}
+     * @return the rendering, or {@link Rendered#ABSENT} when the list holds nothing nameable
+     */
+    private static Rendered renderReferenceList(Object value)
     {
         if (!(value instanceof EList<?>))
         {
-            return null;
+            return Rendered.ABSENT;
         }
         EList<?> list = (EList<?>)value;
         if (list.isEmpty())
         {
-            return null;
+            return Rendered.ABSENT;
         }
-        StringBuilder sb = new StringBuilder();
+        // Two strings out of one walk: the reader gets the bare names, a comparison gets the same
+        // targets qualified by type. Built together so they can never disagree about which
+        // elements the property holds, or in which order.
+        StringBuilder shown = new StringBuilder();
+        StringBuilder identity = new StringBuilder();
         for (Object element : list)
         {
             if (element instanceof MdObject)
             {
-                if (sb.length() > 0)
+                if (shown.length() > 0)
                 {
-                    sb.append(", "); //$NON-NLS-1$
+                    shown.append(", "); //$NON-NLS-1$
+                    identity.append(", "); //$NON-NLS-1$
                 }
-                sb.append(((MdObject)element).getName());
+                shown.append(((MdObject)element).getName());
+                identity.append(qualifiedName((EObject)element, ((MdObject)element).getName()));
             }
         }
-        return sb.length() > 0 ? sb.toString() : null;
+        return shown.length() > 0 ? Rendered.of(shown.toString(), identity.toString())
+            : Rendered.ABSENT;
+    }
+
+    /**
+     * One PRESENT reference target, as the pair this class deals in: the cell a reader sees and the
+     * identity a comparison uses.
+     *
+     * <p>Everything that reaches here is present - {@link #renderCurrent} answers
+     * {@link Rendered#ABSENT} for a feature whose {@code eGet} is {@code null}, before the switch -
+     * so this method never answers absent. It used to, for every target that is not an
+     * {@link MdObject}, and {@link #classifyReference} deliberately admits a family that is not:
+     * a reference declared against the mcore {@code CommandGroup} interface (issue #262). Read from
+     * the platform's own model, that interface has three concrete types - the metadata
+     * {@code CommandGroup} (an {@code MdObject}), the platform's {@code StandardCommandGroup}, and
+     * the command-interface derived-data {@code UnresolvedGroup} - and only the first was rendered.
+     * The other two came back as {@code (null, null, not-failed)}, which is the SAME answer as
+     * "this command has no group", so a command sitting in one standard group on one side and
+     * another on the other side compared EQUAL and vanished from the differing properties.</p>
+     *
+     * <p>What a target is CALLED is a separate question with more than one answer -
+     * {@link #referenceTargetName}. What a target IS always has one: its type, which is why the
+     * identity is built from the type even when there is no name to hang on it.</p>
+     *
+     * @param value the reference value, never {@code null}
+     * @return the rendering; {@link Rendered#FAILED} only for a value with neither a name nor an
+     *     EClass name, which no object of a generated EMF model is
+     */
+    private static Rendered referenceTarget(Object value)
+    {
+        String name = referenceTargetName(value);
+        return value instanceof EObject
+            ? Rendered.present(name, qualifiedName((EObject)value, name))
+            // Unreachable through an EReference, whose values are EObjects by definition. Kept so
+            // that a value this method cannot type is still not published as an absent one.
+            : Rendered.present(name, name);
+    }
+
+    /**
+     * What the PLATFORM calls a reference target, asked of the interface that actually declares the
+     * name rather than of one accessor assumed to be universal.
+     *
+     * <p>{@code MdObject.getName()} is NOT universal. {@link MdObject} declares its own
+     * {@code String[1] name} and does not extend mcore's {@link NamedElement}: the two naming
+     * contracts are unrelated types that spell the accessor alike. (Read from {@code model/
+     * MdClass.xcore} and {@code model/Mcore.xcore} inside the EDT bundles - the Javadoc shows the
+     * accessors but not which interface introduces them.) The admitted targets, and their answer:</p>
+     * <ul>
+     * <li>an {@link MdObject} - {@code MdObject.getName()}, e.g. {@code Sales};</li>
+     * <li>an mcore {@link NamedElement} - its own {@code getName()}. The
+     * {@code StandardCommandGroup} the {@code CommandGroup} interface admits is a
+     * {@code DuallyNamedElement}, which extends {@code NamedElement}, so the general interface
+     * answers it; the platform's catalogue of those names is
+     * {@code IEObjectStandardCommandGroupNames} ({@code FormCommandBarImportant},
+     * {@code NavigationPanelSeeAlso}, ...), and that is the token a {@code .mdo} stores. A group
+     * that carries no name still carries the {@code category} its own class declares, and the
+     * category is what the rest of this server already prints for such a group (the formatter layer
+     * elects the enum as a wrapper's primary value), so it stands in - a half-built group is still
+     * not the same value as a differently-categorised one;</li>
+     * <li>anything else, including the derived-data {@code UnresolvedGroup} that lives in another
+     * bundle - no name. It is not thereby absent: {@link #referenceTarget} still identifies it by
+     * its type.</li>
+     * </ul>
+     *
+     * <p>This says nothing about WRITING such a value: a standard group is not addressable by FQN
+     * and {@code modify_metadata} still refuses it. Reading and reporting one is what was missing.</p>
+     *
+     * @param value the reference target, never {@code null}
+     * @return the target's name, or {@code null} when the platform gives it none
+     */
+    private static String referenceTargetName(Object value)
+    {
+        if (value instanceof MdObject)
+        {
+            return ((MdObject)value).getName();
+        }
+        if (value instanceof NamedElement)
+        {
+            String name = ((NamedElement)value).getName();
+            if (name != null && !name.isEmpty())
+            {
+                return name;
+            }
+            if (value instanceof StandardCommandGroup)
+            {
+                // Rendered through the literal NAME, the same vocabulary the ENUM kind publishes.
+                CommandGroupCategory category = ((StandardCommandGroup)value).getCategory();
+                return category == null ? null : category.getName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A reference target as {@code Type.Name} - the form that still says WHICH object it is once
+     * the bare {@code Name} no longer does.
+     *
+     * <p>A broad reference (a subsystem's {@code content} is declared against the abstract
+     * {@code MdObject}, so it holds objects of any type) can name {@code Catalog.Foo} on one side
+     * and {@code Document.Foo} on the other. Both render {@code Foo}, and a consumer comparing the
+     * rendered text called them equal - see {@link PropertyInfo#valueIdentity}.</p>
+     *
+     * <p>The type is the object's CONCRETE EClass, not the reference's declared target type: it is
+     * the declared type being broad that creates the ambiguity in the first place, so only the
+     * actual object can resolve it.</p>
+     *
+     * <p>A target with NO name is identified by that type alone. The alternative - no identity -
+     * is the empty string an unset reference carries, and "points at an unnamed object" and "points
+     * at nothing" are not the same fact. Two unnamed targets of the same type do collapse into one
+     * identity; that is the same semantic-identity limit {@link PropertyInfo#valueIdentity} states
+     * for two same-named targets under different owners, and it is the safe direction: a comparison
+     * of two different models has no object identity it could use instead.</p>
+     *
+     * @param object the reference target, never {@code null}
+     * @param name the target's name, or {@code null} / empty when it has none
+     * @return {@code Type.Name}; the bare type when there is no name; the bare name when the object
+     *     has no EClass name to qualify by; {@code null} when it has neither
+     */
+    private static String qualifiedName(EObject object, String name)
+    {
+        EClass type = object.eClass();
+        String typeName = type == null ? null : type.getName();
+        if (name == null || name.isEmpty())
+        {
+            return typeName;
+        }
+        return typeName == null ? name : typeName + '.' + name;
     }
 
     /** Renders a many-valued enum to the same JSON array of literal names accepted on the wire. */
@@ -845,12 +1142,37 @@ public final class MetadataPropertyIntrospector
         return rendered.toString();
     }
 
-    /** Renders a contained mcore Value list to the same JSON array of strings accepted on the wire. */
-    private static String renderMcoreValueList(Object value)
+    /**
+     * Renders a contained mcore Value list to the same JSON array of strings accepted on the wire.
+     *
+     * <h2>Why every giving-up branch here answers {@link Rendered#FAILED} and not {@code null}</h2>
+     * {@link #renderCurrent} has already asked {@code eGet}, and a property nobody set answered
+     * {@code null} THERE, before this method was called. An empty list answers {@code []}, which is
+     * a text. So by the time any branch below gives up, there IS a value: a non-empty list this
+     * method could not turn into text. Handing that back as an absent rendering published a failure
+     * as a fact about the model.
+     * <p>
+     * The path the branches actually cover in a live configuration is a {@code ReferenceValue}
+     * pointing at an XDTO package that will not resolve. {@code EcoreUtil.resolve} swallows the
+     * exception and hands back the proxy itself, whose {@code name} is unset - so the entry falls
+     * out here with nothing read about which package it named.
+     * <p>
+     * The cost of calling that absence was paid one consumer further out. The comparison renderer
+     * turns an absent value into an empty cell AND an empty {@code valueIdentity}, and two sides
+     * whose entries both failed to resolve then carry the same empty identity - so
+     * {@code ComparisonNodeRenderer.compare} finds one distinct value and reports SAME for two
+     * lists that may name entirely different packages. {@link Rendered#FAILED} is what makes that
+     * row {@code UNDETERMINED} instead: not a claim that the sides differ, just the refusal to
+     * claim they agree on something neither side was read for.
+     *
+     * @param value the feature's value, never {@code null}
+     * @return the JSON array, or {@link Rendered#FAILED} for a list that could not be read
+     */
+    private static Rendered renderMcoreValueList(Object value)
     {
         if (!(value instanceof EList<?>))
         {
-            return null;
+            return Rendered.FAILED;
         }
         JsonArray rendered = new JsonArray();
         for (Object element : (EList<?>)value)
@@ -864,7 +1186,7 @@ public final class MetadataPropertyIntrospector
                     : resolvingGet(referenceValue, valueFeature);
                 if (!(target instanceof XDTOPackage))
                 {
-                    return null;
+                    return Rendered.FAILED;
                 }
                 EObject targetObject = (EObject)target;
                 EStructuralFeature nameFeature =
@@ -872,7 +1194,7 @@ public final class MetadataPropertyIntrospector
                 Object name = nameFeature == null ? null : resolvingGet(targetObject, nameFeature);
                 if (name == null || name.toString().isEmpty())
                 {
-                    return null;
+                    return Rendered.FAILED;
                 }
                 rendered.add(McoreValueListBuilder.XDTO_PREFIX + name);
             }
@@ -885,16 +1207,16 @@ public final class MetadataPropertyIntrospector
                     : resolvingGet(stringValue, valueFeature);
                 if (namespace == null || namespace.toString().isEmpty())
                 {
-                    return null;
+                    return Rendered.FAILED;
                 }
                 rendered.add(namespace.toString());
             }
             else
             {
-                return null;
+                return Rendered.FAILED;
             }
         }
-        return rendered.toString();
+        return Rendered.of(rendered.toString());
     }
 
     /** Reads a feature normally while keeping a failed proxy resolution local to its rendered value. */
@@ -1059,12 +1381,38 @@ public final class MetadataPropertyIntrospector
             : "{" + nsUri + "}" + name; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private static String renderType(TypeDescription typeDesc)
+    /**
+     * Renders a {@code TypeDescription} for a reader, and beside it - in the same walk - the form
+     * that says WHICH {@code TypeDescription} it is.
+     *
+     * <p>The two are not the same string, and the gap is not cosmetic. A {@code TypeDescription}
+     * is a set of type names PLUS the qualifiers that bound them: {@code String} carries a length
+     * and a fixed flag, {@code Number} a precision, a scale and a sign, {@code Date} which of the
+     * date and the time it stores, and a binary type its own length and fixed flag. The cell shows
+     * the names only, because that is what a type column is for - and it means a {@code String}
+     * bounded at 10 characters and a {@code String} bounded at 100 print the same six letters.
+     * Comparing those cells answered SAME for two attributes EDT stores as different columns.
+     * Both spellings occur side by side in an ordinary configuration: an attribute typed
+     * {@code String} with an empty {@code <stringQualifiers/>} and another with
+     * {@code <length>10</length>} sit in one {@code .mdo} file.</p>
+     *
+     * <p>A qualifier group whose every field still holds the model default is left OUT of the
+     * identity, and that is deliberate rather than an optimisation. EDT writes the empty element
+     * {@code <stringQualifiers/>} for an unbounded string, so one side can hold a defaulted
+     * qualifier object where the other holds none at all while both mean the same unbounded type.
+     * Spelling the group out unconditionally would turn that into a reported difference - the
+     * opposite error to the one this method exists to stop, and the more annoying of the two,
+     * because it would fire on ordinary configurations rather than on a specific pair of values.</p>
+     *
+     * @param typeDesc the value to render, never {@code null}
+     * @return the rendering, or {@link Rendered#ABSENT} when the description names no type
+     */
+    private static Rendered renderTypeDescription(TypeDescription typeDesc)
     {
         EList<TypeItem> types = typeDesc.getTypes();
         if (types == null || types.isEmpty())
         {
-            return null;
+            return Rendered.ABSENT;
         }
         StringBuilder sb = new StringBuilder();
         for (TypeItem item : types)
@@ -1076,6 +1424,58 @@ public final class MetadataPropertyIntrospector
             String name = McoreUtil.getTypeName(item);
             sb.append(name != null ? name : String.valueOf(item));
         }
+        String text = sb.toString();
+        String qualifiers = renderQualifiers(typeDesc);
+        // The separator is one no 1C type name can carry, so a type list and a qualifier list
+        // cannot be read as each other however either of them is spelled.
+        return Rendered.of(text, qualifiers.isEmpty() ? text : text + " | " + qualifiers); //$NON-NLS-1$
+    }
+
+    /**
+     * The qualifier half of {@link #renderTypeDescription}: every qualifier group the description
+     * holds that says anything, in the order {@code TypeDescription} declares them.
+     *
+     * @param typeDesc the description to read
+     * @return the qualifiers, or an empty string when none of them departs from the default
+     */
+    private static String renderQualifiers(TypeDescription typeDesc)
+    {
+        StringBuilder sb = new StringBuilder();
+        NumberQualifiers number = typeDesc.getNumberQualifiers();
+        if (number != null
+            && (number.getPrecision() != 0 || number.getScale() != 0 || number.isNonNegative()))
+        {
+            appendQualifier(sb, "numberQualifiers(precision=" + number.getPrecision() //$NON-NLS-1$
+                + ", scale=" + number.getScale() //$NON-NLS-1$
+                + ", nonNegative=" + number.isNonNegative() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        StringQualifiers string = typeDesc.getStringQualifiers();
+        if (string != null && (string.getLength() != 0 || string.isFixed()))
+        {
+            appendQualifier(sb, "stringQualifiers(length=" + string.getLength() //$NON-NLS-1$
+                + ", fixed=" + string.isFixed() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        DateQualifiers date = typeDesc.getDateQualifiers();
+        DateFractions fractions = date == null ? null : date.getDateFractions();
+        if (fractions != null && fractions != DateFractions.DATE_TIME)
+        {
+            appendQualifier(sb, "dateQualifiers(dateFractions=" + fractions.getName() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        BinaryQualifiers binary = typeDesc.getBinaryQualifiers();
+        if (binary != null && (binary.getLength() != 0 || binary.isFixed()))
+        {
+            appendQualifier(sb, "binaryQualifiers(length=" + binary.getLength() //$NON-NLS-1$
+                + ", fixed=" + binary.isFixed() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return sb.toString();
+    }
+
+    private static void appendQualifier(StringBuilder sb, String qualifier)
+    {
+        if (sb.length() > 0)
+        {
+            sb.append(", "); //$NON-NLS-1$
+        }
+        sb.append(qualifier);
     }
 }

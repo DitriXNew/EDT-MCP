@@ -177,6 +177,19 @@ public final class InputSchemaCompactor
         keep.put("delete_infobase", //$NON-NLS-1$
             asSet("deleteRegistration", "deleteDatabaseFiles")); //$NON-NLS-1$ //$NON-NLS-2$
         keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The one parameter of the three-way comparison family whose prose warns about an effect
+        // of THAT parameter: in write mode the named file is REPLACED at the same path, and only when
+        // 'basedOn' names that same file - any other write over an existing file is refused. A
+        // caller that cannot see the condition either loses decisions it meant to keep or cannot
+        // find the one call shape that updates a rules file at all.
+        // Nothing else in that family is kept, deliberately: compare_configurations and
+        // get_comparison_node state their load-bearing facts in the TOOL description (the single
+        // comparison slot, that a FINISHED comparison is freed only by releaseComparisonId and not
+        // by cancel_job, that omitting scope compares everything, that an unfinished subtree is
+        // reported as unfinished), so a KEEP entry would pay twice for the same sentence; and
+        // merge_rules.decisions needs no entry because it is an opaque payload, kept structurally
+        // by isOpaquePayload with its {path, rule} shape and rule vocabulary intact.
+        keep.put("merge_rules", asSet("filePath")); //$NON-NLS-1$ //$NON-NLS-2$
         // debug=true also changes the return contract (a wait_for_break follow-up).
         // launchConfigurationName OR projectName+applicationId - the same target-selector
         // contract the grader models, and the arms produced project-only calls without it.

@@ -20,6 +20,8 @@ import org.eclipse.emf.common.util.EMap;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
@@ -479,21 +481,26 @@ public class AbstractMetadataFormatterTest
     @Test
     public void testFormatDynamicValueEmptyCollectionReturnsDash()
     {
-        assertEquals("-", f.formatDynamicValue(new ArrayList<>(), "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<MdObject> empty = new ArrayList<>();
+        assertEquals("-", f.formatDynamicValue(empty, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("-", f.formatDynamicValue(empty, "en", false)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("-", f.formatDynamicValue(empty, "en", true)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testFormatDynamicValueSmallCollectionInlinedAsCommaList()
     {
-        // A small (<= 5) collection of MdObjects is inlined as "Type.Name, Type.Name".
-        Catalog a = MdClassFactory.eINSTANCE.createCatalog();
-        a.setName("A"); //$NON-NLS-1$
-        Catalog b = MdClassFactory.eINSTANCE.createCatalog();
-        b.setName("B"); //$NON-NLS-1$
         List<MdObject> list = new ArrayList<>();
-        list.add(a);
-        list.add(b);
-        assertEquals("Catalog.A, Catalog.B", f.formatDynamicValue(list, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 5; i++)
+        {
+            Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+            catalog.setName("C" + i); //$NON-NLS-1$
+            list.add(catalog);
+        }
+        String expected = "Catalog.C0, Catalog.C1, Catalog.C2, Catalog.C3, Catalog.C4"; //$NON-NLS-1$
+        assertEquals(expected, f.formatDynamicValue(list, "en")); //$NON-NLS-1$
+        assertEquals(expected, f.formatDynamicValue(list, "en", false)); //$NON-NLS-1$
+        assertEquals(expected, f.formatDynamicValue(list, "en", true)); //$NON-NLS-1$
     }
 
     @Test
@@ -508,6 +515,23 @@ public class AbstractMetadataFormatterTest
             list.add(c);
         }
         assertEquals("[6 items]", f.formatDynamicValue(list, "en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("[6 items]", f.formatDynamicValue(list, "en", false)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatDynamicValueLargeCollectionUnboundedPrintsAllItems()
+    {
+        List<MdObject> list = new ArrayList<>();
+        for (int i = 0; i < 6; i++)
+        {
+            Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+            catalog.setName("C" + i); //$NON-NLS-1$
+            list.add(catalog);
+        }
+
+        String result = f.formatDynamicValue(list, "en", true); //$NON-NLS-1$
+        assertEquals("Catalog.C0, Catalog.C1, Catalog.C2, Catalog.C3, Catalog.C4, Catalog.C5", result); //$NON-NLS-1$
+        assertFalse(result.contains("items]")); //$NON-NLS-1$
     }
 
     @Test
@@ -642,6 +666,29 @@ public class AbstractMetadataFormatterTest
         assertTrue("the section title must be emitted, got:\n" + out, out.contains("### All Properties")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("a Property/Value table must be opened", out.contains("| Property | Value |")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the set Name scalar must appear", out.contains("| Name | Products |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatAllDynamicPropertiesPrintsEveryLargeCollectionItemInOneRow()
+    {
+        Document document = MdClassFactory.eINSTANCE.createDocument();
+        document.setName("Sale"); //$NON-NLS-1$
+        for (int i = 0; i < 6; i++)
+        {
+            InformationRegister register = MdClassFactory.eINSTANCE.createInformationRegister();
+            register.setName("Register" + i); //$NON-NLS-1$
+            document.getRegisterRecords().add(register);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        f.formatAllDynamicProperties(sb, document, "en", "All Properties"); //$NON-NLS-1$ //$NON-NLS-2$
+        String out = sb.toString();
+
+        assertTrue(out.contains("| Register Records | InformationRegister.Register0, " //$NON-NLS-1$
+            + "InformationRegister.Register1, InformationRegister.Register2, " //$NON-NLS-1$
+            + "InformationRegister.Register3, InformationRegister.Register4, " //$NON-NLS-1$
+            + "InformationRegister.Register5 |\n")); //$NON-NLS-1$
+        assertFalse(out.contains("items]")); //$NON-NLS-1$
     }
 
     private static int countChar(String s, char c)

@@ -30,12 +30,12 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * guard forces the correct order (create the module + Exported method first, THEN bind it) by failing
  * fast, at validation time, with an actionable error.
  *
- * <p>Both properties reference a {@link CommonModule} method as {@code <ModuleName>.<MethodName>},
- * optionally prefixed with the {@code CommonModule} type token (mdclass stores an EventSubscription's
- * {@code handler} as {@code CommonModule.<ModuleName>.<MethodName>}; a bare
- * {@code <ModuleName>.<MethodName>} is the live-verified ScheduledJob {@code methodName} form, e.g.
- * {@code "Calc.Add"}). {@link #validate} runs four checks, in order, failing fast on the first that does
- * not hold:</p>
+ * <p>Both properties store a {@link CommonModule} method as
+ * {@code CommonModule.<ModuleName>.<MethodName>}. A bare {@code <ModuleName>.<MethodName>} or a reference
+ * prefixed with the Russian {@code ОбщийМодуль} type token is accepted as input and normalized to that
+ * canonical form. The platform rejects a ScheduledJob {@code methodName} stored in the short form when
+ * loading a configuration extension because it cannot resolve the method reference. {@link #validate}
+ * runs four checks, in order, failing fast on the first that does not hold:</p>
  * <ol>
  * <li>the value parses as a module/method reference (has a dot separating a module part from a method
  * name);</li>
@@ -349,15 +349,11 @@ public final class MethodReferenceValidator
      * parse/resolve (callers run {@link #validate} first, so {@code null} is only a defensive fallback -
      * they then keep the raw value). The canonical form uses the RESOLVED module's exact metadata name
      * (so a tolerated case/prefix variant is not serialized verbatim into the model, where the
-     * platform's own resolution would then miss it):
-     * <ul>
-     * <li>{@code withTypePrefix == false} (a ScheduledJob's {@code methodName}):
-     * {@code <ModuleName>.<MethodName>};</li>
-     * <li>{@code withTypePrefix == true} (an EventSubscription's {@code handler}):
-     * {@code CommonModule.<ModuleName>.<MethodName>}.</li>
-     * </ul>
+     * platform's own resolution would then miss it). Both a ScheduledJob's {@code methodName} and an
+     * EventSubscription's {@code handler} use
+     * {@code CommonModule.<ModuleName>.<MethodName>}.
      */
-    public static String canonicalReference(Configuration config, String rawValue, boolean withTypePrefix)
+    public static String canonicalReference(Configuration config, String rawValue)
     {
         ParsedReference parsed = parse(rawValue, "", "", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (parsed.error != null)
@@ -369,8 +365,7 @@ public final class MethodReferenceValidator
         {
             return null;
         }
-        String base = moduleObj.getName() + "." + parsed.methodName; //$NON-NLS-1$
-        return withTypePrefix ? COMMON_MODULE_TYPE + "." + base : base; //$NON-NLS-1$
+        return COMMON_MODULE_TYPE + "." + moduleObj.getName() + "." + parsed.methodName; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

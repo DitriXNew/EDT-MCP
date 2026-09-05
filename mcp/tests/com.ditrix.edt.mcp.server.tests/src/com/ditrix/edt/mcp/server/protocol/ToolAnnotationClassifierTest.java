@@ -43,6 +43,22 @@ public class ToolAnnotationClassifierTest
         }
     }
 
+    /**
+     * merge_rules in mode 'write' REPLACES the file named by basedOn, and what that file held is
+     * gone with it. A client reading destructiveHint=false as "additive only" would perform that
+     * without asking. Its own refusal of every OTHER replacement does not make this one
+     * recoverable, and the hint is per tool, so its read half cannot soften it.
+     */
+    @Test
+    public void testMergeRulesIsDestructiveBecauseItsWriteHalfReplacesAFile()
+    {
+        ToolAnnotations a = ToolAnnotationClassifier.classify("merge_rules");
+        assertEquals("merge_rules must be destructiveHint=true", Boolean.TRUE,
+            a.getDestructiveHint());
+        assertEquals("merge_rules must be readOnlyHint=false", Boolean.FALSE,
+            a.getReadOnlyHint());
+    }
+
     @Test
     public void testRecoverableWritesAreNotDestructive()
     {

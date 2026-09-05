@@ -9,7 +9,7 @@ r.text — for a JSON tool r.text is just the placeholder/content text).
 It returns a fixed snapshot of the running server:
   port, running, protocolVersion, pluginVersion, edtVersion,
   enabledTools, totalTools, plainTextMode, checksFolderConfigured, authEnabled,
-  formRenderFlags { nativeFormBufferedLayoutRender, nativeFormLayoutRender }.
+  formRenderFlags { nativeFormLayoutRender, nativeFormBufferedLayoutRender }.
 
 Stable, code-anchored expectations (from the real impl, verified against source):
   - protocolVersion == McpConstants.PROTOCOL_VERSION == "2025-11-25"
@@ -17,8 +17,12 @@ Stable, code-anchored expectations (from the real impl, verified against source)
     and server.isRunning() must be true; a broken tool that hardcodes the
     headless `false` branch would fail here)
   - totalTools / enabledTools are positive ints (registry is populated)
-  - formRenderFlags carries BOTH named JVM-flag keys (the diagnostic for a blank
-    form screenshot) — these key names are the load-bearing contract.
+  - formRenderFlags carries BOTH named JVM-flag keys, each with the render mode
+    sampled at plugin activation (the diagnostic for a blank form screenshot).
+    Deliberately not called "effective": EDT binds buffered render once, when
+    HippoLayoutService initialises its static singleton, and nothing can report
+    which side of that moment a runtime force landed on without initialising the
+    class and thereby deciding it.
 
 NEGATIVE MATRIX — why it is minimal (documented, not fudged):
   The tool has NO parameters: no required param to omit, no enum to violate, no
@@ -106,18 +110,32 @@ def test_returns_live_server_snapshot_and_does_not_mutate():
                 "expected boolean %s, got %r" % (key, s.get(key)))
 
     # --- formRenderFlags: the blank-screenshot diagnostic. BOTH named keys are the
-    # load-bearing contract; their presence proves the nested object was built.
+    # load-bearing contract; each must expose the render mode at plugin activation.
     flags = s.get("formRenderFlags")
     if not isinstance(flags, dict):
         raise AssertionError("expected formRenderFlags object, got %r" % (flags,))
-    for fk in ("nativeFormBufferedLayoutRender", "nativeFormLayoutRender"):
+    for fk in ("nativeFormLayoutRender", "nativeFormBufferedLayoutRender"):
         if fk not in flags:
             raise AssertionError(
                 "formRenderFlags must contain key %r; got keys %r"
                 % (fk, sorted(flags.keys())))
-        if not isinstance(flags[fk], bool):
+        state = flags[fk]
+        if not isinstance(state, dict):
             raise AssertionError(
-                "formRenderFlags[%r] must be a boolean, got %r" % (fk, flags[fk]))
+                "formRenderFlags[%r] must be an object, got %r" % (fk, state))
+        if state.get("atStartup") not in {"on", "off", "unknown"}:
+            raise AssertionError(
+                "formRenderFlags[%r].atStartup must be on, off, or unknown; got %r"
+                % (fk, state.get("atStartup")))
+        if "effective" in state:
+            raise AssertionError(
+                "formRenderFlags[%r] must NOT claim an effective mode: the renderer binds it at "
+                "HippoLayoutService class-init and this tool cannot observe that moment; got %r"
+                % (fk, state))
+        if "requested" in state and not isinstance(state["requested"], str):
+            raise AssertionError(
+                "formRenderFlags[%r].requested must be a string when present; got %r"
+                % (fk, state["requested"]))
 
     # SECURITY contract: the snapshot must NEVER leak the raw auth token or the
     # checks-folder path — only the derived booleans above. Assert no token/path
