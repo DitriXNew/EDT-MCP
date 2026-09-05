@@ -7,8 +7,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
@@ -28,8 +30,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.util.MdClassUtil;
-import com._1c.g5.v8.dt.metadata.mdtype.BasicDbObjectTypes;
-import com._1c.g5.v8.dt.metadata.mdtype.MdObjectType;
+import com._1c.g5.v8.dt.metadata.mdtype.MdType;
 import com._1c.g5.v8.dt.metadata.mdtype.MdTypes;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
@@ -53,7 +54,10 @@ import com.google.gson.JsonObject;
  * ValueTable / ValueTree are platform types that carry no qualifiers - the last two are in-memory
  * collections the platform accepts on a FORM attribute only (issue #295). A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
- * {@code {"kind":"CatalogRef", "ref":"Name"}}. A DefinedType is accepted as
+ * {@code {"kind":"CatalogRef", "ref":"Name"}}. A concrete produced type is
+ * {@code {"kind":"DocumentObject", "ref":"Invoice"}} (a qualified {@code Document.Invoice}
+ * ref is accepted too); omitting {@code ref} selects the corresponding abstract produced type. A
+ * DefinedType is accepted as
  * {@code {"kind":"DefinedType", "ref":"Name"}}, as a Ref to {@code DefinedType.Name}, or as the
  * inline kind {@code {"kind":"DefinedType.Name"}}; its type set is shared from the metadata model.
  * The {@code types} list may mix several (a composite type). The shape is validated before any
@@ -96,6 +100,86 @@ public final class MetadataTypeBuilder
     private static final String RU_DEFINED_TYPE_KIND = MetadataLanguageUtils.cp(0x041E, 0x043F, 0x0440,
         0x0435, 0x0434, 0x0435, 0x043B, 0x044F, 0x0435, 0x043C, 0x044B, 0x0439, 0x0422, 0x0438,
         0x043F);
+
+    /** One bilingual produced-type suffix and the generated holder feature that carries it. */
+    private static final class ProducedTypeSuffix
+    {
+        final String english;
+        final String russian;
+        final String featureName;
+
+        ProducedTypeSuffix(String english, String russian, String featureName)
+        {
+            this.english = english;
+            this.russian = russian;
+            this.featureName = featureName;
+        }
+
+        boolean matches(String candidate)
+        {
+            return english.equalsIgnoreCase(candidate) || russian.equalsIgnoreCase(candidate);
+        }
+    }
+
+    /**
+     * Produced-type suffixes published by the platform naming catalogue, paired with the verified EMF
+     * feature names on the generated {@link MdTypes} holder interfaces.
+     */
+    private static final ProducedTypeSuffix[] PRODUCED_TYPE_SUFFIXES = {
+        new ProducedTypeSuffix("Object", "\u041E\u0431\u044A\u0435\u043A\u0442", "objectType"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        new ProducedTypeSuffix("Manager", "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440", //$NON-NLS-1$ //$NON-NLS-2$
+            "managerType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("Record", "\u0417\u0430\u043F\u0438\u0441\u044C", //$NON-NLS-1$ //$NON-NLS-2$
+            "recordType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("RecordSet", //$NON-NLS-1$
+            "\u041D\u0430\u0431\u043E\u0440\u0417\u0430\u043F\u0438\u0441\u0435\u0439", //$NON-NLS-1$
+            "recordSetType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("RecordManager", //$NON-NLS-1$
+            "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0417\u0430\u043F\u0438\u0441\u0438", //$NON-NLS-1$
+            "recordManagerType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("ValueManager", //$NON-NLS-1$
+            "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0417\u043D\u0430\u0447\u0435\u043D\u0438\u044F", //$NON-NLS-1$
+            "valueManagerType"), //$NON-NLS-1$
+        new ProducedTypeSuffix("RecordKey", //$NON-NLS-1$
+            "\u041A\u043B\u044E\u0447\u0417\u0430\u043F\u0438\u0441\u0438", "recordKeyType"), //$NON-NLS-1$ //$NON-NLS-2$
+        new ProducedTypeSuffix("List", "\u0421\u043F\u0438\u0441\u043E\u043A", "listType"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        new ProducedTypeSuffix("Selection", //$NON-NLS-1$
+            "\u0412\u044B\u0431\u043E\u0440\u043A\u0430", "selectionType"), //$NON-NLS-1$ //$NON-NLS-2$
+        new ProducedTypeSuffix("Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", "refType") }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
+     * The platform narrows event-subscription source candidates through
+     * {@code EventSourceTypeInfoCategory}, whose membership is platform data not readable from the
+     * checked-in sources. This suffix list is anchored in a census of {@code <types>} values under
+     * the EventSubscriptions of a full production ERP configuration. It deliberately does not
+     * impose a per-metadata-kind restriction: the census establishes which suffixes occur, not which
+     * kind/suffix pairs the platform prohibits, and an unproven pair matrix would create false
+     * refusals.
+     */
+    private static final String[] EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES = {
+        "Object", "Manager", "RecordSet", "RecordManager", "ValueManager"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
+    /** A parsed {@code <metadata-token><produced-suffix>} kind. Package-visible for pure tests. */
+    static final class ProducedTypeKind
+    {
+        final String prefix;
+        final String englishMetadataType;
+        final String producedSuffix;
+        final String featureName;
+
+        ProducedTypeKind(String prefix, String englishMetadataType, ProducedTypeSuffix suffix)
+        {
+            this.prefix = prefix;
+            this.englishMetadataType = englishMetadataType;
+            this.producedSuffix = suffix.english;
+            this.featureName = suffix.featureName;
+        }
+
+        boolean hasKnownMetadataType()
+        {
+            return englishMetadataType != null;
+        }
+    }
 
     /**
      * The WIDEST qualifier the platform accepts anywhere: a variable String of 1024, a Number of 38
@@ -141,6 +225,12 @@ public final class MetadataTypeBuilder
      */
     public static String validateShape(JsonElement spec)
     {
+        return validateShape(spec, TypeTarget.METADATA);
+    }
+
+    /** Target-aware shape validation keeps non-metadata target grammars unchanged. */
+    private static String validateShape(JsonElement spec, TypeTarget typeTarget)
+    {
         if (spec == null || !spec.isJsonObject())
         {
             return "type value must be an object like {types:[{kind:'String', length:50}]}."; //$NON-NLS-1$
@@ -165,7 +255,7 @@ public final class MetadataTypeBuilder
                 return "Invalid member 'kind' in type.types[" + i + "]. Expected a non-empty " //$NON-NLS-1$ //$NON-NLS-2$
                     + "string naming String/Number/Boolean/Date, a DefinedType/Ref, or a platform type."; //$NON-NLS-1$
             }
-            String memberError = validateItemMembers(item, kind, i);
+            String memberError = validateItemMembers(item, kind, i, typeTarget);
             if (memberError != null)
             {
                 return memberError;
@@ -182,9 +272,14 @@ public final class MetadataTypeBuilder
      * their only accepted member is {@code kind}; unknown-kind resolution still reports the kind itself
      * later when the item has no extra member.
      */
-    private static String validateItemMembers(JsonObject item, String kind, int index)
+    private static String validateItemMembers(JsonObject item, String kind, int index,
+        TypeTarget typeTarget)
     {
         String primitive = normalizePrimitive(kind);
+        ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
+            || typeTarget == TypeTarget.EVENT_SOURCE
+            || typeTarget == TypeTarget.FORM_ATTRIBUTE
+            ? splitProducedTypeKind(kind) : null;
         String[] accepted;
         if ("String".equals(primitive)) //$NON-NLS-1$
         {
@@ -198,7 +293,7 @@ public final class MetadataTypeBuilder
         {
             accepted = DATE_ITEM_MEMBERS;
         }
-        else if (isRefKind(kind))
+        else if (isRefKind(kind) || producedKind != null)
         {
             accepted = REF_ITEM_MEMBERS;
         }
@@ -229,6 +324,10 @@ public final class MetadataTypeBuilder
         if ("Date".equals(primitive)) //$NON-NLS-1$
         {
             return validateDateItem(item, index);
+        }
+        if (producedKind != null)
+        {
+            return item.has("ref") ? validateRefItem(item, index) : null; //$NON-NLS-1$
         }
         if (isRefKind(kind))
         {
@@ -386,11 +485,20 @@ public final class MetadataTypeBuilder
      * #295). EDT itself does NOT validate this - a ValueTable written into a {@code .mdo} attribute
      * passes a full revalidation silently and only breaks later, in the platform - which is exactly why
      * the refusal has to happen here.
+     * Produced runtime object types are accepted only for {@link #FORM_ATTRIBUTE} and
+     * {@link #EVENT_SOURCE}: a form attribute holds a runtime object because a form's data is where the
+     * platform materializes one, while an event subscription's source names the object whose events fire.
      */
     public enum TypeTarget
     {
         /** A persisted metadata feature (an attribute, a resource, a predefined item's value, ...). */
         METADATA,
+        /**
+         * An event subscription's {@code source}: the one stored feature whose value is a runtime
+         * OBJECT type ({@code DocumentObject.X}, {@code InformationRegisterRecordManager.X}, ...)
+         * rather than a persistable value.
+         */
+        EVENT_SOURCE,
         /** A form attribute (or one of its columns) - the only place an in-memory collection lives. */
         FORM_ATTRIBUTE,
         /**
@@ -452,7 +560,28 @@ public final class MetadataTypeBuilder
     public static Result build(JsonElement spec, Configuration config, Version version,
         boolean isExtensionProject, TypeTarget typeTarget)
     {
-        String shapeError = validateShape(spec);
+        return build(spec, config, MetadataScope.ofConfiguration(config), version,
+            isExtensionProject, typeTarget);
+    }
+
+    /**
+     * Builds the {@link TypeDescription} against an explicit metadata resolution scope. This is the
+     * scope-aware counterpart of {@link #build(JsonElement, Configuration, Version, boolean,
+     * TypeTarget)}; callers that only have a {@link Configuration} keep the previous resolution root
+     * through {@link MetadataScope#ofConfiguration(Configuration)}.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param config the configuration (used by the existing reference-type paths)
+     * @param scope the project resolution root; {@code null} falls back to the configuration scope
+     * @param version the platform version (to create primitive type proxies)
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @param typeTarget what the built type description will be attached to
+     * @return the result (type or error)
+     */
+    public static Result build(JsonElement spec, Configuration config, MetadataScope scope,
+        Version version, boolean isExtensionProject, TypeTarget typeTarget)
+    {
+        String shapeError = validateShape(spec, typeTarget);
         if (shapeError != null)
         {
             return error(shapeError);
@@ -466,12 +595,14 @@ public final class MetadataTypeBuilder
         }
 
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        MetadataScope effectiveScope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
         JsonArray types = spec.getAsJsonObject().getAsJsonArray("types"); //$NON-NLS-1$
         for (JsonElement itemEl : types)
         {
             JsonObject item = itemEl.getAsJsonObject();
             String kind = asString(item.get("kind")).trim(); //$NON-NLS-1$
-            String err = addType(td, item, kind, provider, config, isExtensionProject, typeTarget);
+            String err = addType(td, item, kind, provider, config, effectiveScope,
+                isExtensionProject, typeTarget);
             if (err != null)
             {
                 return error(err);
@@ -522,6 +653,130 @@ public final class MetadataTypeBuilder
     }
 
     /**
+     * Splits a produced-type kind into its bilingual metadata-token prefix and canonical suffix. The
+     * prefix scan runs from longest to shortest and delegates every candidate to
+     * {@link MetadataTypeUtils#toEnglishSingular(String)}; this is what keeps long tokens such as
+     * {@code ChartOfCalculationTypesObject} intact instead of guessing from a local token table.
+     *
+     * <p>When the kind ends in a family suffix but no prefix is a known metadata token, the returned
+     * item carries a {@code null} {@link ProducedTypeKind#englishMetadataType}. The caller can then
+     * distinguish an actionable bad-prefix refusal from an unrelated unknown platform type. A
+     * DefinedType is deliberately excluded because its existing TypeSet grammar is separate.</p>
+     *
+     * @param kind the requested type kind
+     * @return the split, or {@code null} when the kind does not have this family shape
+     */
+    static ProducedTypeKind splitProducedTypeKind(String kind)
+    {
+        if (kind == null)
+        {
+            return null;
+        }
+        String candidate = kind.trim();
+        if (candidate.isEmpty() || isDynamicListKind(candidate)
+            || "ValueList".equalsIgnoreCase(candidate)) //$NON-NLS-1$
+        {
+            return null;
+        }
+        // Ref stays in the suffix table above, because the "it offers:" listing is honest to name
+        // CatalogRef among a Catalog's produced types - but this SPLIT never claims a Ref spelling.
+        // <Type>Ref already has its own branch here, with its own resolution and its own
+        // extension-adopt hint, and it is the most-used kind in the tool: rerouting it through this
+        // family would silently change the behaviour of the thing most callers depend on, to reach a
+        // type that branch already builds. The family exists for what Ref cannot name.
+        if (isRefKind(candidate))
+        {
+            return null;
+        }
+
+        for (int split = candidate.length() - 1; split > 0; split--)
+        {
+            String prefix = candidate.substring(0, split);
+            String englishMetadataType = MetadataTypeUtils.toEnglishSingular(prefix);
+            if (englishMetadataType == null)
+            {
+                continue;
+            }
+            ProducedTypeSuffix suffix = producedTypeSuffix(candidate.substring(split));
+            if (suffix != null && !DEFINED_TYPE_KIND.equals(englishMetadataType))
+            {
+                return new ProducedTypeKind(prefix, englishMetadataType, suffix);
+            }
+        }
+
+        ProducedTypeSuffix suffix = trailingProducedTypeSuffix(candidate);
+        if (suffix == null)
+        {
+            return null;
+        }
+        int suffixLength = matchingSuffixLength(candidate, suffix);
+        String prefix = candidate.substring(0, candidate.length() - suffixLength);
+        String englishMetadataType = MetadataTypeUtils.toEnglishSingular(prefix);
+        if (DEFINED_TYPE_KIND.equals(englishMetadataType))
+        {
+            return null;
+        }
+        return prefix.isEmpty() ? null : new ProducedTypeKind(prefix, null, suffix);
+    }
+
+    private static ProducedTypeSuffix producedTypeSuffix(String candidate)
+    {
+        for (ProducedTypeSuffix suffix : PRODUCED_TYPE_SUFFIXES)
+        {
+            if (suffix.matches(candidate))
+            {
+                return suffix;
+            }
+        }
+        return null;
+    }
+
+    /** Returns the longest matching suffix, so RecordManager / ValueManager never become Manager. */
+    private static ProducedTypeSuffix trailingProducedTypeSuffix(String candidate)
+    {
+        ProducedTypeSuffix best = null;
+        int bestLength = -1;
+        for (ProducedTypeSuffix suffix : PRODUCED_TYPE_SUFFIXES)
+        {
+            int length = matchingSuffixLength(candidate, suffix);
+            if (length > bestLength)
+            {
+                best = suffix;
+                bestLength = length;
+            }
+        }
+        return bestLength >= 0 ? best : null;
+    }
+
+    /**
+     * The length of the trailing suffix this candidate carries, or {@code -1} when it carries none.
+     * <p>
+     * The comparison is {@code >=}, not {@code >}, so a candidate that IS a bare suffix
+     * ({@code "RecordManager"}, {@code "ValueManager"}) matches at its full length and leaves an empty
+     * prefix, which the caller rejects. A VALID kind is {@code <MetadataType><Suffix>} and is therefore
+     * strictly longer than its suffix, so the two spellings of this test are identical for everything
+     * this tool builds - they part only on a bare suffix, which names no object either way. There the
+     * shorter reading is actively misleading: {@code >} would fall back to {@code Manager} and blame the
+     * phantom prefix {@code "Record"}, a token the caller never typed.
+     */
+    private static int matchingSuffixLength(String candidate, ProducedTypeSuffix suffix)
+    {
+        if (candidate.length() >= suffix.english.length()
+            && candidate.regionMatches(true, candidate.length() - suffix.english.length(),
+                suffix.english, 0, suffix.english.length()))
+        {
+            return suffix.english.length();
+        }
+        if (candidate.length() >= suffix.russian.length()
+            && candidate.regionMatches(true, candidate.length() - suffix.russian.length(),
+                suffix.russian, 0, suffix.russian.length()))
+        {
+            return suffix.russian.length();
+        }
+        return -1;
+    }
+
+    /**
      * Builds a {@link TypeDescription} carrying ONLY the {@code DynamicList} platform pseudo-type - the
      * value type a form list attribute uses ({@code <types>DynamicList</types>} on disk). Reuses the
      * same platform type provider as {@link #build}. Returns {@code null} when the platform version is
@@ -561,11 +816,11 @@ public final class MetadataTypeBuilder
      * ({@code <types><Type>Object.<Name></types>} on disk, e.g. {@code DocumentObject.Invoice} /
      * {@code CatalogObject.Goods}). The object type is taken from the owner's OWN produced types (the same
      * path {@code MetadataReferenceService.collectProducedTypesReferences} uses), NOT synthesized from a
-     * type token: {@link MdClassUtil#getProducedTypes} returns the owner's derived {@link MdTypes}, and for
-     * a reference / object owner that is a {@link BasicDbObjectTypes} whose {@link BasicDbObjectTypes#getObjectType()
-     * object type}'s {@link MdObjectType#getType() Type} is the {@code <Type>Object.<Name>} value the
-     * attribute needs. The owner is a PRE-EXISTING object resolved inside the same BM transaction, so its
-     * produced-types derived data is already computed and resolvable here.
+     * type token: {@link MdClassUtil#getProducedTypes} returns the owner's derived {@link MdTypes}, and
+     * the holder's generic {@code objectType} feature carries an {@link MdType} whose
+     * {@link MdType#getType() Type} is the {@code <Type>Object.<Name>} value the attribute needs. The owner
+     * is a PRE-EXISTING object resolved inside the same BM transaction, so its produced-types derived data
+     * is already computed and resolvable here.
      * <p>
      * Mirrors the working {@link #addType} Ref path: the model-owned {@code Type} is added straight into a
      * fresh {@code TypeDescription}'s {@code getTypes()} - a NON-containment reference list, so the type is
@@ -575,7 +830,7 @@ public final class MetadataTypeBuilder
      * ready to {@code eSet} onto a form attribute's {@code valueType} feature. Never throws
      * (unattended-safe). The wrong path would be {@code MdTypeUtil.getRefType}, which yields the REF type
      * ({@code CatalogRef.X}); the main {@code Object} attribute needs the OBJECT type
-     * ({@code <Type>Object.<Name>}) from {@link BasicDbObjectTypes#getObjectType()}.
+     * ({@code <Type>Object.<Name>}) from the holder's {@code objectType} feature.
      *
      * @param owner the owner metadata object (re-fetched inside the active BM transaction), or {@code null}
      * @return the object value-type description, or {@code null} when it cannot be built
@@ -586,32 +841,10 @@ public final class MetadataTypeBuilder
         {
             return null;
         }
-        MdTypes producedTypes = MdClassUtil.getProducedTypes((MdObject)owner);
-        if (producedTypes == null)
-        {
-            return null;
-        }
         // The produced-types holder is a per-kind subtype (CatalogTypes, DocumentTypes,
-        // DataProcessorTypes, ...). Only the DB-stored kinds extend BasicDbObjectTypes - on
-        // EDT 2026.1 a DataProcessor's DataProcessorTypesImpl does NOT (issue #262), so an
-        // instanceof gate silently dropped the object type for it. Every kind's holder carries
-        // the same EMF feature "objectType", so read it generically through eGet instead.
-        MdObjectType mdObjType = null;
-        EStructuralFeature objectTypeFeature =
-            producedTypes.eClass().getEStructuralFeature("objectType"); //$NON-NLS-1$
-        if (objectTypeFeature != null)
-        {
-            Object value = producedTypes.eGet(objectTypeFeature);
-            if (value instanceof MdObjectType)
-            {
-                mdObjType = (MdObjectType)value;
-            }
-        }
-        if (mdObjType == null)
-        {
-            return null;
-        }
-        Type objType = mdObjType.getType();
+        // DataProcessorTypes, ...), and not every subtype extends BasicDbObjectTypes. Read the
+        // common EMF feature generically through eGet instead of gating on a generated subtype.
+        Type objType = modelProducedType((MdObject)owner, "objectType"); //$NON-NLS-1$
         if (objType == null)
         {
             return null;
@@ -623,12 +856,52 @@ public final class MetadataTypeBuilder
         return td;
     }
 
+    /** Reads one model-owned produced {@link Type} through its holder's generic EMF feature. */
+    private static Type modelProducedType(MdObject owner, String featureName)
+    {
+        try
+        {
+            MdTypes producedTypes = MdClassUtil.getProducedTypes(owner);
+            MdType mdType = featureValue(producedTypes, featureName, MdType.class);
+            return mdType != null ? mdType.getType() : null;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
     // Package-visible (not private) so MetadataTypeBuilderTest can exercise the Ref-not-found branch -
     // including the extension-adopt hint - directly, without a registered platform type `provider`
     // (which only the primitive branch needs; see MetadataTypeBuilderTest's class doc).
     static String addType(TypeDescription td, JsonObject item, String kind,
         IEObjectProvider provider, Configuration config, boolean isExtensionProject, TypeTarget typeTarget)
     {
+        return addType(td, item, kind, provider, config, MetadataScope.ofConfiguration(config),
+            isExtensionProject, typeTarget);
+    }
+
+    /** Scope-aware core used by the explicit-scope build overload. */
+    static String addType(TypeDescription td, JsonObject item, String kind,
+        IEObjectProvider provider, Configuration config, MetadataScope scope,
+        boolean isExtensionProject, TypeTarget typeTarget)
+    {
+        MetadataScope effectiveScope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
+        ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
+            || typeTarget == TypeTarget.EVENT_SOURCE
+            || typeTarget == TypeTarget.FORM_ATTRIBUTE
+            ? splitProducedTypeKind(kind) : null;
+        if (typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
+            && producedKind.hasKnownMetadataType() && !isEventSourceProducedType(producedKind))
+        {
+            return eventSourceProducedTypeRefusal(kind);
+        }
+        if (producedKind != null && producedKind.hasKnownMetadataType() && item.has("ref")) //$NON-NLS-1$
+        {
+            return addConcreteProducedType(td, item, kind, producedKind, effectiveScope,
+                isExtensionProject, typeTarget);
+        }
+
         if (isInlineDefinedTypeKind(kind))
         {
             MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, kind);
@@ -719,19 +992,214 @@ public final class MetadataTypeBuilder
             }
             if (typeTarget != TypeTarget.FORM_ATTRIBUTE)
             {
+                if (typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
+                    && producedKind.hasKnownMetadataType())
+                {
+                    td.getTypes().add(platformType);
+                    return null;
+                }
+                if (typeTarget == TypeTarget.METADATA && producedKind != null
+                    && producedKind.hasKnownMetadataType())
+                {
+                    return producedTypeRefusal(kind);
+                }
                 return formOnlyTypeRefusal(kind, typeTarget);
             }
             td.getTypes().add(platformType);
             return null;
         }
 
+        if (producedKind != null && !producedKind.hasKnownMetadataType())
+        {
+            return unknownProducedTypePrefix(kind, producedKind);
+        }
+
         return "Unknown type kind '" + kind //$NON-NLS-1$
             + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$
             + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), a " //$NON-NLS-1$
-            + "DefinedType ({kind:'DefinedType', ref:'Name'} or {kind:'DefinedType.Name'}), or a " //$NON-NLS-1$
-            + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type name " //$NON-NLS-1$
+            + "DefinedType ({kind:'DefinedType', ref:'Name'} or {kind:'DefinedType.Name'}), a " //$NON-NLS-1$
+            + "produced type ({kind:'DocumentObject', ref:'Invoice'} or " //$NON-NLS-1$
+            + "{kind:'ExchangePlanObject'}), or a reference ({kind:'Ref', ref:'Type.Name'}). On a " //$NON-NLS-1$
+            + "FORM attribute any platform type name " //$NON-NLS-1$
             + "also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., English or " //$NON-NLS-1$
             + "Russian) - this one names no type this platform version knows."; //$NON-NLS-1$
+    }
+
+    private static boolean isEventSourceProducedType(ProducedTypeKind producedKind)
+    {
+        for (String suffix : EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES)
+        {
+            if (suffix.equals(producedKind.producedSuffix))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String eventSourceProducedTypeRefusal(String kind)
+    {
+        return "Type kind '" + kind + "' cannot be used as an event subscription's source: an " //$NON-NLS-1$ //$NON-NLS-2$
+            + "event subscription's source is an object that publishes write events. Accepted " //$NON-NLS-1$
+            + "produced-type suffixes: " + String.join(", ", EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES) //$NON-NLS-1$ //$NON-NLS-2$
+            + "."; //$NON-NLS-1$
+    }
+
+    /** Adds one concrete model-owned produced Type to the non-containment type list. */
+    private static String addConcreteProducedType(TypeDescription td, JsonObject item, String kind,
+        ProducedTypeKind producedKind, MetadataScope scope, boolean isExtensionProject,
+        TypeTarget typeTarget)
+    {
+        if (typeTarget != TypeTarget.EVENT_SOURCE && typeTarget != TypeTarget.FORM_ATTRIBUTE)
+        {
+            return producedTypeRefusal(kind);
+        }
+        String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
+        if (rawRef == null || rawRef.trim().isEmpty())
+        {
+            return "Type kind '" + kind + "' requires a non-empty 'ref'. Pass the object's bare " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Name or a qualified metadata FQN such as '" + producedKind.englishMetadataType //$NON-NLS-1$
+                + ".Name'."; //$NON-NLS-1$
+        }
+        String ref = rawRef.trim();
+
+        int dot = ref.indexOf('.');
+        if (dot > 0)
+        {
+            String refToken = ref.substring(0, dot);
+            String refEnglishType = MetadataTypeUtils.toEnglishSingular(refToken);
+            if (refEnglishType != null
+                && !producedKind.englishMetadataType.equalsIgnoreCase(refEnglishType))
+            {
+                return "Type kind '" + kind + "' selects metadata type '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + producedKind.englishMetadataType + "', but qualified ref '" + ref //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' selects metadata type '" + refEnglishType + "'. Make the kind and ref type " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "tokens match, or pass the bare object Name as ref."; //$NON-NLS-1$
+            }
+        }
+
+        MdObject target = resolveProducedTypeTarget(scope, producedKind, ref);
+        if (target == null)
+        {
+            return "Cannot resolve the reference target for kind '" + kind + "' ref '" //$NON-NLS-1$ //$NON-NLS-2$
+                + ref + "'. Use {kind:'" + producedKind.englishMetadataType //$NON-NLS-1$ //$NON-NLS-2$
+                + producedKind.producedSuffix + "', ref:'Name'} or pass ref:'" //$NON-NLS-1$
+                + producedKind.englishMetadataType + ".Name', and check the object exists." //$NON-NLS-1$
+                + extensionAdoptHint(isExtensionProject);
+        }
+
+        MdTypes producedTypes;
+        try
+        {
+            producedTypes = MdClassUtil.getProducedTypes(target);
+        }
+        catch (RuntimeException e)
+        {
+            producedTypes = null;
+        }
+        String objectFqn = producedKind.englishMetadataType + "." + target.getName(); //$NON-NLS-1$
+        if (producedTypes == null || producedTypes.eClass() == null)
+        {
+            return "Object '" + objectFqn + "' resolved, but its produced types are not available " //$NON-NLS-1$ //$NON-NLS-2$
+                + "yet. Wait for project indexing to finish, run revalidate_objects for the object " //$NON-NLS-1$
+                + "if needed, and retry."; //$NON-NLS-1$
+        }
+
+        EStructuralFeature feature =
+            producedTypes.eClass().getEStructuralFeature(producedKind.featureName);
+        if (feature == null)
+        {
+            return unsupportedProducedType(objectFqn, kind, producedKind, producedTypes);
+        }
+
+        MdType mdType;
+        Type modelType;
+        try
+        {
+            Object value = producedTypes.eGet(feature);
+            mdType = value instanceof MdType ? (MdType)value : null;
+            modelType = mdType != null ? mdType.getType() : null;
+        }
+        catch (RuntimeException e)
+        {
+            modelType = null;
+        }
+        if (modelType == null)
+        {
+            return "Object '" + objectFqn + "' offers produced type '" //$NON-NLS-1$ //$NON-NLS-2$
+                + producedKind.englishMetadataType + producedKind.producedSuffix + "', but its " //$NON-NLS-1$
+                + "producedTypes/" + producedKind.featureName + "/type chain is not available yet. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Wait for project indexing to finish, run revalidate_objects for the object if " //$NON-NLS-1$
+                + "needed, and retry. Available produced types: " //$NON-NLS-1$
+                + availableProducedTypeKinds(producedTypes, producedKind.englishMetadataType) + "."; //$NON-NLS-1$
+        }
+
+        // TypeDescription.types is NON-containment: share the model-owned Type, do not copy it.
+        td.getTypes().add(modelType);
+        return null;
+    }
+
+    private static MdObject resolveProducedTypeTarget(MetadataScope scope,
+        ProducedTypeKind producedKind, String ref)
+    {
+        // An external-objects form can name both its project's own objects and objects from the
+        // linked configuration. Consult the scope first: if both roots ever expose the same
+        // type+Name, the object owned by this project wins. Only an external scope gets the linked-
+        // configuration fallback; an ordinary scope already delegates to its Configuration, so its
+        // single-root result (including a miss) remains exactly unchanged.
+        if (ref.indexOf('.') < 0)
+        {
+            MdObject target = scope.findObject(producedKind.englishMetadataType, ref);
+            if (target != null || !scope.isExternalObjects())
+            {
+                return target;
+            }
+            return MetadataTypeUtils.findObject(scope.configuration(),
+                producedKind.englishMetadataType, ref);
+        }
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, ref);
+        if ((node == null || !node.topLevel) && scope.isExternalObjects())
+        {
+            node = MetadataNodeResolver.resolveExisting(scope.configuration(), ref);
+        }
+        return node != null && node.topLevel ? node.object : null;
+    }
+
+    private static String unsupportedProducedType(String objectFqn, String kind,
+        ProducedTypeKind producedKind, MdTypes producedTypes)
+    {
+        return "Object '" + objectFqn + "' does not offer produced type '" //$NON-NLS-1$ //$NON-NLS-2$
+            + producedKind.producedSuffix + "' requested by kind '" + kind + "'. It offers: " //$NON-NLS-1$ //$NON-NLS-2$
+            + availableProducedTypeKinds(producedTypes, producedKind.englishMetadataType)
+            + ". Use one of those kinds, or choose an object whose produced types include '" //$NON-NLS-1$
+            + producedKind.producedSuffix + "'."; //$NON-NLS-1$
+    }
+
+    private static String availableProducedTypeKinds(MdTypes producedTypes, String englishMetadataType)
+    {
+        List<String> available = new ArrayList<>();
+        if (producedTypes != null && producedTypes.eClass() != null)
+        {
+            for (ProducedTypeSuffix suffix : PRODUCED_TYPE_SUFFIXES)
+            {
+                if (producedTypes.eClass().getEStructuralFeature(suffix.featureName) != null)
+                {
+                    available.add(englishMetadataType + suffix.english);
+                }
+            }
+        }
+        return available.isEmpty()
+            ? "none from the Object / Manager / Record / RecordSet / RecordManager / ValueManager / " //$NON-NLS-1$
+                + "RecordKey / List / Selection / Ref family" : String.join(", ", available); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String unknownProducedTypePrefix(String kind, ProducedTypeKind producedKind)
+    {
+        return "Type kind '" + kind + "' uses produced-type suffix '" //$NON-NLS-1$ //$NON-NLS-2$
+            + producedKind.producedSuffix + "', but prefix '" + producedKind.prefix //$NON-NLS-1$
+            + "' is not a known metadata type token. Replace it with a supported English or Russian " //$NON-NLS-1$
+            + "metadata type token, for example {kind:'Document" + producedKind.producedSuffix //$NON-NLS-1$
+            + "', ref:'Invoice'}."; //$NON-NLS-1$
     }
 
     /** Adds the model-owned TypeSet produced by a DefinedType to the non-containment type list. */
@@ -852,6 +1320,16 @@ public final class MetadataTypeBuilder
             + "(fqn 'Type.Object.Form.FormName.Attribute.Name'), not for a stored metadata feature. Set " //$NON-NLS-1$
             + "it on a form attribute; a stored feature takes String / Number / Boolean / Date / " //$NON-NLS-1$
             + "ValueStorage / UUID or a reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+    }
+
+    /** The refusal of a runtime produced type on an ordinary persisted metadata feature. */
+    private static String producedTypeRefusal(String kind)
+    {
+        return "Type kind '" + kind + "' is a runtime object type: it belongs on an event " //$NON-NLS-1$ //$NON-NLS-2$
+            + "subscription's 'source' or on a FORM attribute (fqn " //$NON-NLS-1$
+            + "'Type.Object.Form.FormName.Attribute.Name'). A stored metadata feature takes a " //$NON-NLS-1$
+            + "reference ({kind:'Ref', ref:'Type.Name'}) or a primitive " //$NON-NLS-1$
+            + "(String / Number / Boolean / Date) instead."; //$NON-NLS-1$
     }
 
     /**
