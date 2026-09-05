@@ -112,7 +112,7 @@ def _emit_log_probe():
 
 
 def _collect_our_errors(workspace, token):
-    """Every ERROR entry of ours stamped this run, plus whether our probe was found."""
+    """Every ERROR entry of ours stamped this run, plus whether an optional probe was found."""
     metadata = os.path.join(workspace, ".metadata")
     # The log rotates at ~1 MB, so one run can span .log plus several .bak_N.log.
     files = sorted(glob.glob(os.path.join(metadata, ".bak_*.log"))) + \
@@ -145,9 +145,9 @@ def _collect_our_errors(workspace, token):
                 if follow.startswith("!MESSAGE"):
                     message = follow[len("!MESSAGE"):]
                     break
-            if token in message:
+            if token is not None and token in message:
                 saw_probe = True
-            if severity != SEVERITY_ERROR or token in message:
+            if severity != SEVERITY_ERROR or (token is not None and token in message):
                 continue
             key = _normalize(message) or "(no message)"
             found[key] = found.get(key, 0) + 1
@@ -171,8 +171,17 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
             "EDT workspace not found: set EDT_MCP_EDT_WORKSPACE to the -data directory "
             "so the log ratchet can read <workspace>/.metadata/.log")
 
+    # Read the error-bearing generations before the probe can rotate .log over a reused backup
+    # name. Then emit the probe to bind this workspace to the server under test and read again so
+    # errors written between the reads are included too. Counts form a multiset union: taking the
+    # maximum retains a generation seen by only one read without double-counting stable entries.
+    before_probe, _ = _collect_our_errors(workspace, None)
     token = _emit_log_probe()
-    found, saw_probe = _collect_our_errors(workspace, token)
+    after_probe, saw_probe = _collect_our_errors(workspace, token)
+    found = {
+        message: max(before_probe.get(message, 0), after_probe.get(message, 0))
+        for message in before_probe.keys() | after_probe.keys()
+    }
     if not saw_probe:
         # Inference is only a filesystem guess, so absent evidence must skip; an explicit
         # override is the operator's assertion that this server writes here, so the same

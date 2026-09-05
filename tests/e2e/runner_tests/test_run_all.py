@@ -171,6 +171,37 @@ class RunAllRatchetTest(unittest.TestCase):
             self.assertEqual(["list_projects", "get_project_errors"],
                              [tool for tool, _arguments in captured_calls])
 
+    def test_error_from_first_read_survives_probe_overwriting_its_generation(self):
+        error_message = "Error from generation overwritten while emitting the probe"
+        probe_token = "edtmcplogprobefixedtoken"
+        events = []
+
+        def collect(_workspace, token):
+            events.append(("collect", token))
+            if token is None:
+                return {error_message: 1}, False
+            return {}, True
+
+        def emit_probe():
+            events.append(("emit", probe_token))
+            return probe_token
+
+        with mock.patch.object(RATCHET, "_workspace_dir", return_value="workspace"), \
+                mock.patch.object(RATCHET, "_collect_our_errors", side_effect=collect), \
+                mock.patch.object(RATCHET, "_emit_log_probe", side_effect=emit_probe), \
+                mock.patch.object(RATCHET, "_load_baseline", return_value=set()), \
+                mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EDT_MCP_EDT_WORKSPACE", None)
+            with self.assertRaises(HARNESS.E2EAssertion) as failed:
+                RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+
+        self.assertIn(error_message, str(failed.exception))
+        self.assertEqual([
+            ("collect", None),
+            ("emit", probe_token),
+            ("collect", probe_token),
+        ], events)
+
     @staticmethod
     def _mutation_harness():
         harness = mock.Mock()
