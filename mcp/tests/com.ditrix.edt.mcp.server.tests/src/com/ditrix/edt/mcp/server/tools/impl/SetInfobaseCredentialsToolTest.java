@@ -245,9 +245,10 @@ public class SetInfobaseCredentialsToolTest
     }
 
     @Test
-    public void testLaunchTargetNamesOnlyTheMissingProjectAttribute() throws CoreException
+    public void testMissingProjectBindingKeepsRebindRecommendation() throws CoreException
     {
-        ILaunchConfiguration config = runtimeConfig("B Thin Client", "", "app-b"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "", "app-b"); //$NON-NLS-1$ //$NON-NLS-2$
         Object resolution = resolveLaunchTarget(config, (cfg, project) ->
         {
             fail("application resolution must not run without a project"); //$NON-NLS-1$
@@ -255,10 +256,32 @@ public class SetInfobaseCredentialsToolTest
         });
         String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
 
-        assertTrue(error.contains("ATTR_PROJECT_NAME")); //$NON-NLS-1$
-        assertFalse(error.contains("missing ATTR_APPLICATION_ID")); //$NON-NLS-1$
-        assertTrue(error.contains("project=''")); //$NON-NLS-1$
-        assertTrue(error.contains("applicationId='app-b'")); //$NON-NLS-1$
+        assertEquals("{\"success\":false,\"error\":\"Launch configuration '" + configName //$NON-NLS-1$
+            + "' is missing ATTR_PROJECT_NAME (read project='', applicationId='app-b') — cannot " //$NON-NLS-1$
+            + "derive the target. Bind it to a project in EDT, or pass projectName + applicationId " //$NON-NLS-1$
+            + "explicitly.\"}", error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnreadableProjectBindingIsRefusedWithoutRebindRecommendation() throws CoreException
+    {
+        String configName = "B Thin Client"; //$NON-NLS-1$
+        ILaunchConfiguration config = runtimeConfig(configName, "B", "app-other"); //$NON-NLS-1$ //$NON-NLS-2$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")) //$NON-NLS-1$
+            .thenThrow(new CoreException(new Status(IStatus.ERROR,
+                "com.ditrix.edt.mcp.server.tests", "attribute store is unreadable"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Object resolution = resolveLaunchTarget(config, (cfg, project) -> "app-wrong"); //$NON-NLS-1$
+        String error = (String)resolutionValue(resolution, "error"); //$NON-NLS-1$
+
+        assertEquals("{\"success\":false,\"error\":\"The project binding could not be read from " //$NON-NLS-1$
+            + "launch configuration '" + configName //$NON-NLS-1$
+            + "' — refusing to derive a credential target. " //$NON-NLS-1$
+            + "Fix the configuration, or pass projectName + applicationId explicitly.\"}", error); //$NON-NLS-1$
+        assertFalse("an unreadable binding must not be reported as missing", //$NON-NLS-1$
+            error.contains("is missing ATTR_PROJECT_NAME")); //$NON-NLS-1$
+        assertFalse("an unreadable binding must not recommend rebinding it", //$NON-NLS-1$
+            error.contains("Bind it to a project in EDT")); //$NON-NLS-1$
     }
 
     @Test

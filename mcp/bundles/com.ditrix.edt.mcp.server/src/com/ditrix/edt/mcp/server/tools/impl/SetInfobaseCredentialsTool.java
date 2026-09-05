@@ -363,7 +363,18 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     static TargetResolution resolveLaunchConfigTarget(ILaunchConfiguration cfg,
             BiFunction<ILaunchConfiguration, String, String> applicationIdResolver)
     {
-        String cfgProject = LaunchConfigUtils.readAttribute(cfg, LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+        String cfgProject;
+        try
+        {
+            cfgProject = cfg.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+        }
+        catch (CoreException e)
+        {
+            return TargetResolution.error(ToolResult.error("The project binding could not be " //$NON-NLS-1$
+                + "read from launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' — refusing to derive a credential target. Fix the configuration, or pass " //$NON-NLS-1$
+                + "projectName + applicationId explicitly.").toJson()); //$NON-NLS-1$
+        }
         String cfgAppId;
         try
         {
