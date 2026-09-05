@@ -75,9 +75,13 @@ jobs:
           path: |
             ~/.m2/repository/.cache/tycho
             ~/.m2/repository/p2
-          key: ${{ runner.os }}-tycho-p2-${{ hashFiles('**/*.target') }}
+          # Bump the vN generation by hand when 1C rotates the rolling 2026.1 repository: it is
+          # republished in place for each service release and the previous plugin jars 404,
+          # while the target file - which pins no versions - keeps hashing the same. The restore
+          # prefix carries the same vN, or it would hand the stale entry back anyway (#570).
+          key: ${{ runner.os }}-tycho-p2-v2-${{ hashFiles('**/*.target') }}
           restore-keys: |
-            ${{ runner.os }}-tycho-p2-
+            ${{ runner.os }}-tycho-p2-v2-
 
       - name: Build the MCP plugin (p2 repository)
         working-directory: mcp
