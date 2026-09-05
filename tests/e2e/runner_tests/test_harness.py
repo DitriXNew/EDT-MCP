@@ -2001,6 +2001,52 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("later backup line 79", out)
         self.assertNotIn("INCOMPLETE", out)
 
+    def test_a_rotation_that_only_duplicates_the_stream_does_not_change_what_is_displayed(self):
+        """The 80-line budget drops old lines whether or not rotation happened.
+
+        Dedupe must therefore make rotation invisible to the displayed stream, not evade the
+        budget by charging one generation as two sources.
+        """
+        stream_lines = (["STREAM S01 OLD END"] +
+                        ["STREAM S%02d" % index for index in range(2, 82)] +
+                        ["STREAM S82 NEW END"])
+        stream_text = "\n".join(stream_lines) + "\n"
+        displayed_by_case = []
+        tail_section_counts = []
+
+        for current_line_count in (None, 2, 51):
+            with tempfile.TemporaryDirectory() as tmp:
+                metadata = os.path.join(tmp, ".metadata")
+                current = os.path.join(metadata, ".log")
+                backup = os.path.join(metadata, ".bak_2.log")
+                identity = (1_000_000_000, len(stream_text), 42)
+                current_text = (stream_text if current_line_count is None else
+                                "\n".join(stream_lines[:current_line_count]) + "\n")
+                after = {} if current_line_count is None else {backup: identity}
+
+                def read_tail(path, capture_identity=False):
+                    text = current_text if path == current else stream_text
+                    return (text, identity) if capture_identity else text
+
+                printed = io.StringIO()
+                with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                        mock.patch.object(HARNESS, "_backup_identities",
+                                          side_effect=(({}, None), (after, None))), \
+                        mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_tail), \
+                        contextlib.redirect_stdout(printed):
+                    HARNESS._print_failed_settle_evidence("| P | building |")
+
+            output_lines = printed.getvalue().splitlines()
+            displayed_by_case.append(
+                [line for line in output_lines if line.startswith("STREAM ")])
+            tail_section_counts.append(sum(
+                line.startswith("--- EDT log tail:") for line in output_lines))
+
+        self.assertEqual(stream_lines[-HARNESS._EVIDENCE_TAIL_LINES:], displayed_by_case[0])
+        self.assertEqual(displayed_by_case[0], displayed_by_case[1])
+        self.assertEqual(displayed_by_case[0], displayed_by_case[2])
+        self.assertEqual([1, 1], tail_section_counts[1:])
+
     def test_a_backup_that_grew_after_current_was_read_keeps_the_failure_marker(self):
         """Keeping both copies splits the budget and hides L5 from both displayed tails."""
         with tempfile.TemporaryDirectory() as tmp:
