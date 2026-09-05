@@ -17,6 +17,7 @@ import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnum;
@@ -27,20 +28,35 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
+import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
+import com._1c.g5.v8.dt.mcore.DateFractions;
+import com._1c.g5.v8.dt.mcore.DateQualifiers;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.NumberQualifiers;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
+import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.ValueKind;
@@ -59,6 +75,621 @@ public class MetadataPropertyIntrospectorTest
     private static Catalog newCatalog()
     {
         return MdClassFactory.eINSTANCE.createCatalog();
+    }
+
+    // ============ A reference renders short, but it does not IDENTIFY itself short ============
+
+    /**
+     * A subsystem's {@code content} is declared {@code refers MdObject[]} - it holds objects of any
+     * type - so its two sides can hold a Catalog and a Document that happen to share a name. Both
+     * render the bare {@code Foo}, which is right for a reader and wrong for anything that compares
+     * the rendered text: it makes two different objects one value.
+     */
+    @Test
+    public void testABroadReferenceIsIdentifiedByTypeAsWellAsName()
+    {
+        PropertyInfo content =
+            MetadataPropertyIntrospector.find(subsystemHolding(catalogNamed("Foo")), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(content);
+        assertEquals("the reader still sees the short name", "Foo", content.currentValue); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("but the value identifies itself by type", "Catalog.Foo", //$NON-NLS-1$ //$NON-NLS-2$
+            content.valueIdentity);
+    }
+
+    /** The other half of the same statement: a same-named target of another type is another value. */
+    @Test
+    public void testTwoTargetTypesSharingANameAreTwoIdentities()
+    {
+        PropertyInfo fromCatalog =
+            MetadataPropertyIntrospector.find(subsystemHolding(catalogNamed("Foo")), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+        PropertyInfo fromDocument =
+            MetadataPropertyIntrospector.find(subsystemHolding(documentNamed("Foo")), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the two render alike - that is the whole point", fromCatalog.currentValue, //$NON-NLS-1$
+            fromDocument.currentValue);
+        assertEquals("Document.Foo", fromDocument.valueIdentity); //$NON-NLS-1$
+        assertFalse("...and must not identify alike: " + fromCatalog.valueIdentity, //$NON-NLS-1$
+            fromCatalog.valueIdentity.equals(fromDocument.valueIdentity));
+    }
+
+    /** Every element of a MANY reference is qualified, not just the first. */
+    @Test
+    public void testEveryElementOfAReferenceListIsQualified()
+    {
+        Subsystem subsystem = subsystemHolding(catalogNamed("Foo")); //$NON-NLS-1$
+        subsystem.getContent().add(documentNamed("Bar")); //$NON-NLS-1$
+
+        PropertyInfo content = MetadataPropertyIntrospector.find(subsystem, "content"); //$NON-NLS-1$
+
+        assertEquals("Foo, Bar", content.currentValue); //$NON-NLS-1$
+        assertEquals("Catalog.Foo, Document.Bar", content.valueIdentity); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that keeps the new field from becoming a second, divergent rendering: a kind
+     * whose text already says which value it is identifies itself by that same text.
+     */
+    @Test
+    public void testAKindWithNothingToQualifyIdentifiesItselfByItsRenderedText()
+    {
+        Catalog catalog = newCatalog();
+        catalog.setComment("a plain comment"); //$NON-NLS-1$
+
+        PropertyInfo comment = MetadataPropertyIntrospector.find(catalog, "comment"); //$NON-NLS-1$
+
+        assertEquals("a plain comment", comment.currentValue); //$NON-NLS-1$
+        assertEquals("a plain comment", comment.valueIdentity); //$NON-NLS-1$
+    }
+
+    private static Subsystem subsystemHolding(MdObject target)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("Sales"); //$NON-NLS-1$
+        subsystem.getContent().add(target);
+        return subsystem;
+    }
+
+    private static Catalog catalogNamed(String name)
+    {
+        Catalog catalog = newCatalog();
+        catalog.setName(name);
+        return catalog;
+    }
+
+    private static Document documentNamed(String name)
+    {
+        Document document = MdClassFactory.eINSTANCE.createDocument();
+        document.setName(name);
+        return document;
+    }
+
+    // ====== A target this class ADMITS is read, not silently dropped as an empty property ======
+
+    /**
+     * {@code classifyReference} admits a reference declared against the mcore {@code CommandGroup}
+     * interface, and the platform's {@code StandardCommandGroup} is one of the things that interface
+     * covers. The render path answered every non-{@code MdObject} target with ABSENT, so a command
+     * that IS in a standard group reported the same {@code (null, null, not-failed)} as a command in
+     * no group at all - a property this server admits it can address, and then claims nobody set.
+     */
+    @Test
+    public void testAStandardCommandGroupIsReadRatherThanReportedAbsent()
+    {
+        PropertyInfo group = MetadataPropertyIntrospector.find(
+            commandInStandardGroup("FormCommandBarImportant", null), "group"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the reader sees the platform's own name for the group", //$NON-NLS-1$
+            "FormCommandBarImportant", group.currentValue); //$NON-NLS-1$
+        assertEquals("StandardCommandGroup.FormCommandBarImportant", group.valueIdentity); //$NON-NLS-1$
+        assertFalse("a group that was read is not a group that failed to read", group.readFailed); //$NON-NLS-1$
+    }
+
+    /** Two different standard groups are two values, which is what the old ABSENT hid. */
+    @Test
+    public void testTwoStandardCommandGroupsAreTwoIdentities()
+    {
+        PropertyInfo inCommandBar = MetadataPropertyIntrospector.find(
+            commandInStandardGroup("FormCommandBarImportant", null), "group"); //$NON-NLS-1$ //$NON-NLS-2$
+        PropertyInfo inNavigation = MetadataPropertyIntrospector.find(
+            commandInStandardGroup("NavigationPanelSeeAlso", null), "group"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("a standard group must identify itself at all", inCommandBar.valueIdentity); //$NON-NLS-1$
+        assertFalse("two standard groups must not identify alike: " + inCommandBar.valueIdentity, //$NON-NLS-1$
+            inCommandBar.valueIdentity.equals(inNavigation.valueIdentity));
+    }
+
+    /**
+     * A group carrying no name still carries the {@code category} its own class declares, and the
+     * category is what the rest of this server already prints for such a group. Two groups told
+     * apart by nothing else are still two values.
+     */
+    @Test
+    public void testAnUnnamedStandardCommandGroupIsIdentifiedByItsCategory()
+    {
+        PropertyInfo onCommandBar = MetadataPropertyIntrospector.find(
+            commandInStandardGroup(null, CommandGroupCategory.FORM_COMMAND_BAR), "group"); //$NON-NLS-1$
+        PropertyInfo onNavigation = MetadataPropertyIntrospector.find(
+            commandInStandardGroup(null, CommandGroupCategory.NAVIGATION_PANEL), "group"); //$NON-NLS-1$
+
+        assertEquals("a nameless group still shows what the platform knows about it", //$NON-NLS-1$
+            "FormCommandBar", onCommandBar.currentValue); //$NON-NLS-1$
+        assertEquals("StandardCommandGroup.FormCommandBar", onCommandBar.valueIdentity); //$NON-NLS-1$
+        assertEquals("...and two categories are two values", //$NON-NLS-1$
+            "StandardCommandGroup.NavigationPanel", onNavigation.valueIdentity); //$NON-NLS-1$
+    }
+
+    /**
+     * The control that stops the fix from becoming a blanket: a command with NO group must still
+     * report an empty property, or every reference anybody left unset becomes a value.
+     */
+    @Test
+    public void testACommandWithNoGroupIsStillAnEmptyProperty()
+    {
+        PropertyInfo group = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createDataProcessorCommand(), "group"); //$NON-NLS-1$
+
+        assertNull("an unset group renders no value", group.currentValue); //$NON-NLS-1$
+        assertNull("...and identifies nothing", group.valueIdentity); //$NON-NLS-1$
+        assertFalse("...and nothing failed", group.readFailed); //$NON-NLS-1$
+    }
+
+    /**
+     * The other control: the metadata {@code CommandGroup} - the admitted target that IS an
+     * {@code MdObject} - must keep the shape it already had, so the new branch is an addition
+     * rather than a reroute.
+     */
+    @Test
+    public void testAMetadataCommandGroupKeepsItsNameAndTypeIdentity()
+    {
+        CommandGroup group = MdClassFactory.eINSTANCE.createCommandGroup();
+        group.setName("Sales"); //$NON-NLS-1$
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setGroup(group);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(command, "group"); //$NON-NLS-1$
+
+        assertEquals("Sales", info.currentValue); //$NON-NLS-1$
+        assertEquals("CommandGroup.Sales", info.valueIdentity); //$NON-NLS-1$
+    }
+
+    // ====== A target with no NAME is not a reference with no TARGET ======
+
+    /**
+     * ABSENT was chosen on the rendered text alone, so a reference pointing at an object whose name
+     * is not set threw away the identity it had already built and came back indistinguishable from
+     * a reference pointing at nothing - which a comparison then reports as agreement.
+     */
+    @Test
+    public void testAPresentButUnnamedTargetKeepsATypeIdentity()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()), "parentSubsystem"); //$NON-NLS-1$
+
+        assertEquals("the type is what is left to identify it by", "Subsystem", //$NON-NLS-1$ //$NON-NLS-2$
+            parent.valueIdentity);
+        assertFalse("it was read, so nothing failed", parent.readFailed); //$NON-NLS-1$
+    }
+
+    /**
+     * The cell is a NAME, and there is no name - so it stays empty rather than inventing one. The
+     * identity above, not the cell, is what keeps this apart from an unset reference.
+     */
+    @Test
+    public void testAPresentButUnnamedTargetStillPrintsAnEmptyCell()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            subsystemUnder(MdClassFactory.eINSTANCE.createSubsystem()), "parentSubsystem"); //$NON-NLS-1$
+
+        assertNull("a nameless target must not be given a printed name", parent.currentValue); //$NON-NLS-1$
+    }
+
+    /** The control: pointing at nothing still identifies nothing, so the two remain distinguishable. */
+    @Test
+    public void testAnUnsetReferenceIdentifiesNothingAtAll()
+    {
+        PropertyInfo parent = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createSubsystem(), "parentSubsystem"); //$NON-NLS-1$
+
+        assertNull(parent.currentValue);
+        assertNull("an unset reference must not acquire an identity", parent.valueIdentity); //$NON-NLS-1$
+    }
+
+    /**
+     * A command placed in a platform standard group.
+     *
+     * @param name the group's name, or {@code null} to leave it unset
+     * @param category the group's category, or {@code null} to leave the model's default
+     * @return the command
+     */
+    private static DataProcessorCommand commandInStandardGroup(String name,
+        CommandGroupCategory category)
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        if (name != null)
+        {
+            group.setName(name);
+        }
+        if (category != null)
+        {
+            group.setCategory(category);
+        }
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setGroup(group);
+        return command;
+    }
+
+    /**
+     * A subsystem whose {@code parentSubsystem} points at {@code parent} - a single-valued
+     * reference to a named object, so it says nothing about the many-valued {@code content} above.
+     *
+     * @param parent the object the reference points at
+     * @return the subsystem
+     */
+    private static Subsystem subsystemUnder(Subsystem parent)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("Sales"); //$NON-NLS-1$
+        subsystem.setParentSubsystem(parent);
+        return subsystem;
+    }
+
+    // ====== A 1C type is its qualifiers as well as its names ======
+
+    /**
+     * The type cell prints the type NAMES and nothing else, so a {@code String} bounded at 10
+     * characters and one bounded at 100 are the same six letters on the page. That is right for a
+     * reader and wrong for anything that compares the cells: EDT stores the two as different
+     * database columns, and a report built on the rendered text called them one value.
+     * <p>
+     * The pair is not hypothetical. One ordinary catalog {@code .mdo} carries an attribute typed
+     * {@code String} with an empty {@code <stringQualifiers/>} beside another with
+     * {@code <length>10</length>}.
+     */
+    @Test
+    public void testTwoStringLengthsThatPrintAlikeAreTwoIdentities()
+    {
+        String shortString = typeIdentity(stringTypeBounded(10, false));
+        String longString = typeIdentity(stringTypeBounded(100, false));
+
+        assertFalse("two string lengths must not be one value: " + shortString, //$NON-NLS-1$
+            shortString.equals(longString));
+    }
+
+    /** The other half of the same statement, on the qualifier the length does not cover. */
+    @Test
+    public void testAFixedStringIsNotTheSameValueAsAVariableOne()
+    {
+        String variable = typeIdentity(stringTypeBounded(10, false));
+        String fixed = typeIdentity(stringTypeBounded(10, true));
+
+        assertFalse("fixed and variable are two column types: " + variable, //$NON-NLS-1$
+            variable.equals(fixed));
+    }
+
+    /**
+     * A number differs the same way, and by the qualifier a reader is likeliest to care about: the
+     * scale is what says whether the column holds whole roubles or kopecks.
+     */
+    @Test
+    public void testTwoNumberScalesThatPrintAlikeAreTwoIdentities()
+    {
+        String whole = typeIdentity(numberType(10, 0, false));
+        String fractional = typeIdentity(numberType(10, 2, false));
+
+        assertFalse("two scales must not be one value: " + whole, whole.equals(fractional)); //$NON-NLS-1$
+    }
+
+    /** ...and by its sign, which is a constraint on the stored values rather than on their width. */
+    @Test
+    public void testANonNegativeNumberIsNotTheSameValueAsASignedOne()
+    {
+        String signed = typeIdentity(numberType(10, 2, false));
+        String nonNegative = typeIdentity(numberType(10, 2, true));
+
+        assertFalse("the sign is part of the type: " + signed, signed.equals(nonNegative)); //$NON-NLS-1$
+    }
+
+    /** A date that stores only the date is not a date that stores the time as well. */
+    @Test
+    public void testTwoDateFractionsThatPrintAlikeAreTwoIdentities()
+    {
+        String dateOnly = typeIdentity(dateType(DateFractions.DATE));
+        String timeOnly = typeIdentity(dateType(DateFractions.TIME));
+
+        assertFalse("two date fractions must not be one value: " + dateOnly, //$NON-NLS-1$
+            dateOnly.equals(timeOnly));
+    }
+
+    /**
+     * The fourth qualifier group {@code TypeDescription} declares. It is not in the note this work
+     * started from - it was read out of {@code model/Mcore.xcore} - and it is carried for the same
+     * reason as the other three.
+     */
+    @Test
+    public void testTwoBinaryLengthsThatPrintAlikeAreTwoIdentities()
+    {
+        TypeDescription small = typeDescriptionOf("ValueStorage"); //$NON-NLS-1$
+        small.setBinaryQualifiers(binaryQualifiers(64, false));
+        TypeDescription large = typeDescriptionOf("ValueStorage"); //$NON-NLS-1$
+        large.setBinaryQualifiers(binaryQualifiers(128, false));
+
+        assertFalse("two binary lengths must not be one value: " + typeIdentity(small), //$NON-NLS-1$
+            typeIdentity(small).equals(typeIdentity(large)));
+    }
+
+    /**
+     * The many-valued case: a composite type holds several alternatives AND a qualifier group per
+     * primitive among them. Walking only the names loses every one of those groups at once.
+     */
+    @Test
+    public void testACompositeTypeCarriesEveryQualifierGroupItHolds()
+    {
+        TypeDescription whole = typeDescriptionOf("String", "Number", "Date"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        whole.setStringQualifiers(stringQualifiers(10, false));
+        whole.setNumberQualifiers(numberQualifiers(10, 0, false));
+        whole.setDateQualifiers(dateQualifiers(DateFractions.DATE));
+        TypeDescription fractional = typeDescriptionOf("String", "Number", "Date"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        fractional.setStringQualifiers(stringQualifiers(10, false));
+        fractional.setNumberQualifiers(numberQualifiers(10, 2, false));
+        fractional.setDateQualifiers(dateQualifiers(DateFractions.DATE));
+
+        assertEquals("the cell is the alternatives, unchanged", "String, Number, Date", //$NON-NLS-1$ //$NON-NLS-2$
+            typeCell(whole));
+        assertFalse("a group behind the first one still separates the two: " + typeIdentity(whole), //$NON-NLS-1$
+            typeIdentity(whole).equals(typeIdentity(fractional)));
+    }
+
+    /**
+     * The composite case again, with the difference moved OFF the first group the identity emits.
+     * <p>
+     * The test above cannot see this: its two sides differ in the number scale, and the number
+     * group is the first one written - so an identity that stopped after ONE group still separated
+     * them, and the measured mutation "only the first group reaches the identity" survived. Here
+     * the two sides share their string bound and differ only in the date fractions, which is
+     * written last.
+     */
+    @Test
+    public void testACompositeTypeSeparatesOnAGroupThatIsNotTheFirstWritten()
+    {
+        TypeDescription dateOnly = typeDescriptionOf("String", "Date"); //$NON-NLS-1$ //$NON-NLS-2$
+        dateOnly.setStringQualifiers(stringQualifiers(10, false));
+        dateOnly.setDateQualifiers(dateQualifiers(DateFractions.DATE));
+        TypeDescription timeOnly = typeDescriptionOf("String", "Date"); //$NON-NLS-1$ //$NON-NLS-2$
+        timeOnly.setStringQualifiers(stringQualifiers(10, false));
+        timeOnly.setDateQualifiers(dateQualifiers(DateFractions.TIME));
+
+        assertFalse("the LAST group written still separates the two: " + typeIdentity(dateOnly), //$NON-NLS-1$
+            typeIdentity(dateOnly).equals(typeIdentity(timeOnly)));
+    }
+
+    /**
+     * The display is NOT what changed. Spelling the qualifiers into the cell would widen every type
+     * row in every report to fix something nobody reads out of the table.
+     */
+    @Test
+    public void testAQualifiedTypeStillPrintsJustTheTypeName()
+    {
+        assertEquals("the reader still sees the short type", "String", //$NON-NLS-1$ //$NON-NLS-2$
+            typeCell(stringTypeBounded(10, false)));
+    }
+
+    /**
+     * The control against the opposite error: two types qualified identically are ONE value, and
+     * qualifying the comparison must not make every type row differ.
+     */
+    @Test
+    public void testTwoIdenticallyQualifiedTypesStillAgree()
+    {
+        assertEquals("one type described twice is one value", //$NON-NLS-1$
+            typeIdentity(stringTypeBounded(10, true)), typeIdentity(stringTypeBounded(10, true)));
+    }
+
+    /**
+     * The second control, and the one that keeps the fix from being worse than the defect. EDT
+     * writes an EMPTY {@code <stringQualifiers/>} element for an unbounded string, so one side can
+     * hold a defaulted qualifier object where the other holds none at all - and both mean the same
+     * unbounded type. An identity that spelled the group out unconditionally would report that as a
+     * difference on ordinary configurations.
+     */
+    @Test
+    public void testADefaultedQualifierGroupIsTheSameValueAsNoneAtAll()
+    {
+        TypeDescription defaulted = typeDescriptionOf("String"); //$NON-NLS-1$
+        defaulted.setStringQualifiers(stringQualifiers(0, false));
+
+        assertEquals("an empty <stringQualifiers/> is not a difference from none", //$NON-NLS-1$
+            typeIdentity(typeDescriptionOf("String")), typeIdentity(defaulted)); //$NON-NLS-1$
+    }
+
+    /** The same control on the date group, whose default is the fractions literal rather than a zero. */
+    @Test
+    public void testADefaultedDateGroupIsTheSameValueAsNoneAtAll()
+    {
+        assertEquals("DateTime is the model default, so it says nothing", //$NON-NLS-1$
+            typeIdentity(typeDescriptionOf("Date")), //$NON-NLS-1$
+            typeIdentity(dateType(DateFractions.DATE_TIME)));
+    }
+
+    /**
+     * @param typeNames the alternatives the description names, in order
+     * @return a detached {@code TypeDescription} naming them
+     */
+    private static TypeDescription typeDescriptionOf(String... typeNames)
+    {
+        TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String typeName : typeNames)
+        {
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            description.getTypes().add(type);
+        }
+        return description;
+    }
+
+    private static StringQualifiers stringQualifiers(int length, boolean fixed)
+    {
+        StringQualifiers qualifiers = McoreFactory.eINSTANCE.createStringQualifiers();
+        qualifiers.setLength(length);
+        qualifiers.setFixed(fixed);
+        return qualifiers;
+    }
+
+    private static NumberQualifiers numberQualifiers(int precision, int scale, boolean nonNegative)
+    {
+        NumberQualifiers qualifiers = McoreFactory.eINSTANCE.createNumberQualifiers();
+        qualifiers.setPrecision(precision);
+        qualifiers.setScale(scale);
+        qualifiers.setNonNegative(nonNegative);
+        return qualifiers;
+    }
+
+    private static DateQualifiers dateQualifiers(DateFractions fractions)
+    {
+        DateQualifiers qualifiers = McoreFactory.eINSTANCE.createDateQualifiers();
+        qualifiers.setDateFractions(fractions);
+        return qualifiers;
+    }
+
+    private static BinaryQualifiers binaryQualifiers(int length, boolean fixed)
+    {
+        BinaryQualifiers qualifiers = McoreFactory.eINSTANCE.createBinaryQualifiers();
+        qualifiers.setLength(length);
+        qualifiers.setFixed(fixed);
+        return qualifiers;
+    }
+
+    private static TypeDescription stringTypeBounded(int length, boolean fixed)
+    {
+        TypeDescription description = typeDescriptionOf("String"); //$NON-NLS-1$
+        description.setStringQualifiers(stringQualifiers(length, fixed));
+        return description;
+    }
+
+    private static TypeDescription numberType(int precision, int scale, boolean nonNegative)
+    {
+        TypeDescription description = typeDescriptionOf("Number"); //$NON-NLS-1$
+        description.setNumberQualifiers(numberQualifiers(precision, scale, nonNegative));
+        return description;
+    }
+
+    private static TypeDescription dateType(DateFractions fractions)
+    {
+        TypeDescription description = typeDescriptionOf("Date"); //$NON-NLS-1$
+        description.setDateQualifiers(dateQualifiers(fractions));
+        return description;
+    }
+
+    /** What a comparison sees of an attribute typed {@code type}. */
+    private static String typeIdentity(TypeDescription type)
+    {
+        return typeProperty(type).valueIdentity;
+    }
+
+    /** What a reader sees of the same attribute. */
+    private static String typeCell(TypeDescription type)
+    {
+        return typeProperty(type).currentValue;
+    }
+
+    private static PropertyInfo typeProperty(TypeDescription type)
+    {
+        CatalogAttribute attribute = newAttribute();
+        attribute.setType(type);
+        PropertyInfo info = MetadataPropertyIntrospector.find(attribute, "type"); //$NON-NLS-1$
+        assertNotNull("the type property must be introspected", info); //$NON-NLS-1$
+        return info;
+    }
+
+    // ==================== A failed read is not an empty value ====================
+
+    /**
+     * The read of one property is guarded so that a single dangling proxy cannot abort the whole
+     * object. The guard used to answer {@code null} - the same answer as "this property is not
+     * set" - so a failure to read arrived at every consumer as a fact about the model.
+     */
+    @Test
+    public void testAFailedReadIsReportedAsFailedRatherThanEmpty()
+    {
+        PropertyInfo comment = MetadataPropertyIntrospector.find(explodingOn("comment"), "comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("the failure must not remove the property from the list", comment); //$NON-NLS-1$
+        assertTrue("a property whose read threw must say so", comment.readFailed); //$NON-NLS-1$
+        assertNull("and it carries no value, because none was read", comment.currentValue); //$NON-NLS-1$
+    }
+
+    /** The control: a property nobody set is empty, and that is NOT a failure. */
+    @Test
+    public void testAnUnsetPropertyIsEmptyAndNotAFailure()
+    {
+        PropertyInfo comment = MetadataPropertyIntrospector.find(explodingOn("name"), "comment"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(comment);
+        assertNull("nobody set it, so there is no value", comment.currentValue); //$NON-NLS-1$
+        assertFalse("but an unset property must not be reported as unreadable", comment.readFailed); //$NON-NLS-1$
+    }
+
+    /** One unreadable property must not make the others unreadable, nor stop the walk. */
+    @Test
+    public void testOnlyTheUnreadablePropertyIsMarked()
+    {
+        List<PropertyInfo> all = MetadataPropertyIntrospector.introspect(explodingOn("comment")); //$NON-NLS-1$
+
+        int failed = 0;
+        for (PropertyInfo info : all)
+        {
+            if (info.readFailed)
+            {
+                failed++;
+            }
+        }
+        assertEquals("exactly the one feature whose read threw is marked", 1, failed); //$NON-NLS-1$
+        assertTrue("and the rest of the object is still introspected", all.size() > 1); //$NON-NLS-1$
+    }
+
+    /**
+     * An object with two plain string properties whose {@code eGet} throws for ONE of them - the
+     * shape a dangling proxy takes when the resolver behind it is not available.
+     *
+     * @param failing the feature name whose read must throw
+     * @return the object
+     */
+    private static EObject explodingOn(String failing)
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("explodinglike"); //$NON-NLS-1$
+        pkg.setNsPrefix("explodinglike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/explodinglike"); //$NON-NLS-1$
+        EClass holder = f.createEClass();
+        holder.setName("ExplodingHolder"); //$NON-NLS-1$
+        addString(f, holder, "name"); //$NON-NLS-1$
+        addString(f, holder, "comment"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(holder);
+        return new ExplodingObject(holder, failing);
+    }
+
+    /** A dynamic EObject that refuses to yield ONE named feature. */
+    private static final class ExplodingObject
+        extends org.eclipse.emf.ecore.impl.DynamicEObjectImpl
+    {
+        private final String failing;
+
+        ExplodingObject(EClass eClass, String failing)
+        {
+            super(eClass);
+            this.failing = failing;
+        }
+
+        @Override
+        public Object eGet(EStructuralFeature feature)
+        {
+            if (failing.equals(feature.getName()))
+            {
+                throw new IllegalStateException("the value behind this feature cannot be resolved"); //$NON-NLS-1$
+            }
+            return super.eGet(feature);
+        }
     }
 
     @Test
@@ -460,6 +1091,71 @@ public class MetadataPropertyIntrospectorTest
 
         assertEquals("[\"XDTOPackage.Orders\",\"http://v8.1c.ru/8.1/data/core\"]", //$NON-NLS-1$
             MetadataPropertyIntrospector.find(holder, "flag").currentValue); //$NON-NLS-1$
+    }
+
+    // ---- a value list that could not be read is not an empty one ---------------------------------
+    //
+    // eGet has already answered before this kind's renderer runs, so a property nobody set is
+    // decided THERE, and an empty list renders as "[]". By the time the renderer gives up there is
+    // a non-empty list it could not turn into text - and calling that an absence cost a claim one
+    // consumer further out: the comparison renderer gives an absent value an EMPTY identity, so two
+    // sides whose entries both failed to resolve carried the same identity and the property was
+    // reported as SAME over two lists that may name entirely different packages.
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testAnUnreadableXdtoPackageEntryIsAFailedReadRatherThanAnEmptyProperty()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+        EList<Value> values = (EList<Value>)holder.eGet(
+            holder.eClass().getEStructuralFeature("flag")); //$NON-NLS-1$
+
+        // The shape a dangling XDTO package reference actually takes. EcoreUtil.resolve swallows
+        // whatever went wrong and hands the PROXY back, so the entry arrives carrying no name -
+        // which is the branch this pins, and the branch a throwing resolution lands in as well.
+        XDTOPackage unresolved = MdClassFactory.eINSTANCE.createXDTOPackage();
+        ((InternalEObject)unresolved).eSetProxyURI(URI.createURI("unresolved:/XDTOPackage.Orders")); //$NON-NLS-1$
+        ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+        reference.setValue(unresolved);
+        values.add(reference);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(holder, "flag"); //$NON-NLS-1$
+        assertNotNull("the failure must not remove the property from the list", info); //$NON-NLS-1$
+        assertTrue("a list holding an entry nothing could be read from must say so", //$NON-NLS-1$
+            info.readFailed);
+    }
+
+    /** The control: a list that WAS read is not marked unreadable. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testAReadableMcoreValueListIsNotMarkedUnreadable()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+        EList<Value> values = (EList<Value>)holder.eGet(
+            holder.eClass().getEStructuralFeature("flag")); //$NON-NLS-1$
+
+        XDTOPackage xdtoPackage = MdClassFactory.eINSTANCE.createXDTOPackage();
+        xdtoPackage.setName("Orders"); //$NON-NLS-1$
+        ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+        reference.setValue(xdtoPackage);
+        values.add(reference);
+
+        assertFalse("a list that rendered is not a list that failed", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(holder, "flag").readFailed); //$NON-NLS-1$
+    }
+
+    /**
+     * The other control, and the one that keeps the change from overreaching: a list with no
+     * entries is a value - the empty array - and never a failed read. Without it, "anything that
+     * does not render is unreadable" could be satisfied by marking every empty list.
+     */
+    @Test
+    public void testAnEmptyMcoreValueListIsStillTheEmptyArrayAndNotAFailure()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(holder, "flag"); //$NON-NLS-1$
+        assertEquals("[]", info.currentValue); //$NON-NLS-1$
     }
 
     // ---- contained AdjustableBoolean flags (issue #382) -----------------------------------------

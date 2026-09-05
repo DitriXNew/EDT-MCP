@@ -54,7 +54,14 @@ public final class ToolAnnotationClassifier
         "delete_project", //$NON-NLS-1$
         "delete_launch_config", //$NON-NLS-1$
         "delete_infobase", //$NON-NLS-1$
-        "cancel_job" //$NON-NLS-1$
+        "cancel_job", //$NON-NLS-1$
+        // merge_rules in mode 'write' REPLACES the rules file named by basedOn, and the decisions
+        // that file held are gone with it - an overwrite, not an addition, which is the whole
+        // distinction destructiveHint draws. That the tool refuses every OTHER replacement does
+        // not make this one recoverable: a client that reads the hint as "additive only" would
+        // perform it without asking. Its 'read' half is a pure read, but the hint is per tool and
+        // has to describe what the tool CAN do.
+        "merge_rules" //$NON-NLS-1$
     );
 
     private ToolAnnotationClassifier()

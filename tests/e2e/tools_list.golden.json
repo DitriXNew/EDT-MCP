@@ -263,6 +263,53 @@
   {
     "annotations": {
       "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Compare a project's working tree against two git revisions (three-way) and report which top objects differ. Read-only: it never merges and never writes the project. Returns a jobId immediately - the comparison runs in background; poll it with get_job_status and stop it with cancel_job. EDT runs ONE comparison at a time, so a second call while one is live is refused, naming the live comparison, and is never queued. Omitting scope compares the WHOLE configuration. Expand one object with get_comparison_node. A FINISHED comparison stays open and keeps the slot - cancel_job cannot end it then; free it by calling this tool with releaseComparisonId alone. Full parameters and examples: call get_tool_guide('compare_configurations').",
+    "inputSchema": {
+      "properties": {
+        "ancestorRevision": {
+          "type": "string"
+        },
+        "changedOnly": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "mergeRulesFile": {
+          "type": "string"
+        },
+        "otherRevision": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "releaseComparisonId": {
+          "type": "string"
+        },
+        "scope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "waitSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "compare_configurations",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
     },
@@ -1642,6 +1689,50 @@
       "type": "object"
     },
     "name": "get_check_description",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Expand one node of a comparison started by compare_configurations: three-way property table, form structure, module sections, support state and potential problems. Address the node by objectFqn (Russian or English type tokens both work) or by the nodeId from the comparison report. The tree is built lazily, so an unfinished subtree is reported as unfinished, never as 'no differences'. Read-only: it never merges. Parameters and examples: get_tool_guide('get_comparison_node').",
+    "inputSchema": {
+      "properties": {
+        "comparisonId": {
+          "type": "string"
+        },
+        "depth": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "nodeId": {
+          "type": "integer"
+        },
+        "objectFqn": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "main",
+            "other",
+            "ancestor"
+          ],
+          "type": "string"
+        },
+        "waitSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "comparisonId"
+      ],
+      "type": "object"
+    },
+    "name": "get_comparison_node",
     "outputSchema": null
   },
   {
@@ -3243,6 +3334,52 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Read or author EDT's merge-rules file - the per-node decisions a configuration comparison saves and re-applies when it is launched. Which container to write is chosen by filePath: '.xml' needs NO running comparison but is read by EDT 2026.1 only, while the '.zip' both versions read carries an entry named after the comparison's three project names, so it needs a live comparison and is refused without one. Validation has THREE outcomes: a comparison whose tree is FINISHED checks every rule against what its node allows and refuses an illegal one; a comparison that answers but whose tree cannot be read yet names a zip's entry without checking anything, reported NOT VALIDATED - or refused outright when you passed comparisonId; with no comparison at all the file is authored from names, also NOT VALIDATED. Never merges anything - running the merge stays a human action in the comparison window. Parameters and examples: get_tool_guide('merge_rules').",
+    "inputSchema": {
+      "properties": {
+        "basedOn": {
+          "type": "string"
+        },
+        "comparisonId": {
+          "type": "string"
+        },
+        "decisions": {
+          "description": "write: the decisions to record, as [{path, rule}]. 'path' is the key chain below the root - [] = the whole configuration, ['commonModules'] = a whole collection (the EMF feature name; a metadata type token in either language, 'Catalog' or 'Catalogs' or the Russian form, is translated to it), ['commonModules','Main:Main:Main'] = one object, keyed by its name on the main, other and ancestor sides joined by ':' with 'NONE' for a side that has no such object. 'rule' is one of GetFromOther, DoNotMerge, MergePrioritizingMain, MergePrioritizingOther.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "filePath": {
+          "description": "Absolute path of the merge-rules file (required). read: the file to parse, '.xml' or the '.zip' a comparison saves - the extension's CASE does not matter, '.ZIP' is read. write: this is what picks the container, and here the extension must be spelled in LOWER CASE, because EDT's own reader compares it exactly and would refuse the file inside the launch. '.zip' is read by every supported EDT and holds an entry named after the comparison's three PROJECT names, so it needs a live comparison and is refused without one; '.xml' needs none and is read by EDT 2026.1 only. An existing file is OVERWRITTEN only when 'basedOn' names that SAME file, whose decisions are carried into the file that REPLACES it; any other write over an existing file is refused so decisions are never silently discarded.",
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "read",
+            "write"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "filePath"
+      ],
+      "type": "object"
+    },
+    "name": "merge_rules",
+    "outputSchema": null
   },
   {
     "annotations": {

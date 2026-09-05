@@ -715,6 +715,53 @@ public final class MetadataTypeUtils
     }
 
     /**
+     * Canonicalizes a full FQN to its ALL-ENGLISH form, translating <b>every</b> structural
+     * segment while copying every programmatic Name - and the case of both - verbatim.
+     * <p>
+     * This is the address shape the comparison engine matches against: a comparison-scope symlink
+     * is an EDT qualified name whose structural tokens are the English literals, and the engine has
+     * no bilingual branch anywhere, so a Russian address must arrive already translated or it
+     * matches nothing at all - silently, because a scope that selects no object is still a legal
+     * scope.
+     * <p>
+     * It exists beside its two neighbours because neither can serve that use:
+     * <ul>
+     *   <li>{@link #normalizeFqn(String)} translates the LEADING token only, so
+     *       {@code Справочник.Товары.Форма.ФормаЭлемента} keeps its Russian {@code Форма};</li>
+     *   <li>{@link #getAllFqnVariants(String)} does translate every segment, but LOWERCASES what it
+     *       returns - right for matching markers case-insensitively, wrong for a symlink, which is
+     *       compared verbatim.</li>
+     * </ul>
+     * <p>
+     * Examples:
+     * <ul>
+     *   <li>{@code "Справочник.Товары.Форма.ФормаЭлемента"} -&gt;
+     *       {@code "Catalog.Товары.Form.ФормаЭлемента"}</li>
+     *   <li>{@code "Catalog.Товары.Form.ФормаЭлемента"} -&gt; returned byte-identical</li>
+     *   <li>{@code "Catalogs.Products"} -&gt; {@code "Catalog.Products"} (plural to singular)</li>
+     * </ul>
+     * <p>
+     * A segment in neither catalogue is copied verbatim - exactly as the all-segment translation
+     * behind {@link #getAllFqnVariants} already does, so one unknown token never mangles the rest of
+     * the address. Whether the LEADING token is a known type at all is deliberately NOT decided
+     * here: {@link #toEnglishSingular(String)} answers that, and only the caller knows whether an
+     * unknown token is a refusal or a pass-through.
+     *
+     * @param fqn a full dot-separated FQN; {@code null}, empty, a single token or a leading-dot
+     *     string is returned unchanged - there is no {@code Type.Name} shape to translate, the same
+     *     guard {@link #getAllFqnVariants} applies
+     * @return the all-English FQN with the case of every programmatic Name preserved
+     */
+    public static String toCanonicalEnglishFqn(String fqn)
+    {
+        if (fqn == null || fqn.indexOf('.') <= 0)
+        {
+            return fqn;
+        }
+        return translateStructuralSegments(fqn.split("\\.", -1), true, 0); //$NON-NLS-1$
+    }
+
+    /**
      * Returns the collection of metadata objects from Configuration for the given type name.
      * Uses EMF reflection to find the collection by its reference name.
      *
