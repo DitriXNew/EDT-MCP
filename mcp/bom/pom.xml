@@ -2,9 +2,9 @@
 <!--
    Copyright (c) 2025 DitriX
    This program and the accompanying materials are made available under
-   the terms of the Eclipse Public License 2.0 which is available at
-   https://www.eclipse.org/legal/epl-2.0/
-   SPDX-License-Identifier: EPL-2.0
+   the terms of the GNU Affero General Public License v3.0 or later,
+   which is available at https://www.gnu.org/licenses/agpl-3.0.html
+   SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 <project
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
