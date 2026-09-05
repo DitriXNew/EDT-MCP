@@ -941,7 +941,138 @@ class EvidenceLogTailTest(unittest.TestCase):
                       "one generation that fits the budget must not be charged twice")
         headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
         self.assertEqual(1, len(headings))
-        self.assertIn(".metadata/.log", headings[0])
+        self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertNotIn("INCOMPLETE", out)
+
+    def test_a_grown_rotated_log_supersedes_the_bytes_read_from_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            backup = os.path.join(metadata, ".bak_2.log")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+                handle.write("".join("noise line %d\n" % index for index in range(50)))
+
+            real_read = HARNESS._read_log_tail
+            rotated = []
+
+            def read_grow_then_rotate(path, *args):
+                text = real_read(path, *args)
+                if not rotated:
+                    rotated.append(True)
+                    with open(current, "a", encoding="utf-8") as handle:
+                        handle.write("APPENDED BEFORE ROTATION\n")
+                    os.replace(current, backup)
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
+                return text
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=read_grow_then_rotate), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(1, len(headings))
+        self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertIn("FAILURE MOMENT", out)
+        self.assertIn("APPENDED BEFORE ROTATION", out)
+        self.assertNotIn("INCOMPLETE", out)
+
+    def test_a_reused_rotated_backup_keeps_the_current_bytes_and_marks_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            backup = os.path.join(metadata, ".bak_2.log")
+            replacement = os.path.join(metadata, "replacement.log")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+            with open(replacement, "w", encoding="utf-8") as handle:
+                handle.write("REUSED BACKUP GENERATION\n")
+
+            real_read = HARNESS._read_log_tail
+            rotated = []
+            reused = []
+
+            def read_rotate_then_reuse(path, *args):
+                if path == backup and not reused:
+                    reused.append(True)
+                    os.replace(replacement, backup)
+                text = real_read(path, *args)
+                if path == current and not rotated:
+                    rotated.append(True)
+                    os.replace(current, backup)
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER ROTATION\n")
+                return text
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=read_rotate_then_reuse), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(2, len(headings))
+        self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertIn(".metadata/.log", headings[1])
+        backup_start = out.index(headings[0])
+        current_start = out.index(headings[1])
+        incomplete_start = out.index("--- EDT log tail - INCOMPLETE")
+        self.assertIn("REUSED BACKUP GENERATION", out[backup_start:current_start])
+        self.assertIn("FAILURE MOMENT", out[current_start:incomplete_start])
+        self.assertIn("selected backup identity changed at read time: %s" % backup, out)
+
+    def test_two_rotations_after_the_read_keep_the_backup_chronology(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            first_backup = os.path.join(metadata, ".bak_2.log")
+            second_backup = os.path.join(metadata, ".bak_3.log")
+            with open(current, "w", encoding="utf-8") as handle:
+                handle.write("FAILURE MOMENT\n")
+            os.utime(current, ns=(1_000_000_000, 1_000_000_000))
+
+            real_read = HARNESS._read_log_tail
+            rotated = []
+
+            def read_then_rotate_twice(path, *args):
+                text = real_read(path, *args)
+                if not rotated:
+                    rotated.append(True)
+                    os.replace(current, first_backup)
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("NEWER GENERATION\n")
+                    os.utime(current, ns=(2_000_000_000, 2_000_000_000))
+                    os.replace(current, second_backup)
+                    with open(current, "w", encoding="utf-8") as handle:
+                        handle.write("AFTER TWO ROTATIONS\n")
+                return text
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_read_log_tail",
+                                      side_effect=read_then_rotate_twice), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(2, len(headings))
+        self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertIn(".metadata/.bak_3.log", headings[1])
+        first_start = out.index(headings[0])
+        second_start = out.index(headings[1])
+        self.assertIn("FAILURE MOMENT", out[first_start:second_start])
+        self.assertNotIn("INCOMPLETE", out)
 
     def test_a_noisy_current_log_cannot_crowd_the_rotated_failure_out(self):
         """The whole reason the backup is collected is that the failure is IN it.
