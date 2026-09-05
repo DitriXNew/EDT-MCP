@@ -793,12 +793,15 @@ def wait_for_server(timeout=60):
 
 
 def _workspace_dir(list_projects_markdown=None):
-    """Locate the EDT workspace holding .metadata/.log.
+    """Locate the EDT workspace marked by a .metadata directory.
 
     Explicit env wins. Otherwise infer it: a workspace almost always contains at least one
     project of its own (the Servers container, for one), so walk each project's ancestors
-    looking for a .metadata/.log. Returns None when it cannot be found - callers decide whether
-    missing diagnostics should be skipped or merely reported as unavailable.
+    looking for .metadata, Eclipse's workspace marker. A missing current .log is reported by the
+    readers instead of making the locator reject a workspace and discard its rotated backups.
+    The evidence collector degrades to PARTIAL evidence, never to none. Returns None when the
+    workspace cannot be found - callers decide whether missing diagnostics should be skipped or
+    merely reported as unavailable.
 
     @param list_projects_markdown a list_projects table the caller ALREADY holds. Pass it from
     any path that must not touch the wire: a call() that times out arms the global abort latch
@@ -807,7 +810,7 @@ def _workspace_dir(list_projects_markdown=None):
     """
     override = os.environ.get("EDT_MCP_EDT_WORKSPACE")
     if override:
-        return override if os.path.isfile(os.path.join(override, ".metadata", ".log")) else None
+        return override if os.path.isdir(os.path.join(override, ".metadata")) else None
 
     if list_projects_markdown is not None:
         text = list_projects_markdown
@@ -819,7 +822,7 @@ def _workspace_dir(list_projects_markdown=None):
             candidate = os.path.dirname(candidate)
             if not candidate:
                 break
-            if os.path.isfile(os.path.join(candidate, ".metadata", ".log")):
+            if os.path.isdir(os.path.join(candidate, ".metadata")):
                 return candidate
     return None
 
@@ -976,6 +979,12 @@ def wait_for_project_ready(timeout=None, failure_details=None, progress=None):
             # The one failure a best-effort catch must NOT swallow: the server is still running
             # that call, so retrying - or reporting success - hides it from the runner, the only
             # place that can stop the run before the next test reads a model it is still writing.
+            # last_list_projects is assigned only after a call returns, so it still holds the last
+            # poll that COMPLETED. With that snapshot the collector makes no MCP calls, is safe
+            # after the abort latch is armed, and returns immediately because its reads run on a
+            # daemon thread. The startup pre-flight can exit right afterward, so that block is
+            # best-effort.
+            _failed_settle_evidence(last_list_projects)
             raise
         except Exception:
             pass
@@ -1709,16 +1718,16 @@ def _print_failed_settle_evidence(last_list_projects):
                          (type(exc).__name__, exc)))
 
     try:
-        lines = ["\n===== FIRST FAILED MODEL SETTLE EVIDENCE ====="]
+        lines = ["\n===== FIRST FAILED SETTLE EVIDENCE ====="]
         for heading, body in sections:
             lines.extend(("--- %s ---" % heading, body))
-        lines.append("===== END FIRST FAILED MODEL SETTLE EVIDENCE =====")
+        lines.append("===== END FIRST FAILED SETTLE EVIDENCE =====")
         print("\n".join(lines), flush=True)
     except Exception as exc:
         # Diagnostics must never replace or otherwise alter the reset failure being diagnosed.
-        print("\n===== FIRST FAILED MODEL SETTLE EVIDENCE =====\n"
+        print("\n===== FIRST FAILED SETTLE EVIDENCE =====\n"
               "<evidence unavailable: %s: %s>\n"
-              "===== END FIRST FAILED MODEL SETTLE EVIDENCE ====="
+              "===== END FIRST FAILED SETTLE EVIDENCE ====="
               % (type(exc).__name__, exc), flush=True)
 
 

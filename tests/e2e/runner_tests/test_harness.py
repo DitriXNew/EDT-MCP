@@ -154,6 +154,24 @@ class ResetSettleEvidenceTest(unittest.TestCase):
         self.assertEqual([snapshot], collected,
                          "the final snapshot must be handed off before final_cleanup raises")
 
+    def test_a_settle_call_timeout_collects_the_last_completed_poll_before_reraising(self):
+        snapshot = ("| Name | State | X | Open | EDT Project |\n"
+                    "|---|---|---|---|---|\n"
+                    "| P | building | - | Yes | Yes |\n")
+        polls = iter((mock.Mock(text=snapshot),
+                      HARNESS.E2ECallTimeout("list_projects timed out")))
+        collected = []
+
+        with mock.patch.object(HARNESS, "call", side_effect=polls), \
+                mock.patch.object(HARNESS, "_failed_settle_evidence",
+                                  side_effect=collected.append), \
+                mock.patch.object(HARNESS.time, "sleep"):
+            with self.assertRaises(HARNESS.E2ECallTimeout):
+                HARNESS.wait_for_project_ready(timeout=HARNESS.MODEL_SETTLE_TIMEOUT)
+
+        self.assertEqual([snapshot], collected,
+                         "the timeout must preserve the last list_projects poll that completed")
+
 
 class EvidenceLogTailTest(unittest.TestCase):
     """The evidence block must not be able to change the reset outcome, and that is EXECUTED here.
@@ -217,7 +235,7 @@ class EvidenceLogTailTest(unittest.TestCase):
                 HARNESS._print_failed_settle_evidence("| P | building |")
 
         out = printed.getvalue()
-        self.assertIn("FIRST FAILED MODEL SETTLE EVIDENCE", out)
+        self.assertIn("FIRST FAILED SETTLE EVIDENCE", out)
         self.assertIn("| P | building |", out)
         self.assertIn("something went wrong", out)
 
@@ -244,6 +262,24 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertLess(out.index("failure before rotation"), out.index("lines after rotation"))
         self.assertNotIn("INCOMPLETE", out,
                          "an ordinary backup plus current log is complete evidence")
+
+    def test_a_configured_workspace_without_a_current_log_keeps_rotated_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            with open(os.path.join(metadata, ".bak_1.log"), "w", encoding="utf-8") as handle:
+                handle.write("FAILURE FROM ROTATED BACKUP\n")
+
+            printed = io.StringIO()
+            with mock.patch.dict(os.environ, {"EDT_MCP_EDT_WORKSPACE": tmp}), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        self.assertIn("FAILURE FROM ROTATED BACKUP", out)
+        self.assertNotIn("EDT workspace not found", out)
+        self.assertIn("INCOMPLETE", out,
+                      "the unreadable current log must leave the collected evidence partial")
 
     def test_a_burst_of_rotations_keeps_the_EARLIEST_one_the_failure_went_into(self):
         """The cap must spend its budget on the first rotation, not the last three.
