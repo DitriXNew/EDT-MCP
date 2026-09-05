@@ -86,14 +86,14 @@ def _load_baseline():
 
 
 def _collect_our_errors(workspace):
-    """Every ERROR entry of ours stamped at/after this run started, plus whether a log was read."""
+    """Every ERROR entry of ours stamped this run, plus whether any entry was stamped this run."""
     metadata = os.path.join(workspace, ".metadata")
     # The log rotates at ~1 MB, so one run can span .log plus several .bak_N.log.
     files = sorted(glob.glob(os.path.join(metadata, ".bak_*.log"))) + \
         [os.path.join(metadata, ".log")]
 
     found = {}
-    inspected = False
+    saw_run_entry = False
     for path in files:
         if not os.path.isfile(path):
             continue
@@ -102,19 +102,18 @@ def _collect_our_errors(workspace):
                 lines = handle.readlines()
         except OSError:
             continue
-        if lines:
-            inspected = True
         for index, line in enumerate(lines):
             match = _ENTRY.match(line)
             if not match:
                 continue
             plugin, severity, _code, stamp = match.groups()
-            if plugin != OUR_PLUGIN or severity != SEVERITY_ERROR:
-                continue
             try:
                 if _entry_epoch(stamp) < RUN_STARTED_AT - 1:
                     continue
             except ValueError:
+                continue
+            saw_run_entry = True
+            if plugin != OUR_PLUGIN or severity != SEVERITY_ERROR:
                 continue
             message = ""
             for follow in lines[index + 1:index + 3]:
@@ -123,7 +122,9 @@ def _collect_our_errors(workspace):
                     break
             key = _normalize(message) or "(no message)"
             found[key] = found.get(key, 0) + 1
-    return found, inspected
+    # A current entry proves the logs are live, not that EDT writes this server's logs to
+    # this workspace; the locator cannot establish that.
+    return found, saw_run_entry
 
 
 @e2e_test(tool="_edt_log_ratchet", kind="read", last=True)
@@ -134,10 +135,10 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
             "EDT workspace not found: set EDT_MCP_EDT_WORKSPACE to the -data directory "
             "so the log ratchet can read <workspace>/.metadata/.log")
 
-    found, inspected = _collect_our_errors(workspace)
-    if not inspected:
+    found, saw_run_entry = _collect_our_errors(workspace)
+    if not saw_run_entry:
         raise E2ESkip(
-            "EDT workspace found at %s but holds no readable EDT log content to inspect "
+            "EDT workspace found at %s but its logs show no entries from this run "
             "(.metadata/.log or .metadata/.bak_*.log)" % workspace)
     accepted = _load_baseline()
     new = {msg: count for msg, count in found.items() if msg not in accepted}

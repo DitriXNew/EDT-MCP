@@ -1,6 +1,7 @@
 """Pure runner-contract tests; no EDT server or fixture checkout required."""
 
 import ast
+import datetime
 import importlib.util
 import inspect
 import os
@@ -27,7 +28,11 @@ with mock.patch.dict("sys.modules", {"harness": HARNESS}):
 
 
 class RunAllRatchetTest(unittest.TestCase):
-    def test_a_located_workspace_needs_readable_current_or_rotated_log_content(self):
+    def test_a_located_workspace_needs_a_log_entry_from_this_run(self):
+        def entry_at(epoch):
+            stamp = datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+            return "!ENTRY org.eclipse.core.runtime 1 0 %s.000\n!MESSAGE status\n" % stamp
+
         with tempfile.TemporaryDirectory() as tmp:
             metadata = os.path.join(tmp, ".metadata")
             os.makedirs(metadata)
@@ -35,7 +40,7 @@ class RunAllRatchetTest(unittest.TestCase):
                 with self.assertRaises(HARNESS.E2ESkip) as skipped:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
                 self.assertIn("workspace found", str(skipped.exception))
-                self.assertIn("no readable EDT log content to inspect", str(skipped.exception))
+                self.assertIn("logs show no entries from this run", str(skipped.exception))
                 no_log_message = str(skipped.exception)
 
                 backup = os.path.join(metadata, ".bak_1.log")
@@ -46,7 +51,13 @@ class RunAllRatchetTest(unittest.TestCase):
                 self.assertEqual(no_log_message, str(skipped.exception))
 
                 with open(backup, "w", encoding="utf-8") as handle:
-                    handle.write("one line\n")
+                    handle.write(entry_at(HARNESS.RUN_STARTED_AT - 60))
+                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertEqual(no_log_message, str(skipped.exception))
+
+                with open(backup, "w", encoding="utf-8") as handle:
+                    handle.write(entry_at(HARNESS.RUN_STARTED_AT))
                 self.assertIsNone(
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log())
 
