@@ -200,7 +200,7 @@ def _ensure_absent(name, verify=False):
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY / CONTRACT PATH (env-robust: REAL build OR the clear precondition sentinel)
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="build_external_objects", kind="action")
+@e2e_test(tool="build_external_objects", kind="write-metadata")
 def test_build_all_succeeds_or_clear_precondition_sentinel():
     """Build ALL external objects of a real external-object project into a fresh
     OS-temp directory (outside the repo).

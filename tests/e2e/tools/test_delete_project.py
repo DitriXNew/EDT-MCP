@@ -90,7 +90,7 @@ def test_preview_does_not_remove_the_fixture_project():
 # ──────────────────────────────────────────────────────────────────────────────
 # ROUND-TRIP: export -> import -> verify -> delete -> verify gone
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="delete_project", kind="action")
+@e2e_test(tool="delete_project", kind="write-metadata")
 def test_export_import_roundtrip_then_delete_project():
     """Full export/import/delete round-trip. Dumps the fixture config to XML, imports it as a
     NEW project, verifies the project deployed, then removes it via delete_project (preview,

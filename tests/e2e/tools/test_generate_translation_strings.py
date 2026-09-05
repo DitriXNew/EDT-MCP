@@ -73,7 +73,7 @@ from harness import (
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATH (env-robust: LanguageTool-absent sentinel OR real success contract)
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="generate_translation_strings", kind="action")
+@e2e_test(tool="generate_translation_strings", kind="write-metadata")
 def test_generate_returns_success_doc_or_clear_unavailable_sentinel():
     """Happy path is ENVIRONMENT-DEPENDENT (like the form-render / translation tools).
 

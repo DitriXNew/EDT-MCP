@@ -6,6 +6,9 @@ import inspect
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest import mock
 
 
 RUN_ALL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "run_all.py")
@@ -15,6 +18,111 @@ SPEC.loader.exec_module(RUN_ALL)
 
 
 class RunAllRatchetTest(unittest.TestCase):
+    @staticmethod
+    def _mutation_harness():
+        harness = mock.Mock()
+        harness.PROJECT = "Base"
+        harness.EXT_OBJECTS_PROJECT = "ExternalObjects"
+        harness.ALL_FIXTURE_PROJECTS = ["Base", "Extension", "ExternalObjects"]
+        harness.external_objects_model_synced.return_value = True
+        harness.confirmed_mutation_tools.return_value = frozenset({"modify_metadata"})
+        harness.mutation_kind_violation_tools.return_value = ("modify_metadata",)
+        harness.mutations_unresolved.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset()
+        harness.evidenced_mutation_fixture_projects.return_value = frozenset()
+        harness.mutation_could_have_cascaded.return_value = False
+        harness.reset_all_fixtures.return_value = True
+        return harness
+
+    def test_kind_violation_resets_every_fixture_through_model_reset_and_prints_advisory(self):
+        harness = self._mutation_harness()
+        output = StringIO()
+
+        with redirect_stdout(output):
+            RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(harness.ALL_FIXTURE_PROJECTS)
+        harness.call.assert_not_called()
+        self.assertIn("[kind-advisory]", output.getvalue())
+
+    def test_kind_violation_skips_unsynced_external_objects_named_only_by_refused_call(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        # Another call produced the confirmed mutation that triggered this branch. The refused
+        # call only named ExternalObjects, so it is present in the attempted-target union but not
+        # in the per-call outcome-evidenced set.
+        harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_kind_violation_resets_unsynced_external_objects_named_by_evidenced_call(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
+        harness.evidenced_mutation_fixture_projects.return_value = frozenset(
+            {"ExternalObjects"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(harness.ALL_FIXTURE_PROJECTS)
+        harness.evidenced_mutation_fixture_projects.assert_called_once_with()
+
+    def test_kind_violation_skips_unsynced_external_objects_when_call_did_not_target_it(self):
+        harness = self._mutation_harness()
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"Base"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        # This case is deliberately indistinguishable from the pre-fix behaviour: an unsynced
+        # fixture the call never named stays skipped either way. It guards the OPPOSITE direction
+        # from its sibling above - that widening the set to "what the call targeted" did not
+        # quietly become "everything" - so it is a boundary test, not a discriminating one. The
+        # assertion is therefore on the decision, not on which accessor was consulted to reach it.
+        harness.reset_all_fixtures.assert_called_once_with()
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_kind_violation_model_reset_failure_propagates(self):
+        class E2EModelResetFailed(Exception):
+            pass
+
+        harness = self._mutation_harness()
+        harness.E2EModelResetFailed = E2EModelResetFailed
+        harness.reset_model.side_effect = E2EModelResetFailed("could not restore fixture")
+
+        with self.assertRaisesRegex(E2EModelResetFailed, "could not restore fixture"):
+            RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+    def test_declared_write_resets_base_and_named_fixture_projects(self):
+        harness = self._mutation_harness()
+        harness.mutation_kind_violation_tools.return_value = ()
+        harness.model_is_pristine.return_value = False
+        harness.reset_fixture.return_value = True
+        harness.mutated_fixture_projects.return_value = frozenset({"Extension"})
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "write-metadata"})
+
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_declared_cascade_write_resets_every_available_fixture_project(self):
+        harness = self._mutation_harness()
+        harness.mutation_kind_violation_tools.return_value = ()
+        harness.model_is_pristine.return_value = False
+        harness.reset_fixture.return_value = True
+        harness.external_objects_model_synced.return_value = False
+        harness.mutated_fixture_projects.return_value = frozenset({"Base"})
+        harness.mutation_could_have_cascaded.return_value = True
+
+        RUN_ALL._reset_after_write(
+            harness, {"name": "base delete", "kind": "write-metadata"})
+
+        harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
     def test_every_shard_holds_its_own_log_ratchet_out_of_the_main_loop(self):
         first = {"tool": "alpha", "name": "first"}
         deferred = {"tool": "omega", "name": "last", "last": True}

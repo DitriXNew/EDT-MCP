@@ -256,7 +256,7 @@ def test_report_only_is_the_default():
     assert_no_diff("a default (report-only) resync must not change any tracked file")
 
 
-@e2e_test(tool="resync_to_disk", kind="action")
+@e2e_test(tool="resync_to_disk", kind="write-metadata")
 def test_clean_dangling_true_is_echoed_and_safe_on_clean_fixture():
     """cleanDanglingReferences=true on the CLEAN fixture: the opt-in flag must be
     echoed back, but with danglingFound==0 there is nothing to remove, so

@@ -2892,7 +2892,7 @@ def test_dynamic_list_write_persists_form_and_external_list_settings_files():
     assert root + "#/listSettings/conditionalAppearance" in settings.text
 
 
-@e2e_test(tool="dcs", kind="write")
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_dynamic_list_settings_accept_replace_and_remove_but_its_own_types_do_not():
     """replace/remove reach a dynamic list's SETTINGS; the list's own types refuse them.
 

@@ -144,7 +144,7 @@ def test_extobj_type_on_a_configuration_names_the_project_kind():
     assert_no_diff("a read tool must not touch the base project on disk")
 
 
-@e2e_test(tool="create_metadata", kind="write")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_extobj_create_and_delete_a_form_element():
     """The reported call: create a Group on an external data processor's form.
 
@@ -179,7 +179,7 @@ def test_extobj_create_and_delete_a_form_element():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="create_metadata", kind="write")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_extobj_create_and_delete_an_attribute():
     """A MEMBER of the external object itself — "Cannot resolve a create target" in the report."""
     reset_fixture_rel(EXT_OBJECTS_REL)
@@ -205,7 +205,7 @@ def test_extobj_create_and_delete_an_attribute():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="create_metadata", kind="write")
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_extobj_create_a_form_object_with_generated_content():
     """generateContent must SEED the main Object attribute on an external data processor.
 
@@ -268,7 +268,7 @@ def test_extobj_top_level_create_is_refused_with_the_way_to_do_it():
     assert_no_diff_rel(EXT_OBJECTS_REL, "a refused call must not touch the fixture")
 
 
-@e2e_test(tool="modify_metadata", kind="write")
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_extobj_modify_a_form_member_title():
     """modify_metadata reaches a form member of an external data processor (reported broken)."""
     reset_fixture_rel(EXT_OBJECTS_REL)
@@ -292,7 +292,7 @@ def test_extobj_modify_a_form_member_title():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="modify_metadata", kind="write")
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_extobj_form_attribute_accepts_own_concrete_produced_type():
     """A form attribute resolves its external owner's concrete produced type in project scope."""
     reset_fixture_rel(EXT_OBJECTS_REL)
@@ -336,7 +336,7 @@ def test_extobj_form_attribute_accepts_own_concrete_produced_type():
     assert_no_diff("the base project must never be touched by this test")
 
 
-@e2e_test(tool="dcs", kind="write")
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_extobj_external_report_owned_dcs_round_trip_uses_inherited_language():
     """An ExternalReport-owned DCS template resolves without any owner-type special case.
 
@@ -404,7 +404,7 @@ def test_extobj_external_report_owned_dcs_round_trip_uses_inherited_language():
     assert_no_diff("the owned-DCS round trip must never touch the base project")
 
 
-@e2e_test(tool="dcs", kind="read")
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_extobj_external_report_main_dcs_root_resolves():
     """The existing ExtReport is a supported main-DCS root even before one is materialized."""
     reset_fixture_rel(EXT_OBJECTS_REL)

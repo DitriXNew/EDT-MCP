@@ -52,7 +52,7 @@ def _structured(r, ctx):
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY (non-mutating): adopting an ALREADY-adopted object is benign
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="adopt_metadata_object", kind="write")
+@e2e_test(tool="adopt_metadata_object", kind="write-metadata")
 def test_already_adopted_object_is_benign_not_readopted():
     """The fixture extension already adopts CommonModule.Calc. Adopting it again must hit the
     isAdopted branch: action='alreadyAdopted', objectBelonging='ADOPTED', and NO mutation.
