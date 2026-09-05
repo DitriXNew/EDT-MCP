@@ -15,6 +15,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
+import java.util.Set;
 
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
@@ -547,6 +548,17 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testInlineDefinedTypeKindRequiresANameAfterTheToken()
+    {
+        String russianKind = russianDefinedTypeToken();
+
+        assertFalse(MetadataTypeBuilder.isInlineDefinedTypeKind("DefinedType")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isInlineDefinedTypeKind(russianKind));
+        assertTrue(MetadataTypeBuilder.isInlineDefinedTypeKind("DefinedType.ContractorRef")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isInlineDefinedTypeKind(russianKind + ".ContractorRef")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testHasObjectFormMainAttribute()
     {
         // Object-form types (a <Type>Object main attribute on their object form) - issue #208 gate.
@@ -601,6 +613,8 @@ public class MetadataTypeBuilderTest
         assertProducedTypeSplit("InformationRegisterRecordManager", "InformationRegister", //$NON-NLS-1$ //$NON-NLS-2$
             "InformationRegister", "RecordManager", "recordManagerType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertProducedTypeSplit("ConstantValueManager", "Constant", "Constant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "ValueManager", "valueManagerType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertProducedTypeSplit("EnumValueManager", "Enum", "Enum", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "ValueManager", "valueManagerType"); //$NON-NLS-1$ //$NON-NLS-2$
         // A bare suffix carries no metadata prefix, so it names no produced type. Both entries whose
         // spelling ENDS in a shorter entry are checked, because that is where a shortest-suffix match
@@ -688,6 +702,216 @@ public class MetadataTypeBuilderTest
             "{\"types\":[{\"kind\":\"DocumentObject\",\"ref\":\"Invoice\"}]}"))); //$NON-NLS-1$
         assertNull(MetadataTypeBuilder.validateShape(json(
             "{\"types\":[{\"kind\":\"ExchangePlanObject\"}]}"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInlineDefinedTypeNameEndingInAProducedSuffixStillRefusesRef()
+    {
+        assertUnknownMember(
+            "{\"types\":[{\"kind\":\"DefinedType.PriceList\",\"ref\":\"DifferentType\"}]}", //$NON-NLS-1$
+            "ref", 0, "kind"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertUnknownMember(
+            "{\"types\":[{\"kind\":\"DefinedType.ContractorRef\",\"ref\":\"Anything\"}]}", //$NON-NLS-1$
+            "ref", 0, "kind"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertUnknownMember("{\"types\":[{\"kind\":\"" + russianDefinedTypeToken() //$NON-NLS-1$
+            + ".ContractorRef\",\"ref\":\"Anything\"}]}", "ref", 0, "kind"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull(MetadataTypeBuilder.validateShape(json(
+            "{\"types\":[{\"kind\":\"DefinedType.ContractorRef\"}]}"))); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.splitProducedTypeKind("DefinedType.PriceList")); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.splitProducedTypeKind(
+            russianDefinedTypeToken() + ".PriceList")); //$NON-NLS-1$
+        assertProducedTypeSplit("CatalogList", "Catalog", "Catalog", "List", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "listType"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRecalculationProducedTypeSplitsThroughTheNestedKindCatalogue()
+    {
+        assertProducedTypeSplit("RecalculationRecordSet", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MetadataTypeBuilder.splitProducedTypeKind(
+            "RecalculationRecordSet").isNested()); //$NON-NLS-1$
+
+        String russianRecalculation =
+            "\u041F\u0435\u0440\u0435\u0440\u0430\u0441\u0447\u0435\u0442"; //$NON-NLS-1$
+        String russianRecordSet = "\u041D\u0430\u0431\u043E\u0440" //$NON-NLS-1$
+            + "\u0417\u0430\u043F\u0438\u0441\u0435\u0439"; //$NON-NLS-1$
+        String russianKind = russianRecalculation + russianRecordSet;
+        assertProducedTypeSplit(russianKind, russianRecalculation, "Recalculation", //$NON-NLS-1$
+            "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MetadataTypeBuilder.splitProducedTypeKind(russianKind).isNested());
+    }
+
+    @Test
+    public void testRecalculationProducedTypeSplitRecognizesOnlyDeclaredFeaturePairs()
+    {
+        assertProducedTypeSplit("RecalculationRecord", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Record", "recordType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertProducedTypeSplit("RecalculationManager", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Manager", "managerType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertProducedTypeSplit("RecalculationRecordSet", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String russianRecalculation =
+            "\u041F\u0435\u0440\u0435\u0440\u0430\u0441\u0447\u0435\u0442"; //$NON-NLS-1$
+        String russianManager =
+            "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440"; //$NON-NLS-1$
+        assertProducedTypeSplit(russianRecalculation + russianManager, russianRecalculation,
+            "Recalculation", "Manager", "managerType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertUnknownProducedTypeSplit("RecalculationObject", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$
+            "Object", "objectType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertUnknownProducedTypeSplit("RecalculationList", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$
+            "List", "listType"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNestedProducedTypeFeaturesExistInSuffixCatalogue()
+    {
+        Set<String> features =
+            MetadataTypeBuilder.nestedProducedTypeFeatures("Recalculation"); //$NON-NLS-1$
+        assertFalse(features.isEmpty());
+        for (String featureName : features)
+        {
+            assertTrue(featureName, MetadataTypeBuilder.hasProducedTypeSuffixFeature(featureName));
+        }
+    }
+
+    @Test
+    public void testConcreteRecalculationProducedTypeIsRefusedByName()
+    {
+        JsonObject item = json("{\"kind\":\"RecalculationRecordSet\"," //$NON-NLS-1$
+            + "\"ref\":\"CalculationRegister.R.Recalculation.Rc\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = MetadataTypeBuilder.addType(td, item, "RecalculationRecordSet", null, //$NON-NLS-1$
+                MdClassFactory.eINSTANCE.createConfiguration(), false, target);
+
+            assertEquals(target.name(), "Type kind 'RecalculationRecordSet' is a produced type of a " //$NON-NLS-1$
+                + "NESTED object (Recalculation lives inside its owning register), which cannot be " //$NON-NLS-1$
+                + "addressed by ref. Pass {kind:'RecalculationRecordSet'} without ref to use its " //$NON-NLS-1$
+                + "abstract form.", error); //$NON-NLS-1$
+            assertTrue(target.name(), td.getTypes().isEmpty());
+        }
+    }
+
+    @Test
+    public void testAbstractRecalculationRecordSetIsAcceptedOnBothTargets()
+    {
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            Type expected = McoreFactory.eINSTANCE.createType();
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = addKind("RecalculationRecordSet", //$NON-NLS-1$
+                providerKnowing("RecalculationRecordSet", expected), td, target); //$NON-NLS-1$
+
+            assertNull(target.name(), error);
+            assertEquals(target.name(), 1, td.getTypes().size());
+            assertSame(target.name(), expected, td.getTypes().get(0));
+        }
+    }
+
+    @Test
+    public void testStructuralNestedKindPrefixesAreNotKnownProducedTypeObjects()
+    {
+        for (String kind : new String[] {"ColumnList", "ModuleObject", "FieldList", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "PackageManager"}) //$NON-NLS-1$
+        {
+            MetadataTypeBuilder.ProducedTypeKind split =
+                MetadataTypeBuilder.splitProducedTypeKind(kind);
+
+            assertNotNull(kind, split);
+            assertFalse(kind, split.hasKnownMetadataType());
+            assertFalse(kind, split.isNested());
+        }
+    }
+
+    @Test
+    public void testColumnListReportsUnknownPrefixWithAndWithoutRefOnBothTargets()
+    {
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            for (String itemJson : new String[] {"{\"kind\":\"ColumnList\"}", //$NON-NLS-1$
+                "{\"kind\":\"ColumnList\",\"ref\":\"X\"}"}) //$NON-NLS-1$
+            {
+                TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+                JsonObject item = json(itemJson).getAsJsonObject();
+                String error = MetadataTypeBuilder.addType(td, item, "ColumnList", //$NON-NLS-1$
+                    providerKnowing("NothingElse", McoreFactory.eINSTANCE.createType()), //$NON-NLS-1$
+                    MdClassFactory.eINSTANCE.createConfiguration(), false, target);
+
+                assertEquals(target.name() + ": " + itemJson, //$NON-NLS-1$
+                    "Type kind 'ColumnList' uses produced-type suffix 'List', but prefix 'Column' " //$NON-NLS-1$
+                        + "is not a known metadata type token. Replace it with a supported English " //$NON-NLS-1$
+                        + "or Russian metadata type token, for example {kind:'DocumentList', " //$NON-NLS-1$
+                        + "ref:'Invoice'}.", error); //$NON-NLS-1$
+                assertTrue(target.name(), td.getTypes().isEmpty());
+            }
+        }
+    }
+
+    @Test
+    public void testUnpublishedRecalculationProducedTypeUsesGenericUnknownKindMessage()
+    {
+        MetadataTypeBuilder.ProducedTypeKind split =
+            MetadataTypeBuilder.splitProducedTypeKind("RecalculationObject"); //$NON-NLS-1$
+        assertNotNull(split);
+        assertFalse(split.hasKnownMetadataType());
+        assertFalse(split.isNested());
+
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = addKind("RecalculationObject", providerKnowing("NothingElse", //$NON-NLS-1$ //$NON-NLS-2$
+                McoreFactory.eINSTANCE.createType()), td, target);
+
+            assertEquals(target.name(), "Unknown type kind 'RecalculationObject'. Use String / " //$NON-NLS-1$
+                + "Number / Boolean / Date / ValueStorage / UUID, ValueTable / ValueTree (in-memory " //$NON-NLS-1$
+                + "collections - a FORM attribute only), a DefinedType ({kind:'DefinedType', " //$NON-NLS-1$
+                + "ref:'Name'} or {kind:'DefinedType.Name'}), a produced type " //$NON-NLS-1$
+                + "({kind:'DocumentObject', ref:'Invoice'} or {kind:'ExchangePlanObject'}), or a " //$NON-NLS-1$
+                + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type " //$NON-NLS-1$
+                + "name also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., " //$NON-NLS-1$
+                + "English or Russian) - this one names no type this platform version knows.", error); //$NON-NLS-1$
+            assertTrue(target.name(), td.getTypes().isEmpty());
+        }
+    }
+
+    @Test
+    public void testConcreteUnpublishedRecalculationProducedTypeUsesGenericUnknownKindMessage()
+    {
+        JsonObject item = json(
+            "{\"kind\":\"RecalculationObject\",\"ref\":\"X\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = MetadataTypeBuilder.addType(td, item, "RecalculationObject", //$NON-NLS-1$
+                providerKnowing("NothingElse", McoreFactory.eINSTANCE.createType()), //$NON-NLS-1$
+                MdClassFactory.eINSTANCE.createConfiguration(), false, target);
+
+            assertEquals(target.name(), "Unknown type kind 'RecalculationObject'. Use String / " //$NON-NLS-1$
+                + "Number / Boolean / Date / ValueStorage / UUID, ValueTable / ValueTree (in-memory " //$NON-NLS-1$
+                + "collections - a FORM attribute only), a DefinedType ({kind:'DefinedType', " //$NON-NLS-1$
+                + "ref:'Name'} or {kind:'DefinedType.Name'}), a produced type " //$NON-NLS-1$
+                + "({kind:'DocumentObject', ref:'Invoice'} or {kind:'ExchangePlanObject'}), or a " //$NON-NLS-1$
+                + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type " //$NON-NLS-1$
+                + "name also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., " //$NON-NLS-1$
+                + "English or Russian) - this one names no type this platform version knows.", error); //$NON-NLS-1$
+            assertTrue(target.name(), td.getTypes().isEmpty());
+        }
     }
 
     @Test
@@ -944,6 +1168,21 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testEventSourceRefusesRecalculationRecordAndListsAcceptedSuffixes()
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String error = addKind("RecalculationRecord", null, td, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE);
+
+        assertEquals("Type kind 'RecalculationRecord' cannot be used as an event subscription's " //$NON-NLS-1$
+            + "source: an event subscription's source is an object that publishes write events. " //$NON-NLS-1$
+            + "Accepted produced-type suffixes: Object, Manager, RecordSet, RecordManager, " //$NON-NLS-1$
+            + "ValueManager.", error); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
     public void testAccountingRegisterRecordManagerReportsUnsupportedProducedType()
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
@@ -1048,7 +1287,8 @@ public class MetadataTypeBuilderTest
     public void testEventSourceAcceptsAbstractProducedTypeThePlatformKnows()
     {
         for (String kind : new String[] {"ExchangePlanObject", "InformationRegisterRecordSet", //$NON-NLS-1$ //$NON-NLS-2$
-            "InformationRegisterRecordManager", "ConstantValueManager"}) //$NON-NLS-1$ //$NON-NLS-2$
+            "InformationRegisterRecordManager", "ConstantValueManager", //$NON-NLS-1$ //$NON-NLS-2$
+            "RecalculationRecordSet"}) //$NON-NLS-1$
         {
             Type abstractType = McoreFactory.eINSTANCE.createType();
             TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
@@ -1519,6 +1759,19 @@ public class MetadataTypeBuilderTest
         assertEquals(kind, englishMetadataType, split.englishMetadataType);
         assertEquals(kind, producedSuffix, split.producedSuffix);
         assertEquals(kind, featureName, split.featureName);
+    }
+
+    private static void assertUnknownProducedTypeSplit(String kind, String prefix,
+        String producedSuffix, String featureName)
+    {
+        MetadataTypeBuilder.ProducedTypeKind split =
+            MetadataTypeBuilder.splitProducedTypeKind(kind);
+        assertNotNull(kind, split);
+        assertEquals(kind, prefix, split.prefix);
+        assertFalse(kind, split.hasKnownMetadataType());
+        assertEquals(kind, producedSuffix, split.producedSuffix);
+        assertEquals(kind, featureName, split.featureName);
+        assertFalse(kind, split.isNested());
     }
 
     /** Seeds one top-level object and one generated produced-type wrapper in its model holder. */

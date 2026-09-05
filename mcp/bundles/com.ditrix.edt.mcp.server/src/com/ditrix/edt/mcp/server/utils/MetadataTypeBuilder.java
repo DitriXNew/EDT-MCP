@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
@@ -148,6 +149,16 @@ public final class MetadataTypeBuilder
         new ProducedTypeSuffix("Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", "refType") }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     /**
+     * Catalogue of the produced types the platform declares for nested metadata objects. Each key is
+     * a nested FQN segment and each value contains the produced-type feature names declared by that
+     * segment's owning EMF class. A nested segment qualifies only for a feature in its own set. This
+     * mapping is maintained manually; no mechanism keeps it synchronized with the platform model.
+     */
+    private static final Map<String, Set<String>> NESTED_PRODUCED_TYPE_FEATURES = Map.of(
+        "Recalculation", //$NON-NLS-1$
+        Set.of("recordType", "managerType", "recordSetType")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
      * The platform narrows event-subscription source candidates through
      * {@code EventSourceTypeInfoCategory}, whose membership is platform data not readable from the
      * checked-in sources. This suffix list is anchored in a census of {@code <types>} values under
@@ -159,25 +170,37 @@ public final class MetadataTypeBuilder
     private static final String[] EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES = {
         "Object", "Manager", "RecordSet", "RecordManager", "ValueManager"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
-    /** A parsed {@code <metadata-token><produced-suffix>} kind. Package-visible for pure tests. */
+    /**
+     * A parsed {@code <metadata-token><produced-suffix>} kind. The metadata token may be top-level or
+     * nested; {@link #isNested()} distinguishes the two. Package-visible for pure tests.
+     */
     static final class ProducedTypeKind
     {
         final String prefix;
         final String englishMetadataType;
         final String producedSuffix;
         final String featureName;
+        private final boolean nested;
 
-        ProducedTypeKind(String prefix, String englishMetadataType, ProducedTypeSuffix suffix)
+        ProducedTypeKind(String prefix, String englishMetadataType, ProducedTypeSuffix suffix,
+            boolean nested)
         {
             this.prefix = prefix;
             this.englishMetadataType = englishMetadataType;
             this.producedSuffix = suffix.english;
             this.featureName = suffix.featureName;
+            this.nested = nested;
         }
 
+        /** Whether the prefix names a top-level or runtime-type-publishing nested metadata object. */
         boolean hasKnownMetadataType()
         {
             return englishMetadataType != null;
+        }
+
+        boolean isNested()
+        {
+            return nested;
         }
     }
 
@@ -293,6 +316,12 @@ public final class MetadataTypeBuilder
         {
             accepted = DATE_ITEM_MEMBERS;
         }
+        // Inline DefinedType and Ref classifications must stay in this order as in addType; a mismatch
+        // can validate a member that the selected addType branch ignores.
+        else if (isInlineDefinedTypeKind(kind))
+        {
+            accepted = MEMBERLESS_ITEM_MEMBERS;
+        }
         else if (isRefKind(kind) || producedKind != null)
         {
             accepted = REF_ITEM_MEMBERS;
@@ -324,6 +353,10 @@ public final class MetadataTypeBuilder
         if ("Date".equals(primitive)) //$NON-NLS-1$
         {
             return validateDateItem(item, index);
+        }
+        if (isInlineDefinedTypeKind(kind))
+        {
+            return null;
         }
         if (producedKind != null)
         {
@@ -658,10 +691,12 @@ public final class MetadataTypeBuilder
      * {@link MetadataTypeUtils#toEnglishSingular(String)}; this is what keeps long tokens such as
      * {@code ChartOfCalculationTypesObject} intact instead of guessing from a local token table.
      *
-     * <p>When the kind ends in a family suffix but no prefix is a known metadata token, the returned
-     * item carries a {@code null} {@link ProducedTypeKind#englishMetadataType}. The caller can then
-     * distinguish an actionable bad-prefix refusal from an unrelated unknown platform type. A
-     * DefinedType is deliberately excluded because its existing TypeSet grammar is separate.</p>
+     * <p>When the kind ends in a family suffix but its prefix names neither a top-level metadata object
+     * nor a nested object that declares the suffix's feature, the returned item carries a {@code null}
+     * {@link ProducedTypeKind#englishMetadataType}. A non-null value may still identify such a nested
+     * object, which top-level lookup and object resolution cannot resolve;
+     * {@link ProducedTypeKind#isNested()} distinguishes it. A DefinedType is deliberately excluded
+     * because its existing TypeSet grammar is separate.</p>
      *
      * @param kind the requested type kind
      * @return the split, or {@code null} when the kind does not have this family shape
@@ -684,7 +719,8 @@ public final class MetadataTypeBuilder
         // extension-adopt hint, and it is the most-used kind in the tool: rerouting it through this
         // family would silently change the behaviour of the thing most callers depend on, to reach a
         // type that branch already builds. The family exists for what Ref cannot name.
-        if (isRefKind(candidate))
+        // No produced-type prefix contains a dot, but an inline DefinedType name may end in a suffix.
+        if (isRefKind(candidate) || isInlineDefinedTypeKind(candidate))
         {
             return null;
         }
@@ -700,7 +736,26 @@ public final class MetadataTypeBuilder
             ProducedTypeSuffix suffix = producedTypeSuffix(candidate.substring(split));
             if (suffix != null && !DEFINED_TYPE_KIND.equals(englishMetadataType))
             {
-                return new ProducedTypeKind(prefix, englishMetadataType, suffix);
+                return new ProducedTypeKind(prefix, englishMetadataType, suffix, false);
+            }
+        }
+
+        // Run the nested pass only after the top-level pass completes: EnumValueManager must split as
+        // top-level Enum + ValueManager, not nested EnumValue + Manager.
+        for (int split = candidate.length() - 1; split > 0; split--)
+        {
+            String prefix = candidate.substring(0, split);
+            MetadataTypeUtils.NestedKindInfo nestedKind =
+                MetadataTypeUtils.resolveNestedKind(prefix);
+            if (nestedKind == null)
+            {
+                continue;
+            }
+            ProducedTypeSuffix suffix = producedTypeSuffix(candidate.substring(split));
+            if (suffix != null
+                && nestedProducedTypeFeatures(nestedKind.getEnglish()).contains(suffix.featureName))
+            {
+                return new ProducedTypeKind(prefix, nestedKind.getEnglish(), suffix, true);
             }
         }
 
@@ -716,7 +771,7 @@ public final class MetadataTypeBuilder
         {
             return null;
         }
-        return prefix.isEmpty() ? null : new ProducedTypeKind(prefix, null, suffix);
+        return prefix.isEmpty() ? null : new ProducedTypeKind(prefix, null, suffix, false);
     }
 
     private static ProducedTypeSuffix producedTypeSuffix(String candidate)
@@ -729,6 +784,31 @@ public final class MetadataTypeBuilder
             }
         }
         return null;
+    }
+
+    static Set<String> nestedProducedTypeFeatures(String englishNestedKind)
+    {
+        Set<String> features = NESTED_PRODUCED_TYPE_FEATURES.get(englishNestedKind);
+        return features == null ? Set.of() : features;
+    }
+
+    static boolean hasProducedTypeSuffixFeature(String featureName)
+    {
+        for (ProducedTypeSuffix suffix : PRODUCED_TYPE_SUFFIXES)
+        {
+            if (suffix.featureName.equals(featureName))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isCataloguedNestedProducedTypePrefix(String prefix)
+    {
+        MetadataTypeUtils.NestedKindInfo nestedKind = MetadataTypeUtils.resolveNestedKind(prefix);
+        return nestedKind != null
+            && NESTED_PRODUCED_TYPE_FEATURES.containsKey(nestedKind.getEnglish());
     }
 
     /** Returns the longest matching suffix, so RecordManager / ValueManager never become Manager. */
@@ -1009,7 +1089,8 @@ public final class MetadataTypeBuilder
             return null;
         }
 
-        if (producedKind != null && !producedKind.hasKnownMetadataType())
+        if (producedKind != null && !producedKind.hasKnownMetadataType()
+            && !isCataloguedNestedProducedTypePrefix(producedKind.prefix))
         {
             return unknownProducedTypePrefix(kind, producedKind);
         }
@@ -1053,6 +1134,19 @@ public final class MetadataTypeBuilder
         if (typeTarget != TypeTarget.EVENT_SOURCE && typeTarget != TypeTarget.FORM_ATTRIBUTE)
         {
             return producedTypeRefusal(kind);
+        }
+        if (producedKind.isNested())
+        {
+            if ("Recalculation".equals(producedKind.englishMetadataType)) //$NON-NLS-1$
+            {
+                return "Type kind '" + kind + "' is a produced type of a NESTED object (" //$NON-NLS-1$ //$NON-NLS-2$
+                    + producedKind.englishMetadataType + " lives inside its owning register" //$NON-NLS-1$
+                    + "), which cannot be addressed by ref. Pass {kind:'" + kind //$NON-NLS-1$
+                    + "'} without ref to use its abstract form."; //$NON-NLS-1$
+            }
+            return "Type kind '" + kind + "' is a produced type of a NESTED object; a nested " //$NON-NLS-1$ //$NON-NLS-2$
+                + "object is addressed through its owner, not by ref. Pass {kind:'" + kind //$NON-NLS-1$ //$NON-NLS-2$
+                + "'} without ref to use its abstract form."; //$NON-NLS-1$
         }
         String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
         if (rawRef == null || rawRef.trim().isEmpty())

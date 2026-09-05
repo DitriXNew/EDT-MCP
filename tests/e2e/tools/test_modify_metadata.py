@@ -768,6 +768,55 @@ def test_event_subscription_source_accepts_concrete_document_object():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_source_accepts_abstract_nested_produced_type():
+    subscription_name = "E2ENestedProducedSourceSubscription"
+    subscription_fqn = "EventSubscription." + subscription_name
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": subscription_fqn,
+    }), "seed the EventSubscription")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": subscription_fqn,
+        "properties": [{
+            "name": "source",
+            "value": {"types": [
+                {"kind": "InformationRegisterRecordSet"},
+                {"kind": "RecalculationRecordSet"},
+            ]},
+        }],
+    })
+    assert_ok(r, "set EventSubscription.source to top-level and nested abstract RecordSets")
+    assert "source" in (r.structured.get("applied") or []), \
+        "source must be reported as applied: %r" % (r.structured,)
+
+    relative_path = "src/EventSubscriptions/%s/%s.mdo" % (
+        subscription_name, subscription_name)
+    root = ET.fromstring(read_disk(relative_path))
+    source_elements = [element for element in root.iter()
+                       if element.tag.rsplit("}", 1)[-1] == "source"]
+    assert len(source_elements) == 1, \
+        "the EventSubscription .mdo must contain exactly one <source>: %r" % source_elements
+    type_elements = [element for element in source_elements[0].iter()
+                     if element.tag.rsplit("}", 1)[-1] == "types"]
+    assert len(type_elements) == 2, \
+        "EventSubscription.source must contain exactly two <types>: %r" % type_elements
+    expected_types = {"InformationRegisterRecordSet", "RecalculationRecordSet"}
+    actual_types = {element.text or "" for element in type_elements}
+    assert actual_types == expected_types, \
+        "EventSubscription.source types must be %r, got %r" % (expected_types, actual_types)
+
+    row = _assignable_row(subscription_fqn, "source")
+    assert row is not None, "EventSubscription.source must remain readable through assignable:true"
+    assert_contains(row, "InformationRegisterRecordSet",
+                    "MODEL read-back must expose the top-level abstract produced type")
+    assert_contains(row, "RecalculationRecordSet",
+                    "MODEL read-back must expose the nested abstract produced type")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_persisted_catalog_attribute_refuses_concrete_document_object():
     document_name = "E2EProducedStoredDocument"
     attribute_name = "E2EProducedStoredAttribute"
