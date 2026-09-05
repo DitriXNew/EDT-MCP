@@ -198,6 +198,19 @@ public final class MetadataTypeBuilder
             return englishMetadataType != null;
         }
 
+        /**
+         * The spelling the platform publishes for this produced type: the canonical English
+         * metadata token plus the matched suffix's declared spelling. The prefix the caller typed
+         * is deliberately NOT reused - a nested segment is accepted in either language and in the
+         * plural, and only this reconstruction names a kind the platform's type index carries.
+         *
+         * @return the canonical kind, or {@code null} when the prefix names no metadata type
+         */
+        String canonicalKind()
+        {
+            return englishMetadataType == null ? null : englishMetadataType + producedSuffix;
+        }
+
         boolean isNested()
         {
             return nested;
@@ -1137,15 +1150,20 @@ public final class MetadataTypeBuilder
         }
         if (producedKind.isNested())
         {
+            // The advice must name the CANONICAL produced type, not replay the caller's spelling:
+            // the nested split accepts a plural segment (RecalculationsRecordSet) that the platform
+            // type index does not publish, so echoing it hands back a retry that cannot resolve.
+            String canonical = producedKind.hasKnownMetadataType()
+                ? producedKind.canonicalKind() : kind;
             if ("Recalculation".equals(producedKind.englishMetadataType)) //$NON-NLS-1$
             {
                 return "Type kind '" + kind + "' is a produced type of a NESTED object (" //$NON-NLS-1$ //$NON-NLS-2$
                     + producedKind.englishMetadataType + " lives inside its owning register" //$NON-NLS-1$
-                    + "), which cannot be addressed by ref. Pass {kind:'" + kind //$NON-NLS-1$
+                    + "), which cannot be addressed by ref. Pass {kind:'" + canonical //$NON-NLS-1$
                     + "'} without ref to use its abstract form."; //$NON-NLS-1$
             }
             return "Type kind '" + kind + "' is a produced type of a NESTED object; a nested " //$NON-NLS-1$ //$NON-NLS-2$
-                + "object is addressed through its owner, not by ref. Pass {kind:'" + kind //$NON-NLS-1$ //$NON-NLS-2$
+                + "object is addressed through its owner, not by ref. Pass {kind:'" + canonical //$NON-NLS-1$ //$NON-NLS-2$
                 + "'} without ref to use its abstract form."; //$NON-NLS-1$
         }
         String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
