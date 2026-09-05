@@ -6,15 +6,42 @@ import inspect
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 
-RUN_ALL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "run_all.py")
+E2E_DIR = os.path.dirname(os.path.dirname(__file__))
+RUN_ALL_PATH = os.path.join(E2E_DIR, "run_all.py")
 SPEC = importlib.util.spec_from_file_location("edt_mcp_e2e_run_all", RUN_ALL_PATH)
 RUN_ALL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RUN_ALL)
 
+HARNESS_SPEC = importlib.util.spec_from_file_location(
+    "edt_mcp_e2e_harness", os.path.join(E2E_DIR, "harness.py"))
+HARNESS = importlib.util.module_from_spec(HARNESS_SPEC)
+HARNESS_SPEC.loader.exec_module(HARNESS)
+RATCHET_SPEC = importlib.util.spec_from_file_location(
+    "edt_mcp_e2e_log_ratchet", os.path.join(E2E_DIR, "tools", "test_edt_log_ratchet.py"))
+RATCHET = importlib.util.module_from_spec(RATCHET_SPEC)
+with mock.patch.dict("sys.modules", {"harness": HARNESS}):
+    RATCHET_SPEC.loader.exec_module(RATCHET)
+
 
 class RunAllRatchetTest(unittest.TestCase):
+    def test_a_located_workspace_needs_a_readable_current_or_rotated_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            with mock.patch.dict(os.environ, {"EDT_MCP_EDT_WORKSPACE": tmp}):
+                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertIn("workspace found", str(skipped.exception))
+                self.assertIn("no readable EDT log to inspect", str(skipped.exception))
+
+                with open(os.path.join(metadata, ".bak_1.log"), "w", encoding="utf-8"):
+                    pass
+                self.assertIsNone(
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log())
+
     def test_every_shard_holds_its_own_log_ratchet_out_of_the_main_loop(self):
         first = {"tool": "alpha", "name": "first"}
         deferred = {"tool": "omega", "name": "last", "last": True}

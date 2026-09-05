@@ -86,13 +86,14 @@ def _load_baseline():
 
 
 def _collect_our_errors(workspace):
-    """Every ERROR entry of ours stamped at/after this run started, normalized + counted."""
+    """Every ERROR entry of ours stamped at/after this run started, plus whether a log was read."""
     metadata = os.path.join(workspace, ".metadata")
     # The log rotates at ~1 MB, so one run can span .log plus several .bak_N.log.
     files = sorted(glob.glob(os.path.join(metadata, ".bak_*.log"))) + \
         [os.path.join(metadata, ".log")]
 
     found = {}
+    inspected = False
     for path in files:
         if not os.path.isfile(path):
             continue
@@ -101,6 +102,7 @@ def _collect_our_errors(workspace):
                 lines = handle.readlines()
         except OSError:
             continue
+        inspected = True
         for index, line in enumerate(lines):
             match = _ENTRY.match(line)
             if not match:
@@ -120,7 +122,7 @@ def _collect_our_errors(workspace):
                     break
             key = _normalize(message) or "(no message)"
             found[key] = found.get(key, 0) + 1
-    return found
+    return found, inspected
 
 
 @e2e_test(tool="_edt_log_ratchet", kind="read", last=True)
@@ -131,7 +133,11 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
             "EDT workspace not found: set EDT_MCP_EDT_WORKSPACE to the -data directory "
             "so the log ratchet can read <workspace>/.metadata/.log")
 
-    found = _collect_our_errors(workspace)
+    found, inspected = _collect_our_errors(workspace)
+    if not inspected:
+        raise E2ESkip(
+            "EDT workspace found at %s but holds no readable EDT log to inspect "
+            "(.metadata/.log or .metadata/.bak_*.log)" % workspace)
     accepted = _load_baseline()
     new = {msg: count for msg, count in found.items() if msg not in accepted}
     if not new:

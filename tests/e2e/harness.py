@@ -797,11 +797,11 @@ def _workspace_dir(list_projects_markdown=None):
 
     Explicit env wins. Otherwise infer it: a workspace almost always contains at least one
     project of its own (the Servers container, for one), so walk each project's ancestors
-    looking for .metadata, Eclipse's workspace marker. A missing current .log is reported by the
-    readers instead of making the locator reject a workspace and discard its rotated backups.
-    The evidence collector degrades to PARTIAL evidence, never to none. Returns None when the
-    workspace cannot be found - callers decide whether missing diagnostics should be skipped or
-    merely reported as unavailable.
+    looking for .metadata, Eclipse's workspace marker. Locating a workspace does not imply a
+    readable log: readers report unavailable sources, and any caller that certifies log contents
+    must check that it read at least one itself. A missing current .log is accepted here so its
+    rotated backups remain reachable. Returns None when the workspace cannot be found - callers
+    decide whether missing diagnostics should be skipped or merely reported as unavailable.
 
     @param list_projects_markdown a list_projects table the caller ALREADY holds. Pass it from
     any path that must not touch the wire: a call() that times out arms the global abort latch
