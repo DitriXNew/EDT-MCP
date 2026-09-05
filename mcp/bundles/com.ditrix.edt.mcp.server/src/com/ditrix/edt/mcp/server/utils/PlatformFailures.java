@@ -6,7 +6,6 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
@@ -43,11 +42,11 @@ import com.e1c.g5.dt.applications.ApplicationException;
  * itself the diagnosis: something aborted the operation rather than failing it.
  *
  * <p>{@link #rootCause(Throwable)} answers a separate, complementary question: after
- * {@code describe} has selected the headline, what does the deepest distinct CAUSAL throwable hop
- * say? Throwable causes and exceptions attached to statuses are causal edges; child statuses are
- * aggregate detail and are interpreted only by {@code describe}'s rule at their owning throwable
- * hop. Callers that need both compose them explicitly; the root-cause helper does not change
- * {@code describe}'s established selection rule or invent an ordering among aggregate statuses.
+ * {@code describe} has selected the headline, what does the deepest distinct bounded
+ * {@code getCause()} hop say? Child statuses are aggregate detail and are interpreted only by the
+ * per-hop selection rule at their owning throwable. Callers that need both compose them explicitly;
+ * the root-cause helper does not change {@code describe}'s established selection rule or invent an
+ * ordering among aggregate statuses.
  *
  * <p>{@link #withoutObjectIdentity(String)} answers a SEPARATE question and is meant to be
  * COMPOSED with {@code describe}, never substituted for it. {@code describe} selects the most
@@ -128,31 +127,23 @@ public final class PlatformFailures
     }
 
     /**
-     * The deepest diagnosis on a bounded causal path below the failure, when it adds information to
-     * {@link #describe(Throwable)}'s headline.
+     * The deepest diagnosis on the bounded {@link Throwable#getCause()} path below the failure,
+     * when it adds information to {@link #describe(Throwable)}'s headline.
      *
-     * <p>The walk follows only {@link Throwable#getCause()} and {@link IStatus#getException()}
-     * edges. At each throwable hop, failing status children come first, then the throwable's own
-     * message and status fallback. Unlike {@code describe}, causation never falls back to a
-     * non-failing aggregate child merely because it has text. A status tree therefore says what
-     * ONE causal hop means; structural depth within that aggregate never competes with causal depth.
+     * <p>The walk follows only {@link Throwable#getCause()} and is capped at
+     * {@link #MAX_CAUSE_CHAIN_DEPTH}. At each cause hop, failing status children come first, then the
+     * throwable's own message and status fallback. Unlike {@code describe}, causation never falls
+     * back to a non-failing aggregate child merely because it has text. Messages whose raw or
+     * formatted form equals the headline are skipped at that hop, so a deeper repeat cannot erase
+     * the last distinct diagnosis. A short generic message (40 characters or fewer and no more than
+     * four words) is prefixed only when a terminal exception genuinely owns it. Text selected from a
+     * status carries no wrapper provenance.
      *
-     * <p>Throwable identities are de-duplicated. Each ordinary or status-attached cause chain is
-     * capped at {@link #MAX_CAUSE_CHAIN_DEPTH}, and discovery of attached exceptions is capped at
-     * {@link #MAX_STATUS_DEPTH}. A status exception identical to its current throwable's
-     * {@code getCause()} is the same edge and cannot restart that cause-chain cap. Status aliases are
-     * revisited only when reached at a shallower depth, where the cap can expose children that were
-     * previously out of bounds. These rules terminate cyclic graphs without making the result depend
-     * on a deeper alias being visited first.
-     *
-     * <p>Messages equal to the selected headline are excluded. The formatted result is compared
-     * with the headline again, because adding a type prefix can recreate a headline that differed
-     * from the raw candidate. When no distinct result remains, the empty string is returned. A
-     * short generic message (40 characters or fewer and no more than four words) is prefixed only
-     * when a terminal exception genuinely owns it. Text selected from a status carries no wrapper
-     * provenance. Thus a status-carried
-     * {@code RuntimeException("SSH error", new JSchException("Auth fail"))} still contributes
-     * {@code com.jcraft.jsch.JSchException: Auth fail}.
+     * <p>{@link CoreException#getCause()} exposes the exception carried by its status. EDT aggregate
+     * statuses likewise synthesize their exception from failing children when they have no exception
+     * of their own. Any exception known to those statuses is therefore already represented on the
+     * {@code getCause()} chain. As a known limitation, a plain {@code MultiStatus} with no root
+     * exception contributes no cause clause, even when its children contain additional detail.
      *
      * <p>This method returns only the diagnosis. A caller that displays both messages should compose
      * English prose such as {@code describe(failure) + " Caused by: " + rootCause(failure)}.
@@ -167,46 +158,44 @@ public final class PlatformFailures
             return ""; //$NON-NLS-1$
         }
         String selected = describe(failure);
-        FailureMessage deepest = null;
-        ArrayDeque<ThrowableHop> pending = new ArrayDeque<ThrowableHop>();
-        IdentityHashMap<Throwable, Boolean> visitedThrowables =
-            new IdentityHashMap<Throwable, Boolean>();
-        pending.add(new ThrowableHop(failure, 0, 0));
-        visitedThrowables.put(failure, Boolean.TRUE);
-        while (!pending.isEmpty())
+        String deepest = ""; //$NON-NLS-1$
+        Throwable current = failure.getCause();
+        for (int depth = 1; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
         {
-            ThrowableHop hop = pending.remove();
-            if (hop.causalDepth > 0)
+            FailureMessage atHop = causalFailureMessageAt(current);
+            if (atHop != null)
             {
-                FailureMessage atHop = causalFailureMessageAt(hop.failure);
-                if (atHop != null && !selected.equals(atHop.message)
-                    && (deepest == null || hop.causalDepth > deepest.depth))
+                String candidate = formatted(atHop);
+                // Both forms are compared HERE, not after the walk: a deeper hop whose formatted
+                // text recreates the headline must be skipped, leaving the last distinct candidate
+                // standing, rather than replacing it and then being dropped as a repeat.
+                if (!selected.equals(atHop.message) && !selected.equals(candidate))
                 {
-                    deepest = new FailureMessage(atHop.message, atHop.source, hop.causalDepth);
+                    deepest = candidate;
                 }
             }
+            current = current.getCause();
+        }
+        return deepest;
+    }
 
-            Throwable directCause = hop.failure.getCause();
-            if (hop.causeDepth + 1 < MAX_CAUSE_CHAIN_DEPTH)
-            {
-                enqueue(directCause, hop.causalDepth + 1, hop.causeDepth + 1, pending,
-                    visitedThrowables);
-            }
-            enqueueStatusExceptions(statusOf(hop.failure), 0, hop.causalDepth + 1, directCause,
-                pending, visitedThrowables, new IdentityHashMap<IStatus, Integer>());
-        }
-        if (deepest == null)
+    /**
+     * The message with its exception type prefixed when a terminal exception genuinely owns a
+     * short generic text: "Auth fail" alone is not actionable, "com.jcraft.jsch.JSchException:
+     * Auth fail" is. Text selected from a status carries no wrapper provenance.
+     *
+     * @param message the selected message and its source (never {@code null})
+     * @return the text to present
+     */
+    private static String formatted(FailureMessage message)
+    {
+        if (message.source != null && message.source.getCause() == null
+            && message.message.equals(trimToNull(message.source.getMessage()))
+            && isShortGenericMessage(message.message))
         {
-            return ""; //$NON-NLS-1$
+            return message.source.getClass().getName() + ": " + message.message; //$NON-NLS-1$
         }
-        String formatted = deepest.message;
-        if (deepest.source != null && deepest.source.getCause() == null
-            && deepest.message.equals(trimToNull(deepest.source.getMessage()))
-            && isShortGenericMessage(deepest.message))
-        {
-            formatted = deepest.source.getClass().getName() + ": " + deepest.message; //$NON-NLS-1$
-        }
-        return selected.equals(formatted) ? "" : formatted; //$NON-NLS-1$
+        return message.message;
     }
 
     /** The exact per-hop display rule used by {@link #describe(Throwable)}. */
@@ -231,7 +220,7 @@ public final class PlatformFailures
             String fromChildren = statusMessage(status, 0, allowNonFailingChildren);
             if (fromChildren != null)
             {
-                return new FailureMessage(fromChildren, null, 0);
+                return new FailureMessage(fromChildren, null);
             }
         }
         String own = trimToNull(failure.getMessage());
@@ -239,67 +228,10 @@ public final class PlatformFailures
         {
             boolean copiedFromStatus = status != null
                 && own.equals(trimToNull(status.getMessage()));
-            return new FailureMessage(own, copiedFromStatus ? null : failure, 0);
+            return new FailureMessage(own, copiedFromStatus ? null : failure);
         }
         String fromStatus = statusMessage(status, 0, allowNonFailingChildren);
-        return fromStatus == null ? null : new FailureMessage(fromStatus, null, 0);
-    }
-
-    /** Adds a throwable once; status-attached exceptions start a fresh bounded cause chain. */
-    private static void enqueue(Throwable failure, int causalDepth, int causeDepth,
-            ArrayDeque<ThrowableHop> pending,
-            IdentityHashMap<Throwable, Boolean> visitedThrowables)
-    {
-        if (failure != null && visitedThrowables.put(failure, Boolean.TRUE) == null)
-        {
-            pending.add(new ThrowableHop(failure, causalDepth, causeDepth));
-        }
-    }
-
-    /** Finds exception edges in a bounded status aggregate; status messages are not candidates. */
-    private static void enqueueStatusExceptions(IStatus status, int statusDepth, int causalDepth,
-            Throwable directCause, ArrayDeque<ThrowableHop> pending,
-            IdentityHashMap<Throwable, Boolean> visitedThrowables,
-            IdentityHashMap<IStatus, Integer> visitedStatuses)
-    {
-        if (status == null || statusDepth > MAX_STATUS_DEPTH)
-        {
-            return;
-        }
-        Integer previousDepth = visitedStatuses.get(status);
-        if (previousDepth != null && previousDepth.intValue() <= statusDepth)
-        {
-            return;
-        }
-        visitedStatuses.put(status, Integer.valueOf(statusDepth));
-
-        IStatus[] children = status.getChildren();
-        if (children != null)
-        {
-            for (int pass = 0; pass < 2; pass++)
-            {
-                boolean failing = pass == 0;
-                for (IStatus child : children)
-                {
-                    if (child == null
-                        || child.matches(IStatus.ERROR | IStatus.CANCEL) != failing)
-                    {
-                        continue;
-                    }
-                    enqueueStatusExceptions(child, statusDepth + 1, causalDepth, directCause,
-                        pending, visitedThrowables, visitedStatuses);
-                }
-            }
-        }
-        Throwable statusException = status.getException();
-        // CoreException.getCause() is its status exception. It is the SAME cause-chain edge, even
-        // when the ordinary enqueue is stopped by the cap, so admitting it here with depth zero
-        // would make every tenth CoreException restart the documented bound. Genuinely different
-        // status exceptions still begin their own bounded chains.
-        if (statusException != directCause)
-        {
-            enqueue(statusException, causalDepth, 0, pending, visitedThrowables);
-        }
+        return fromStatus == null ? null : new FailureMessage(fromStatus, null);
     }
 
     /** Deterministic proxy for a terse generic message that benefits from its exception type. */
@@ -323,33 +255,16 @@ public final class PlatformFailures
         return words <= 4;
     }
 
-    /** Message plus the source/depth needed for deterministic terminal formatting. */
+    /** Message plus the source needed for deterministic terminal formatting. */
     private static final class FailureMessage
     {
         final String message;
         final Throwable source;
-        final int depth;
 
-        FailureMessage(String message, Throwable source, int depth)
+        FailureMessage(String message, Throwable source)
         {
             this.message = message;
             this.source = source;
-            this.depth = depth;
-        }
-    }
-
-    /** One causal throwable plus its result depth and position in the current getCause chain. */
-    private static final class ThrowableHop
-    {
-        final Throwable failure;
-        final int causalDepth;
-        final int causeDepth;
-
-        ThrowableHop(Throwable failure, int causalDepth, int causeDepth)
-        {
-            this.failure = failure;
-            this.causalDepth = causalDepth;
-            this.causeDepth = causeDepth;
         }
     }
 

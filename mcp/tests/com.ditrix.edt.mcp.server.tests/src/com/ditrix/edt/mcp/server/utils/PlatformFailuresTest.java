@@ -434,33 +434,6 @@ public class PlatformFailuresTest
     }
 
     @Test
-    public void testRootCauseStatusDiscoveryStopsAtItsDepthBoundary()
-    {
-        String boundaryMessage = "boundary diagnosis"; //$NON-NLS-1$
-        String beyondMessage = "beyond-depth diagnosis"; //$NON-NLS-1$
-        MultiStatus root = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
-        MultiStatus current = root;
-        for (int depth = 1; depth < 4; depth++)
-        {
-            MultiStatus child = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
-            current.add(child);
-            current = child;
-        }
-        MultiStatus boundary = new MultiStatus(PLUGIN, 0, "", //$NON-NLS-1$
-            new RuntimeException(boundaryMessage));
-        current.add(boundary);
-        boundary.add(new Status(IStatus.ERROR, PLUGIN, "", //$NON-NLS-1$
-            new IllegalStateException(beyondMessage)));
-        Throwable failure = new RuntimeException("headline", new CoreException(root)); //$NON-NLS-1$
-
-        String diagnosis = rootCause(failure);
-        assertEquals("a carried exception at status depth four must remain discoverable", //$NON-NLS-1$
-            "java.lang.RuntimeException: " + boundaryMessage, diagnosis); //$NON-NLS-1$
-        assertFalse("a carried exception at status depth five must be outside the walk: " //$NON-NLS-1$
-            + diagnosis, diagnosis.contains(beyondMessage));
-    }
-
-    @Test
     public void testRootCauseCycleGuardStopsACyclicalCauseChain()
     {
         CyclicFailure first = new CyclicFailure("cycle-a"); //$NON-NLS-1$
@@ -492,6 +465,23 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testRootCauseKeepsTheDistinctMiddleWhenTheTerminalFormatsIntoTheHeadline()
+    {
+        Throwable terminal = new IllegalStateException("Auth fail"); //$NON-NLS-1$
+        Throwable middle = new RuntimeException("useful detail", terminal); //$NON-NLS-1$
+        Throwable failure = new RuntimeException(
+            new IllegalStateException("Auth fail", middle)); //$NON-NLS-1$
+
+        assertEquals("the fixture headline must come from the cause-only constructor", //$NON-NLS-1$
+            "java.lang.IllegalStateException: Auth fail", PlatformFailures.describe(failure)); //$NON-NLS-1$
+        String diagnosis = rootCause(failure);
+        assertEquals("the formatted terminal repeat must not erase the distinct middle", //$NON-NLS-1$
+            "useful detail", diagnosis); //$NON-NLS-1$
+        assertFalse("the repeated terminal diagnosis must be absent: " + diagnosis, //$NON-NLS-1$
+            diagnosis.contains("Auth fail")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRootCauseDoesNotAttributeCopiedStatusTextToApplicationException()
     {
         IStatus status = new Status(IStatus.ERROR, PLUGIN, "Auth fail", null); //$NON-NLS-1$
@@ -503,34 +493,6 @@ public class PlatformFailuresTest
             "Auth fail", diagnosis); //$NON-NLS-1$
         assertFalse("the wrapper type must be absent from the diagnosis: " + diagnosis, //$NON-NLS-1$
             diagnosis.contains(ApplicationException.class.getName()));
-    }
-
-    @Test
-    public void testRootCauseFollowsCauseOfExceptionCarriedByChildStatus()
-    {
-        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
-        status.add(new Status(IStatus.ERROR, PLUGIN, "", //$NON-NLS-1$
-            new RuntimeException("SSH error", new JSchException("Auth fail")))); //$NON-NLS-1$ //$NON-NLS-2$
-        ApplicationException failure = new ApplicationException(status);
-
-        assertEquals("the fixture headline comes from the child status's carried exception", //$NON-NLS-1$
-            "SSH error", PlatformFailures.describe(failure)); //$NON-NLS-1$
-        assertEquals("the carried exception's terminal cause is the actionable diagnosis", //$NON-NLS-1$
-            "com.jcraft.jsch.JSchException: Auth fail", rootCause(failure)); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testRootCauseFollowsExceptionOfSelectedStatusWithDifferentMessage()
-    {
-        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
-        status.add(new Status(IStatus.ERROR, PLUGIN, "Infobase authentication error", //$NON-NLS-1$
-            new JSchException("Auth fail"))); //$NON-NLS-1$
-        ApplicationException failure = new ApplicationException(status);
-
-        assertEquals("the status text remains the selected headline", //$NON-NLS-1$
-            "Infobase authentication error", PlatformFailures.describe(failure)); //$NON-NLS-1$
-        assertEquals("IStatus.getException is a direct causal edge despite different text", //$NON-NLS-1$
-            "com.jcraft.jsch.JSchException: Auth fail", rootCause(failure)); //$NON-NLS-1$
     }
 
     @Test
@@ -548,39 +510,6 @@ public class PlatformFailuresTest
 
         assertEquals("the cause hop must describe its failure, not its deepest progress child", //$NON-NLS-1$
             "Auth fail", rootCause(failure)); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testRootCauseCapsCauseChainCarriedByChildStatus()
-    {
-        Throwable carried = new RuntimeException("level-11"); //$NON-NLS-1$
-        for (int level = 10; level >= 0; level--)
-        {
-            carried = new RuntimeException("level-" + level, carried); //$NON-NLS-1$
-        }
-        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
-        status.add(new Status(IStatus.ERROR, PLUGIN, "", carried)); //$NON-NLS-1$
-
-        ApplicationException failure = new ApplicationException(status);
-        assertEquals("the fixture headline is the first carried throwable hop", "level-0", //$NON-NLS-1$ //$NON-NLS-2$
-            PlatformFailures.describe(failure));
-        assertEquals("the carried chain must reuse the ten-hop cause cap", "level-9", //$NON-NLS-1$ //$NON-NLS-2$
-            rootCause(failure));
-    }
-
-    @Test
-    public void testRootCauseCycleGuardAppliesToCauseChainCarriedByChildStatus()
-    {
-        CyclicFailure first = new CyclicFailure("cycle-a"); //$NON-NLS-1$
-        CyclicFailure second = new CyclicFailure("cycle-b"); //$NON-NLS-1$
-        first.setNext(second);
-        second.setNext(first);
-        MultiStatus status = new MultiStatus(PLUGIN, 0, "", null); //$NON-NLS-1$
-        status.add(new Status(IStatus.ERROR, PLUGIN, "", first)); //$NON-NLS-1$
-
-        ApplicationException failure = new ApplicationException(status);
-        assertEquals("the bounded carried walk must stop instead of looping forever", "cycle-b", //$NON-NLS-1$ //$NON-NLS-2$
-            rootCause(failure));
     }
 
     @Test
