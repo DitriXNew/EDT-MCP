@@ -231,7 +231,7 @@ Quickly switch between common tool configurations using presets:
 | Preset | Description |
 |--------|-------------|
 | **All Tools** | All tools enabled (default) |
-| **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
+| **Analysis Only** | Read-only analysis — Core except `delete_project`, plus Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
 
@@ -839,8 +839,9 @@ The MCP server is a **local developer tool** and is secured for that model:
 Before a **destructive** metadata write, the server can ask **you** (the human at the EDT
 workbench) to confirm — so the AI cannot silently delete, rename or retype configuration objects.
 The gated tools are `delete_metadata`, `rename_metadata_object`, `delete_project`,
-`delete_infobase`, `update_database`, and `modify_metadata` **only when it changes an object's or
-attribute's data type** (a benign property edit is never gated).
+`delete_infobase`, `update_database`, `modify_metadata` **only when it changes an object's or
+attribute's data type** (a benign property edit is never gated), and `merge_rules` **only when a
+`write` replaces the file `basedOn` names** (a write to a path that holds no file is never gated).
 
 Configure it in **Window → Preferences → MCP Server**:
 

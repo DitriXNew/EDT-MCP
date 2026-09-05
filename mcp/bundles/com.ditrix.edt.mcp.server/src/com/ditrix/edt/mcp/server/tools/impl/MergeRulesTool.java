@@ -41,6 +41,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -186,6 +188,27 @@ public class MergeRulesTool implements IMcpTool
     private final MergeRuleAuthoritySupplier authoritySupplier;
 
     /**
+     * Asks the destructive-consent gate. A package-private SEAM, the same one
+     * {@code DeleteMetadataTool} and {@code ModifyMetadataTool} use: the production default
+     * delegates to {@link DestructiveConsentGate#getInstance()}, which stays a singleton, while a
+     * unit test substitutes a requester answering REJECT / TIMEOUT to prove the file on the target
+     * path is left byte for byte - or one that fails outright, to prove the gate is never reached
+     * on a path that writes nothing.
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
+    private final ConsentRequester consentRequester;
+
+    /**
      * Creates the tool with the production authority - the one that asks a live comparison, over
      * {@link ComparisonEngine}, which rules each node allows.
      * <p>
@@ -198,7 +221,7 @@ public class MergeRulesTool implements IMcpTool
      */
     public MergeRulesTool()
     {
-        this(new EngineRuleAuthority());
+        this(new EngineRuleAuthority(), MergeRulesTool::askTheGate);
     }
 
     /**
@@ -211,7 +234,33 @@ public class MergeRulesTool implements IMcpTool
      */
     public MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier)
     {
+        this(authoritySupplier, MergeRulesTool::askTheGate);
+    }
+
+    /**
+     * Test seam constructor: the authority AND the consent source.
+     *
+     * @param authoritySupplier resolves the authority for a comparison id, never {@code null}
+     * @param consentRequester the consent source to use instead of the singleton gate
+     */
+    MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier, ConsentRequester consentRequester)
+    {
         this.authoritySupplier = authoritySupplier;
+        this.consentRequester = consentRequester;
+    }
+
+    /**
+     * The production consent source. A named method rather than a lambda so the two public
+     * constructors install the SAME thing and neither can drift into asking a different gate.
+     *
+     * @param tool the gated tool's name
+     * @param preview what the user is being asked to authorize
+     * @return the verdict
+     */
+    private static DestructiveConsentGate.ConsentDecision askTheGate(String tool,
+        ConsentPreview preview)
+    {
+        return DestructiveConsentGate.getInstance().requireConsent(tool, preview);
     }
 
     /**
@@ -365,11 +414,70 @@ public class MergeRulesTool implements IMcpTool
             {
                 return malformed;
             }
+            // A parameter that was SENT holding nothing is not the parameter that was omitted:
+            // both of these mean something different when absent, and reading a blank as an
+            // omission answered a call the caller did not make. See blankWriteParameterRefusal.
+            String blank = blankWriteParameterRefusal(params);
+            if (blank != null)
+            {
+                return blank;
+            }
             return write(filePath, basedOn, comparisonId, decisions, limit);
         }
         return ToolResult.error("Unknown " + KEY_MODE + " '" + mode + "'. Use '" + MODE_READ //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' to parse a merge-rules file, or '" + MODE_WRITE + "' to record decisions into one.") //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
+    }
+
+    /**
+     * Refuses a write-only parameter that was SENT but holds nothing.
+     *
+     * <h2>Why a blank is not an omission here</h2>
+     * Both of these parameters mean something DIFFERENT when they are absent, and in both
+     * directions the difference is the whole call. Omitting {@link #KEY_BASED_ON} means "author a
+     * fresh file"; omitting {@link #KEY_COMPARISON_ID} means "validate against whichever
+     * comparison is running, and if none is, write the file NOT VALIDATED". {@link #isSet} reads
+     * {@code ""} as absent, so a caller whose variable resolved to nothing got the OTHER call
+     * silently: a fresh document where they meant to carry decisions forward, or an unvalidated
+     * file where they meant a checked one. Neither said anything about it.
+     * <p>
+     * Judged on the RAW argument map, in schema order, so the refusal names the first parameter
+     * the caller would find in the schema rather than whichever check happened to run first.
+     * <p>
+     * <b>The one shape this cannot see</b>, and it is the transport's rule for every tool rather
+     * than a boundary drawn here: {@code McpProtocolHandler.extractToolParams} drops every
+     * argument whose JSON value is null while building the map, so {@code basedOn: null} on the
+     * wire arrives as no key at all and IS read as an omission. That is the right reading of an
+     * explicit null for an optional parameter, and telling it from a real omission would mean
+     * changing how arguments reach every tool. The blank STRING is the case worth catching,
+     * because it is the one a caller sends believing they sent a value.
+     *
+     * @param params the call arguments, may be {@code null}
+     * @return the refusal, or {@code null} when neither parameter was sent blank
+     */
+    private static String blankWriteParameterRefusal(Map<String, String> params)
+    {
+        if (params == null)
+        {
+            return null;
+        }
+        if (params.containsKey(KEY_BASED_ON) && !isSet(params.get(KEY_BASED_ON)))
+        {
+            return ToolResult.error("Nothing was written: '" + KEY_BASED_ON //$NON-NLS-1$
+                + "' was sent blank, and a blank path names no file. Pass the absolute path of " //$NON-NLS-1$
+                + "the rules file whose decisions this write should start from, or omit the " //$NON-NLS-1$
+                + "parameter entirely to author a fresh file.").toJson(); //$NON-NLS-1$
+        }
+        if (params.containsKey(KEY_COMPARISON_ID) && !isSet(params.get(KEY_COMPARISON_ID)))
+        {
+            return ToolResult.error("Nothing was written: '" + KEY_COMPARISON_ID //$NON-NLS-1$
+                + "' was sent blank, and a blank id names no comparison. Pass the " //$NON-NLS-1$
+                + KEY_COMPARISON_ID + " that compare_configurations returned to validate against " //$NON-NLS-1$
+                + "that comparison, or omit the parameter entirely - with no id this tool " //$NON-NLS-1$
+                + "validates against whichever comparison is RUNNING when its tree is finished, " //$NON-NLS-1$
+                + "and otherwise writes the file and reports it NOT VALIDATED.").toJson(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     // ==================== read ====================
@@ -634,7 +742,10 @@ public class MergeRulesTool implements IMcpTool
         }
 
         Path base = null;
-        if (isSet(basedOn))
+        // Presence, not content: a blank basedOn was refused in execute(), so anything that
+        // reaches here and is not null is a path the caller meant. isSet would answer the same
+        // today and would go back to lying the moment that refusal moved.
+        if (basedOn != null)
         {
             Path givenBase;
             try
@@ -816,7 +927,10 @@ public class MergeRulesTool implements IMcpTool
             requestedPaths.add(fullPathOf(decision.path));
         }
 
-        boolean idGiven = isSet(comparisonId);
+        // The same reading as basedOn above: a blank comparisonId is refused in execute(), so
+        // presence is the honest question here. Read as isSet, a blank id meant "no id given",
+        // which is the OTHER mode - author against whatever is running, and say NOT VALIDATED.
+        boolean idGiven = comparisonId != null;
         Optional<MergeRuleAuthority> comparison = Optional.empty();
         // The two halves of what a live comparison gives this write, kept apart on purpose. The
         // ADDRESS is a fact about which projects the comparison runs over, and it is known the
@@ -967,6 +1081,26 @@ public class MergeRulesTool implements IMcpTool
             return refusal;
         }
 
+        // Destructive-operation consent: the LAST check before the file on the path is replaced,
+        // after every refusal above, so the human is never asked to authorize a write that was
+        // going to be refused anyway. Only the SAME-PATH rewrite is gated, because it is the only
+        // write here that destroys something: a write to a free path adds a file, which is why
+        // import_configuration_from_xml is not destructive and write_module_source is not gated.
+        // The preview costs no new work - existingDecisions, replaced and requested are already
+        // computed for the report. Holding the path mutex across the dialog is deliberate: a
+        // second rewrite of the same path must wait and re-read, not race this one.
+        if (targetPolicy == MergeRulesCodec.Target.MAY_BE_REPLACED)
+        {
+            DestructiveConsentGate.ConsentDecision decision = consentRequester.request(NAME,
+                replacementPreview(file, existingDecisions, replaced, requested.size(),
+                    document.readEntryCarriedMetadata()));
+            if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME))
+                    .toJson();
+            }
+        }
+
         try
         {
             if (zipEntryId == null)
@@ -1006,6 +1140,63 @@ public class MergeRulesTool implements IMcpTool
         }
         return renderWrite(file, basedOn, existingDecisions, requested, replaced, comparison, validated,
             document, limit, zipEntryId);
+    }
+
+    /**
+     * What the human is asked to authorize before a same-path rewrite: the file that will be
+     * replaced, what the replacement carries out of it, and what does not survive.
+     * <p>
+     * Shaped like {@code delete_project}'s preview - one named target, {@code totalCount} 1 - and
+     * built from numbers this write has already computed for its own report, so the dialog costs
+     * no extra work. It states the LOSS in the same terms the report states the gain: the rules
+     * this call writes over are gone, and so is the file OBJECT, whose owner and access rights the
+     * replacing move does not carry (see the guide's gotcha on that).
+     *
+     * <h2>The dialog may not list FEWER losses than the report</h2>
+     * A zip rewrite whose merge-settings entry carried a comment or an extra field loses that too,
+     * and {@link #replacedEntryMetadataClause} tells the caller so AFTER the write. Leaving it out
+     * here would have the operator consent to a shorter list than the one they are then shown -
+     * the same shape of dishonesty this gate exists to remove. The sentence is the report's own,
+     * word for word rather than paraphrased, so the two describe one fact in one wording; and it
+     * appears only when the entry really carried something, because a clause printed
+     * unconditionally would tell every caller they lost what they never had.
+     *
+     * <h2>What it still does NOT name</h2>
+     * That the entry's NAME can change - the archive was read under whatever entry it held, and
+     * the replacement is named after the live comparison's three projects, which need not be the
+     * same. The report does not name it either: it prints the old label under {@code Based on:}
+     * and the new one under {@code Container:} and leaves the caller to compare them. Saying it
+     * here alone would make the dialog claim something the report never states, and stating it
+     * honestly needs the entry NAME as a value - {@link MergeRulesDocument} keeps only the
+     * composite {@code <file>!<entry>} label, and {@code !} is legal in both halves, so the name
+     * cannot be recovered from it by splitting. That is a change to the document and to BOTH
+     * texts, not a clause to add to one of them.
+     *
+     * @param file the absolute, normalised target that will be replaced
+     * @param existingDecisions how many addressable decisions the file already holds
+     * @param replaced how many of them this call writes over
+     * @param requested how many decisions this call records
+     * @param entryCarriedMetadata whether the zip entry read from carried a comment or an extra
+     *            field, which the replacement does not carry
+     * @return the preview
+     */
+    private static ConsentPreview replacementPreview(Path file, int existingDecisions, int replaced,
+        int requested, boolean entryCarriedMetadata)
+    {
+        return new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
+            "This replaces " + file + " with a new file. It carries " //$NON-NLS-1$ //$NON-NLS-2$
+                + (existingDecisions - replaced) + " of the " + existingDecisions //$NON-NLS-1$
+                + " decision(s) the file holds, plus its Properties, Correspondences and every " //$NON-NLS-1$
+                + "section this tool does not interpret, and adds " + requested //$NON-NLS-1$
+                + " decision(s) from this call, " + replaced //$NON-NLS-1$
+                + " of which replace a rule the file holds. Lost: those " + replaced //$NON-NLS-1$
+                + " previous rule(s), and the file object itself - its owner and access rights " //$NON-NLS-1$
+                + "are not carried over." //$NON-NLS-1$
+                + (entryCarriedMetadata
+                    ? " Also lost: the merge-settings entry this write started from carried a zip " //$NON-NLS-1$
+                        + "entry comment or an extra field, and that did not come across." //$NON-NLS-1$
+                    : ""), //$NON-NLS-1$
+            1, List.of(file.toString()));
     }
 
     /**
@@ -1326,8 +1517,11 @@ public class MergeRulesTool implements IMcpTool
         out.append(containerClause(zipEntryId));
         out.append("- Decisions recorded: ").append(requested.size()).append(" (") //$NON-NLS-1$ //$NON-NLS-2$
             .append(requested.size() - replaced).append(" new, ").append(replaced).append(" replaced)\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (isSet(basedOn))
+        if (basedOn != null)
         {
+            // Presence, not emptiness: a blank 'basedOn' is refused before any of this runs, so by
+            // here the two questions have the same answer - and asking the one that matches the
+            // refusal keeps them from drifting apart if that refusal is ever narrowed.
             // The same label, through the same helper, for the same reason: 'basedOn' may name a
             // zip, and the label then ends in that archive's ENTRY name. See renderRead.
             out.append("- Based on: ").append(MarkdownUtils.inlineCode(document.sourceLabel())) //$NON-NLS-1$

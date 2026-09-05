@@ -97,9 +97,11 @@ public final class PreferenceConstants
      * Analysis Only / Code Review preset (saved before {@code apply_quick_fix} existed) gains it in
      * its disabled set; 3 = {@code ask_workmate} ships disabled; 4 = stored preset shapes gain the
      * tools newly disabled through group membership; 5 = the renamed {@code debug_launch} entry
-     * becomes {@code launch}, so a deliberate disable survives the rename.
+     * becomes {@code launch}, so a deliberate disable survives the rename; 6 = a stored Analysis
+     * Only / Code Review profile gains the destructive tools it missed - {@code merge_rules} (new
+     * in the release after 2.15.1) and {@code delete_project}.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 5;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 6;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$

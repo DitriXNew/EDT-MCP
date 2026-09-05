@@ -38,6 +38,11 @@ public class ToolSettingsServiceTest
     private static final Set<String> DEVELOPMENT_V4_ADDITIONS = Set.of(
         "stop_profiling"); //$NON-NLS-1$
 
+    /* Written out here rather than read off the production constant, which is private. */
+    private static final Set<String> READ_ONLY_V6_ADDITIONS = Set.of(
+        "merge_rules", //$NON-NLS-1$
+        "delete_project"); //$NON-NLS-1$
+
     /* Independent first-release fixtures: never derive these from the production constants. */
     private static final Set<String> FIRST_RELEASE_ANALYSIS_ONLY_SHAPE = Set.of(
         "debug_launch", //$NON-NLS-1$
@@ -425,6 +430,8 @@ public class ToolSettingsServiceTest
             disabled.contains("ask_workmate")); //$NON-NLS-1$
         assertTrue("version 4 must add every Code Review addition: " + disabled,
             disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
+        assertTrue("version 6 must add the destructive tools it missed: " + disabled,
+            disabled.containsAll(READ_ONLY_V6_ADDITIONS));
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -446,6 +453,8 @@ public class ToolSettingsServiceTest
             disabled.contains("ask_workmate")); //$NON-NLS-1$
         assertTrue("version 4 must add every Analysis Only addition: " + disabled,
             disabled.containsAll(ANALYSIS_ONLY_V4_ADDITIONS));
+        assertTrue("version 6 must add the destructive tools it missed: " + disabled,
+            disabled.containsAll(READ_ONLY_V6_ADDITIONS));
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -467,6 +476,8 @@ public class ToolSettingsServiceTest
             disabled.containsAll(DEVELOPMENT_V4_ADDITIONS));
         assertFalse("Development is writable, so quick fixes stay enabled: " + disabled,
             disabled.contains("apply_quick_fix")); //$NON-NLS-1$
+        assertFalse("Development authors merge rules, so version 6 owes it nothing: " + disabled,
+            disabled.contains("merge_rules")); //$NON-NLS-1$
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -651,6 +662,90 @@ public class ToolSettingsServiceTest
 
         assertFalse("the rename must not invent a disable: " + disabledTools(store),
             disabledTools(store).contains("launch")); //$NON-NLS-1$
+    }
+
+
+    /*
+     * Version 6 - the two destructive tools a stored read-only profile could not have excluded.
+     * merge_rules did not exist when such a profile was saved; delete_project did, but it lives in
+     * a group no preset disables, so no stored read-only profile carries it either.
+     */
+
+    @Test
+    public void testVersion6RestoresCurrentAnalysisOnlyPreset()
+    {
+        assertVersion6RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
+    }
+
+    @Test
+    public void testVersion6RestoresCurrentCodeReviewPreset()
+    {
+        assertVersion6RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
+    }
+
+    @Test
+    public void testVersion6LeavesADevelopmentProfileAlone()
+    {
+        PreferenceStore store = storedDisabledTools(ToolPreset.DEVELOPMENT.getDisabledTools(), 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("Development is a writing profile: version 6 owes it nothing",
+            ToolPreset.DEVELOPMENT.getDisabledTools(), disabled);
+        assertFalse("a profile that authors merge rules must keep the tool: " + disabled,
+            disabled.contains("merge_rules")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion6LeavesACustomProfileThatEnabledAWriteToolAlone()
+    {
+        // A selection that OVERLAPS the read-only shape without containing it is somebody's own
+        // profile, not a preset this migration owes anything to. write_module_source is in the
+        // frozen Analysis Only shape, so removing it breaks containment.
+        Set<String> custom = new HashSet<>(ToolPreset.ANALYSIS_ONLY.getDisabledTools());
+        custom.remove("write_module_source"); //$NON-NLS-1$
+        custom.removeAll(READ_ONLY_V6_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(custom, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals("a custom profile must come back exactly as it was", custom,
+            disabledTools(store));
+    }
+
+    @Test
+    public void testVersion6StillRecognizesAReadOnlyProfileThatReEnabledApplyQuickFix()
+    {
+        // apply_quick_fix is in NEITHER frozen shape, precisely so a user who deliberately turned
+        // it back on after version 2 is still recognized as read-only here.
+        Set<String> beforeVersion6 = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        beforeVersion6.remove("apply_quick_fix"); //$NON-NLS-1$
+        beforeVersion6.removeAll(READ_ONLY_V6_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion6, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("version 6 must still add its names: " + disabled,
+            disabled.containsAll(READ_ONLY_V6_ADDITIONS));
+        assertFalse("version 6 must not re-disable apply_quick_fix: " + disabled,
+            disabled.contains("apply_quick_fix")); //$NON-NLS-1$
+    }
+
+    private static void assertVersion6RestoresCurrentPreset(ToolPreset preset)
+    {
+        Set<String> beforeVersion6 = new HashSet<>(preset.getDisabledTools());
+        beforeVersion6.removeAll(READ_ONLY_V6_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion6, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 6 must restore the current disabled set for " + preset,
+            preset.getDisabledTools(), disabled);
+        assertEquals("the restored set must match " + preset,
+            preset, ToolPreset.matchPreset(disabled));
     }
 
     private static PreferenceStore storedDisabledTools(Set<String> disabled, int migrationVersion)

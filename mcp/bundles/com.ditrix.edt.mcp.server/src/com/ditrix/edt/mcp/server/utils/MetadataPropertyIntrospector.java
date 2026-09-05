@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.TreeMap;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -47,6 +48,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 
 /**
  * Introspects the ASSIGNABLE properties of a metadata {@link EObject}: which structural features a
@@ -167,6 +169,15 @@ public final class MetadataPropertyIntrospector
          * characters and an unbounded {@code String} are one word on the page and two different
          * columns in the database, so this field spells the qualifiers out; see
          * {@link MetadataPropertyIntrospector#renderTypeDescription}.
+         * <p>
+         * A LOCALIZED STRING is the third, and it hides the STRUCTURE rather than a detail of the
+         * value. It renders as {@code key=value} pairs joined by {@code ", "} - separators that
+         * free text may itself contain - so {@code {en: "Hi, de=Hallo"}} and
+         * {@code {en: "Hi", de: "Hallo"}} are one string on the page and two different synonyms in
+         * the model; and the {@code EMap}'s own order is insertion order, which two sides carrying
+         * the same translations need not share. This field carries the pairs as a key-sorted JSON
+         * object instead, which is injective and order-independent; see
+         * {@link MetadataPropertyIntrospector#renderLocalizedString}.
          * <p>
          * For every other kind it is the same string as {@link #currentValue}: those renderings
          * already distinguish the values they show. It is never {@code null} while
@@ -886,7 +897,9 @@ public final class MetadataPropertyIntrospector
             switch (kind)
             {
                 case LOCALIZED_STRING:
-                    return Rendered.of(renderLocalizedString(value));
+                    // One of the kinds that answer with a Rendered of their own: what it SHOWS is
+                    // not injective, so it cannot also be what it IS. See the method.
+                    return renderLocalizedString(value);
                 case TYPE_DESCRIPTION:
                     return value instanceof TypeDescription
                         ? renderTypeDescription((TypeDescription)value) : Rendered.ABSENT;
@@ -924,19 +937,53 @@ public final class MetadataPropertyIntrospector
         }
     }
 
+    /**
+     * A localized string, as the two things it has to be: the per-language text a reader sees, and
+     * a canonical identity a comparison can trust.
+     *
+     * <h2>Why the displayed text cannot be the identity</h2>
+     * The display joins FREE TEXT with separators that free text may itself contain, so it is not
+     * injective: {@code {en: "Hi, de=Hallo"}} and {@code {en: "Hi", de: "Hallo"}} render the
+     * identical string, and a comparison reading that string calls a one-language synonym and a
+     * two-language one the same value. This is the only kind here that joins free text - a single
+     * value carries one value, {@code MANY_ENUM} and {@code MCORE_VALUE_LIST} are JSON arrays,
+     * references use {@code Type.Name} with {@code ", "} outside the 1C identifier alphabet, a
+     * type description separates names from qualifiers with {@code " | "} which is outside the
+     * type-name alphabet, and a {@code QName} is {@code {nsUri}name} where {@code "}"} occurs in
+     * neither a URI nor an NCName.
+     *
+     * <h2>What the identity is</h2>
+     * A JSON object with its keys sorted, via {@code JsonObject.toString()} - the same convention
+     * {@link #renderEnumList} and {@link #renderMcoreValueList} already use for their kinds. Gson
+     * escapes quotes, backslashes and control characters, so no separator has to be invented and
+     * no value can spell the structure around it; sorting makes the identity independent of the
+     * {@code EMap}'s order, which is the model's insertion order and differs between two sides
+     * that carry the same translations.
+     * <p>
+     * <b>The display is deliberately unchanged</b>, {@code EMap} order and all: two sides showing
+     * the SAME text can therefore now be reported as DIFFERENT. That is the precedent
+     * {@link PropertyInfo#valueIdentity} already set for references, where {@code Foo} on both
+     * sides can be {@code Catalog.Foo} and {@code Document.Foo}.
+     *
+     * @param value the feature value, expected to be an {@code EMap}
+     * @return the rendering, or {@link Rendered#ABSENT} when there is nothing to show
+     */
     @SuppressWarnings("unchecked")
-    private static String renderLocalizedString(Object value)
+    private static Rendered renderLocalizedString(Object value)
     {
         if (!(value instanceof EMap<?, ?>))
         {
-            return null;
+            return Rendered.ABSENT;
         }
         EMap<String, String> map = (EMap<String, String>)value;
         if (map.isEmpty())
         {
-            return null;
+            return Rendered.ABSENT;
         }
         StringBuilder sb = new StringBuilder();
+        // Sorted for the identity only, and collected in the SAME pass as the display, so the two
+        // can never disagree about which entries the value holds.
+        TreeMap<String, String> canonical = new TreeMap<>();
         for (java.util.Map.Entry<String, String> entry : map.entrySet())
         {
             if (sb.length() > 0)
@@ -944,8 +991,14 @@ public final class MetadataPropertyIntrospector
                 sb.append(", "); //$NON-NLS-1$
             }
             sb.append(entry.getKey()).append('=').append(entry.getValue());
+            canonical.put(entry.getKey(), entry.getValue());
         }
-        return sb.toString();
+        JsonObject identity = new JsonObject();
+        for (java.util.Map.Entry<String, String> entry : canonical.entrySet())
+        {
+            identity.addProperty(entry.getKey(), entry.getValue());
+        }
+        return Rendered.of(sb.toString(), identity.toString());
     }
 
     /**

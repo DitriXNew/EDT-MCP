@@ -8,10 +8,21 @@ package com.ditrix.edt.mcp.server.preferences;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 
+import org.junit.After;
 import org.junit.Test;
+
+import com.ditrix.edt.mcp.server.protocol.ToolAnnotationClassifier;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
+import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
+import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 
 /**
  * Tests for {@link ToolPreset} enum.
@@ -19,6 +30,12 @@ import org.junit.Test;
  */
 public class ToolPresetTest
 {
+    @After
+    public void tearDown()
+    {
+        McpToolRegistry.getInstance().clear();
+    }
+
     // === Preset definitions ===
 
     @Test
@@ -283,5 +300,97 @@ public class ToolPresetTest
             assertTrue(preset.getDisplayName() + " must keep the default-off tools disabled", //$NON-NLS-1$
                 disabled.containsAll(defaultOff));
         }
+    }
+
+    // ============ Destructive tools may not be enabled in a read-only preset ============
+
+    /**
+     * The structural ratchet, and it is a ratchet rather than a derivation on purpose. Deriving
+     * the presets from the classification was rejected as too wide: {@code isReadOnly} is a PREFIX
+     * heuristic for the MCP hint, not policy, and derivation would flip {@code clean_project},
+     * {@code resync_to_disk}, {@code create_project}, the git branch tools and
+     * {@code export_common_picture} - all of which the read-only presets keep enabled on purpose.
+     * <p>
+     * What this asserts is narrower and checkable: a tool that either the MCP hint or the consent
+     * gate calls destructive must be OFF in both read-only presets. It is the check that found
+     * {@code delete_project} sitting enabled in both - it lives in {@link ToolGroup#CORE}, which
+     * no preset disables, and nothing named it by hand.
+     * <p>
+     * There is deliberately NO exception list: the moment one is needed, the preset and the
+     * classification disagree about the same tool and that disagreement should be argued in a
+     * review, not encoded here.
+     */
+    @Test
+    public void testEveryDestructiveOrGatedToolIsDisabledInTheReadOnlyPresets()
+    {
+        McpToolRegistry registry = McpToolRegistry.getInstance();
+        BuiltInToolRegistrar.registerAll(registry);
+
+        Set<String> destructive = new TreeSet<>();
+        for (IMcpTool tool : registry.getAllTools())
+        {
+            String name = tool.getName();
+            // The tool's OWN annotations first, and the classifier only as the fallback: dcs, git
+            // and ask_workmate carry their hint through an override, and the classifier answers
+            // "not destructive" for all three.
+            ToolAnnotations annotations =
+                tool.getAnnotations() != null ? tool.getAnnotations()
+                    : ToolAnnotationClassifier.classify(name);
+            if (Boolean.TRUE.equals(annotations.getDestructiveHint())
+                || DestructiveConsentGate.GATED_TOOLS.contains(name))
+            {
+                destructive.add(name);
+            }
+        }
+
+        // Positive control: an empty or wrongly-built set would make every assertion below
+        // vacuously true.
+        assertFalse("no destructive tool was found at all - the scan is broken", //$NON-NLS-1$
+            destructive.isEmpty());
+        assertTrue("the scan must find the archetypal destructive tool: " + destructive, //$NON-NLS-1$
+            destructive.contains("delete_metadata")); //$NON-NLS-1$
+
+        List<String> violators = new ArrayList<>();
+        for (String name : destructive)
+        {
+            if (!ToolPreset.ANALYSIS_ONLY.getDisabledTools().contains(name))
+            {
+                violators.add(name + " (Analysis Only)"); //$NON-NLS-1$
+            }
+            if (!ToolPreset.CODE_REVIEW.getDisabledTools().contains(name))
+            {
+                violators.add(name + " (Code Review)"); //$NON-NLS-1$
+            }
+        }
+        assertTrue("destructive or gated tools left ENABLED in a read-only preset: " //$NON-NLS-1$
+            + violators + ". A read-only preset must disable them; if one genuinely belongs " //$NON-NLS-1$
+            + "there, the disagreement is with its destructive hint, not with this check.", //$NON-NLS-1$
+            violators.isEmpty());
+    }
+
+    /**
+     * The two halves of the comparison family part ways here, and that is the decision rather than
+     * an oversight: {@code merge_rules} WRITES files, while starting a comparison and expanding a
+     * node read the model and change no code. The slot a comparison occupies and the time it takes
+     * are not preset criteria - {@code clean_project}, {@code resync_to_disk} and
+     * {@code revalidate_objects} are just as heavy and stay enabled.
+     */
+    @Test
+    public void testReadOnlyPresetsDisableMergeRulesButKeepTheComparisonReadHalf()
+    {
+        for (ToolPreset preset : List.of(ToolPreset.ANALYSIS_ONLY, ToolPreset.CODE_REVIEW))
+        {
+            Set<String> disabled = preset.getDisabledTools();
+            assertTrue(preset.getDisplayName() + " must disable merge_rules: " + disabled, //$NON-NLS-1$
+                disabled.contains("merge_rules")); //$NON-NLS-1$
+            assertTrue(preset.getDisplayName() + " must disable delete_project: " + disabled, //$NON-NLS-1$
+                disabled.contains("delete_project")); //$NON-NLS-1$
+            assertFalse(preset.getDisplayName() + " must keep compare_configurations: " + disabled, //$NON-NLS-1$
+                disabled.contains("compare_configurations")); //$NON-NLS-1$
+            assertFalse(preset.getDisplayName() + " must keep get_comparison_node: " + disabled, //$NON-NLS-1$
+                disabled.contains("get_comparison_node")); //$NON-NLS-1$
+        }
+        assertFalse("Development authors merge rules, so it must NOT disable merge_rules", //$NON-NLS-1$
+            ToolPreset.DEVELOPMENT.getDisabledTools().contains("merge_rules")); //$NON-NLS-1$
     }
 }

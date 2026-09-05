@@ -41,6 +41,17 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "stop_profiling"); //$NON-NLS-1$
 
     /*
+     * Version 6: the two destructive tools a stored read-only profile could not have excluded.
+     * merge_rules is new (its write half creates and REPLACES files); delete_project is not new at
+     * all - it sits in ToolGroup.CORE, which no preset disables, so it has been enabled in both
+     * read-only presets since they existed. Both read-only presets get the same two names, so one
+     * set answers for both.
+     */
+    private static final Set<String> READ_ONLY_V6_ADDITIONS = Set.of(
+        "merge_rules", //$NON-NLS-1$
+        "delete_project"); //$NON-NLS-1$
+
+    /*
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
      * Never derive them from the live preset, which has grown over time. A shape is only ever
      * extended after checking that every supported historical store still contains the new name.
@@ -182,6 +193,14 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * is left untouched. See
      * {@link #migrateApplyQuickFixIntoReadOnlyPreset} for why containment rather than equality.
      * <p>
+     * Version 6 is the version 2 case again, one tool generation later: a stored read-only profile
+     * is recognized by CONTAINMENT of its frozen shape - never by equality, which would miss the
+     * ordinary user who tightened the preset further - and gains the two destructive tools it
+     * could not have excluded. {@code merge_rules} did not exist when the profile was saved;
+     * {@code delete_project} did, but it lives in a group no preset disables and was never named
+     * by hand, so no stored read-only profile has it. Neither is re-added to a profile that
+     * already carries it, and a selection that merely OVERLAPS a shape is left alone.
+     * <p>
      * Version 4 repairs stored preset shapes after previously ungrouped tools joined groups that
      * those presets disable. It recognizes an older preset by containment of the frozen historical
      * shape, which omits both names the store may predate and default-disabled names the user may
@@ -242,6 +261,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // The v4 shapes intentionally omit apply_quick_fix, so this step recognizes a store
                 // whose user deliberately re-enabled it after version 2 without adding it back.
                 changed |= migrateRegroupedToolsIntoPresets(disabled);
+            }
+            if (storedVersion < 6)
+            {
+                changed |= migrateDestructiveToolsIntoReadOnlyPresets(disabled);
             }
             if (changed)
             {
@@ -315,6 +338,30 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         if (disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
         {
             return disabled.addAll(DEVELOPMENT_V4_ADDITIONS);
+        }
+        return false;
+    }
+
+    /**
+     * Adds the version 6 destructive names to a stored list that already expresses a read-only
+     * profile - i.e. one CONTAINING the frozen recognition shape of Analysis Only or Code Review.
+     * <p>
+     * The same containment argument as version 2, and for the same reason: exact matching would
+     * miss the user who picked a read-only preset and then unticked another tool or two, and a
+     * write-capable tool silently live in a profile built to be read-only is exactly the hazard
+     * this step exists to prevent. Unlike version 4 the two shapes are NOT tried in order of
+     * restrictiveness, because both read-only presets are owed the SAME two names - so whichever
+     * shape matches first gives the right answer, and a store matching both gets it once.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when at least one name was added
+     */
+    private static boolean migrateDestructiveToolsIntoReadOnlyPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(READ_ONLY_V6_ADDITIONS);
         }
         return false;
     }

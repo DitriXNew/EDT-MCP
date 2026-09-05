@@ -167,7 +167,8 @@ public class DestructiveConsentGateTest
     {
         assertEquals("GATED_TOOLS must be exactly the frozen set", //$NON-NLS-1$
             Set.of("delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "delete_infobase", "update_database", "modify_metadata", "dcs", "git"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "delete_infobase", "update_database", "modify_metadata", "dcs", "git", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "merge_rules"), //$NON-NLS-1$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
@@ -179,6 +180,13 @@ public class DestructiveConsentGateTest
         // conversion), and git (only the commands that destroy work - see GitTool.destructiveForm).
         // Those three carry their own annotations and are
         // deliberately NOT in the always-destructive classifier list.
+        //
+        // merge_rules is gated conditionally too - only the same-path rewrite asks - and yet it IS
+        // classified destructive, so it belongs on the other side of this branch. There is no
+        // contradiction: the classifier answers per TOOL and has to describe what the tool CAN do,
+        // while the gate is called per CALL and can see which one this is. The three above differ
+        // because each carries an explicit getAnnotations() override that answers "not always
+        // destructive"; merge_rules does not, and its entry in DESTRUCTIVE_TOOLS says why.
         Set<String> conditionallyDestructive = Set.of("modify_metadata", "dcs", "git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
         {

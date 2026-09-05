@@ -403,6 +403,25 @@ def test_unreadable_merge_rules_file_is_refused_before_anything_starts():
 
 
 @e2e_test(tool="compare_configurations", kind="action")
+def test_a_blank_merge_rules_file_is_refused_before_anything_starts():
+    """A blank is not the omission it renders as. trimToNull folds "" into "no rules
+    file", which is the OTHER call - compare without pre-set rules - so a caller whose
+    variable resolved to nothing got a comparison with NONE of their decisions applied,
+    paid EDT's single comparison slot for it, and was told nothing.
+
+    Run on the wire because the refusal has to arrive BEFORE the slot is claimed, and
+    only a live call can show the slot still free afterwards.
+    """
+    result = _start(mergeRulesFile="", waitSeconds=10)
+    error = assert_error(result, "a blank mergeRulesFile")
+    assert_error_quality(error, names=["mergeRulesFile"], suggests=["omit"],
+                         ctx="blank mergeRulesFile")
+    assert _started_comparison_id(result) is None, \
+        "a blank mergeRulesFile must not have started a comparison"
+    assert_no_diff()
+
+
+@e2e_test(tool="compare_configurations", kind="action")
 def test_a_relative_merge_rules_file_is_refused_instead_of_resolved_against_edts_directory():
     """A relative path is resolved against the working directory of the EDT PROCESS,
     while the MCP client that wrote it means its OWN directory. That resolution never
