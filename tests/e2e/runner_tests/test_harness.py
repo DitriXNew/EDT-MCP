@@ -1074,6 +1074,40 @@ class EvidenceLogTailTest(unittest.TestCase):
         self.assertIn("FAILURE MOMENT", out[first_start:second_start])
         self.assertNotIn("INCOMPLETE", out)
 
+    def test_a_backup_tail_that_does_not_cover_current_keeps_both_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = os.path.join(tmp, ".metadata")
+            os.makedirs(metadata)
+            current = os.path.join(metadata, ".log")
+            backup = os.path.join(metadata, ".bak_2.log")
+            identity = (1_000_000_000, 100, 42)
+
+            def read_tail(path, capture_identity=False):
+                if path == current:
+                    text = "FAILURE MOMENT\nCURRENT TAIL\n"
+                else:
+                    text = "BACKUP TAIL AFTER MANY APPENDS\n"
+                return (text, identity) if capture_identity else text
+
+            printed = io.StringIO()
+            with mock.patch.object(HARNESS, "_workspace_dir", return_value=tmp), \
+                    mock.patch.object(HARNESS, "_backup_identities",
+                                      return_value=({backup: identity}, None)), \
+                    mock.patch.object(HARNESS, "_read_log_tail", side_effect=read_tail), \
+                    contextlib.redirect_stdout(printed):
+                HARNESS._print_failed_settle_evidence("| P | building |")
+
+        out = printed.getvalue()
+        headings = [line for line in out.splitlines() if line.startswith("--- EDT log tail:")]
+        self.assertEqual(2, len(headings))
+        self.assertIn(".metadata/.bak_2.log", headings[0])
+        self.assertIn(".metadata/.log", headings[1])
+        backup_start = out.index(headings[0])
+        current_start = out.index(headings[1])
+        self.assertIn("BACKUP TAIL AFTER MANY APPENDS", out[backup_start:current_start])
+        self.assertIn("FAILURE MOMENT", out[current_start:])
+        self.assertNotIn("INCOMPLETE", out)
+
     def test_a_noisy_current_log_cannot_crowd_the_rotated_failure_out(self):
         """The whole reason the backup is collected is that the failure is IN it.
 

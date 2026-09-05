@@ -1613,10 +1613,9 @@ def _print_failed_settle_evidence(last_list_projects):
                 failures.append("backup scan %s: %s" % (when, failure))
             return identities
 
-        def read_into(log_path, selected_identity=None, capture_identity=False):
+        def read_into(log_path, selected_identity=None):
             try:
-                opened_identity = None
-                if selected_identity is None and not capture_identity:
+                if selected_identity is None:
                     text = _read_log_tail(log_path)
                 else:
                     text, opened_identity = _read_log_tail(log_path, True)
@@ -1624,7 +1623,6 @@ def _print_failed_settle_evidence(last_list_projects):
                         failures.append(
                             "selected backup identity changed at read time: %s" % log_path)
                 by_path[log_path] = text
-                return opened_identity
             except Exception as exc:
                 # Rotation may remove a path before it can be opened, so one failed read must not
                 # hide evidence that remains available in the other file. This also contains a
@@ -1640,38 +1638,33 @@ def _print_failed_settle_evidence(last_list_projects):
         # read as well:
         #   rotation before the read -> .log comes back empty, but the rotated-out file is in the
         #                               `after` snapshot and gets read;
-        #   rotation after the read  -> the failure is already in hand, and a backup read that
-        #                               confirms the same non-zero inode is its later superset;
+        #   rotation after the read  -> the failure is already in hand; when a selected backup's
+        #                               displayed text contains it, that backup keeps the bytes;
         #   two in a row             -> BOTH new backups are in the snapshot diff, so the failure
-        #                               stays in its first backup's chronological slot.
+        #                               stays in the covering backup's chronological slot.
         # Choosing a single "newest backup" survived none of these fully, and choosing it BEFORE
         # the read survived neither of the first two. Re-scanning at the end alone is no fix - it
         # races the writer the same way; the pair of snapshots is what makes the window observable.
-        # The captured identity drops the in-hand .log bytes only after a selected backup is opened
-        # with its scan identity unchanged and the same non-zero inode. Otherwise both sources stay:
-        # duplication costs line budget, but cannot discard evidence. The backup tail is read later,
-        # so if more than the byte limit was appended before rename, the head of the earlier read is
-        # not shown; the last lines are, which are the lines the display budget keeps anyway.
         before_rotation = scan_backups("before reading .log")
-        current_identity = read_into(current, capture_identity=True)
+        read_into(current)
         after_rotation = scan_backups("after reading .log")
         backup_paths = _backups_covering(before_rotation, after_rotation, failures)
         backups = [(path, after_rotation.get(path, before_rotation.get(path)))
                    for path in backup_paths]
-        backup_reads = []
         for log_path, selected_identity in backups:
-            backup_reads.append((selected_identity, read_into(log_path, selected_identity)))
+            read_into(log_path, selected_identity)
         # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
         display_order = backup_paths + [current]
-        if any(opened_identity is not None
-               and opened_identity == selected_identity
-               and current_identity is not None
-               and opened_identity[2]
-               and current_identity[2]
-               and opened_identity[2] == current_identity[2]
-               for selected_identity, opened_identity in backup_reads):
+        # Drop the current source only when displayed backup text literally contains every byte
+        # its section would have shown, so that section can only repeat evidence and cost budget.
+        # When it does not - a reused backup name, a rotation that pushed these bytes out of the
+        # backup's tail window, or an unrelated file - both sources stay. Duplication then costs
+        # line budget, but never the failure line.
+        current_text = by_path.get(current)
+        if current_text and any(current_text in by_path.get(log_path, "")
+                                for log_path in backup_paths):
             display_order.remove(current)
             by_path.pop(current, None)
         texts = []
