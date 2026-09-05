@@ -159,7 +159,10 @@ public final class MetadataTypeBuilder
     private static final String[] EVENT_SOURCE_PRODUCED_TYPE_SUFFIXES = {
         "Object", "Manager", "RecordSet", "RecordManager", "ValueManager"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
-    /** A parsed {@code <metadata-token><produced-suffix>} kind. Package-visible for pure tests. */
+    /**
+     * A parsed {@code <metadata-token><produced-suffix>} kind. The metadata token may be top-level or
+     * nested; {@link #isNested()} distinguishes the two. Package-visible for pure tests.
+     */
     static final class ProducedTypeKind
     {
         final String prefix;
@@ -178,6 +181,7 @@ public final class MetadataTypeBuilder
             this.nested = nested;
         }
 
+        /** Whether the prefix appears in either the top-level or nested metadata-token catalogue. */
         boolean hasKnownMetadataType()
         {
             return englishMetadataType != null;
@@ -301,6 +305,12 @@ public final class MetadataTypeBuilder
         {
             accepted = DATE_ITEM_MEMBERS;
         }
+        // Inline DefinedType and Ref classifications must stay in this order as in addType; a mismatch
+        // can validate a member that the selected addType branch ignores.
+        else if (isInlineDefinedTypeKind(kind))
+        {
+            accepted = MEMBERLESS_ITEM_MEMBERS;
+        }
         else if (isRefKind(kind) || producedKind != null)
         {
             accepted = REF_ITEM_MEMBERS;
@@ -332,6 +342,10 @@ public final class MetadataTypeBuilder
         if ("Date".equals(primitive)) //$NON-NLS-1$
         {
             return validateDateItem(item, index);
+        }
+        if (isInlineDefinedTypeKind(kind))
+        {
+            return null;
         }
         if (producedKind != null)
         {
@@ -666,10 +680,12 @@ public final class MetadataTypeBuilder
      * {@link MetadataTypeUtils#toEnglishSingular(String)}; this is what keeps long tokens such as
      * {@code ChartOfCalculationTypesObject} intact instead of guessing from a local token table.
      *
-     * <p>When the kind ends in a family suffix but no prefix is a known metadata token, the returned
-     * item carries a {@code null} {@link ProducedTypeKind#englishMetadataType}. The caller can then
-     * distinguish an actionable bad-prefix refusal from an unrelated unknown platform type. A
-     * DefinedType is deliberately excluded because its existing TypeSet grammar is separate.</p>
+     * <p>When the kind ends in a family suffix but no prefix occurs in either the top-level or nested
+     * metadata-token catalogue, the returned item carries a {@code null}
+     * {@link ProducedTypeKind#englishMetadataType}. A non-null value may still identify a nested kind,
+     * which top-level lookup and object resolution cannot resolve; {@link ProducedTypeKind#isNested()}
+     * distinguishes it. A DefinedType is deliberately excluded because its existing TypeSet grammar
+     * is separate.</p>
      *
      * @param kind the requested type kind
      * @return the split, or {@code null} when the kind does not have this family shape
@@ -713,6 +729,8 @@ public final class MetadataTypeBuilder
             }
         }
 
+        // Run the nested pass only after the top-level pass completes: EnumValueManager must split as
+        // top-level Enum + ValueManager, not nested EnumValue + Manager.
         for (int split = candidate.length() - 1; split > 0; split--)
         {
             String prefix = candidate.substring(0, split);
@@ -1034,7 +1052,8 @@ public final class MetadataTypeBuilder
             return null;
         }
 
-        if (producedKind != null && !producedKind.hasKnownMetadataType())
+        if (producedKind != null
+            && (!producedKind.hasKnownMetadataType() || producedKind.isNested()))
         {
             return unknownProducedTypePrefix(kind, producedKind);
         }
@@ -1081,11 +1100,15 @@ public final class MetadataTypeBuilder
         }
         if (producedKind.isNested())
         {
-            String parentKind = "Recalculation".equals(producedKind.englishMetadataType) //$NON-NLS-1$
-                ? "its owning register" : "its owner"; //$NON-NLS-1$ //$NON-NLS-2$
-            return "Type kind '" + kind + "' is a produced type of a NESTED object (" //$NON-NLS-1$ //$NON-NLS-2$
-                + producedKind.englishMetadataType + " lives inside " + parentKind //$NON-NLS-1$
-                + "), which cannot be addressed by ref. Pass {kind:'" + kind //$NON-NLS-1$
+            if ("Recalculation".equals(producedKind.englishMetadataType)) //$NON-NLS-1$
+            {
+                return "Type kind '" + kind + "' is a produced type of a NESTED object (" //$NON-NLS-1$ //$NON-NLS-2$
+                    + producedKind.englishMetadataType + " lives inside its owning register" //$NON-NLS-1$
+                    + "), which cannot be addressed by ref. Pass {kind:'" + kind //$NON-NLS-1$
+                    + "'} without ref to use its abstract form."; //$NON-NLS-1$
+            }
+            return "Type kind '" + kind + "' is a produced type of a NESTED object; a nested " //$NON-NLS-1$ //$NON-NLS-2$
+                + "object is addressed through its owner, not by ref. Pass {kind:'" + kind //$NON-NLS-1$ //$NON-NLS-2$
                 + "'} without ref to use its abstract form."; //$NON-NLS-1$
         }
         String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
