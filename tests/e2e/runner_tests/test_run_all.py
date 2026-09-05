@@ -52,7 +52,19 @@ class RunAllRatchetTest(unittest.TestCase):
                       contracts[probe_tool]["inputSchema"]["properties"])
         return probe_arguments[probe_argument_key]
 
-    def test_a_located_workspace_must_contain_the_server_log_probe(self):
+    def test_an_explicit_workspace_that_is_not_one_fails_rather_than_advising(self):
+        """The override naming a directory with no .metadata is the same operator error as the
+        override naming the wrong EDT, only cruder, so it gets the same verdict. Skipping here
+        would print advice about the wrong problem - it would tell an operator who HAS set the
+        variable to set it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(RATCHET, "call", side_effect=AssertionError("no call")),                     mock.patch.dict(os.environ, {"EDT_MCP_EDT_WORKSPACE": tmp}):
+                with self.assertRaises(HARNESS.E2EAssertion) as failed:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+                self.assertIn(tmp, str(failed.exception))
+                self.assertIn("no .metadata directory there", str(failed.exception))
+
+    def test_an_explicit_workspace_must_contain_the_server_log_probe(self):
         def entry_at(plugin, severity, message, epoch=None):
             if epoch is None:
                 epoch = HARNESS.RUN_STARTED_AT
@@ -69,8 +81,11 @@ class RunAllRatchetTest(unittest.TestCase):
 
             def fake_call(tool, arguments):
                 captured_calls.append((tool, arguments))
-                if write_probe["enabled"]:
-                    token, = arguments.values()
+                # Model the server's logging boundary: only the missing-project request writes
+                # the line the probe depends on. If the probe stops provoking that outcome, the
+                # ratchet's missing-evidence check must be the assertion that catches it.
+                token = arguments.get("projectName")
+                if write_probe["enabled"] and token is not None:
                     with open(log_path, "a", encoding="utf-8") as handle:
                         handle.write(entry_at(
                             RATCHET.OUR_PLUGIN, "2",
@@ -80,27 +95,30 @@ class RunAllRatchetTest(unittest.TestCase):
 
             with mock.patch.object(RATCHET, "call", side_effect=fake_call), \
                     mock.patch.dict(os.environ, {"EDT_MCP_EDT_WORKSPACE": tmp}):
-                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                with self.assertRaises(HARNESS.E2EAssertion) as failed:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
-                self.assertIn("does not carry this server's own log output",
-                              str(skipped.exception))
+                self.assertIn("EDT workspace was named explicitly at %s" % tmp,
+                              str(failed.exception))
+                self.assertIn("probe sent through get_project_errors", str(failed.exception))
                 self.assertFalse(os.path.exists(log_path))
 
                 with open(log_path, "w", encoding="utf-8") as handle:
                     handle.write(entry_at(
                         "org.eclipse.core.runtime", "1", "unrelated platform status"))
-                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                with self.assertRaises(HARNESS.E2EAssertion) as failed:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
-                self.assertIn("does not carry this server's own log output",
-                              str(skipped.exception))
+                self.assertIn("EDT workspace was named explicitly at %s" % tmp,
+                              str(failed.exception))
+                self.assertIn("probe sent through get_project_errors", str(failed.exception))
 
                 with open(log_path, "w", encoding="utf-8") as handle:
                     handle.write(entry_at(
                         RATCHET.OUR_PLUGIN, "2", "another server instance was here"))
-                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                with self.assertRaises(HARNESS.E2EAssertion) as failed:
                     RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
-                self.assertIn("does not carry this server's own log output",
-                              str(skipped.exception))
+                self.assertIn("EDT workspace was named explicitly at %s" % tmp,
+                              str(failed.exception))
+                self.assertIn("probe sent through get_project_errors", str(failed.exception))
 
                 with open(log_path, "w", encoding="utf-8"):
                     pass
@@ -121,6 +139,37 @@ class RunAllRatchetTest(unittest.TestCase):
                 probe_token = self._probe_token_from(captured_calls)
                 with open(log_path, encoding="utf-8") as handle:
                     self.assertIn("Project not found: %s" % probe_token, handle.read())
+
+    def test_an_inferred_workspace_without_the_server_log_probe_still_skips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".metadata"))
+            project_path = os.path.join(tmp, "Base")
+            os.makedirs(project_path)
+            projects_table = (
+                "| Name | State | Path | Open | EDT Project | Natures |\n"
+                "|---|---|---|---|---|---|\n"
+                "| Base | ready | %s | Yes | Yes | fixture |\n" % project_path)
+            captured_calls = []
+
+            def fake_call(tool, arguments):
+                captured_calls.append((tool, arguments))
+                if tool == "list_projects":
+                    return mock.Mock(text=projects_table)
+                if tool == "get_project_errors":
+                    return mock.Mock()
+                raise AssertionError("unexpected tool call: %s" % tool)
+
+            with mock.patch.object(HARNESS, "call", side_effect=fake_call), \
+                    mock.patch.object(RATCHET, "call", side_effect=fake_call), \
+                    mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("EDT_MCP_EDT_WORKSPACE", None)
+                with self.assertRaises(HARNESS.E2ESkip) as skipped:
+                    RATCHET.test_run_adds_no_unbaselined_error_entries_to_the_edt_log()
+
+            self.assertIn("EDT workspace was located at %s" % tmp, str(skipped.exception))
+            self.assertIn("does not carry this server's own log output", str(skipped.exception))
+            self.assertEqual(["list_projects", "get_project_errors"],
+                             [tool for tool, _arguments in captured_calls])
 
     @staticmethod
     def _mutation_harness():

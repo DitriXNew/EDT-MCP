@@ -156,8 +156,17 @@ def _collect_our_errors(workspace, token):
 
 @e2e_test(tool="_edt_log_ratchet", kind="read", last=True)
 def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
+    workspace_override = os.environ.get("EDT_MCP_EDT_WORKSPACE")
     workspace = _workspace_dir()
     if workspace is None:
+        # Same split as below, for the same reason and one step earlier: an override that is
+        # not a workspace at all is the operator's assertion failing outright, so telling them
+        # to set the variable they already set would be advice about the wrong problem.
+        if workspace_override:
+            _fail(
+                "EDT_MCP_EDT_WORKSPACE names %s, but there is no .metadata directory there, so "
+                "the log ratchet has nothing to read. Point it at the -data directory the "
+                "server under test was launched with." % workspace_override)
         raise E2ESkip(
             "EDT workspace not found: set EDT_MCP_EDT_WORKSPACE to the -data directory "
             "so the log ratchet can read <workspace>/.metadata/.log")
@@ -165,6 +174,17 @@ def test_run_adds_no_unbaselined_error_entries_to_the_edt_log():
     token = _emit_log_probe()
     found, saw_probe = _collect_our_errors(workspace, token)
     if not saw_probe:
+        # Inference is only a filesystem guess, so absent evidence must skip; an explicit
+        # override is the operator's assertion that this server writes here, so the same
+        # absence disproves either that assertion or the probe and must fail the run.
+        if workspace_override:
+            _fail(
+                "EDT workspace was named explicitly at %s by EDT_MCP_EDT_WORKSPACE, but the "
+                "run-unique probe sent through get_project_errors under a run-unique project "
+                "name did not come back in .metadata/.log or .metadata/.bak_*.log. Either "
+                "that directory is not this server's workspace, or the probe no longer "
+                "produces the log line the ratchet depends on."
+                % workspace)
         raise E2ESkip(
             "EDT workspace was located at %s but does not carry this server's own log output: "
             "the run-unique probe sent through get_project_errors was not found in "
