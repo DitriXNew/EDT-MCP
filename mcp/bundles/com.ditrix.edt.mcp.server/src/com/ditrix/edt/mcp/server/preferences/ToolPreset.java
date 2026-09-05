@@ -135,6 +135,12 @@ public enum ToolPreset
      * write_module_source, apply_quick_fix, and the state-mutating workspace export/import tools.
      * {@code export_common_picture} remains enabled: despite its name, it is a pure model read that
      * returns the selected PNG as base64 and never writes a file.
+     * <p>
+     * It also disables {@code delete_project} and {@code merge_rules}. {@code merge_rules} is here
+     * because its {@code write} half creates and replaces files; {@code compare_configurations}
+     * and {@code get_comparison_node} stay ENABLED - a comparison is analysis and touches no
+     * project. {@code delete_project} sits in {@link ToolGroup#CORE}, which no preset disables, so
+     * it has to be named here or it stays on in a read-only profile.
      */
     private static Set<String> buildCodeReviewDisabled()
     {
@@ -147,6 +153,8 @@ public enum ToolPreset
         disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
         disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
         disabled.add("apply_quick_fix"); //$NON-NLS-1$
+        disabled.add("merge_rules"); //$NON-NLS-1$
+        disabled.add("delete_project"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 
@@ -157,6 +165,12 @@ public enum ToolPreset
      * the state-mutating workspace export/import tools, and the LanguageTool translation tools.
      * {@code export_common_picture} remains enabled because it only reads model content and returns
      * base64; it does not export to the filesystem.
+     * <p>
+     * It also disables {@code delete_project} and {@code merge_rules}. {@code merge_rules} is here
+     * because its {@code write} half creates and replaces files; {@code compare_configurations}
+     * and {@code get_comparison_node} stay ENABLED - a comparison is analysis and touches no
+     * project. {@code delete_project} sits in {@link ToolGroup#CORE}, which no preset disables, so
+     * it has to be named here or it stays on in a read-only profile.
      */
     private static Set<String> buildAnalysisOnlyDisabled()
     {
@@ -169,6 +183,8 @@ public enum ToolPreset
         disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
         disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
         disabled.add("apply_quick_fix"); //$NON-NLS-1$
+        disabled.add("merge_rules"); //$NON-NLS-1$
+        disabled.add("delete_project"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 }

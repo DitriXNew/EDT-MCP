@@ -725,6 +725,85 @@ public class MetadataPropertyIntrospectorTest
             "en=Weight".equals(synonym.currentValue)); //$NON-NLS-1$
     }
 
+
+    // ====== A localized string renders lossily, so it does not IDENTIFY itself by its text ======
+
+    /** The Russian for "Hello", in escapes so a non-UTF-8 build cannot mangle the source. */
+    private static final String HELLO_RU = "\u041f\u0440\u0438\u0432\u0435\u0442"; //$NON-NLS-1$
+
+    /** The Russian for "Weight", likewise in escapes. */
+    private static final String WEIGHT_RU = "\u0412\u0435\u0441"; //$NON-NLS-1$
+
+    /**
+     * The defect this pins is a wrong ANSWER, not wrong prose. A synonym is an {@code EMap} of
+     * language code to free text, rendered as {@code key=value} pairs joined by {@code ", "} - and
+     * free text may contain both separators. So a one-language synonym whose VALUE spells a second
+     * pair renders exactly like the real two-language one, and a comparison reading that string
+     * calls two different synonyms the same value.
+     */
+    @Test
+    public void testTwoLocalizedStringsThatJoinToTheSameTextIdentifyDifferently()
+    {
+        CatalogAttribute oneLanguage = newAttribute();
+        oneLanguage.getSynonym().put("en", "Hello, ru=" + HELLO_RU); //$NON-NLS-1$ //$NON-NLS-2$
+        CatalogAttribute twoLanguages = newAttribute();
+        twoLanguages.getSynonym().put("en", "Hello"); //$NON-NLS-1$ //$NON-NLS-2$
+        twoLanguages.getSynonym().put("ru", HELLO_RU);
+
+        PropertyInfo left = MetadataPropertyIntrospector.find(oneLanguage, "synonym"); //$NON-NLS-1$
+        PropertyInfo right = MetadataPropertyIntrospector.find(twoLanguages, "synonym"); //$NON-NLS-1$
+        assertNotNull(left);
+        assertNotNull(right);
+
+        // The positive control, and it is half the point: the DISPLAY is unchanged. If these two
+        // stopped rendering alike, the identity assertion below would pass for the wrong reason.
+        assertEquals("the two must still render identically", left.currentValue, //$NON-NLS-1$
+            right.currentValue);
+        assertFalse("two different synonyms may not share an identity: " + left.valueIdentity, //$NON-NLS-1$
+            left.valueIdentity.equals(right.valueIdentity));
+    }
+
+    /**
+     * What the two strings actually are, as literals: the display keeps the model's own
+     * {@code EMap} order, while the identity is a key-SORTED JSON object. The sorting is what
+     * makes two sides carrying the same translations in different insertion orders compare equal.
+     */
+    @Test
+    public void testALocalizedStringIdentityIsTheSortedJsonObjectWhileTheDisplayKeepsModelOrder()
+    {
+        CatalogAttribute attr = newAttribute();
+        attr.getSynonym().put("ru", WEIGHT_RU); //$NON-NLS-1$
+        attr.getSynonym().put("en", "Weight"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        PropertyInfo synonym = MetadataPropertyIntrospector.find(attr, "synonym"); //$NON-NLS-1$
+        assertNotNull(synonym);
+        assertEquals("the display must keep the order the model holds", //$NON-NLS-1$
+            "ru=" + WEIGHT_RU + ", en=Weight", synonym.currentValue); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the identity must be the key-sorted JSON object", //$NON-NLS-1$
+            "{\"en\":\"Weight\",\"ru\":\"" + WEIGHT_RU + "\"}", synonym.valueIdentity); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The escaping is not decoration: a value holding a quote or a backslash could otherwise spell
+     * the structure around it, which is the same non-injectivity one layer down. Gson escapes
+     * both, so the two below stay apart.
+     */
+    @Test
+    public void testALocalizedValueWithAQuoteOrBackslashStillIdentifiesUnambiguously()
+    {
+        CatalogAttribute plain = newAttribute();
+        plain.getSynonym().put("en", "a\"b"); //$NON-NLS-1$ //$NON-NLS-2$
+        CatalogAttribute escaped = newAttribute();
+        escaped.getSynonym().put("en", "a\\\"b"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        PropertyInfo left = MetadataPropertyIntrospector.find(plain, "synonym"); //$NON-NLS-1$
+        PropertyInfo right = MetadataPropertyIntrospector.find(escaped, "synonym"); //$NON-NLS-1$
+        assertNotNull(left);
+        assertNotNull(right);
+        assertFalse("a quote and an escaped quote are two values: " + left.valueIdentity, //$NON-NLS-1$
+            left.valueIdentity.equals(right.valueIdentity));
+    }
+
     @Test
     public void testEnumCurrentValueSharesAllowedVocabulary()
     {
