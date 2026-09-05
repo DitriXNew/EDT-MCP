@@ -11,7 +11,9 @@ the engine recorded. It reads; it never merges and never writes the project.
 RESPONSE SHAPE
 --------------
 MARKDOWN tool: the payload lands in r.text.
-  success: "# Comparison node: <address>" + a "| Field | Value |" summary
+  success: "# Comparison node: `<address>`" + a "| Field | Value |" summary
+           (the address rides in a code span, so an address carrying a line break
+           cannot end the heading and start blocks of its own)
            + "## Properties" + "## Children" + "## Potential problems"
   error:   {"success": false, "error": "..."} delivered as isError
 

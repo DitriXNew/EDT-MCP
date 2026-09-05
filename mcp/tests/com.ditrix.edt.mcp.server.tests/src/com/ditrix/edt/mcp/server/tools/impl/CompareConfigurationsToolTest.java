@@ -846,6 +846,45 @@ public class CompareConfigurationsToolTest
     }
 
     @Test
+    public void testAScopeSentBlankStartsNothing()
+    {
+        // The third way into the same trap, and the easiest one for a caller to fall into: a
+        // variable that resolved to nothing. extractArrayArgument hands back no entries and
+        // ComparisonScopeBuilder reads that as COMPARE EVERYTHING, so a request naming no object
+        // took EDT's single slot for the heaviest run this tool can start.
+        String result = tool.execute(request(Map.of("scope", "", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Asked BEFORE the message, and that order is the point: what goes wrong here is that a
+        // comparison RUNS. Reading the message first turns the defect into a parse failure over
+        // a launch report, which says nothing about what the call did.
+        assertEquals("a scope that names nothing may not start a comparison", 0, //$NON-NLS-1$
+            backend.starts());
+        assertContains(errorMessage(result), "names no object"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAScopeOfNothingButWhitespaceStartsNothing()
+    {
+        // Its own method rather than a second assertion above: JUnit stops at the first failed
+        // one, so a blank of a different spelling would only be checked while the first held.
+        String result = tool.execute(request(Map.of("scope", "   ", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("a scope of whitespace may not start a comparison either", 0, //$NON-NLS-1$
+            backend.starts());
+        assertContains(errorMessage(result), "names no object"); //$NON-NLS-1$
+    }
+
+    // The controls for the two above are already in this class and stay green under them, which is
+    // what keeps the blank check from swallowing the calls it must not touch:
+    // testAnOmittedScopeIsAWholeConfigurationRequestNotARefusal - nobody sent the key, so the run
+    // covers everything, which is the call every whole-configuration comparison makes; and
+    // testAnExplicitlyEmptyScopeArrayIsStillAWholeConfigurationRequest - '[]' dropped nothing.
+    // Reading the blank off the VALUE alone rather than off the KEY's presence would have refused
+    // the first of those.
+
+    @Test
     public void testAnExplicitlyEmptyScopeArrayIsStillAWholeConfigurationRequest()
     {
         // The negative control that keeps the check from overreaching: '[]' dropped NOTHING, so it

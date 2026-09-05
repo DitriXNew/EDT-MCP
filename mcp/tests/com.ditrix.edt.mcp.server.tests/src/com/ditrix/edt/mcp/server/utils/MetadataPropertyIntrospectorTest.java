@@ -17,6 +17,7 @@ import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnum;
@@ -27,6 +28,7 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
@@ -1089,6 +1091,71 @@ public class MetadataPropertyIntrospectorTest
 
         assertEquals("[\"XDTOPackage.Orders\",\"http://v8.1c.ru/8.1/data/core\"]", //$NON-NLS-1$
             MetadataPropertyIntrospector.find(holder, "flag").currentValue); //$NON-NLS-1$
+    }
+
+    // ---- a value list that could not be read is not an empty one ---------------------------------
+    //
+    // eGet has already answered before this kind's renderer runs, so a property nobody set is
+    // decided THERE, and an empty list renders as "[]". By the time the renderer gives up there is
+    // a non-empty list it could not turn into text - and calling that an absence cost a claim one
+    // consumer further out: the comparison renderer gives an absent value an EMPTY identity, so two
+    // sides whose entries both failed to resolve carried the same identity and the property was
+    // reported as SAME over two lists that may name entirely different packages.
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testAnUnreadableXdtoPackageEntryIsAFailedReadRatherThanAnEmptyProperty()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+        EList<Value> values = (EList<Value>)holder.eGet(
+            holder.eClass().getEStructuralFeature("flag")); //$NON-NLS-1$
+
+        // The shape a dangling XDTO package reference actually takes. EcoreUtil.resolve swallows
+        // whatever went wrong and hands the PROXY back, so the entry arrives carrying no name -
+        // which is the branch this pins, and the branch a throwing resolution lands in as well.
+        XDTOPackage unresolved = MdClassFactory.eINSTANCE.createXDTOPackage();
+        ((InternalEObject)unresolved).eSetProxyURI(URI.createURI("unresolved:/XDTOPackage.Orders")); //$NON-NLS-1$
+        ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+        reference.setValue(unresolved);
+        values.add(reference);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(holder, "flag"); //$NON-NLS-1$
+        assertNotNull("the failure must not remove the property from the list", info); //$NON-NLS-1$
+        assertTrue("a list holding an entry nothing could be read from must say so", //$NON-NLS-1$
+            info.readFailed);
+    }
+
+    /** The control: a list that WAS read is not marked unreadable. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testAReadableMcoreValueListIsNotMarkedUnreadable()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+        EList<Value> values = (EList<Value>)holder.eGet(
+            holder.eClass().getEStructuralFeature("flag")); //$NON-NLS-1$
+
+        XDTOPackage xdtoPackage = MdClassFactory.eINSTANCE.createXDTOPackage();
+        xdtoPackage.setName("Orders"); //$NON-NLS-1$
+        ReferenceValue reference = McoreFactory.eINSTANCE.createReferenceValue();
+        reference.setValue(xdtoPackage);
+        values.add(reference);
+
+        assertFalse("a list that rendered is not a list that failed", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(holder, "flag").readFailed); //$NON-NLS-1$
+    }
+
+    /**
+     * The other control, and the one that keeps the change from overreaching: a list with no
+     * entries is a value - the empty array - and never a failed read. Without it, "anything that
+     * does not render is unreadable" could be satisfied by marking every empty list.
+     */
+    @Test
+    public void testAnEmptyMcoreValueListIsStillTheEmptyArrayAndNotAFailure()
+    {
+        EObject holder = newFlagHolder(McorePackage.Literals.VALUE, true, true);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(holder, "flag"); //$NON-NLS-1$
+        assertEquals("[]", info.currentValue); //$NON-NLS-1$
     }
 
     // ---- contained AdjustableBoolean flags (issue #382) -----------------------------------------

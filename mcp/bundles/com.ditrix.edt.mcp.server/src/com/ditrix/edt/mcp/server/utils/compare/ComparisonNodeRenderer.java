@@ -411,7 +411,14 @@ public final class ComparisonNodeRenderer
         // two halves of one document disagree about the very number the cell exists to reconcile.
         PropertyDigest properties = digestProperties(node, access);
         StringBuilder sb = new StringBuilder();
-        sb.append("# Comparison node: ").append(request.address).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The address is either a qualified name read off the compared configuration or the very
+        // string the caller sent, and it is written OUTSIDE a table - the one place in this
+        // document where MarkdownUtils is not already escaping. A line break in it ended the
+        // heading and let the rest be read as the report's own blocks, which in a document an
+        // agent acts on is injected instruction rather than broken layout. A code span forecloses
+        // that by construction; see MarkdownUtils.inlineCode.
+        sb.append("# Comparison node: ").append(MarkdownUtils.inlineCode(request.address)) //$NON-NLS-1$
+            .append("\n\n"); //$NON-NLS-1$
         if (!finished)
         {
             appendNotFinishedNotice(sb, request.status);
@@ -995,8 +1002,11 @@ public final class ComparisonNodeRenderer
         sb.append("## Support settings\n\n"); //$NON-NLS-1$
         if (!state.parentConfigurationName.isEmpty())
         {
-            sb.append("**Parent configuration:** ").append(state.parentConfigurationName) //$NON-NLS-1$
-                .append("\n\n"); //$NON-NLS-1$
+            // Read straight off the compared configuration's support settings and printed beside
+            // a bold label rather than inside the table below it - so unlike the modes on the
+            // next lines, nothing was escaping it. Same treatment as the H1 above.
+            sb.append("**Parent configuration:** ") //$NON-NLS-1$
+                .append(MarkdownUtils.inlineCode(state.parentConfigurationName)).append("\n\n"); //$NON-NLS-1$
         }
         sb.append(MarkdownUtils.tableHeader("Setting", "Main", "Other", "Ancestor")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         if (state.hasUserMode())

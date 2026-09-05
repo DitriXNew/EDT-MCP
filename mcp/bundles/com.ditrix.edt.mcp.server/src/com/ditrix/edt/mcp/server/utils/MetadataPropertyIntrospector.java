@@ -901,7 +901,11 @@ public final class MetadataPropertyIntrospector
                 case MANY_REFERENCE:
                     return renderReferenceList(value);
                 case MCORE_VALUE_LIST:
-                    return Rendered.of(renderMcoreValueList(value));
+                    // The one kind here that answers with a Rendered of its own, because it is the
+                    // one whose "no text" does not mean "no value": eGet already handed back a
+                    // list, so anything the renderer cannot turn into text is a list it could not
+                    // READ. See renderMcoreValueList.
+                    return renderMcoreValueList(value);
                 case STYLE_VALUE:
                     return Rendered.of(renderStyleValue(value));
                 case PICTURE:
@@ -1138,12 +1142,37 @@ public final class MetadataPropertyIntrospector
         return rendered.toString();
     }
 
-    /** Renders a contained mcore Value list to the same JSON array of strings accepted on the wire. */
-    private static String renderMcoreValueList(Object value)
+    /**
+     * Renders a contained mcore Value list to the same JSON array of strings accepted on the wire.
+     *
+     * <h2>Why every giving-up branch here answers {@link Rendered#FAILED} and not {@code null}</h2>
+     * {@link #renderCurrent} has already asked {@code eGet}, and a property nobody set answered
+     * {@code null} THERE, before this method was called. An empty list answers {@code []}, which is
+     * a text. So by the time any branch below gives up, there IS a value: a non-empty list this
+     * method could not turn into text. Handing that back as an absent rendering published a failure
+     * as a fact about the model.
+     * <p>
+     * The path the branches actually cover in a live configuration is a {@code ReferenceValue}
+     * pointing at an XDTO package that will not resolve. {@code EcoreUtil.resolve} swallows the
+     * exception and hands back the proxy itself, whose {@code name} is unset - so the entry falls
+     * out here with nothing read about which package it named.
+     * <p>
+     * The cost of calling that absence was paid one consumer further out. The comparison renderer
+     * turns an absent value into an empty cell AND an empty {@code valueIdentity}, and two sides
+     * whose entries both failed to resolve then carry the same empty identity - so
+     * {@code ComparisonNodeRenderer.compare} finds one distinct value and reports SAME for two
+     * lists that may name entirely different packages. {@link Rendered#FAILED} is what makes that
+     * row {@code UNDETERMINED} instead: not a claim that the sides differ, just the refusal to
+     * claim they agree on something neither side was read for.
+     *
+     * @param value the feature's value, never {@code null}
+     * @return the JSON array, or {@link Rendered#FAILED} for a list that could not be read
+     */
+    private static Rendered renderMcoreValueList(Object value)
     {
         if (!(value instanceof EList<?>))
         {
-            return null;
+            return Rendered.FAILED;
         }
         JsonArray rendered = new JsonArray();
         for (Object element : (EList<?>)value)
@@ -1157,7 +1186,7 @@ public final class MetadataPropertyIntrospector
                     : resolvingGet(referenceValue, valueFeature);
                 if (!(target instanceof XDTOPackage))
                 {
-                    return null;
+                    return Rendered.FAILED;
                 }
                 EObject targetObject = (EObject)target;
                 EStructuralFeature nameFeature =
@@ -1165,7 +1194,7 @@ public final class MetadataPropertyIntrospector
                 Object name = nameFeature == null ? null : resolvingGet(targetObject, nameFeature);
                 if (name == null || name.toString().isEmpty())
                 {
-                    return null;
+                    return Rendered.FAILED;
                 }
                 rendered.add(McoreValueListBuilder.XDTO_PREFIX + name);
             }
@@ -1178,16 +1207,16 @@ public final class MetadataPropertyIntrospector
                     : resolvingGet(stringValue, valueFeature);
                 if (namespace == null || namespace.toString().isEmpty())
                 {
-                    return null;
+                    return Rendered.FAILED;
                 }
                 rendered.add(namespace.toString());
             }
             else
             {
-                return null;
+                return Rendered.FAILED;
             }
         }
-        return rendered.toString();
+        return Rendered.of(rendered.toString());
     }
 
     /** Reads a feature normally while keeping a failed proxy resolution local to its rendered value. */

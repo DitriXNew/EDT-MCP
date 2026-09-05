@@ -369,8 +369,10 @@ public class CompareConfigurationsTool implements IMcpTool
                 .toJson();
         }
 
-        String scopeError =
-            validateScopeArgument(params == null ? null : params.get(KEY_SCOPE));
+        // Presence, then value - the same order, and for the same reason, as the release form
+        // above: a blank scope is not the omitted scope it renders as. See validateScopeArgument.
+        String scopeError = validateScopeArgument(params != null && params.containsKey(KEY_SCOPE),
+            params == null ? null : params.get(KEY_SCOPE));
         if (scopeError != null)
         {
             return scopeError;
@@ -545,18 +547,42 @@ public class CompareConfigurationsTool implements IMcpTool
      * {@link ComparisonScopeBuilder} already uses for a blank entry. An explicitly EMPTY array
      * {@code []} is left alone: no element was dropped there, so it is read as the omitted scope it
      * looks like.
+     * <p>
+     * A BLANK argument is the third way into the same trap and the easiest one to send: a caller
+     * whose variable resolved to nothing sends {@code scope: ""}, {@code extractArrayArgument}
+     * hands back no entries, and {@link ComparisonScopeBuilder} reads that as compare-everything -
+     * so a request that named no object took EDT's single slot for the heaviest run this tool can
+     * start. It is refused through {@link #commaSeparatedScopeError}, the refusal {@code ",,"}
+     * already gets, because it is the same fact: the parameter was sent and it names nothing.
+     * <p>
+     * WHETHER it was sent is read from the KEY's presence, exactly as the release form above reads
+     * its own - and with the same limit, stated rather than glossed over.
+     * {@code McpProtocolHandler.extractToolParams} drops every argument whose JSON value is null,
+     * so {@code scope: null} arrives as no key at all and is read here as an omission: it compares
+     * everything. That is the right reading of an explicit null for an optional array, and telling
+     * it from a real omission would mean changing how arguments reach EVERY tool. The blank STRING
+     * is the case worth catching, because it is the one a caller sends believing they sent a scope.
+     * <p>
+     * One place still reads this parameter the other way, deliberately: {@code namedArgumentsPresent},
+     * which decides whether a RELEASE request also carries launch arguments, asks
+     * {@code trimToNull} and so counts a blank scope as absent. A release alongside
+     * {@code scope: ""} therefore proceeds instead of being refused as mixed intent. That is the
+     * right reading there - a blank carries no launch intent, and refusing it would refuse a
+     * release whose caller merely passed an empty variable - but it does mean "sent" is answered
+     * by the key here and by the value there, and the two answers differ for exactly this input.
      *
+     * @param present whether the caller sent the key at all, in the sense this map can answer
      * @param raw the argument exactly as it arrived, or {@code null} when it was omitted
      * @return an error result, or {@code null} when the argument can be parsed without losing
      *         anything
      */
-    private static String validateScopeArgument(String raw)
+    private static String validateScopeArgument(boolean present, String raw)
     {
-        if (raw == null || raw.trim().isEmpty())
+        String value = raw == null ? "" : raw.trim(); //$NON-NLS-1$
+        if (value.isEmpty())
         {
-            return null;
+            return present ? commaSeparatedScopeError(value) : null;
         }
-        String value = raw.trim();
         if (value.startsWith("[")) //$NON-NLS-1$
         {
             JsonArray array = asJsonArray(value);
@@ -581,8 +607,14 @@ public class CompareConfigurationsTool implements IMcpTool
     }
 
     /**
-     * @param value the raw argument, already trimmed and known not to be a JSON array
-     * @return the refusal when the comma-separated form carries no usable entry, else {@code null}
+     * The refusal for a sent {@code scope} that yields no entry - whether because every
+     * comma-separated part is blank, or because the whole argument is. ONE refusal for both:
+     * the caller's mistake is the same in either spelling, and it is the same one the message
+     * already names.
+     *
+     * @param value the raw argument, already trimmed and known not to be a JSON array; the empty
+     *     string when the argument itself was blank
+     * @return the refusal when the value carries no usable entry, else {@code null}
      */
     private static String commaSeparatedScopeError(String value)
     {

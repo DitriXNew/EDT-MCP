@@ -669,7 +669,16 @@ public final class ComparisonTreeReport
     public static String render(Header header, ScopeSnapshot scope, Collector collector)
     {
         StringBuilder out = new StringBuilder();
-        out.append("# Comparison: ").append(header.projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The name is the ONE value in this document that sits outside a table, and the table is
+        // where every other externally supplied string is made harmless: MarkdownUtils escapes
+        // each cell, so a project called "x\n# Deleted everything" broke nothing there and
+        // terminated the heading here, leaving whatever followed it to be read as new blocks of
+        // the report. That is not a formatting nit in a document an agent reads and acts on -
+        // injected text is injected instructions. A code span closes it by construction rather
+        // than by naming characters; see MarkdownUtils.inlineCode for why the shape and not a
+        // blacklist.
+        out.append("# Comparison: ").append(MarkdownUtils.inlineCode(header.projectName)) //$NON-NLS-1$
+            .append("\n\n"); //$NON-NLS-1$
 
         Map<String, String> summary = new LinkedHashMap<>();
         summary.put("comparisonId", header.comparisonId); //$NON-NLS-1$
@@ -741,8 +750,13 @@ public final class ComparisonTreeReport
             for (String name : scope.addedNames(side))
             {
                 shown++;
-                reasons.append("- `").append(sideName(side)).append("` / `") //$NON-NLS-1$ //$NON-NLS-2$
-                    .append(name).append("` — ") //$NON-NLS-1$
+                // Backticks BY CONSTRUCTION rather than by hand: this line used to write its own
+                // pair around the name, which a name carrying a backtick or a line break simply
+                // stepped out of - and a bullet that ends early lets what follows it be read as
+                // the report's own text. The rendering of a benign name is unchanged, because a
+                // one-character fence is what the hand-rolled pair already wrote.
+                reasons.append("- ").append(MarkdownUtils.inlineCode(sideName(side))) //$NON-NLS-1$
+                    .append(" / ").append(MarkdownUtils.inlineCode(name)).append(" — ") //$NON-NLS-1$ //$NON-NLS-2$
                     .append(joinReasons(scope.reasons(side, name), scope.reasonTotal(side, name)))
                     .append('\n');
             }
@@ -827,7 +841,14 @@ public final class ComparisonTreeReport
         {
             return ""; //$NON-NLS-1$
         }
-        return String.join("; ", reasons) + Pagination.truncationNotice(reasons.size(), total); //$NON-NLS-1$
+        // ONE span around the joined reasons, and the notice outside it. The reasons are the
+        // engine's free text and they are the LAST thing on their bullet, so a line break in one
+        // does not merely end a code span - it ends the list item, and the next line is read as a
+        // block of the report. Spanning the join rather than each reason keeps the separator
+        // inside the value a reader sees, which is what it has always been; the notice stays
+        // outside because it is ours, and a reader must be able to see it is not part of the text.
+        return MarkdownUtils.inlineCode(String.join("; ", reasons)) //$NON-NLS-1$
+            + Pagination.truncationNotice(reasons.size(), total);
     }
 
     /**

@@ -13,7 +13,9 @@ RESPONSE SHAPE
 MARKDOWN tool: the payload lands in r.text.
   start, still running: "**Pending:** the comparison continues in background job `<id>`"
                         plus the shared "# Background job: running" snapshot
-  start, finished:      "# Background job: done" + "## Result" + "# Comparison: <project>"
+  start, finished:      "# Background job: done" + "## Result" + "# Comparison: `<project>`"
+                        (the project name rides in a code span, so a name carrying a line
+                        break cannot end the heading and start blocks of its own)
   error:                {"success": false, "error": "..."} delivered as isError
 
 CI STRATEGY - WHY BOTH REVISIONS ARE "HEAD"
