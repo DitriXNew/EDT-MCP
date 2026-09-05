@@ -481,6 +481,9 @@ def call(tool, arguments):
     # still have committed the write — recording only on the way out left the shortcut believing
     # nothing happened, so it skipped the reset and the next test inherited the mutation. An
     # unknown outcome counts as a mutation; a REFUSAL that was actually read back takes it back.
+    # Prove the body can be built before counting the attempt. If this raises, nothing left this
+    # process, so no outcome exists for anyone to read back.
+    json.dumps({"name": tool, "arguments": arguments})
     _record_attempt(tool, arguments)
     while True:
         try:
@@ -534,17 +537,25 @@ DEEP_MUTATION_TOOLS = frozenset({
 CASCADE_MUTATION_TOOLS = frozenset({"delete_metadata", "rename_metadata_object"})
 
 
+_SERVER_TRUE = frozenset({"true", "1", "yes"})
+
+
 def _confirmed(args):
-    # The server's parse is the reference; this client rule is deliberately looser so an odd
-    # spelling that the server accepts as true still widens the reset.
+    # Follow the server's true/1/yes tokens wherever stringification is unambiguous. A bare
+    # integer 1 stays deliberately wide because a JSON integer may stringify as the true token
+    # "1"; non-dict arguments keep the prior widening because their confirm value is unknowable.
     if not isinstance(args, dict):
         return True
     value = args.get("confirm")
-    if value is None or value is False:
-        return False
+    if isinstance(value, bool):
+        return value
     if isinstance(value, str):
-        return value.strip().lower() not in ("", "false", "0", "no")
-    return True
+        return value.strip().lower() in _SERVER_TRUE
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, float):
+        return False
+    return False
 
 # Tools that change the BM model. A SUCCESSFUL call, an observed post-commit error, or an error
 # whose mutating API cannot report rollback forfeits the shortcut, whatever later evidence says.
@@ -702,11 +713,21 @@ def _candidate_mutation_targets(tool, args):
     return _fixture_projects_named_in(args) | _implicit_extension_targets(tool, args)
 
 
+# A cascade can cross fixture projects only when rooted at PROJECT, whose open extension is
+# TESTS_PROJECT. EXT_OBJECTS_PROJECT is neither an extension nor a base; an unknown root stays
+# wide. Do not infer delete dispatch from FQN shape: the server-side form parser decides whether
+# EDT uses metadata refactoring or the direct form-member path.
+def _cascades_across_fixtures(tool, args):
+    named = _fixture_projects_named_in(args)
+    return (tool in CASCADE_MUTATION_TOOLS and _confirmed(args)
+            and (PROJECT in named or not named))
+
+
 def _record_attempt(tool, args=None):
     """Called ONCE per logical call, before the request goes out."""
     global _MUTATIONS_UNRESOLVED, _UNRESOLVED_CASCADE_CALLS
     _CALLED_TOOLS.add(tool)
-    if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
+    if _cascades_across_fixtures(tool, args):
         _UNRESOLVED_CASCADE_CALLS += 1
     if (tool in (MODEL_MUTATION_TOOLS | DEEP_MUTATION_TOOLS)
             and tool not in NON_FIXTURE_MODEL_MUTATION_TOOLS):
@@ -742,7 +763,7 @@ def _record_outcome(tool, args, is_error, structured):
     except Exception:
         # A malformed or exotic structured response must not escape the call path.
         pass
-    if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
+    if _cascades_across_fixtures(tool, args):
         _UNRESOLVED_CASCADE_CALLS = max(0, _UNRESOLVED_CASCADE_CALLS - 1)
     if tool not in MODEL_MUTATION_TOOLS:
         return
@@ -763,7 +784,7 @@ def _record_outcome(tool, args, is_error, structured):
                           and _call_moves_the_fixture_model(tool, args, structured))
     if mutation_evidenced:
         _MUTATION_CONFIRMED = True
-        if tool in CASCADE_MUTATION_TOOLS and _confirmed(args):
+        if _cascades_across_fixtures(tool, args):
             _CASCADE_CONFIRMED_CALLED = True
         # The RATCHET's set is narrower than the reset shortcut's flag on purpose: the shortcut
         # stays conservative (any success forfeits it), while accusing a test of a mis-declared

@@ -150,6 +150,52 @@ class MutationOutcomeTest(unittest.TestCase):
 
         self.assertTrue(HARNESS.mutation_could_have_cascaded())
 
+    def test_confirmation_follows_the_servers_boolean_parser(self):
+        cases = (
+            (True, True),
+            ("true", True),
+            (" TRUE ", True),
+            ("1", True),
+            ("yes", True),
+            ("YES", True),
+            (1, True),
+            (False, False),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+            ("", False),
+            (0, False),
+            (2, False),
+            (1.0, False),
+            ([], False),
+            ({}, False),
+            ("y", False),
+            ("on", False),
+        )
+
+        for value, expected in cases:
+            with self.subTest(confirm=value):
+                HARNESS.begin_test_calls()
+                args = {"projectName": HARNESS.PROJECT, "confirm": value}
+                HARNESS._record_attempt("rename_metadata_object", args)
+                HARNESS._record_outcome("rename_metadata_object", args, False, None)
+                self.assertEqual(
+                    expected, HARNESS.mutation_could_have_cascaded())
+
+        self.assertTrue(HARNESS._confirmed(None))
+
+    def test_a_numeric_confirm_runs_a_preview_and_does_not_widen(self):
+        args = {
+            "projectName": HARNESS.PROJECT,
+            "fqn": "Catalog.C",
+            "newName": "D",
+            "confirm": 0,
+        }
+        HARNESS._record_attempt("rename_metadata_object", args)
+        HARNESS._record_outcome("rename_metadata_object", args, False, None)
+
+        self.assertFalse(HARNESS.mutation_could_have_cascaded())
+
     def test_a_committed_delete_error_claims_a_cascade(self):
         args = {"projectName": HARNESS.PROJECT, "confirm": True}
         HARNESS._record_attempt("delete_metadata", args)
@@ -168,6 +214,61 @@ class MutationOutcomeTest(unittest.TestCase):
         self.assertTrue(HARNESS.mutation_could_have_cascaded())
         HARNESS.begin_test_calls()
         self.assertTrue(HARNESS.mutation_could_have_cascaded())
+
+    def test_a_delete_outside_the_base_does_not_widen_but_evidences_its_target(self):
+        args = {
+            "projectName": HARNESS.EXT_OBJECTS_PROJECT,
+            "fqn": "ExternalReport.R.Form.F.Attribute.A",
+            "confirm": True,
+        }
+        HARNESS._record_attempt("delete_metadata", args)
+        HARNESS._record_outcome(
+            "delete_metadata", args, False, {"action": "executed"})
+
+        self.assertFalse(HARNESS.mutation_could_have_cascaded())
+        self.assertIn(
+            HARNESS.EXT_OBJECTS_PROJECT,
+            HARNESS.evidenced_mutation_fixture_projects(),
+        )
+
+    def test_a_confirmed_delete_in_the_base_still_widens(self):
+        args = {
+            "projectName": HARNESS.PROJECT,
+            "fqn": "Catalog.C",
+            "confirm": True,
+        }
+        HARNESS._record_attempt("delete_metadata", args)
+        HARNESS._record_outcome(
+            "delete_metadata", args, False, {"action": "executed"})
+
+        self.assertTrue(HARNESS.mutation_could_have_cascaded())
+
+    def test_a_cascade_call_naming_no_fixture_stays_wide(self):
+        args = {
+            "projectName": "SomethingElse",
+            "fqn": "Catalog.C",
+            "confirm": True,
+        }
+        HARNESS._record_attempt("rename_metadata_object", args)
+        HARNESS._record_outcome("rename_metadata_object", args, False, None)
+
+        self.assertTrue(HARNESS.mutation_could_have_cascaded())
+
+    def test_a_request_body_that_cannot_be_built_counts_no_attempt(self):
+        class Unserializable:
+            pass
+
+        with self.assertRaises(TypeError):
+            HARNESS.call("delete_metadata", {
+                "projectName": HARNESS.PROJECT,
+                "fqn": "Catalog.C",
+                "confirm": True,
+                "junk": Unserializable(),
+            })
+
+        self.assertFalse(HARNESS.mutations_unresolved())
+        self.assertFalse(HARNESS.mutation_could_have_cascaded())
+        self.assertEqual(frozenset(), HARNESS.mutated_fixture_projects())
 
     def test_adoption_without_extension_tracks_implicit_fixture_extension(self):
         HARNESS._record_attempt(
