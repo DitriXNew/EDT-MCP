@@ -36,11 +36,6 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *       case-insensitive, read like {@code Toolsets.ENV_PROGRESSIVE_DISCLOSURE}) —
  *       {@code allow} WINS and returns {@link ConsentDecision#ALLOW} without any UI.
  *       This is the automated-run bypass the destructive e2e suite relies on.</li>
- *   <li><b>Headless</b>: if there is no live workbench display or no active shell
- *       (via {@link LaunchLifecycleUtils#workbenchDisplayOrNull()} /
- *       {@link LaunchLifecycleUtils#grabActiveShell()}) → {@link ConsentDecision#ALLOW}
- *       plus a logged info line. NEVER {@code syncExec} against a null/disposed
- *       display; NEVER block.</li>
  *   <li><b>In-memory session-allow</b>: a per-tool {@link Set} populated by the
  *       dialog's "Allow for session" button. A gated tool the user allowed for the
  *       session this EDT run proceeds without a dialog.</li>
@@ -48,6 +43,14 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *       {@code ALLOW_ALL} → allow; {@code PER_TOOL} + the tool is in the allow-set →
  *       allow; otherwise ({@code ASK_ALWAYS}, or {@code PER_TOOL} + not allowed) →
  *       prompt.</li>
+ *   <li><b>Headless</b>: if there is no live workbench display or no active shell
+ *       (via {@link LaunchLifecycleUtils#workbenchDisplayOrNull()} /
+ *       {@link LaunchLifecycleUtils#grabActiveShell()}) → {@link ConsentDecision#ALLOW}
+ *       plus a logged info line. NEVER {@code syncExec} against a null/disposed
+ *       display; NEVER block. This probe runs AFTER the two policy steps above and only
+ *       when a prompt is actually due: it is the first thing on the path that touches SWT,
+ *       and reaching it for a call the policy had already allowed parked that call on an
+ *       unbounded {@code syncExec} waiting for a dialog it never needed.</li>
  *   <li><b>Dialog</b>: open {@link DestructiveConsentDialog}, time-bounded to
  *       {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} on BOTH threading paths. Allow = OK,
  *       Reject = CANCEL, "Allow for session" adds the tool to the session set.
@@ -72,10 +75,20 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  * <p><b>Invariant:</b> the gate NEVER blocks indefinitely in EITHER dialog path — it
  * waits at most {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277); it NEVER blocks
  * at all in a headless / env-bypass / non-ASK (level-2/session/per-tool-allowed)
- * path; it does not deadlock when already on the UI thread; and a non-
- * {@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT} or
+ * path — the policy is settled before anything on the path touches SWT, so an allowed
+ * call never reaches the shell probe; it does not deadlock when already on the UI thread;
+ * and a non-{@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT} or
  * {@link ConsentDecision#TIMEOUT}) mutates nothing (it only returns the decision, and
  * the caller turns it into an error via {@link #consentDeniedMessage(ConsentDecision, String)}).
+ *
+ * <p><b>Known residual (named, not fixed here):</b> on the ONE path that still reaches it — a
+ * prompt is genuinely due — {@link LaunchLifecycleUtils#grabActiveShell()} is an unbounded
+ * {@code syncExec}, so a wedged UI thread parks the call there. #277's bound covers the dialog,
+ * not the shell lookup that precedes it. Bounding the lookup is not one timeout away: a
+ * {@code null} returned on timeout is read below as "headless → ALLOW", i.e. a destructive
+ * write without consent exactly when the UI is wedged — a predicate whose failure mode equals
+ * its permissive answer. It needs a third, "unknown" outcome, and the helper is shared with
+ * three other call sites, so it is separate work.
  */
 public final class DestructiveConsentGate // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
@@ -218,7 +231,24 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             return ConsentDecision.ALLOW;
         }
 
-        // Step 2 — headless probe: never syncExec / block without a live display+shell.
+        // Steps 2-3 — the pure policy BEFORE any SWT: session-allow, ALLOW_ALL, PER_TOOL. None
+        // of them needs a display, and both reads are null-safe without an Activator (no
+        // preference store yields ASK_ALWAYS / false), so the policy is readable before the
+        // workbench is. Probing SWT first parked a Preferences-approved call on the shell
+        // grab's unbounded syncExec, waiting for a dialog the policy was about to make
+        // unnecessary.
+        ConsentSettingsService settings = ConsentSettingsService.getInstance();
+        Outcome outcome = decide(sessionAllow.contains(toolName), settings.getLevel(),
+            settings.isToolAllowed(toolName));
+        if (outcome == Outcome.ALLOW)
+        {
+            return ConsentDecision.ALLOW;
+        }
+
+        // Step 4 — headless probe, reached only when a prompt is due: never syncExec / block
+        // without a live display+shell. This grab is the one unbounded wait left on the path
+        // (#277 bounded the dialog, not the shell lookup that precedes it) — see the class
+        // javadoc's named residual.
         Display display = LaunchLifecycleUtils.workbenchDisplayOrNull();
         Shell shell = display != null ? LaunchLifecycleUtils.grabActiveShell() : null;
         if (display == null || display.isDisposed() || shell == null)
@@ -228,16 +258,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             return ConsentDecision.ALLOW;
         }
 
-        // Steps 3-5 — pure decision from the resolved sources.
-        ConsentSettingsService settings = ConsentSettingsService.getInstance();
-        Outcome outcome = decide(sessionAllow.contains(toolName), settings.getLevel(),
-            settings.isToolAllowed(toolName));
-        if (outcome == Outcome.ALLOW)
-        {
-            return ConsentDecision.ALLOW;
-        }
-
-        // Step 6 — prompt on a live UI session (the SWT seam).
+        // Step 5 — prompt on a live UI session (the SWT seam).
         return promptForConsent(toolName, preview, display, shell);
     }
 
@@ -273,7 +294,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     }
 
     /**
-     * The pure decision core (steps 3-5): given the already-resolved session-allow
+     * The pure decision core (steps 2-3): given the already-resolved session-allow
      * flag, the preference {@link ConsentSettingsService.Level} and the per-tool
      * allow flag, decides whether to allow outright or to prompt. Contains NO SWT and
      * NO service lookups, so the whole decision table is unit-testable headlessly.
@@ -287,12 +308,12 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     static Outcome decide(boolean sessionAllowed, ConsentSettingsService.Level level,
         boolean perToolAllowed)
     {
-        // Step 3 — session-allow (the "Allow for session" button).
+        // Step 2 — session-allow (the "Allow for session" button).
         if (sessionAllowed)
         {
             return Outcome.ALLOW;
         }
-        // Step 4/5 — preference level.
+        // Step 3 — preference level.
         if (level == ConsentSettingsService.Level.ALLOW_ALL)
         {
             return Outcome.ALLOW;

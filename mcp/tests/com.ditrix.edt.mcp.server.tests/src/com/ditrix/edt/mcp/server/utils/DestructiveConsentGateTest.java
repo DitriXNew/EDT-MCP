@@ -11,7 +11,12 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.fail;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.Set;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
@@ -26,7 +31,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.Outcome;
 
 /**
  * Headless ratchet for {@link DestructiveConsentGate}: asserts the full
- * env &gt; headless &gt; session &gt; level &gt; per-tool decision table using the
+ * env &gt; session &gt; level &gt; headless &gt; per-tool decision table using the
  * pure {@link DestructiveConsentGate#decide} / {@link DestructiveConsentGate#envForcesAllow}
  * seams — with NO SWT instantiation — plus the relationship between
  * {@link DestructiveConsentGate#GATED_TOOLS} and the destructive tools
@@ -73,24 +78,7 @@ public class DestructiveConsentGateTest
     }
 
     // =====================================================================
-    // Step 2 — headless: no active UI session -> ALLOW (never blocks)
-    // =====================================================================
-
-    @Test
-    public void headlessAllowsWithoutPrompt()
-    {
-        // In the headless unit-test JVM there is no workbench display / active shell,
-        // so requireConsent must take the headless path and ALLOW without any SWT.
-        // (The e2e-launch env is set on the EDT process, not on this test run, so
-        // step 1 does not mask this — but either way the verdict is ALLOW.)
-        ConsentDecision decision =
-            DestructiveConsentGate.getInstance().requireConsent(TOOL, null);
-        assertEquals("Headless / unattended must ALLOW, never block", //$NON-NLS-1$
-            ConsentDecision.ALLOW, decision);
-    }
-
-    // =====================================================================
-    // Step 3 — in-memory per-tool session-allow
+    // Step 2 — in-memory per-tool session-allow
     // =====================================================================
 
     @Test
@@ -113,7 +101,7 @@ public class DestructiveConsentGateTest
     }
 
     // =====================================================================
-    // Steps 4/5 — preference level via ConsentSettingsService.Level
+    // Step 3 — preference level via ConsentSettingsService.Level
     // =====================================================================
 
     @Test
@@ -156,6 +144,26 @@ public class DestructiveConsentGateTest
         assertEquals("ASK_ALWAYS ignores the per-tool allow flag", //$NON-NLS-1$
             Outcome.PROMPT,
             DestructiveConsentGate.decide(false, ConsentSettingsService.Level.ASK_ALWAYS, true));
+    }
+
+    // =====================================================================
+    // Step 4 — headless: no active UI session -> ALLOW (never blocks)
+    // =====================================================================
+
+    @Test
+    public void headlessAllowsWithoutPrompt()
+    {
+        // In the headless unit-test JVM there is no workbench display / active shell,
+        // so requireConsent must take the headless path and ALLOW without any SWT.
+        // (The e2e-launch env is set on the EDT process, not on this test run, so
+        // step 1 does not mask this — but either way the verdict is ALLOW.)
+        // Since the policy is now settled first, this also exercises reading it with no
+        // Activator / preference store: that must yield ASK_ALWAYS + no per-tool entry,
+        // i.e. PROMPT, and the headless probe below must still turn it into ALLOW.
+        ConsentDecision decision =
+            DestructiveConsentGate.getInstance().requireConsent(TOOL, null);
+        assertEquals("Headless / unattended must ALLOW, never block", //$NON-NLS-1$
+            ConsentDecision.ALLOW, decision);
     }
 
     // =====================================================================
@@ -370,5 +378,97 @@ public class DestructiveConsentGateTest
             message.contains("EDT_MCP_DESTRUCTIVE_CONSENT")); //$NON-NLS-1$
         assertTrue("must mention re-running / answering promptly as the third remedy", //$NON-NLS-1$
             message.contains("re-run")); //$NON-NLS-1$
+    }
+
+    // =====================================================================
+    // Source-order ratchet: the policy is settled BEFORE anything touches SWT
+    // =====================================================================
+
+    /**
+     * Pins the one ordering inside {@code requireConsent} that the verdict table cannot see:
+     * the pure policy ({@code decide}) must run BEFORE the shell probe. Both orders return the
+     * same verdict for every input — that is exactly why no behavioural test can catch a
+     * regression here — but {@code LaunchLifecycleUtils.grabActiveShell()} is an unbounded
+     * {@code display.syncExec}, so probing first parks a session-allowed / {@code ALLOW_ALL} /
+     * Preferences-approved call on a busy UI thread for a dialog it was never going to see.
+     * That is the class javadoc's own "NEVER blocks at all in a ... non-ASK path" invariant.
+     * <p>
+     * Modelled on {@code GitToolTest.testTheContainmentCheckRunsBeforeTheStoredRemoteRefusal}.
+     * The three anchors are unique in the file: the javadoc spells the helper
+     * {@code LaunchLifecycleUtils#grabActiveShell()} with a {@code #}, and {@code decide}'s
+     * declaration takes {@code (boolean sessionAllowed,}, so neither collides with its call site.
+     */
+    @Test
+    public void requireConsentSettlesThePolicyBeforeItTouchesSwt()
+    {
+        String source = readGateSource();
+        // Positive control: a locator that found the wrong file (or nothing) would make this
+        // ratchet's failure mode identical to its pass, and it would prove nothing.
+        assertTrue("the located file is not DestructiveConsentGate's source", //$NON-NLS-1$
+            source.contains("public final class DestructiveConsentGate")); //$NON-NLS-1$
+
+        int policy = source.indexOf("decide(sessionAllow.contains(toolName)"); //$NON-NLS-1$
+        int probe = source.indexOf("LaunchLifecycleUtils.grabActiveShell()"); //$NON-NLS-1$
+        int prompt = source.indexOf("promptForConsent(toolName, preview, display, shell)"); //$NON-NLS-1$
+
+        assertTrue("requireConsent no longer consults the policy via " //$NON-NLS-1$
+            + "decide(sessionAllow.contains(toolName), ...): session-allow, ALLOW_ALL and the " //$NON-NLS-1$
+            + "per-tool allow-set are dead and every gated call now prompts", policy > -1); //$NON-NLS-1$
+        assertTrue("requireConsent no longer probes the shell via " //$NON-NLS-1$
+            + "LaunchLifecycleUtils.grabActiveShell(): the headless/unattended ALLOW path is " //$NON-NLS-1$
+            + "gone and a destructive tool can hang or fail with no UI", probe > -1); //$NON-NLS-1$
+        assertTrue("requireConsent no longer prompts via " //$NON-NLS-1$
+            + "promptForConsent(toolName, preview, display, shell)", prompt > -1); //$NON-NLS-1$
+
+        assertTrue("the policy must be settled BEFORE the shell probe: grabActiveShell is an " //$NON-NLS-1$
+            + "unbounded syncExec, so a session-allowed / ALLOW_ALL / Preferences-approved " //$NON-NLS-1$
+            + "call must never reach it", policy < probe); //$NON-NLS-1$
+        assertTrue("the shell probe must still precede the prompt: promptForConsent takes the " //$NON-NLS-1$
+            + "display and shell the probe resolved", probe < prompt); //$NON-NLS-1$
+    }
+
+    /**
+     * Reads {@code utils/DestructiveConsentGate.java} by walking up from the working directory,
+     * the way {@code GitToolTest.readToolImplSource} locates tool sources (Tycho surefire runs
+     * inside the checkout). Fails loudly rather than returning nothing, so a source-order
+     * ratchet cannot pass merely because the file was not found.
+     */
+    private static String readGateSource()
+    {
+        String rel = "bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/server/utils"; //$NON-NLS-1$
+        String fileName = "DestructiveConsentGate.java"; //$NON-NLS-1$
+        File dir = new File(System.getProperty("user.dir")); //$NON-NLS-1$
+        for (int i = 0; i < 12 && dir != null; i++)
+        {
+            File direct = new File(new File(dir, rel), fileName);
+            if (direct.isFile())
+            {
+                return readUtf8(direct);
+            }
+            File underMcp = new File(new File(dir, "mcp/" + rel), fileName); //$NON-NLS-1$
+            if (underMcp.isFile())
+            {
+                return readUtf8(underMcp);
+            }
+            dir = dir.getParentFile();
+        }
+        fail("could not locate utils/" + fileName + " by walking up from user.dir=" //$NON-NLS-1$ //$NON-NLS-2$
+            + System.getProperty("user.dir") //$NON-NLS-1$
+            + " (looked for '" + rel + "'). Adjust the locator for this build layout - a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "source-order ratchet must never pass just because it read nothing."); //$NON-NLS-1$
+        return null; // unreachable
+    }
+
+    private static String readUtf8(File file)
+    {
+        try
+        {
+            return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        }
+        catch (IOException e)
+        {
+            fail("failed reading source " + file + ": " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+            return null; // unreachable
+        }
     }
 }
