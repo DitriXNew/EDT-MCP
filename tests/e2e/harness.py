@@ -1657,16 +1657,22 @@ def _print_failed_settle_evidence(last_list_projects):
         # than derived from it, which would make the displayed chronology silently wrong the moment
         # the read order is touched.
         display_order = backup_paths + [current]
-        # Drop the current source only when displayed backup text literally contains every byte
-        # its section would have shown, so that section can only repeat evidence and cost budget.
-        # When it does not - a reused backup name, a rotation that pushed these bytes out of the
-        # backup's tail window, or an unrelated file - both sources stay. Duplication then costs
-        # line budget, but never the failure line.
+        # Drop the current source only when what a readable backup will actually show contains
+        # every byte its section would have shown. If a backup holds those bytes outside its
+        # displayed tail, both sources stay: duplication costs line budget, but never the failure
+        # line.
         current_text = by_path.get(current)
-        if current_text and any(current_text in by_path.get(log_path, "")
-                                for log_path in backup_paths):
-            display_order.remove(current)
-            by_path.pop(current, None)
+        readable_backups = [log_path for log_path in backup_paths if log_path in by_path]
+        if current_text and readable_backups:
+            base_share = max(
+                _EVIDENCE_TAIL_MIN_LINES, _EVIDENCE_TAIL_LINES // len(readable_backups))
+            current_section = "\n".join(current_text.splitlines()).rstrip()
+            if current_section and any(
+                    current_section in "\n".join(
+                        by_path[log_path].splitlines()[-base_share:]).rstrip()
+                    for log_path in readable_backups):
+                display_order.remove(current)
+                by_path.pop(current, None)
         texts = []
         for log_path in display_order:
             if log_path in by_path:
