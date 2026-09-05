@@ -10,6 +10,7 @@ re-implement them. See SKILL.md for the full guide.
 Python stdlib only. No third-party dependencies.
 """
 
+import fnmatch
 import hashlib
 import http.client
 import json
@@ -1079,6 +1080,41 @@ def wait_for_server(timeout=60):
     raise RuntimeError("MCP server not reachable at %s" % HEALTH_URL)
 
 
+def _workspace_dir(list_projects_markdown=None):
+    """Locate the EDT workspace marked by a .metadata directory.
+
+    Explicit env wins. Otherwise infer it: a workspace almost always contains at least one
+    project of its own (the Servers container, for one), so walk each project's ancestors
+    looking for .metadata, Eclipse's workspace marker. Locating a workspace does not imply a
+    readable log: readers report unavailable sources, and any caller that certifies log contents
+    must check that it read at least one itself. A missing current .log is accepted here so its
+    rotated backups remain reachable. Returns None when the workspace cannot be found - callers
+    decide whether missing diagnostics should be skipped or merely reported as unavailable.
+
+    @param list_projects_markdown a list_projects table the caller ALREADY holds. Pass it from
+    any path that must not touch the wire: a call() that times out arms the global abort latch
+    (abort_further_calls), which refuses every later MCP call AND every fixture reset - so a
+    diagnostic that issued one could destroy the very reset it was called to explain.
+    """
+    override = os.environ.get("EDT_MCP_EDT_WORKSPACE")
+    if override:
+        return override if os.path.isdir(os.path.join(override, ".metadata")) else None
+
+    if list_projects_markdown is not None:
+        text = list_projects_markdown
+    else:
+        text = call("list_projects", {}).text or ""
+    for raw in re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text):
+        candidate = raw.rstrip("\\/ `")
+        for _ in range(4):
+            candidate = os.path.dirname(candidate)
+            if not candidate:
+                break
+            if os.path.isdir(os.path.join(candidate, ".metadata")):
+                return candidate
+    return None
+
+
 def _all_edt_projects_ready(list_projects_markdown, not_ready=None, ignore=()):
     """True when every EDT project in the list_projects table reads 'ready'.
 
@@ -1142,7 +1178,26 @@ def _projects_not_ready_message(timeout, projects):
     return "projects not ready after %ds: %s" % (timeout, states or "states unavailable")
 
 
-def wait_for_project_ready(timeout=None, failure_details=None, ignore_projects=()):
+_PROJECT_READY_OBSERVED_LIMIT = 20
+
+
+def _store_project_ready_progress(progress, changed, observed, polls, start,
+                                  last_list_projects):
+    """Publish one completed wait's observations without leaving stale caller-owned keys."""
+    if progress is None:
+        return
+    progress.clear()
+    progress.update({
+        "changed": changed,
+        "observed": [list(snapshot) for snapshot in observed],
+        "polls": polls,
+        "elapsed": int(time.time() - start),
+        # The reset diagnostic needs the exact final response, not a reconstructed table.
+        "last_list_projects": last_list_projects,
+    })
+
+
+def wait_for_project_ready(timeout=None, failure_details=None, progress=None, ignore_projects=()):
     """Wait until every EDT project is fully indexed (state 'ready') — i.e. none is still
     'building' its derived data AND none is 'not_available' (mid (re)load). Non-EDT projects
     are ignored (see _all_edt_projects_ready): a standalone server's "Servers" container is
@@ -1164,8 +1219,11 @@ def wait_for_project_ready(timeout=None, failure_details=None, ignore_projects=(
 
     Best-effort: returns True once ready (or if state cannot be read), False on timeout.
     If `failure_details` is a list, a timeout replaces its contents with one diagnostic naming
-    the last parsed blocking projects and their states. The per-tool ProjectStateChecker guard
-    is the real safety net — this only removes the test-timing flake so a normal run starts on a
+    the last parsed blocking projects and their states. If `progress` is a dict, completion
+    replaces its contents with whether the blocking project/state snapshot ever changed, the
+    observed snapshots (consecutive duplicates removed and capped), the poll count, elapsed
+    seconds, and the final raw list_projects text. The per-tool ProjectStateChecker guard is the
+    real safety net — this only removes the test-timing flake so a normal run starts on a
     fully-indexed workspace. Names in `ignore_projects` do not participate in this wait.
     """
     if timeout is None:
@@ -1181,13 +1239,30 @@ def wait_for_project_ready(timeout=None, failure_details=None, ignore_projects=(
     # long cold-index wait.
     last_log = start
     last_not_ready = []
+    last_snapshot = None
+    observed = []
+    changed = False
+    polls = 0
+    last_list_projects = ""
     while time.time() < deadline:
         try:
+            polls += 1
             text = call("list_projects", {}).text or ""
+            last_list_projects = text
             if text:
                 not_ready = []
-                if _all_edt_projects_ready(
-                        text, not_ready=not_ready, ignore=ignore_projects):
+                ready = _all_edt_projects_ready(text, not_ready=not_ready, ignore=ignore_projects)
+                snapshot = tuple(sorted(not_ready))
+                if last_snapshot is not None and snapshot != last_snapshot:
+                    changed = True
+                if last_snapshot is None or snapshot != last_snapshot:
+                    observed.append(snapshot)
+                    if len(observed) > _PROJECT_READY_OBSERVED_LIMIT:
+                        observed.pop(0)
+                last_snapshot = snapshot
+                if ready:
+                    _store_project_ready_progress(
+                        progress, changed, observed, polls, start, last_list_projects)
                     return True
                 if not_ready:
                     last_not_ready = not_ready
@@ -1195,6 +1270,12 @@ def wait_for_project_ready(timeout=None, failure_details=None, ignore_projects=(
             # The one failure a best-effort catch must NOT swallow: the server is still running
             # that call, so retrying - or reporting success - hides it from the runner, the only
             # place that can stop the run before the next test reads a model it is still writing.
+            # last_list_projects is assigned only after a call returns, so it still holds the last
+            # poll that COMPLETED. With that snapshot the collector makes no MCP calls, is safe
+            # after the abort latch is armed, and returns immediately because its reads run on a
+            # daemon thread. The startup pre-flight can exit right afterward, so that block is
+            # best-effort.
+            _failed_settle_evidence(last_list_projects)
             raise
         except Exception:
             pass
@@ -1206,6 +1287,8 @@ def wait_for_project_ready(timeout=None, failure_details=None, ignore_projects=(
         time.sleep(2)
     if failure_details is not None:
         failure_details[:] = [_projects_not_ready_message(timeout, last_not_ready)]
+    _store_project_ready_progress(
+        progress, changed, observed, polls, start, last_list_projects)
     return False
 
 
@@ -1577,6 +1660,414 @@ def _baseline_mismatch():
     return None
 
 
+def _settle_progress_note(progress):
+    """One clause describing what the settle observed, for the failure message.
+
+    Deliberately NOT a decision. list_projects reports a COARSE categorical state: a project
+    reads `building` for the entire recompute, whether the queue is draining steadily or has
+    stalled, so an unchanged snapshot is not evidence of a stall and must not shorten the
+    retries - a slow-but-healthy runner would start failing. It is still worth SAYING, because
+    the next occurrence is diagnosed from what was printed.
+    """
+    polls = progress.get("polls", 0)
+    elapsed = int(progress.get("elapsed", 0))
+    if not progress.get("observed"):
+        return "project state could not be read at all in %d polls over %ds" % (polls, elapsed)
+    if progress.get("changed"):
+        return "project state changed during the wait (%d polls over %ds)" % (polls, elapsed)
+    return ("project state never changed in %d polls over %ds (a coarse state, so this does not "
+            "by itself distinguish a stalled queue from a slow one)" % (polls, elapsed))
+
+
+# The evidence tail is capped so a large log cannot turn a diagnostic into a delay. 80 lines of
+# EDT log run well under this; the cap only decides how much is READ to find them.
+_EVIDENCE_LOG_TAIL_BYTES = 256 * 1024
+
+# The line budget for the whole block, split between the files it ended up reading, and the floor
+# below which a share stops being worth printing. Split rather than shared: see the assembly.
+_EVIDENCE_TAIL_LINES = 80
+_EVIDENCE_TAIL_MIN_LINES = 20
+
+# ...and the size cap alone is not enough: open/seek/read on a hung or very slow filesystem do not
+# return, so the bytes are bounded while the WAIT is not. A BOUNDED wait does not fix it either -
+# the runner's per-test timeout is absolute, so any wait at all can be the one that overruns it,
+# and an overrun abandons the worker and arms the global abort latch, killing the remaining reset
+# attempts. The only wait that provably cannot change the outcome is no wait, so the whole block is
+# collected and printed by a daemon thread and the caller returns at once.
+#
+# Which leaves the threads themselves as the last way to spend the caller's budget: a later settle
+# failure must not start another collector, whether the first is still reading or already printed.
+# Apart from duplicating a block titled FIRST, enough overlapping collectors can reach the thread
+# limit and make Thread.start() raise SYNCHRONOUSLY - the diagnostic replacing the retry it exists
+# to explain. Hence single-flight for the whole run: once a collector starts, the stored thread is
+# never replaced. A start that fails is reported as unavailable evidence rather than raised, and
+# clears the slot so a later failure can still try to leave the run's one block.
+_FAILED_SETTLE_EVIDENCE_THREAD = None
+_FAILED_SETTLE_EVIDENCE_LOCK = threading.Lock()
+
+
+def _read_log_tail(log_path, capture_identity=False):
+    """Return the last _EVIDENCE_LOG_TAIL_BYTES of `log_path`.
+
+    Reads the TAIL rather than the file: seek back a bounded number of bytes instead of pulling in
+    a log that may have grown to any size. It can still BLOCK on a filesystem that stopped
+    answering, which is safe only because its sole caller runs off the reset thread entirely.
+
+    When requested, return the identity of the generation that was actually opened along with the
+    text. The fstat happens after open, so a backup path reused after selection cannot silently
+    substitute a different file generation.
+    """
+    with open(log_path, "rb") as handle:
+        opened_identity = None
+        if capture_identity:
+            st = os.fstat(handle.fileno())
+            opened_identity = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - _EVIDENCE_LOG_TAIL_BYTES))
+        # read(N), not read(): the seek bounds where the read STARTS, not where it ends, and
+        # EDT is still appending. A bare read() runs to the CURRENT end of file and returns
+        # however much was written meanwhile - so the cap that justifies calling this cheap
+        # was not being applied at all.
+        blob = handle.read(_EVIDENCE_LOG_TAIL_BYTES)
+    text = blob.decode("utf-8", errors="replace")
+    return (text, opened_identity) if capture_identity else text
+
+
+def _failed_settle_evidence(last_list_projects):
+    """Print one best-effort evidence block for the first failed settle in the run.
+
+    Returns immediately because the work runs on one daemon thread. It issues no MCP call, reads
+    bounded bytes, and never starts another collector while a filesystem read is still in flight.
+    """
+    global _FAILED_SETTLE_EVIDENCE_THREAD
+
+    try:
+        with _FAILED_SETTLE_EVIDENCE_LOCK:
+            current = _FAILED_SETTLE_EVIDENCE_THREAD
+            if current is not None:
+                if current.is_alive():
+                    message = "collection is still in flight from an earlier settle and was skipped"
+                else:
+                    message = "evidence was already collected for an earlier settle and was skipped"
+                _print_failed_settle_evidence_note(message)
+                return
+            thread = threading.Thread(
+                target=_print_failed_settle_evidence, args=(last_list_projects,),
+                name="e2e-failed-settle-evidence", daemon=True)
+            _FAILED_SETTLE_EVIDENCE_THREAD = thread
+            try:
+                thread.start()
+            except Exception as exc:
+                _FAILED_SETTLE_EVIDENCE_THREAD = None
+                _print_failed_settle_evidence_note(
+                    "evidence is unavailable because collection could not start and was skipped "
+                    "(%s: %s)" % (type(exc).__name__, exc))
+    except Exception as exc:
+        _print_failed_settle_evidence_note(
+            "evidence is unavailable and collection was skipped (%s: %s)" %
+            (type(exc).__name__, exc))
+
+
+# At most this many backups are read for one evidence block, on top of the current .log. Not a
+# guess about rotation frequency - a ceiling on what a diagnostic may cost if something
+# pathological is rotating in a loop. Which files the cap KEEPS is the part that matters, and it
+# keeps the earliest rotations; see _backups_covering. Realistically the selection returns one.
+_EVIDENCE_LOG_MAX_BACKUPS = 3
+
+
+def _backup_identities(metadata):
+    """Return (`{path: identity}`, scan failure) for every `.bak_*.log`.
+
+    The identity is (mtime_ns, size, inode), not the mtime alone. EDT reuses the backup NAMES, so
+    a rotation can overwrite .bak_1 rather than add a file - and if the replacement happens to
+    carry the same coarse timestamp, an mtime-only comparison calls that "unchanged" and the
+    rotation goes unseen. Three independent fields make a same-name replacement essentially
+    impossible to miss: the file that replaced it would have to match all three.
+
+    A file vanishing between enumeration and stat is a normal rotation race and remains a
+    successful scan. A failure of the scan itself is returned separately: an empty dict alone
+    cannot tell the collector whether there really were no backups or whether it failed to look
+    for them.
+    """
+    seen = {}
+    try:
+        with os.scandir(metadata) as entries:
+            for entry in entries:
+                if not fnmatch.fnmatch(entry.name, ".bak_*.log"):
+                    continue
+                if not entry.is_file(follow_symlinks=True):
+                    continue
+                path = os.path.join(metadata, entry.name)
+                try:
+                    st = os.stat(path)
+                except FileNotFoundError:
+                    continue    # rotation removed it between enumeration and stat
+                seen[path] = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+    except Exception as exc:
+        return ({}, "%s: %s" % (type(exc).__name__, exc))
+    return (seen, None)
+
+
+def _rotated_during(before, after):
+    """Backups that APPEARED or CHANGED between snapshots: each was `.log` moments ago."""
+    return [path for path, identity in after.items() if before.get(path) != identity]
+
+
+def _backups_covering(before, after, failures=None):
+    """The backups that can still hold the failure moment, oldest first.
+
+    `before` and `after` are _backup_identities snapshots taken around the read of the current
+    log. Two groups qualify, and each answers a different rotation:
+
+    - every backup that APPEARED or CHANGED between the snapshots. Each one is a file that was
+      .log moments ago, so a burst of rotations during collection cannot push the failure past us
+      - which is what one "newest backup" could not survive: two rotations in a row leave the
+      failure in the FIRST rotation's backup while the second becomes the newest;
+    - the newest backup that already existed, where an earlier rotation had put it.
+
+    Comparing SNAPSHOTS is what makes this exact - no clock, no epsilon - and comparing identities
+    rather than timestamps is what survives EDT reusing a backup name. Names never order these
+    files: a workspace can hold a .bak_7 written hours after its .bak_8.
+
+    THE CAP KEEPS THE EARLIEST ROTATION, not the newest. The failure is at or before the moment
+    collection started, so among the backups created during collection it lives in the FIRST one -
+    the file that was .log when the settle failed. Later ones hold what was written after. Sorting
+    newest-first and truncating would throw away precisely the file being looked for, which is the
+    mistake the previous revision made.
+    """
+    appeared = _rotated_during(before, after)
+    pre_existing = [path for path in before if path not in appeared]
+    overwritten = sorted(path for path in appeared if path in before)
+
+    def when(path):
+        """Only the MTIME orders these files.
+
+        The identity tuple carries size and inode as well, but those exist to DETECT a same-name
+        replacement, not to sequence one. Sorting by the whole tuple means that when two rotations
+        share a coarse timestamp the "earliest" is decided by which file is smaller or which inode
+        the filesystem happened to hand out - and the earliest is exactly the one the cap keeps.
+        """
+        identity = after.get(path, before.get(path, (0, 0, 0)))
+        return identity[0]
+
+    # Do not make selection cleverer in an ambiguity: enlarging the cap, reserving a slot or
+    # inventing a tie-break cannot prove that the omitted source was safe to omit. The honest
+    # answer is to mark the evidence incomplete and tell the reader to inspect the raw workspace.
+    if failures is not None:
+        if overwritten:
+            failures.append(
+                "%d pre-existing backup%s overwritten in place during collection, so %s earlier "
+                "contents are gone: %s"
+                % (len(overwritten), "" if len(overwritten) == 1 else "s",
+                   "its" if len(overwritten) == 1 else "their",
+                   ", ".join(os.path.basename(path) for path in overwritten)))
+        slots_left = max(0, _EVIDENCE_LOG_MAX_BACKUPS - len(appeared))
+        omitted_pre_existing = max(0, len(pre_existing) - slots_left)
+        if omitted_pre_existing:
+            failures.append(
+                "backup cap of %d omitted %d pre-existing backup%s for want of room"
+                % (_EVIDENCE_LOG_MAX_BACKUPS, omitted_pre_existing,
+                   "" if omitted_pre_existing == 1 else "s"))
+        appeared_by_mtime = {}
+        for path in appeared:
+            appeared_by_mtime.setdefault(when(path), []).append(path)
+        for timestamp, tied in sorted(appeared_by_mtime.items()):
+            if len(tied) > _EVIDENCE_LOG_MAX_BACKUPS:
+                failures.append(
+                    "backup mtime tie: %d appeared backups share timestamp %d, exceeding cap "
+                    "of %d; their order is not decidable"
+                    % (len(tied), timestamp, _EVIDENCE_LOG_MAX_BACKUPS))
+
+    appeared.sort(key=when)
+    # The earliest rotations first: the failure is at or before the moment collection started, so
+    # among the files that became backups DURING collection it lives in the first of them.
+    chosen = appeared[:_EVIDENCE_LOG_MAX_BACKUPS]
+    # Then the pre-existing backups, NEWEST first, for whatever room is left. More than one,
+    # because rotations that completed BEFORE the collector started leave nothing in the snapshot
+    # diff to find them by - a failure that had already rotated twice sits behind the newest one.
+    # Newest-first here is not the same rule inverted: among files that predate collection, the
+    # newest is the closest to the failure, while among files created during it, the earliest is.
+    for path in sorted(pre_existing, key=when, reverse=True):
+        if len(chosen) >= _EVIDENCE_LOG_MAX_BACKUPS:
+            break
+        chosen.append(path)
+    # Oldest first, which is also the display order. A tie between the two snapshot groups is
+    # broken by the group, since a pre-existing backup can never be the later one.
+    pre_existing_set = set(pre_existing)
+    chosen.sort(key=lambda path: (when(path), 0 if path in pre_existing_set else 1))
+    return chosen
+
+
+def _share_tail_lines(sources):
+    """Split the line budget between sources, leaving none of it unspent.
+
+    Each source starts with an equal share; a source with fewer lines than its share releases the
+    difference, and the remainder is dealt round-robin to the ones that can still use it. The floor
+    keeps a share from collapsing to nothing when many files were read.
+
+    @param sources the lines of each source, in the order they will be displayed
+    @return the TAIL of each source, same order, each already cut to its final share
+    """
+    if not sources:
+        return []
+    share = max(_EVIDENCE_TAIL_MIN_LINES, _EVIDENCE_TAIL_LINES // len(sources))
+    wanted = [len(lines) for lines in sources]
+    granted = [min(share, want) for want in wanted]
+    spare = max(0, _EVIDENCE_TAIL_LINES - sum(granted))
+    while spare > 0 and any(g < w for g, w in zip(granted, wanted)):
+        for index, (grant, want) in enumerate(zip(granted, wanted)):
+            if spare <= 0:
+                break
+            if grant < want:
+                granted[index] = grant + 1
+                spare -= 1
+    return [lines[-grant:] if grant else [] for lines, grant in zip(sources, granted)]
+
+
+def _print_failed_settle_evidence_note(message):
+    """Print a one-line status without letting diagnostic output alter the reset outcome."""
+    try:
+        print("  [failed settle evidence] %s" % message, flush=True)
+    except Exception:
+        pass
+
+
+def _print_failed_settle_evidence(last_list_projects):
+    """Build and print the evidence block. Runs on the daemon thread started above."""
+    sections = [("last list_projects (raw)", last_list_projects or "<empty response>")]
+
+    try:
+        workspace = _workspace_dir(last_list_projects or "")
+        if workspace is None:
+            raise RuntimeError(
+                "EDT workspace not found; set EDT_MCP_EDT_WORKSPACE to the -data directory")
+        metadata = os.path.join(workspace, ".metadata")
+        current = os.path.join(metadata, ".log")
+        by_path = {}
+        sources = []
+        failures = []
+
+        def scan_backups(when):
+            try:
+                identities, failure = _backup_identities(metadata)
+            except Exception as exc:
+                # Keep a helper failure local just like a failed log read: .log may still be
+                # readable, but the block must admit that a rotated source may be missing.
+                identities = {}
+                failure = "%s: %s" % (type(exc).__name__, exc)
+            if failure:
+                failures.append("backup scan %s: %s" % (when, failure))
+            return identities
+
+        def read_into(log_path, selected_identity=None):
+            try:
+                if selected_identity is None:
+                    text = _read_log_tail(log_path)
+                else:
+                    text, opened_identity = _read_log_tail(log_path, True)
+                    if selected_identity is not None and opened_identity != selected_identity:
+                        failures.append(
+                            "selected backup identity changed at read time: %s" % log_path)
+                by_path[log_path] = text
+            except Exception as exc:
+                # Rotation may remove a path before it can be opened, so one failed read must not
+                # hide evidence that remains available in the other file. This also contains a
+                # failed local fstat: identity verification must never raise out of this block.
+                failures.append("%s: %s: %s" %
+                                (os.path.basename(log_path), type(exc).__name__, exc))
+
+        # ORDER IS THE MECHANISM, and what has to be ordered are the OPERATIONS, not just the
+        # reads. EDT rotates by renaming .log to a .bak_N and starting an empty .log, so the file
+        # holding the failure moves while it is being collected. Bracket the read of the current
+        # log with two cheap directory snapshots, and every rotation that happens in that window
+        # shows up as a backup that appeared or changed - which is exactly the set that has to be
+        # read as well:
+        #   rotation before the read -> .log comes back empty, but the rotated-out file is in the
+        #                               `after` snapshot and gets read;
+        #   rotation after the read  -> the failure is already in hand, and both successful reads
+        #                               keep their own sections because the timing is ambiguous;
+        #   two in a row             -> BOTH new backups are in the snapshot diff, so the failure
+        #                               stays in the covering backup's chronological slot.
+        # Choosing a single "newest backup" survived none of these fully, and choosing it BEFORE
+        # the read survived neither of the first two. Re-scanning at the end alone is no fix - it
+        # races the writer the same way; the pair of snapshots is what makes the window observable.
+        before_rotation = scan_backups("before reading .log")
+        read_into(current)
+        after_rotation = scan_backups("after reading .log")
+        backup_paths = _backups_covering(before_rotation, after_rotation, failures)
+        backups = [(path, after_rotation.get(path, before_rotation.get(path)))
+                   for path in backup_paths]
+        for log_path, selected_identity in backups:
+            read_into(log_path, selected_identity)
+        # Chronological for DISPLAY - the opposite of the read order, and stated separately rather
+        # than derived from it, which would make the displayed chronology silently wrong the moment
+        # the read order is touched.
+        display_order = backup_paths + [current]
+        # Every successfully read member keeps one section in this order. The snapshots can show
+        # that a backup path changed, but not whether rotation happened before or after .log was
+        # opened; text equality or containment cannot settle that either, because distinct log
+        # generations may have identical text or one may contain the other. There is therefore no
+        # sound predicate for dropping an observed source.
+        #
+        # THE PRICE IS PAID DELIBERATELY, so do not "optimise" it away: when a rotation really did
+        # move the bytes in hand, one stream prints under two headings and the budget below splits
+        # between them - two 40-line tails of the same 81-line capture show 80 rendered rows but
+        # only 40 DISTINCT lines, and an early failure marker can fall outside both. That cost is
+        # visible in the output, both headings state their line counts, and a test pins it. Every
+        # rule that bought those lines back instead removed the live .log section outright on a
+        # textual coincidence, silently and with no INCOMPLETE marker. Buying them back needs a
+        # new source of proof - a writer-supplied generation id, or handles held across the
+        # rotation - not another predicate over these snapshots and these strings.
+        texts = []
+        for log_path in display_order:
+            if log_path in by_path:
+                texts.append(by_path[log_path])
+                sources.append(".metadata/" + os.path.basename(log_path))
+        if not sources:
+            raise RuntimeError("no readable EDT logs (%s)" % "; ".join(failures))
+        # ONE SECTION PER SOURCE, each with its OWN share of the line budget. Concatenating the
+        # files and taking the last 80 lines of the result looks equivalent and is not: when the
+        # failure has rotated into a backup and the current .log has since accumulated 80 lines of
+        # its own, the global cut discards every backup line - the failure included - while the
+        # heading still names the backup as a source. That would undo the whole reason these files
+        # are collected, and present the result as complete. Per-source budgets cannot do it, and
+        # a reader can see which lines came from which file.
+        # An equal split alone still drops evidence while the block is under budget: two sources
+        # get 40 lines each, and a short current log leaves 39 of its share unspent while the
+        # backup holding the failure is cut at 40. So the shares are settled first, giving every
+        # source what it can use and handing the remainder to those that want more.
+        for source, lines in zip(sources, _share_tail_lines([body.splitlines() for body in texts])):
+            sections.append(("EDT log tail: %s (last %d lines, last %d bytes at most)"
+                             % (source, len(lines), _EVIDENCE_LOG_TAIL_BYTES),
+                             "\n".join(lines).rstrip() or "<empty log>"))
+        # A PARTIAL tail must say so. A backup that rotation removed before it could be opened is
+        # a file that may have held the failure, and reporting only what was read would present an
+        # incomplete block as a complete one - the same overclaim this block keeps being fixed for,
+        # in its own output this time.
+        if failures:
+            sections.append(("EDT log tail - INCOMPLETE",
+                             "evidence may be partial: %s" % "; ".join(failures)))
+    except Exception as exc:
+        sections.append(("EDT log tail (last 80 lines, last %d bytes per file at most)" %
+                         _EVIDENCE_LOG_TAIL_BYTES,
+                         "<evidence unavailable: %s: %s>" %
+                         (type(exc).__name__, exc)))
+
+    try:
+        lines = ["\n===== FIRST FAILED SETTLE EVIDENCE ====="]
+        for heading, body in sections:
+            lines.extend(("--- %s ---" % heading, body))
+        lines.append("===== END FIRST FAILED SETTLE EVIDENCE =====")
+        print("\n".join(lines), flush=True)
+    except Exception as exc:
+        # Diagnostics must never replace or otherwise alter the reset failure being diagnosed.
+        print("\n===== FIRST FAILED SETTLE EVIDENCE =====\n"
+              "<evidence unavailable: %s: %s>\n"
+              "===== END FIRST FAILED SETTLE EVIDENCE ====="
+              % (type(exc).__name__, exc), flush=True)
+
+
 def _revert_and_clean(project, revert, ignore_projects=()):
     """One revert + clean_project cycle for `project`, with SEPARATE budgets for its two failures.
 
@@ -1604,11 +2095,18 @@ def _revert_and_clean(project, revert, ignore_projects=()):
         # would not be the last write: retry the whole cycle instead of building on it. The
         # verification the caller does afterwards is what finally decides.
         failure_details = []
+        progress = {}
         if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
                                       failure_details=failure_details,
+                                      progress=progress,
                                       ignore_projects=ignore_projects):
             settle_failures += 1
             last_settle_failure = failure_details[0]
+            # No deadline credit-back: the call returns at once (the block is built and
+            # printed on a daemon thread), so there is no diagnostic time to give back.
+            _failed_settle_evidence(progress.get("last_list_projects", ""))
+            last_settle_failure = "%s; %s" % (
+                last_settle_failure, _settle_progress_note(progress))
             continue
         # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
         # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
@@ -1638,18 +2136,19 @@ def _revert_and_clean(project, revert, ignore_projects=()):
 
 def _clean_failure_cause(clean_attempts, settle_failures, last_settle_failure):
     """Name the budget that actually ran out, for the abort message."""
-    exhausted = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or settle_failures >= MODEL_SETTLE_ATTEMPTS)
+    terminal = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or
+                settle_failures >= MODEL_SETTLE_ATTEMPTS)
     if clean_attempts == 0:
         return ("%s (%d settle attempts of %ds each%s), so "
                 "clean_project was never even accepted for an attempt"
                 % (last_settle_failure or "projects never reported ready",
                    settle_failures, MODEL_SETTLE_TIMEOUT,
-                   "" if exhausted else "; the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
+                   "" if terminal else "; the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
     return ("clean_project was refused in all %d attempts%s%s"
             % (clean_attempts,
                " (plus %d settle timeouts; %s)" % (settle_failures, last_settle_failure)
                if settle_failures else "",
-               "" if exhausted else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
+               "" if terminal else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
 
 
 def _reset_model_project(project, revert, verify):
@@ -1695,6 +2194,9 @@ def _reset_model_project(project, revert, verify):
             # The model still carries the finished test's write, and the next test would read it.
             # That is the cascade this reset exists to prevent, so stop the run instead of
             # continuing on a model we know is stale.
+            # Do not start a "FAILED MODEL SETTLE" collector here: _revert_and_clean already did
+            # so if a settle failed; if only clean_project retries ran out, there is no failed
+            # settle snapshot and that title would overclaim what the evidence represents.
             raise E2EModelResetFailed(
                 "%s, so the in-memory model still carries the last test's write. Continuing would "
                 "hand it to the next test."
@@ -1704,11 +2206,13 @@ def _reset_model_project(project, revert, verify):
         # A negative result here is the same hazard as the exhausted-retries branch above (the
         # model is not guaranteed to be back in sync) and must not be swallowed either.
         failure_details = []
+        progress = {}
         if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                      failure_details=failure_details):
+                                      failure_details=failure_details, progress=progress):
+            _failed_settle_evidence(progress.get("last_list_projects", ""))
             raise E2EModelResetFailed(
-                "clean_project succeeded, but %s, so the model is not guaranteed to be back in "
-                "sync." % failure_details[0])
+                "clean_project succeeded, but %s; %s, so the model is not guaranteed to be back "
+                "in sync." % (failure_details[0], _settle_progress_note(progress)))
         mismatch = verify()
         if mismatch is None:
             return
@@ -1716,6 +2220,8 @@ def _reset_model_project(project, revert, verify):
     # Every attempt reported success and the model STILL does not match the baseline. Continuing
     # would hand the previous test's mutation to the next one (exactly the cascade this reset
     # exists to prevent), and the next failure would be reported against an innocent test.
+    # Every settle succeeded here, so a block titled "FAILED MODEL SETTLE" would be misleading;
+    # the baseline mismatch below is the evidence for this semantic post-condition failure.
     raise E2EModelResetFailed(
         "the model did not come back to the committed fixture after %d revert+clean_project "
         "cycles, even though every clean_project reported ok and the project reported ready: %s. "
@@ -1868,17 +2374,22 @@ def final_cleanup():
             _revert_and_clean(
                 proj, reset_all_fixtures, ignore_projects={EXT_OBJECTS_PROJECT})
         if not cleaned:
+            # Any failed settle already started the single-flight collector in _revert_and_clean;
+            # exhausted clean_project retries alone do not provide a failed-settle snapshot.
             raise E2EModelResetFailed(
                 "%s for project %r, so its in-memory model may still carry an unsynchronised "
                 "change - reporting this run clean would be a lie."
                 % (_clean_failure_cause(clean_attempts, settle_failures, settle_failure), proj))
     failure_details = []
+    progress = {}
     if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT,
-                                  failure_details=failure_details,
+                                  failure_details=failure_details, progress=progress,
                                   ignore_projects={EXT_OBJECTS_PROJECT}):
+        _failed_settle_evidence(progress.get("last_list_projects", ""))
         raise E2EModelResetFailed(
-            "clean_project succeeded for every project, but %s, so the model is not guaranteed "
-            "to be back in sync." % failure_details[0])
+            "clean_project succeeded for every project, but %s; %s, so the model is not "
+            "guaranteed to be back in sync."
+            % (failure_details[0], _settle_progress_note(progress)))
 
     # ExternalObjects is not installed/loaded on every stand. Keep its attempt completely outside
     # the mandatory projects' outcome above, but retain their full revert+clean+settle contract
