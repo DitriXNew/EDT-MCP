@@ -9,9 +9,9 @@ package com.ditrix.edt.mcp.server.utils;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.emf.ecore.EObject;
@@ -149,12 +149,14 @@ public final class MetadataTypeBuilder
         new ProducedTypeSuffix("Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", "refType") }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     /**
-     * English nested-kind tokens that may prefix a produced type. The nested-kind catalogue
-     * describes FQN segments, not runtime objects, so a segment belongs here only when the platform
-     * declares runtime types for it. Recalculation is the only such nested kind today.
+     * Catalogue of the produced types the platform declares for nested metadata objects. Each key is
+     * a nested FQN segment and each value contains the produced-type feature names declared by that
+     * segment's owning EMF class. A nested segment qualifies only for a feature in its own set. This
+     * mapping is maintained manually; no mechanism keeps it synchronized with the platform model.
      */
-    private static final Set<String> NESTED_PRODUCED_TYPE_KINDS =
-        Collections.singleton("Recalculation"); //$NON-NLS-1$
+    private static final Map<String, Set<String>> NESTED_PRODUCED_TYPE_FEATURES = Map.of(
+        "Recalculation", //$NON-NLS-1$
+        Set.of("recordType", "managerType", "recordSetType")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     /**
      * The platform narrows event-subscription source candidates through
@@ -689,8 +691,8 @@ public final class MetadataTypeBuilder
      * {@link MetadataTypeUtils#toEnglishSingular(String)}; this is what keeps long tokens such as
      * {@code ChartOfCalculationTypesObject} intact instead of guessing from a local token table.
      *
-     * <p>When the kind ends in a family suffix but no prefix names either a top-level metadata object
-     * or a nested object that publishes runtime types, the returned item carries a {@code null}
+     * <p>When the kind ends in a family suffix but its prefix names neither a top-level metadata object
+     * nor a nested object that declares the suffix's feature, the returned item carries a {@code null}
      * {@link ProducedTypeKind#englishMetadataType}. A non-null value may still identify such a nested
      * object, which top-level lookup and object resolution cannot resolve;
      * {@link ProducedTypeKind#isNested()} distinguishes it. A DefinedType is deliberately excluded
@@ -745,13 +747,13 @@ public final class MetadataTypeBuilder
             String prefix = candidate.substring(0, split);
             MetadataTypeUtils.NestedKindInfo nestedKind =
                 MetadataTypeUtils.resolveNestedKind(prefix);
-            if (nestedKind == null
-                || !NESTED_PRODUCED_TYPE_KINDS.contains(nestedKind.getEnglish()))
+            if (nestedKind == null)
             {
                 continue;
             }
             ProducedTypeSuffix suffix = producedTypeSuffix(candidate.substring(split));
-            if (suffix != null)
+            if (suffix != null
+                && nestedProducedTypeFeatures(nestedKind.getEnglish()).contains(suffix.featureName))
             {
                 return new ProducedTypeKind(prefix, nestedKind.getEnglish(), suffix, true);
             }
@@ -782,6 +784,31 @@ public final class MetadataTypeBuilder
             }
         }
         return null;
+    }
+
+    static Set<String> nestedProducedTypeFeatures(String englishNestedKind)
+    {
+        Set<String> features = NESTED_PRODUCED_TYPE_FEATURES.get(englishNestedKind);
+        return features == null ? Set.of() : features;
+    }
+
+    static boolean hasProducedTypeSuffixFeature(String featureName)
+    {
+        for (ProducedTypeSuffix suffix : PRODUCED_TYPE_SUFFIXES)
+        {
+            if (suffix.featureName.equals(featureName))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isCataloguedNestedProducedTypePrefix(String prefix)
+    {
+        MetadataTypeUtils.NestedKindInfo nestedKind = MetadataTypeUtils.resolveNestedKind(prefix);
+        return nestedKind != null
+            && NESTED_PRODUCED_TYPE_FEATURES.containsKey(nestedKind.getEnglish());
     }
 
     /** Returns the longest matching suffix, so RecordManager / ValueManager never become Manager. */
@@ -1062,7 +1089,8 @@ public final class MetadataTypeBuilder
             return null;
         }
 
-        if (producedKind != null && !producedKind.hasKnownMetadataType())
+        if (producedKind != null && !producedKind.hasKnownMetadataType()
+            && !isCataloguedNestedProducedTypePrefix(producedKind.prefix))
         {
             return unknownProducedTypePrefix(kind, producedKind);
         }

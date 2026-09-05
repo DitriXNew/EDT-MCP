@@ -15,6 +15,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
+import java.util.Set;
 
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
@@ -742,6 +743,41 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testRecalculationProducedTypeSplitRecognizesOnlyDeclaredFeaturePairs()
+    {
+        assertProducedTypeSplit("RecalculationRecord", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Record", "recordType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertProducedTypeSplit("RecalculationManager", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Manager", "managerType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertProducedTypeSplit("RecalculationRecordSet", "Recalculation", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "RecordSet", "recordSetType"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String russianRecalculation =
+            "\u041F\u0435\u0440\u0435\u0440\u0430\u0441\u0447\u0435\u0442"; //$NON-NLS-1$
+        String russianManager =
+            "\u041C\u0435\u043D\u0435\u0434\u0436\u0435\u0440"; //$NON-NLS-1$
+        assertProducedTypeSplit(russianRecalculation + russianManager, russianRecalculation,
+            "Recalculation", "Manager", "managerType"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertUnknownProducedTypeSplit("RecalculationObject", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$
+            "Object", "objectType"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertUnknownProducedTypeSplit("RecalculationList", "Recalculation", //$NON-NLS-1$ //$NON-NLS-2$
+            "List", "listType"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNestedProducedTypeFeaturesExistInSuffixCatalogue()
+    {
+        Set<String> features =
+            MetadataTypeBuilder.nestedProducedTypeFeatures("Recalculation"); //$NON-NLS-1$
+        assertFalse(features.isEmpty());
+        for (String featureName : features)
+        {
+            assertTrue(featureName, MetadataTypeBuilder.hasProducedTypeSuffixFeature(featureName));
+        }
+    }
+
+    @Test
     public void testConcreteRecalculationProducedTypeIsRefusedByName()
     {
         JsonObject item = json("{\"kind\":\"RecalculationRecordSet\"," //$NON-NLS-1$
@@ -828,8 +864,8 @@ public class MetadataTypeBuilderTest
         MetadataTypeBuilder.ProducedTypeKind split =
             MetadataTypeBuilder.splitProducedTypeKind("RecalculationObject"); //$NON-NLS-1$
         assertNotNull(split);
-        assertTrue(split.hasKnownMetadataType());
-        assertTrue(split.isNested());
+        assertFalse(split.hasKnownMetadataType());
+        assertFalse(split.isNested());
 
         for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
             MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
@@ -838,6 +874,33 @@ public class MetadataTypeBuilderTest
             TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
             String error = addKind("RecalculationObject", providerKnowing("NothingElse", //$NON-NLS-1$ //$NON-NLS-2$
                 McoreFactory.eINSTANCE.createType()), td, target);
+
+            assertEquals(target.name(), "Unknown type kind 'RecalculationObject'. Use String / " //$NON-NLS-1$
+                + "Number / Boolean / Date / ValueStorage / UUID, ValueTable / ValueTree (in-memory " //$NON-NLS-1$
+                + "collections - a FORM attribute only), a DefinedType ({kind:'DefinedType', " //$NON-NLS-1$
+                + "ref:'Name'} or {kind:'DefinedType.Name'}), a produced type " //$NON-NLS-1$
+                + "({kind:'DocumentObject', ref:'Invoice'} or {kind:'ExchangePlanObject'}), or a " //$NON-NLS-1$
+                + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type " //$NON-NLS-1$
+                + "name also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., " //$NON-NLS-1$
+                + "English or Russian) - this one names no type this platform version knows.", error); //$NON-NLS-1$
+            assertTrue(target.name(), td.getTypes().isEmpty());
+        }
+    }
+
+    @Test
+    public void testConcreteUnpublishedRecalculationProducedTypeUsesGenericUnknownKindMessage()
+    {
+        JsonObject item = json(
+            "{\"kind\":\"RecalculationObject\",\"ref\":\"X\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = MetadataTypeBuilder.addType(td, item, "RecalculationObject", //$NON-NLS-1$
+                providerKnowing("NothingElse", McoreFactory.eINSTANCE.createType()), //$NON-NLS-1$
+                MdClassFactory.eINSTANCE.createConfiguration(), false, target);
 
             assertEquals(target.name(), "Unknown type kind 'RecalculationObject'. Use String / " //$NON-NLS-1$
                 + "Number / Boolean / Date / ValueStorage / UUID, ValueTable / ValueTree (in-memory " //$NON-NLS-1$
@@ -1696,6 +1759,19 @@ public class MetadataTypeBuilderTest
         assertEquals(kind, englishMetadataType, split.englishMetadataType);
         assertEquals(kind, producedSuffix, split.producedSuffix);
         assertEquals(kind, featureName, split.featureName);
+    }
+
+    private static void assertUnknownProducedTypeSplit(String kind, String prefix,
+        String producedSuffix, String featureName)
+    {
+        MetadataTypeBuilder.ProducedTypeKind split =
+            MetadataTypeBuilder.splitProducedTypeKind(kind);
+        assertNotNull(kind, split);
+        assertEquals(kind, prefix, split.prefix);
+        assertFalse(kind, split.hasKnownMetadataType());
+        assertEquals(kind, producedSuffix, split.producedSuffix);
+        assertEquals(kind, featureName, split.featureName);
+        assertFalse(kind, split.isNested());
     }
 
     /** Seeds one top-level object and one generated produced-type wrapper in its model holder. */
