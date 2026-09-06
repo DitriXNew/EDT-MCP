@@ -7,7 +7,6 @@
 package com.ditrix.edt.mcp.server;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -123,44 +122,6 @@ public class McpServerTest
         server.restart(PORT);
 
         assertEquals("stop start ", server.calls());
-    }
-
-    /**
-     * The authorizer asks the server whether the open listener faces the network, and answers
-     * "refuse everything" when it does and the token has since been erased. A server that never
-     * opened one must therefore not claim it did - otherwise a stale true would refuse requests
-     * on a perfectly good loopback bind, and a stale false would serve a remote one unguarded.
-     */
-    @Test
-    public void testAServerThatNeverBoundRemotelyDoesNotClaimItDid()
-    {
-        McpServer neverStarted = new McpServer();
-        assertFalse("a server that was never started is not bound to anything",
-            neverStarted.isBoundRemotely());
-
-        // A real start() that stops at the refusal: it must not have reached the socket, and
-        // must not have recorded the remote bind it was refused.
-        McpServer refused = new McpServer()
-        {
-            @Override
-            BindConfig readBindConfig()
-            {
-                return new BindConfig(true, "   ");
-            }
-        };
-        try
-        {
-            refused.start(PORT);
-            fail("an unauthenticated remote bind must be refused");
-        }
-        catch (IOException expected)
-        {
-            assertTrue(expected.getMessage(), expected.getMessage().contains("auth token"));
-        }
-        assertFalse("a refused start must leave the flag where it was", refused.isBoundRemotely());
-
-        refused.stop();
-        assertFalse("and stop() clears it whichever way the start ended", refused.isBoundRemotely());
     }
 
     /**

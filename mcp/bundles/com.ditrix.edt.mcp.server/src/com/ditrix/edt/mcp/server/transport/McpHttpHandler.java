@@ -85,12 +85,21 @@ public class McpHttpHandler implements HttpHandler
     private final McpProtocolHandler protocolHandler;
     private final InterruptibleToolExecutor interruptibleExecutor;
 
+    /**
+     * Whether the listener THIS handler serves accepts connections from other hosts. It is a
+     * final snapshot rather than a lookup on the server, and that is the point: a handler exists
+     * for exactly as long as the context it was created for, so no start or stop can leave it
+     * describing a different socket than the one the request arrived on.
+     */
+    private final boolean boundRemotely;
+
     public McpHttpHandler(McpServer server, McpProtocolHandler protocolHandler,
-        InterruptibleToolExecutor interruptibleExecutor)
+        InterruptibleToolExecutor interruptibleExecutor, boolean boundRemotely)
     {
         this.server = server;
         this.protocolHandler = protocolHandler;
         this.interruptibleExecutor = interruptibleExecutor;
+        this.boundRemotely = boundRemotely;
     }
 
     @Override
@@ -104,7 +113,7 @@ public class McpHttpHandler implements HttpHandler
         // No-op when PREF_AUTH_TOKEN is empty on the default loopback bind; on a listener bound
         // to every interface an empty token refuses instead, because that listener was only
         // allowed to open because a token was set.
-        if (!HttpTransport.isAuthorized(exchange, server.isBoundRemotely()))
+        if (!HttpTransport.isAuthorized(exchange, boundRemotely))
         {
             try
             {
