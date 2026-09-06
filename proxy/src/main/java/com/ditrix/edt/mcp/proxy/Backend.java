@@ -256,7 +256,14 @@ public final class Backend
         String session = ensureSession();
         HttpResponse<InputStream> response = client.send(
             newPostRequest(rawBody, session, requestTimeoutSeconds, accept), HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() == 404)
+        // 404 means the session we presented is gone. 400 with NO session presented means the
+        // same thing one step earlier: this handshake was made with a plugin that issued no
+        // session id, that plugin has since been upgraded to one that requires it, and the
+        // cached handshake is now unusable. A Backend outlives a rescan by design, so without
+        // this the proxy would answer 400 to every routed call until someone restarted it.
+        // Narrow on purpose: a 400 for a request that DID carry a session is a real bad request
+        // and is returned as-is rather than retried.
+        if (response.statusCode() == 404 || (response.statusCode() == 400 && session == null))
         {
             closeQuietly(response.body());
             invalidateSessionIfCurrent(session);

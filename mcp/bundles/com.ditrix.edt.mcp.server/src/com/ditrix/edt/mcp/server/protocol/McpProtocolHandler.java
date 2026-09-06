@@ -80,6 +80,14 @@ public class McpProtocolHandler
 
     private static final String USER_SIGNAL_ELLIPSIS = "\u2026"; //$NON-NLS-1$
 
+    /**
+     * Largest serialized {@code capabilities} object the server will keep for a client. Every
+     * session retains the one its client declared, so without a ceiling a caller could pin a
+     * request-body-sized tree per session; a genuine MCP capabilities object is a few hundred
+     * characters. A bigger one is treated exactly like a malformed one: the permissive default.
+     */
+    static final int MAX_RETAINED_CAPABILITIES_CHARS = 4096;
+
     private final McpToolRegistry toolRegistry;
 
     /**
@@ -1034,6 +1042,21 @@ public class McpProtocolHandler
         try
         {
             JsonElement tree = GsonProvider.get().toJsonTree(capabilities);
+            // A parsed capabilities object is RETAINED - by the server-scoped slot, and since
+            // sessions exist by every open session - so its size is a per-session memory cost
+            // paid on a client's word. A real capabilities object is a few hundred bytes; this
+            // ceiling is orders of magnitude above anything a client legitimately declares and
+            // far below what a caller could otherwise pin (the whole request-body allowance,
+            // times the session cap). Over it, fall back to the permissive default exactly as a
+            // malformed value does, and say so.
+            int declaredSize = tree.toString().length();
+            if (declaredSize > MAX_RETAINED_CAPABILITIES_CHARS)
+            {
+                Activator.logInfo("Client declared a " + declaredSize //$NON-NLS-1$
+                    + "-character capabilities object, over the " + MAX_RETAINED_CAPABILITIES_CHARS //$NON-NLS-1$
+                    + "-character limit the server retains; using defaults."); //$NON-NLS-1$
+                return ClientCapabilities.ABSENT;
+            }
             return ClientCapabilities.from(tree);
         }
         catch (RuntimeException e)

@@ -108,10 +108,9 @@ public final class McpProxyHandler implements HttpHandler
     /**
      * In-flight + queued requests above which this handler sheds load with {@code 503} plus a
      * {@code Retry-After}, mirroring the plugin's own admission control
-     * ({@code McpHttpHandler}). It is deliberately far below the worker pool's queue capacity
-     * ({@code ProxyServer.WORKER_QUEUE_CAPACITY}) so the queue drains through 503 answers the
-     * caller can act on, rather than through an executor rejection - which drops the connection
-     * with no response at all.
+     * ({@code McpHttpHandler}). This ceiling, not the queue, is what bounds the work the proxy
+     * takes on: the pool's queue is unbounded precisely so that a burst is answered with a
+     * retryable 503 instead of a dropped connection (see {@code ProxyServer.start}).
      */
     static final int MAX_IN_FLIGHT_REQUESTS = 50;
 

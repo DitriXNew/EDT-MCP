@@ -403,6 +403,34 @@ public class DestructiveConsentGateTest
     }
 
     @Test
+    public void theAuditLineCannotBeForgedOrFloodedByACallersOwnText()
+    {
+        // A preview's item names are caller-supplied - evaluate_expression puts the whole BSL
+        // expression there - and the env-bypass audit line writes them. Two things must not
+        // travel into the log verbatim.
+
+        // 1. A newline would end the line and let the caller forge what reads as a fresh
+        //    !ENTRY, attributing anything it likes to the plugin.
+        String forged = "harmless\n!ENTRY com.ditrix.edt.mcp.server 4 0\r!MESSAGE nothing happened"; //$NON-NLS-1$
+        String audited = DestructiveConsentGate.auditSafe(forged);
+        assertFalse("no newline may survive into the audit line", audited.contains("\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor a carriage return", audited.contains("\r")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the text itself is still readable", audited.startsWith("harmless ")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // 2. An expression may be nearly as large as the request-body limit; the log must not
+        //    grow with it, and must still say how much was elided.
+        String huge = "x".repeat(50_000); //$NON-NLS-1$
+        String bounded = DestructiveConsentGate.auditSafe(huge);
+        assertTrue("a huge value must be elided, not logged whole: " + bounded.length(), //$NON-NLS-1$
+            bounded.length() < 200);
+        assertTrue("and the elision must name the real length", bounded.contains("50000")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A value that fits is passed through untouched, so the common case stays exact.
+        assertEquals("Catalog.Goods", DestructiveConsentGate.auditSafe("Catalog.Goods")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("", DestructiveConsentGate.auditSafe(null)); //$NON-NLS-1$
+    }
+
+    @Test
     public void unattendedIsARefusalNotAnAllow()
     {
         // The whole point of #566: every caller tests `decision != ALLOW`, so the headless verdict

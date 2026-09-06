@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -643,10 +644,23 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         return ConsentDecision.UNATTENDED;
     }
 
+    /** Names listed in the audit line before it says "and N more". */
+    private static final int AUDIT_MAX_NAMES = 5;
+
+    /** Longest a single audited value may be before it is elided. */
+    private static final int AUDIT_MAX_NAME_CHARS = 120;
+
     /**
      * A one-line, bounded rendering of a {@link ConsentPreview} for the env-bypass audit line.
-     * The preview is already bounded (a title, a subtitle and a short list of top names), so
-     * this cannot flood the log with a large payload.
+     * <p>
+     * A preview's item names are CALLER-SUPPLIED - {@code evaluate_expression} puts the whole BSL
+     * expression there, which is the right thing to show a human in the dialog and the wrong
+     * thing to splice into a log verbatim: at up to the request-body limit it would bloat the
+     * log, and an embedded newline would forge what looks like a new {@code !ENTRY}. So every
+     * value goes through {@link #auditSafe} (control characters folded to spaces, elided past
+     * {@link #AUDIT_MAX_NAME_CHARS}) and only the first {@link #AUDIT_MAX_NAMES} are listed. The
+     * line stays an INDEX into what happened - the tool, the scale, the first few targets - not a
+     * transcript of it.
      *
      * @param preview the preview the gated tool computed, or {@code null}
      * @return a single line describing the pending operation; never {@code null}
@@ -660,19 +674,57 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         StringBuilder sb = new StringBuilder();
         if (preview.getTitle() != null)
         {
-            sb.append(preview.getTitle());
+            sb.append(auditSafe(preview.getTitle()));
         }
         if (preview.getSubtitle() != null)
         {
-            sb.append(sb.length() > 0 ? ": " : "").append(preview.getSubtitle()); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(sb.length() > 0 ? ": " : "").append(auditSafe(preview.getSubtitle())); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append(sb.length() > 0 ? " " : "").append('(').append(preview.getTotalCount()) //$NON-NLS-1$ //$NON-NLS-2$
             .append(" item(s)"); //$NON-NLS-1$
-        if (!preview.getTopNames().isEmpty())
+        List<String> names = preview.getTopNames();
+        if (!names.isEmpty())
         {
-            sb.append(": ").append(String.join(", ", preview.getTopNames())); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(": "); //$NON-NLS-1$
+            int listed = Math.min(names.size(), AUDIT_MAX_NAMES);
+            for (int i = 0; i < listed; i++)
+            {
+                sb.append(i > 0 ? ", " : "").append(auditSafe(names.get(i))); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            if (names.size() > listed)
+            {
+                sb.append(", and ").append(names.size() - listed).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
         }
         return sb.append(')').toString();
+    }
+
+    /**
+     * Makes one caller-supplied value safe to put on a single log line: every control character
+     * (newline included) becomes a space, and anything past {@link #AUDIT_MAX_NAME_CHARS} is
+     * replaced by an explicit elision that keeps the original length visible.
+     *
+     * @param value the value to render; may be {@code null}
+     * @return a single-line, length-bounded rendering
+     */
+    static String auditSafe(String value)
+    {
+        if (value == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder out = new StringBuilder(Math.min(value.length(), AUDIT_MAX_NAME_CHARS));
+        int kept = Math.min(value.length(), AUDIT_MAX_NAME_CHARS);
+        for (int i = 0; i < kept; i++)
+        {
+            char c = value.charAt(i);
+            out.append(Character.isISOControl(c) ? ' ' : c);
+        }
+        if (value.length() > kept)
+        {
+            out.append("\u2026 (").append(value.length()).append(" chars)"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return out.toString();
     }
 
     /**

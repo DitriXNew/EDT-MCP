@@ -59,14 +59,6 @@ public final class ProxyServer
      */
     private static final int WORKER_THREADS = 32;
 
-    /**
-     * Backlog the worker pool will hold. The handler's admission control sheds at
-     * {@code McpProxyHandler.MAX_IN_FLIGHT_REQUESTS}, well below this, so the queue exists to
-     * absorb bursts rather than to be filled - reaching it would mean an executor rejection,
-     * which drops the connection instead of answering 503.
-     */
-    private static final int WORKER_QUEUE_CAPACITY = 200;
-
     private final ProxyConfig cfg;
     private final BackendRegistry registry;
     private final McpProxyHandler handler;
@@ -130,20 +122,26 @@ public final class ProxyServer
                 + (cfg.allowRemote ? cfg.bindHost : "loopback") + ":" + cfg.port //$NON-NLS-1$ //$NON-NLS-2$
                 + " (already in use?): " + e.getMessage(), e); //$NON-NLS-1$
         }
-        // A BOUNDED pool, mirroring the plugin's (McpServer): a cached pool grew one thread per
-        // concurrent request, so a client that opened connections faster than the backends
-        // answered could exhaust the proxy's memory - and the proxy is the component most likely
-        // to be reachable from a network. The queue is generous and the handler sheds long
-        // before it fills (McpProxyHandler.MAX_IN_FLIGHT_REQUESTS), so a caller gets a 503 it can
-        // retry rather than a dropped connection from an executor rejection.
+        // A pool bounded in THREADS: a cached pool grew one per concurrent request, so a client
+        // that opened connections faster than the backends answered could exhaust the proxy's
+        // memory - and the proxy is the component most likely to be reachable from a network.
         //
         // Wider than the plugin's 8 because the work is different: a plugin worker runs the tool
         // itself inside EDT, while a proxy worker spends its whole life blocked on a backend
         // socket, so threads here buy concurrency instead of contention.
+        //
+        // The QUEUE is deliberately unbounded, because bounding it would trade one failure for a
+        // worse one. Admission control (McpProxyHandler.MAX_IN_FLIGHT_REQUESTS) runs INSIDE a
+        // worker, so a burst arriving while every worker is blocked on a backend cannot be shed
+        // until a worker frees; with a capacity, that burst would hit the executor's abort policy
+        // and HttpServer would close those connections with no response at all - the opposite of
+        // the retryable 503 this is for. A queued exchange is a few hundred bytes and a shed one
+        // is answered in microseconds, so the queue drains as fast as workers can pick from it,
+        // and the 50-in-flight ceiling is what actually bounds the work in progress.
         AtomicInteger workerCounter = new AtomicInteger();
         executor = new ThreadPoolExecutor(
             WORKER_THREADS, WORKER_THREADS, 60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(WORKER_QUEUE_CAPACITY),
+            new LinkedBlockingQueue<>(),
             r -> {
                 Thread thread = new Thread(r, "edt-mcp-proxy-worker-" + workerCounter.incrementAndGet()); //$NON-NLS-1$
                 thread.setDaemon(true);
