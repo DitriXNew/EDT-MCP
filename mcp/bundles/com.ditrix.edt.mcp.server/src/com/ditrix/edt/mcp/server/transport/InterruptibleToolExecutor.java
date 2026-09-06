@@ -47,8 +47,10 @@ public class InterruptibleToolExecutor
      */
     public String execute(HttpExchange exchange, String requestBody) throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
+        // The clock starts before the parse: the history reports the whole exchange.
+        long startNanos = System.nanoTime();
         // Extract request ID and tool name for ActiveToolCall via the shared parser.
-        return execute(exchange, requestBody, protocolHandler.parse(requestBody));
+        return execute(exchange, requestBody, protocolHandler.parse(requestBody), startNanos);
     }
 
     /**
@@ -58,10 +60,12 @@ public class InterruptibleToolExecutor
      * @param exchange the HTTP exchange
      * @param requestBody the request body
      * @param request the body parsed by the caller, or {@code null} on a JSON syntax error
+     * @param startNanos {@link System#nanoTime()} as read by the caller before it parsed, so the
+     *            recorded duration covers the parse the caller already did
      * @return the response, or {@code null} if the response was already sent (interrupted)
      * @throws Exception if tool execution failed (propagated to the caller for error mapping)
      */
-    public String execute(HttpExchange exchange, String requestBody, JsonRpcRequest request) // NOSONAR propagates checked exceptions across the reflective boundary by design
+    public String execute(HttpExchange exchange, String requestBody, JsonRpcRequest request, long startNanos) // NOSONAR propagates checked exceptions across the reflective boundary by design
         throws Exception
     {
         Object requestId = request != null ? McpProtocolHandler.normalizeId(request.getId()) : null;
@@ -80,7 +84,7 @@ public class InterruptibleToolExecutor
         Thread executionThread = new Thread(() -> {
             try
             {
-                resultContainer[0] = protocolHandler.processRequest(requestBody, request);
+                resultContainer[0] = protocolHandler.processRequest(requestBody, request, startNanos);
             }
             catch (Exception e)
             {

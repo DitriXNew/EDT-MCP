@@ -325,7 +325,10 @@ public class McpHttpHandler implements HttpHandler
 
         // Parse ONCE, here, and route on the parsed method. The parsed request is handed down so
         // neither path below parses the same body again; a syntax error leaves it null and the
-        // protocol handler answers "invalid request" exactly as before.
+        // protocol handler answers "invalid request" exactly as before. The clock is read before
+        // the parse and handed down with it, so moving the parse up here did not shorten the
+        // duration the history reports for this exchange.
+        long startNanos = System.nanoTime();
         JsonRpcRequest request = protocolHandler.parse(requestBody);
         Route route = Route.of(request);
 
@@ -338,7 +341,7 @@ public class McpHttpHandler implements HttpHandler
             if (isToolCall)
             {
                 // Handle tool calls with interruptible execution
-                response = interruptibleExecutor.execute(exchange, requestBody, request);
+                response = interruptibleExecutor.execute(exchange, requestBody, request, startNanos);
                 if (response == null)
                 {
                     // Response was already sent (user interrupted)
@@ -347,7 +350,7 @@ public class McpHttpHandler implements HttpHandler
             }
             else
             {
-                response = protocolHandler.processRequest(requestBody, request);
+                response = protocolHandler.processRequest(requestBody, request, startNanos);
             }
 
             // null response means notification (no response needed)

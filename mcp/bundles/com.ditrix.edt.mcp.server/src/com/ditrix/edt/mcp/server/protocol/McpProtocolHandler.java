@@ -136,26 +136,33 @@ public class McpProtocolHandler
      */
     public String processRequest(String requestBody)
     {
+        // The clock starts BEFORE the parse, because deserializing a multi-megabyte
+        // tool-call payload is part of the exchange the history reports.
+        long startNanos = System.nanoTime();
         // Parse once at the choke point; parse() swallows a JSON syntax error and
         // returns null, and dispatch() treats a null request as an invalid request —
         // exactly as before, when the parse happened inside dispatch.
-        return processRequest(requestBody, parse(requestBody));
+        return processRequest(requestBody, parse(requestBody), startNanos);
     }
 
     /**
      * Same, for a caller that has already parsed the body — the HTTP transport parses it to
      * decide which path the request takes, and hands the result down instead of parsing twice.
      * The raw body is still needed: it is what the history recorder stores.
+     * <p>
+     * The caller also hands down WHEN it started, taken before its own parse: the recorded
+     * duration is the whole exchange, and a transport that parses first must not be able to
+     * hide its parse time from the history.
      *
      * @param requestBody the JSON request body
      * @param request the body parsed by the caller, or {@code null} on a JSON syntax error
      *            (dispatched as an invalid request, exactly like a parse failure here)
+     * @param startNanos {@link System#nanoTime()} as read by the caller before it parsed
      * @return JSON response with correct id from request ({@code null} for a
      *         notification answered with 202 Accepted)
      */
-    public String processRequest(String requestBody, JsonRpcRequest request)
+    public String processRequest(String requestBody, JsonRpcRequest request, long startNanos)
     {
-        long startNanos = System.nanoTime();
         String response = null;
         try
         {
