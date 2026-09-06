@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.transport;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -171,6 +172,43 @@ public class HttpTransportTest
     }
 
     @Test
+    public void testTheCorsPreflightIsTheOneMethodThatNeedNotAuthenticate()
+    {
+        // A browser sends OPTIONS with no credentials by design - it is asking what it may send.
+        // Authenticating it would answer 401 to every browser client before it could present the
+        // token, which is now mandatory for a remote bind.
+        assertFalse("the preflight must not be authenticated", //$NON-NLS-1$
+            HttpTransport.requiresAuthorization("OPTIONS")); //$NON-NLS-1$
+
+        // The other edge: nothing else is exempt, and the exemption is not a spelling trick.
+        for (String method : new String[] { "GET", "POST", "DELETE", "PUT", "HEAD", "options", "Options" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+        {
+            assertTrue(method + " must still carry the token", //$NON-NLS-1$
+                HttpTransport.requiresAuthorization(method));
+        }
+    }
+
+    @Test
+    public void testThePreflightAllowsTheHeadersAClientHasToSend()
+    {
+        // A browser may not send a header the preflight did not allow, nor read one that was not
+        // exposed - so an allow-list without these is the same as no browser client at all.
+        StubExchange exchange = new StubExchange(new byte[0]);
+        exchange.getRequestHeaders().add("Origin", "http://localhost:3000"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a localhost origin is allowed", HttpTransport.addCorsHeaders(exchange)); //$NON-NLS-1$
+
+        String allowed = exchange.getResponseHeaders().getFirst("Access-Control-Allow-Headers"); //$NON-NLS-1$
+        assertNotNull("the preflight must advertise an allow-list", allowed); //$NON-NLS-1$
+        assertTrue("the shared token travels in Authorization: " + allowed, //$NON-NLS-1$
+            allowed.contains("Authorization")); //$NON-NLS-1$
+        assertTrue("the session id travels in Mcp-Session-Id: " + allowed, //$NON-NLS-1$
+            allowed.contains("Mcp-Session-Id")); //$NON-NLS-1$
+        assertEquals("and the session id must be readable back", "Mcp-Session-Id", //$NON-NLS-1$ //$NON-NLS-2$
+            exchange.getResponseHeaders().getFirst("Access-Control-Expose-Headers")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testNormalizeTokenIsWhatBothDecisionsRead()
     {
         assertEquals("", HttpTransport.normalizeToken(null)); //$NON-NLS-1$ //$NON-NLS-2$
@@ -186,6 +224,7 @@ public class HttpTransportTest
     private static final class StubExchange extends HttpExchange
     {
         private final Headers requestHeaders = new Headers();
+        private final Headers responseHeaders = new Headers();
         private final InputStream body;
         private boolean bodyRead;
 
@@ -221,7 +260,8 @@ public class HttpTransportTest
         @Override
         public Headers getResponseHeaders()
         {
-            throw new UnsupportedOperationException();
+            // Real, because addCorsHeaders writes here and the test reads back what it wrote.
+            return responseHeaders;
         }
 
         @Override

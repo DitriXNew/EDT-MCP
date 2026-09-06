@@ -53,6 +53,9 @@ cp "$BOM" "$BACKUP/pom.xml"
 
 restore()
 {
+  # Idempotent: a Ctrl-C runs the INT handler and the EXIT trap still fires afterwards, and a
+  # second pass must not report a failure to restore what it already restored.
+  [ -d "$BACKUP" ] || return 0
   cp "$BACKUP/default.target" "$TARGET" && cp "$BACKUP/pom.xml" "$BOM" || {
     echo "FAILED TO RESTORE the working tree - originals are in $BACKUP" >&2
     exit 3
@@ -60,7 +63,10 @@ restore()
   rm -rf "$BACKUP"
   echo "-- working tree restored"
 }
-trap restore EXIT INT TERM
+trap restore EXIT
+# Restore and then leave with the signal's own status, rather than falling back into the script.
+trap 'restore; exit 130' INT
+trap 'restore; exit 143' TERM
 
 # The probe target: every bundle of the installed EDT, and nothing from the network.
 # The path must be written the way the JVM reads it: under Git Bash a POSIX /d/... path is

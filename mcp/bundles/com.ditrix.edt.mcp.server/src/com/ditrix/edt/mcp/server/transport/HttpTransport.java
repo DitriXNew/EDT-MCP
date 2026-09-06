@@ -94,12 +94,35 @@ public final class HttpTransport
             }
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
             exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
-            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
+            // Authorization and Mcp-Session-Id are named because a browser may not send a header
+            // the preflight did not allow: without them a browser client could never present the
+            // shared token, nor carry the session id this transport assigns it.
+            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", //$NON-NLS-1$
+                "Content-Type, Accept, Authorization, Mcp-Session-Id"); //$NON-NLS-1$
+            // And may not READ one that is not exposed - the session id is returned, not just sent.
+            exchange.getResponseHeaders().add("Access-Control-Expose-Headers", "Mcp-Session-Id"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         // A missing Origin means a non-browser client (CLI / MCP client) — browsers
         // always send Origin, so the browser-CSRF allow-list does not apply here.
         // Real access control is the loopback bind + the optional auth token.
         return true;
+    }
+
+    /**
+     * Whether a request of this method must carry the shared token.
+     * <p>
+     * Everything must, except the CORS preflight: a browser sends {@code OPTIONS} with no
+     * credentials by design - it is asking what it is allowed to send - so authenticating the
+     * preflight would answer 401 to every browser client before it could ever present the token.
+     * The preflight carries no payload and runs no tool; the request it precedes is authenticated
+     * like any other. Origin validation still applies to it.
+     *
+     * @param method the HTTP request method
+     * @return true when the request must be authorized
+     */
+    public static boolean requiresAuthorization(String method)
+    {
+        return !"OPTIONS".equals(method); //$NON-NLS-1$
     }
 
     /**

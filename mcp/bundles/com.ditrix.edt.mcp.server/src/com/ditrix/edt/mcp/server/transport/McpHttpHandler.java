@@ -109,11 +109,12 @@ public class McpHttpHandler implements HttpHandler
         // occupy threads in the main request pool or block the dispatcher.
         String method = exchange.getRequestMethod();
 
-        // Optional shared-token auth — applies to every method, including SSE GET.
+        // Optional shared-token auth — applies to every method except the CORS preflight,
+        // including SSE GET (see HttpTransport.requiresAuthorization for why OPTIONS is exempt).
         // No-op when PREF_AUTH_TOKEN is empty on the default loopback bind; on a listener bound
         // to every interface an empty token refuses instead, because that listener was only
         // allowed to open because a token was set.
-        if (!HttpTransport.isAuthorized(exchange, boundRemotely))
+        if (HttpTransport.requiresAuthorization(method) && !HttpTransport.isAuthorized(exchange, boundRemotely))
         {
             try
             {
