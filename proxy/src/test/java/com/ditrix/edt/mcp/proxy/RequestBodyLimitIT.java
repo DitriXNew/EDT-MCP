@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -39,7 +40,9 @@ import com.google.gson.JsonParser;
  * up front, before a single byte of the body is read;</li>
  * <li>a body with NO declared length (chunked transfer, the JDK client's behaviour for
  * {@link HttpRequest.BodyPublishers#ofInputStream}) that only turns out to be oversized while
- * streaming - caught by the bounded read itself.</li>
+ * streaming - caught by the bounded read itself. Here the refusal may also arrive as a
+ * connection reset instead of the 413, because the server stops reading mid-upload; see that
+ * test for why both are the same refusal and how it is told apart from a server that died.</li>
  * </ul>
  *
  * <p>No backend is needed: the size cap is enforced in {@code McpProxyHandler.readBody}, before
@@ -113,8 +116,8 @@ public class RequestBodyLimitIT
     /**
      * A body with NO declared {@code Content-Length} (the JDK client streams it chunked when
      * given {@link HttpRequest.BodyPublishers#ofInputStream}) that exceeds the cap only while
-     * being read must ALSO be rejected with {@code 413} - proving the bounded-read fallback
-     * catches what the header check cannot see up front.
+     * being read must ALSO be refused - proving the bounded-read fallback catches what the
+     * header check cannot see up front.
      */
     @Test
     public void testOversizedChunkedBodyWithNoContentLengthRejectedWith413() throws Exception
@@ -131,9 +134,45 @@ public class RequestBodyLimitIT
         assertTrue("test premise: the publisher must report an unknown content length", //$NON-NLS-1$
             request.bodyPublisher().orElseThrow().contentLength() <= 0);
 
-        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        // Two refusals are correct here, and which one arrives is not the proxy's to decide.
+        // The server answers 413 as soon as the bounded read passes the cap - while the client
+        // is still streaming the rest. Whether that answer reaches the client depends on
+        // whether the JDK can drain what is left in flight (sun.net.httpserver.drainAmount,
+        // 64 KiB by default): the remainder here is far larger, so the connection may be reset
+        // and the client sees the response or nothing at all, purely on timing. Refusing to
+        // read a body is what MAKES that reset possible, so a test of the refusal cannot demand
+        // that the refusal always be delivered.
+        //
+        // What must hold either way is that the proxy refused rather than buffered, so a reset
+        // is accepted ONLY together with proof that the server is alive and still serving - the
+        // outcome a proxy that had swallowed 5 MiB, or died trying, could not produce.
+        try
+        {
+            assertRejectedWith413(http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)));
+        }
+        catch (IOException connectionReset)
+        {
+            assertTrue("a reset is only acceptable from a server that is still serving; got: " //$NON-NLS-1$
+                + connectionReset, stillServing());
+        }
+    }
 
-        assertRejectedWith413(response);
+    /**
+     * Whether the proxy answers an ordinary small request. Used to tell "refused an oversized
+     * body and dropped the connection" from "was taken down by it".
+     *
+     * @return {@code true} when a normal request is answered
+     */
+    private boolean stillServing() throws Exception
+    {
+        HttpRequest probe = HttpRequest.newBuilder(mcpUri)
+            .timeout(Duration.ofSeconds(20))
+            .header("Content-Type", "application/json") //$NON-NLS-1$ //$NON-NLS-2$
+            .header("Accept", "application/json") //$NON-NLS-1$ //$NON-NLS-2$
+            .POST(HttpRequest.BodyPublishers.ofString(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")) //$NON-NLS-1$
+            .build();
+        return http.send(probe, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)).statusCode() == 200;
     }
 
     /**
