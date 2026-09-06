@@ -74,6 +74,44 @@ public final class ClientCapabilities
     }
 
     /**
+     * The capabilities of a client whose declaration was too large to retain, reduced to the
+     * flags this server actually consults.
+     * <p>
+     * The ceiling on a retained capabilities object exists to bound MEMORY - an object a caller
+     * pins on its own word, once per open session - not to discard what the client SAID.
+     * Falling back to {@link #ABSENT} would do the latter: a client that explicitly opted out of
+     * structuredContent inside a large declaration would then silently receive it anyway, which
+     * is the one outcome the opt-out exists to prevent. This keeps a constant-size projection
+     * instead - the consulted flags survive, everything else is dropped, and nothing from the
+     * oversized tree is referenced.
+     * </p>
+     * <p>
+     * The projection is NOT the client's object: {@link #has(String)} answers only about the
+     * flags kept here, so a capability declared alongside the oversized payload reads as absent.
+     * That is the deliberate cost of not retaining it.
+     * </p>
+     *
+     * @param capabilities the raw capabilities element (may be {@code null})
+     * @return a holder carrying only the consulted flags, or {@link #ABSENT} when it declared none
+     */
+    public static ClientCapabilities distill(JsonElement capabilities)
+    {
+        // Expressed through the predicate rather than by re-reading the flag: a second copy of
+        // "where the opt-out lives" would drift from the first one silently. Here the only way
+        // to build a suppressing projection is to have asked the real object and been told no,
+        // and the only reader of the projection is that same predicate.
+        if (from(capabilities).allowsStructuredContent())
+        {
+            return ABSENT;
+        }
+        JsonObject experimental = new JsonObject();
+        experimental.addProperty("structuredContent", false); //$NON-NLS-1$
+        JsonObject kept = new JsonObject();
+        kept.add("experimental", experimental); //$NON-NLS-1$
+        return new ClientCapabilities(kept);
+    }
+
+    /**
      * Whether the client actually declared a capabilities object. {@code false}
      * for {@link #ABSENT}. Most clients send an empty object, which is still
      * "present" (and still permissive).
@@ -101,7 +139,8 @@ public final class ClientCapabilities
      * Whether the client declared a top-level capability with the given name
      * (e.g. {@code "elicitation"}, {@code "roots"}, {@code "sampling"}). The
      * value's shape is not inspected here; presence of the key is the signal MCP
-     * uses for an object-valued capability.
+     * uses for an object-valued capability. For a holder built by {@link #distill(JsonElement)}
+     * only the consulted flags are present - see there.
      *
      * @param name the capability name (may be {@code null})
      * @return {@code true} when the capabilities object carries that key
