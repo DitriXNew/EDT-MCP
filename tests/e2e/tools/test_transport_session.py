@@ -27,6 +27,23 @@ PROTOCOL_VERSION = harness.PROTOCOL_VERSION
 SESSION_HEADER = "Mcp-Session-Id"
 
 
+class _Headers(dict):
+    """Response headers looked up without regard to case.
+
+    HTTP header names are case-insensitive and the JDK's HttpServer normalises what it sends
+    to its own spelling - the server declares "MCP-Session-Id" and the wire carries
+    "Mcp-session-id". A plain dict keyed by the sent spelling therefore misses the header the
+    test is looking for, which is exactly how the first version of this file failed.
+    """
+
+    def __init__(self, message):
+        super().__init__((k, v) for k, v in message.items())
+        self._lower = {k.lower(): v for k, v in message.items()}
+
+    def get(self, name, default=None):
+        return self._lower.get(name.lower(), default)
+
+
 def _raw(method, params=None, session=None, origin=None, http_method="POST", request_id=1):
     """One request, returning (status, headers, parsed-body-or-None).
 
@@ -52,9 +69,9 @@ def _raw(method, params=None, session=None, origin=None, http_method="POST", req
     req = urllib.request.Request(MCP_URL, data=data, headers=headers, method=http_method)
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.status, dict(resp.headers), _body(resp.read())
+            return resp.status, _Headers(resp.headers), _body(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), _body(e.read())
+        return e.code, _Headers(e.headers), _body(e.read())
 
 
 def _body(raw):
