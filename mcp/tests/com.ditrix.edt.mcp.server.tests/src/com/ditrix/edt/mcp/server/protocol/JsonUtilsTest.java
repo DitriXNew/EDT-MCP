@@ -467,6 +467,33 @@ public class JsonUtilsTest
         assertTrue(error.contains("\"error\":\"Unknown error\""));
     }
 
+    // --- isErrorResponse ---
+
+    @Test
+    public void testIsErrorResponseTellsAFailureFromASuccess()
+    {
+        // The transport asks this before minting a session: JSON-RPC reports failure in the body,
+        // so a 200 alone cannot say whether the handshake it just answered succeeded.
+        assertTrue("an error member means the call failed",
+            JsonUtils.isErrorResponse(JsonUtils.buildJsonRpcError(-32603, "Session limit reached", 1)));
+        assertFalse("a result is a success",
+            JsonUtils.isErrorResponse("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-11-25\"}}"));
+    }
+
+    @Test
+    public void testIsErrorResponseTreatsUnreadableInputAsNotAnError()
+    {
+        // It gates the mint of a session, so guessing "error" from something it cannot read would
+        // refuse legitimate handshakes. Anything that is not a JSON-RPC response answers false.
+        assertFalse(JsonUtils.isErrorResponse(null));
+        assertFalse(JsonUtils.isErrorResponse(""));
+        assertFalse(JsonUtils.isErrorResponse("   "));
+        assertFalse(JsonUtils.isErrorResponse("not json at all"));
+        assertFalse("a JSON array is not a response object", JsonUtils.isErrorResponse("[1,2,3]"));
+        assertFalse("and neither is a bare string that merely contains the word",
+            JsonUtils.isErrorResponse("\"error\""));
+    }
+
     // --- buildHealthResponse ---
 
     @Test

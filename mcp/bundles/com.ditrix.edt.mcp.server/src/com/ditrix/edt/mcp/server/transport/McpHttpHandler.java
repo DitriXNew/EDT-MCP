@@ -437,12 +437,15 @@ public class McpHttpHandler implements HttpHandler
                 McpConstants.ERROR_INTERNAL, e.getMessage(), null);
         }
 
-        if (isInitialize)
+        if (isInitialize && !JsonUtils.isErrorResponse(response))
         {
             // Mint the session this handshake is for, remembering the capabilities THIS client
-            // declared, and hand its id back. The id is issued for every initialize, including
-            // one this server answered with an error - that is what the client is told to retry
-            // with, and an unused session costs one map entry until MAX_SESSIONS.
+            // declared, and hand its id back.
+            //
+            // Only for a handshake that SUCCEEDED. A session issued alongside an error would be
+            // wrong in both directions: it tells a client whose initialize failed that it may
+            // proceed, and it spends a slot toward MAX_SESSIONS - so a stream of malformed
+            // initialize requests could exhaust the registry without ever completing a handshake.
             issuedSessionId = sessions.create(McpProtocolHandler.parseClientCapabilities(request));
             if (issuedSessionId == null)
             {

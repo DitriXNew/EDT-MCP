@@ -118,6 +118,30 @@ public class BackendSessionUpgradeIT
     }
 
     @Test
+    public void aRefusalThatCameWithASessionIsStillARefusal() throws Exception
+    {
+        // The session header is not evidence that the backend agreed to talk: it is free to mint
+        // one and still report the handshake failed. Judging the outcome by "an id arrived" would
+        // send notifications/initialized and forward calls into an initialization that never
+        // completed - and the caller would never learn why.
+        backend.setRefusesInitialize(true);
+
+        try
+        {
+            forwardPing();
+            throw new AssertionError("a refusal is a refusal even when a session came with it"); //$NON-NLS-1$
+        }
+        catch (java.io.IOException expected)
+        {
+            assertTrue("the failure must carry the backend's own reason: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("Session limit reached")); //$NON-NLS-1$
+        }
+
+        backend.setRefusesInitialize(false);
+        assertEquals("and nothing was cached, so recovery is immediate", 200, forwardPing().statusCode()); //$NON-NLS-1$
+    }
+
+    @Test
     public void aRefusedHandshakeFailsInsteadOfLookingLikeALegacyBackend() throws Exception
     {
         // JSON-RPC reports failure INSIDE a 200, and the plugin's session cap answers exactly
@@ -125,6 +149,7 @@ public class BackendSessionUpgradeIT
         // sessions", it would make every later call present no session, be answered 400, and be
         // retried as a legacy handshake - two calls per request forever, with the real reason
         // (the cap) never reaching the caller.
+        backend.setIssuesSessions(false);
         backend.setRefusesInitialize(true);
 
         try
@@ -141,6 +166,7 @@ public class BackendSessionUpgradeIT
         // And nothing was cached: once the backend recovers, the next call handshakes normally
         // rather than staying stuck on a poisoned session.
         backend.setRefusesInitialize(false);
+        backend.setIssuesSessions(true);
         assertEquals(200, forwardPing().statusCode());
     }
 

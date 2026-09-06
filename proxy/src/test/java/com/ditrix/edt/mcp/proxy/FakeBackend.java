@@ -273,17 +273,19 @@ public final class FakeBackend
             if ("initialize".equals(method))
             {
                 initializeCount.incrementAndGet();
-                if (refusesInitialize)
-                {
-                    // The shape the plugin's session cap answers with: HTTP 200, a JSON-RPC
-                    // error, and NO session header. JSON-RPC reports failure inside a 200.
-                    sendFramed(exchange, jsonRpcError(id, -32603, "Session limit reached (10000)"),
-                        acceptsSse);
-                    return;
-                }
                 if (issuesSessions)
                 {
                     exchange.getResponseHeaders().add(HEADER_SESSION_ID, issueSessionId());
+                }
+                if (refusesInitialize)
+                {
+                    // A REFUSED handshake, HTTP 200 - JSON-RPC reports failure inside the body.
+                    // Whether a session header came with it is up to the backend: the plugin's
+                    // session cap sends none (setIssuesSessions(false) here), while a backend
+                    // that mints one first sends both. Neither is a completed handshake.
+                    sendFramed(exchange, jsonRpcError(id, -32603, "Session limit reached (10000)"),
+                        acceptsSse);
+                    return;
                 }
                 sendFramed(exchange, jsonRpcResponse(id, initializeResult()), acceptsSse);
                 return;

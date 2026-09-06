@@ -128,6 +128,32 @@ def test_initialize_issues_a_session_that_then_works():
 
 
 @e2e_test(tool="_transport_session", kind="read")
+def test_a_failed_initialize_issues_no_session():
+    # A session issued alongside an error would tell a client whose handshake FAILED that it may
+    # proceed, and would spend a slot toward the session cap - so a stream of malformed
+    # initialize requests could exhaust the registry without ever completing a handshake.
+    # An unsupported JSON-RPC version is the cheapest way to make initialize fail.
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": PROTOCOL_VERSION,
+    }
+    body = json.dumps({
+        "jsonrpc": "1.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {}},
+    }).encode("utf-8")
+    req = urllib.request.Request(MCP_URL, data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        issued = _Headers(resp.headers).get(SESSION_HEADER)
+        answered = _body(resp.read())
+
+    if "error" not in (answered or {}):
+        _fail("test premise: this initialize must fail; got %s" % _error_text(answered))
+    if issued:
+        _fail("a failed initialize must issue no %s, got %r" % (SESSION_HEADER, issued))
+
+
+@e2e_test(tool="_transport_session", kind="read")
 def test_a_request_without_a_session_is_refused_with_400():
     # The drive-by case: a POST that never initialized. Before #564 this was served.
     status, _, body = _raw("tools/list", request_id=3)
