@@ -235,6 +235,31 @@ public class GitTool implements IMcpTool
         "blame", "LCM", //$NON-NLS-1$ //$NON-NLS-2$
         "ls-files", "x"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * The subcommands whose ARGUMENTS may be written to the unattended-bypass audit line: their
+     * grammar carries refs and paths - WHAT was destroyed - and no caller-authored message.
+     * <p>
+     * The distinction is needed because the two halves pull opposite ways. A message is the
+     * caller's own text and can hold a token, so it must not reach a log; but
+     * {@code restore --worktree <path>}, {@code branch -D <name>} and {@code checkout -- <path>}
+     * destroy something and leave NO other record - no commit, no reflog entry, no remote - so
+     * for those the audit line is the only place the target is written down at all, and a line
+     * carrying just a subcommand and a character count would be evidence of nothing.
+     * </p>
+     * <p>
+     * It is an ALLOW-list, so the default is redaction: a subcommand added to
+     * {@link #ALLOWED_SUBCOMMANDS} later is redacted until someone reads its grammar and puts it
+     * here. {@code commit}, {@code tag}, {@code stash}, {@code merge} and {@code pull} are
+     * deliberately absent - each accepts a message ({@code -m}, {@code -F}, or {@code stash save}
+     * positionally), and the choice is per SUBCOMMAND rather than per invocation because judging
+     * {@code tag -d} apart from {@code tag -m} means tracking git's per-option arity, which is
+     * exactly the thing this class refuses to reimplement elsewhere.
+     * </p>
+     */
+    private static final Set<String> LOGGABLE_ARGUMENT_SUBCOMMANDS = Set.of(
+        "restore", "checkout", "switch", "add", "branch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "push", "fetch", "remote", "revert", "cherry-pick"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
     /** How long the MCP call waits for the post-command workspace refresh before returning. */
     private static final long REFRESH_WAIT_SECONDS = 30;
 
@@ -3431,13 +3456,10 @@ public class GitTool implements IMcpTool
      * The preview a human sees before a write-capable git command runs - and which the unattended
      * bypass audits.
      * <p>
-     * The arguments are shown in FULL: deciding whether to allow {@code push --force origin main}
-     * means reading it. They are marked UNLOGGABLE all the same, because a git command carries the
-     * caller's own free text - {@code commit -m}, {@code tag -m}, {@code stash save} - and nothing
-     * here can prove a message holds no token. What the command DID is not lost by that: unlike an
-     * evaluated expression, a git operation records itself in the repository (the reflog, the
-     * commit, the remote), while the audit line's own job - that this tool ran destructively with
-     * nobody watching, and which subcommand - is carried by the title.
+     * The arguments are always shown in FULL: deciding whether to allow
+     * {@code push --force origin main} means reading it. Whether they may also be WRITTEN DOWN is
+     * decided per subcommand by {@link #LOGGABLE_ARGUMENT_SUBCOMMANDS} - refs and paths are the
+     * record of what was destroyed, a message is the caller's own text and may hold a token.
      * </p>
      * <p>
      * A credential URL is a separate and stricter story: {@code parseCommand} refuses one outright
@@ -3451,9 +3473,12 @@ public class GitTool implements IMcpTool
      */
     static ConsentPreview consentPreview(String destructiveForm, List<String> argv)
     {
-        return ConsentPreview.withUnloggableNames("git " + destructiveForm, //$NON-NLS-1$
-            "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
-            List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
+        String title = "git " + destructiveForm; //$NON-NLS-1$
+        String subtitle = "'git " + destructiveForm + "' is a write-capable subcommand."; //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> arguments = List.of(String.join(" ", argv.subList(1, argv.size()))); //$NON-NLS-1$
+        return LOGGABLE_ARGUMENT_SUBCOMMANDS.contains(destructiveForm)
+            ? new ConsentPreview(title, subtitle, 1, arguments)
+            : ConsentPreview.withUnloggableNames(title, subtitle, 1, arguments);
     }
 
     /**

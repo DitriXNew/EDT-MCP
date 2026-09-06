@@ -1513,22 +1513,53 @@ public class GitToolTest
     }
 
     @Test
-    public void gitArgumentsAreShownToAHumanAndKeptOutOfTheLog()
+    public void gitArgumentsAreShownToAHumanAndKeptOutOfTheLogWhenTheyCanCarryAMessage()
     {
-        // A git command carries the caller's own free text - commit -m, tag -m, stash save - and
-        // the unattended bypass writes its preview into <workspace>/.metadata/.log, a file that
-        // outlives the run and travels with bug reports. A credential URL is refused earlier by
-        // parseCommand, but nothing can prove a MESSAGE holds no token, so the arguments are
-        // marked unloggable.
-        ConsentPreview preview = GitTool.consentPreview("commit", //$NON-NLS-1$
-            argv("commit", "-m", "wip: token=ghp_secretvalue")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // commit / tag / stash / merge / pull accept the caller's own text (-m, -F, or
+        // 'stash save' positionally), and the unattended bypass writes the preview into
+        // <workspace>/.metadata/.log - a file that outlives the run and travels with bug reports.
+        // A credential URL is refused earlier by parseCommand, but nothing can prove a MESSAGE
+        // holds no token.
+        for (String subcommand : new String[] {"commit", "tag", "stash", "merge", "pull"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            ConsentPreview preview = GitTool.consentPreview(subcommand,
+                argv(subcommand, "-m", "wip: token=ghp_secretvalue")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("git " + subcommand + " can carry a message, so its arguments must not " //$NON-NLS-1$ //$NON-NLS-2$
+                + "reach the audit line", preview.areNamesLoggable()); //$NON-NLS-1$
+            assertTrue("but the human deciding must still see the whole command", //$NON-NLS-1$
+                preview.getTopNames().get(0).contains("token=ghp_secretvalue")); //$NON-NLS-1$
+        }
+    }
 
-        assertFalse("git arguments are caller text and must not reach the audit line", //$NON-NLS-1$
-            preview.areNamesLoggable());
-        assertTrue("but the human deciding must still see the whole command", //$NON-NLS-1$
-            preview.getTopNames().get(0).contains("token=ghp_secretvalue")); //$NON-NLS-1$
-        assertTrue("and the subcommand stays in the title, which IS logged", //$NON-NLS-1$
-            preview.getTitle().contains("commit")); //$NON-NLS-1$
+    @Test
+    public void theAuditKeepsTheTargetOfAGitCommandThatLeavesNoOtherTrace()
+    {
+        // The other edge. 'restore --worktree <path>' and 'branch -D <name>' destroy something and
+        // leave NO commit, NO reflog entry and NO remote behind - so for these the audit line is
+        // the only place the target is written down, and redacting it would make the line evidence
+        // of nothing. Their grammar carries refs and paths, never a message.
+        ConsentPreview restore =
+            GitTool.consentPreview("restore", argv("restore", "--worktree", "src/Module.bsl")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue("a restore's path is what it destroyed and must be recorded", //$NON-NLS-1$
+            restore.areNamesLoggable());
+        assertTrue("and it must actually be in the preview: " + restore.getTopNames(), //$NON-NLS-1$
+            restore.getTopNames().get(0).contains("src/Module.bsl")); //$NON-NLS-1$
+
+        ConsentPreview branch =
+            GitTool.consentPreview("branch", argv("branch", "-D", "feature/x")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue("a deleted branch name has no other record either", branch.areNamesLoggable()); //$NON-NLS-1$
+        assertTrue("and must name the branch: " + branch.getTopNames(), //$NON-NLS-1$
+            branch.getTopNames().get(0).contains("feature/x")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anUnclassifiedGitSubcommandIsRedactedByDefault()
+    {
+        // The property that keeps this from rotting: the classification is an ALLOW-list, so a
+        // subcommand added to ALLOWED_SUBCOMMANDS later is redacted until someone reads its
+        // grammar. The failure mode of forgetting is a thinner audit line, never a leak.
+        assertFalse("an unclassified subcommand must default to redacted", //$NON-NLS-1$
+            GitTool.consentPreview("wibble", argv("wibble", "whatever")).areNamesLoggable()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test

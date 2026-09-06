@@ -866,10 +866,12 @@ set the environment variable **`EDT_MCP_DESTRUCTIVE_CONSENT=allow`** on the EDT 
 it overrides the preference and lets every gated operation proceed without a dialog (the same knob the
 e2e suite uses). Every such allow is logged with the tool name and its preview, so an unattended run
 leaves an audit trail in the EDT log — with one deliberate omission. Where a preview's content is the
-caller's OWN text — `evaluate_expression`'s BSL, `git`'s arguments — it can carry a password or a
-token, so the audit line records how many characters ran and never any part of them; the human at the
-dialog still sees the whole thing. The dialog only ever appears on a live UI session at the *Ask*
-level.
+caller's OWN text it can hold a password or a token, so the audit records its length and never any
+part of it: `evaluate_expression`'s BSL always, and `git` for the message-bearing subcommands
+(`commit`, `tag`, `stash`, `merge`, `pull`). Everything else is recorded in full — `restore <path>`
+and `branch -D <name>` destroy something and leave no commit or reflog behind, so that line is the
+only record of what they hit. The human at the dialog always sees the whole command, redacted or not.
+The dialog only ever appears on a live UI session at the *Ask* level.
 
 **A headless EDT REFUSES a gated operation** (it still never blocks): with no workbench window there is
 nobody to ask, and the gate's job is to stop a destructive write that no human agreed to — so consent
