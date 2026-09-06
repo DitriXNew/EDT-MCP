@@ -76,6 +76,9 @@ public final class FakeBackend
     /** Whether this fake runs the MCP session layer at all - see {@link #setIssuesSessions}. */
     private volatile boolean issuesSessions = true;
 
+    /** Whether initialize answers a JSON-RPC error instead of a result - see {@link #setRefusesInitialize}. */
+    private volatile boolean refusesInitialize;
+
     /**
      * Creates a fake backend on an OS-chosen free port (port 0).
      *
@@ -196,6 +199,19 @@ public final class FakeBackend
     }
 
     /**
+     * Makes {@code initialize} REFUSE: {@code HTTP 200} carrying a JSON-RPC error and no session
+     * header - the shape the plugin's session cap answers with. A handshake that looks
+     * successful at the HTTP level but issued no session is the case a client must not mistake
+     * for a backend that simply does not use sessions.
+     *
+     * @param refuses whether initialize answers a JSON-RPC error
+     */
+    public void setRefusesInitialize(boolean refuses)
+    {
+        this.refusesInitialize = refuses;
+    }
+
+    /**
      * Switches between a backend that runs the MCP session layer and one that does not.
      * <p>
      * {@code false} is a plugin from before sessions were validated: {@code initialize} issues
@@ -257,6 +273,14 @@ public final class FakeBackend
             if ("initialize".equals(method))
             {
                 initializeCount.incrementAndGet();
+                if (refusesInitialize)
+                {
+                    // The shape the plugin's session cap answers with: HTTP 200, a JSON-RPC
+                    // error, and NO session header. JSON-RPC reports failure inside a 200.
+                    sendFramed(exchange, jsonRpcError(id, -32603, "Session limit reached (10000)"),
+                        acceptsSse);
+                    return;
+                }
                 if (issuesSessions)
                 {
                     exchange.getResponseHeaders().add(HEADER_SESSION_ID, issueSessionId());
@@ -441,6 +465,19 @@ public final class FakeBackend
         response.addProperty("jsonrpc", "2.0");
         response.add("id", id);
         response.add("result", result);
+        return response.toString();
+    }
+
+    /** A JSON-RPC error response - what a REFUSED call answers, inside an HTTP 200. */
+    private static String jsonRpcError(JsonElement id, int code, String message)
+    {
+        JsonObject error = new JsonObject();
+        error.addProperty("code", code);
+        error.addProperty("message", message);
+        JsonObject response = new JsonObject();
+        response.addProperty("jsonrpc", "2.0");
+        response.add("id", id);
+        response.add("error", error);
         return response.toString();
     }
 

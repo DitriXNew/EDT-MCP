@@ -138,8 +138,10 @@ public final class Backend
      * Ensures an MCP session against the backend, performing the lazy handshake on first
      * use: {@code initialize} (capturing the {@code Mcp-Session-Id} response header) followed
      * by {@code notifications/initialized}. The result is cached until
-     * {@link #invalidateSession()}; a session-less backend (no header issued) is cached too,
-     * so the handshake runs at most once per (in)validation cycle.
+     * {@link #invalidateSession()}; a session-less backend (no header issued AND no error
+     * reported) is cached too, so the handshake runs at most once per (in)validation cycle. A
+     * backend that issues no session and answers a JSON-RPC error has REFUSED the handshake, not
+     * declined to use sessions: that is thrown, never cached.
      *
      * @return the backend-issued session id, or {@code null} when the backend is session-less
      * @throws IOException when the handshake request fails or the backend rejects it
@@ -169,6 +171,22 @@ public final class Backend
                 + response.statusCode());
         }
         String issued = response.headers().firstValue(HEADER_SESSION_ID).orElse(null);
+        // A REFUSED handshake also arrives as 200: JSON-RPC puts its errors in the body, and the
+        // plugin answers its session-cap that way - 200, a JSON-RPC error, no session header.
+        // Caching that as "a backend that issues no sessions" would be wrong twice over: the
+        // refusal is discarded, and every later call would present no session, be answered 400,
+        // and be retried as if this were a pre-session plugin - two calls per request, forever,
+        // with the real reason never reaching the caller. A backend that issues no session AND
+        // reports an error did not complete a handshake, so say so and fail here.
+        // Through stripSseFraming, because this handshake asks for SSE like every other request
+        // and the payload therefore arrives inside a data: frame - reading the raw body would
+        // simply never parse, and the check would pass everything.
+        String handshakeBody = stripSseFraming(response.body());
+        if (issued == null && Json.isJsonRpcError(handshakeBody))
+        {
+            throw new IOException("initialize against backend :" + port + " was refused: " //$NON-NLS-1$ //$NON-NLS-2$
+                + Json.jsonRpcErrorMessage(handshakeBody));
+        }
 
         String initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}"; //$NON-NLS-1$
         client.send(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),

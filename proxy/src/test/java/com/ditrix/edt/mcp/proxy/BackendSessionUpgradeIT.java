@@ -117,6 +117,33 @@ public class BackendSessionUpgradeIT
             handshakesAfterFirstCall, backend.getInitializeCount());
     }
 
+    @Test
+    public void aRefusedHandshakeFailsInsteadOfLookingLikeALegacyBackend() throws Exception
+    {
+        // JSON-RPC reports failure INSIDE a 200, and the plugin's session cap answers exactly
+        // that way: 200, an error, no session header. Cached as "a backend that issues no
+        // sessions", it would make every later call present no session, be answered 400, and be
+        // retried as a legacy handshake - two calls per request forever, with the real reason
+        // (the cap) never reaching the caller.
+        backend.setRefusesInitialize(true);
+
+        try
+        {
+            forwardPing();
+            throw new AssertionError("a refused handshake must not be cached as a successful one"); //$NON-NLS-1$
+        }
+        catch (java.io.IOException expected)
+        {
+            assertTrue("the failure must carry the backend's own reason, not a generic one: " //$NON-NLS-1$
+                + expected.getMessage(), expected.getMessage().contains("Session limit reached")); //$NON-NLS-1$
+        }
+
+        // And nothing was cached: once the backend recovers, the next call handshakes normally
+        // rather than staying stuck on a poisoned session.
+        backend.setRefusesInitialize(false);
+        assertEquals(200, forwardPing().statusCode());
+    }
+
     private HttpResponse<InputStream> forwardPing() throws Exception
     {
         return client.forward("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{}}"); //$NON-NLS-1$
