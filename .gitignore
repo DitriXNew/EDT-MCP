@@ -10,6 +10,7 @@ nulq
 nul
 /source/*
 !/source/compile.sh
+!/source/verify-oldest-platform.sh
 log.log
 .serena/
 # Ignore personal/local .claude state, but SHARE project skills, hooks and settings

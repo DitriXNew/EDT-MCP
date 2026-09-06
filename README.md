@@ -1211,6 +1211,7 @@ bash source/compile.sh
 ### Notes
 
 - A full first build pulls the EDT 2026.2 p2 repository (`mcp/targets/default/default.target`) and the Eclipse 2025-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
+- `bash source/verify-oldest-platform.sh <edt-install-dir>` compiles the same sources against an installed **2026.1** instead, which is what keeps the single-build claim honest: the manifest cannot express "references no API that only 2026.2 has", but a compile against 2026.1 proves it. Run it when the target platform or a call into an EDT API changes. It needs a local EDT installation because 1C publishes only the current service release of each major online.
 - The output zip uses forward-slash entries (produced by `jar` when `zip` is unavailable) so it installs cleanly on both Windows and Linux EDT instances.
 - `source/dist/` is gitignored; only the script itself is tracked.
 
