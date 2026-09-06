@@ -129,7 +129,11 @@ public class EvaluateExpressionTool implements IMcpTool
         // so unlike every other gated tool no preview can enumerate what it will touch, and the
         // expression ITSELF is the only honest preview. The gate is free for unattended runs
         // (EDT_MCP_DESTRUCTIVE_CONSENT=allow) and costs one "Allow for session" click otherwise.
-        ConsentPreview preview = new ConsentPreview(
+        //
+        // The expression is shown to a human and NOT written to the log: a human deciding needs
+        // to read it, while an expression can carry a password or a token and the audit line
+        // lands in a file that outlives the run and travels with bug reports.
+        ConsentPreview preview = ConsentPreview.withUnloggableNames(
             "Evaluate a BSL expression", //$NON-NLS-1$
             "This runs the expression in the paused application; it can change state, not just " //$NON-NLS-1$
                 + "read it.", //$NON-NLS-1$

@@ -13,6 +13,8 @@ import static org.junit.Assert.assertNotEquals;
 
 import static org.junit.Assert.assertNull;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Set;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
@@ -428,6 +430,44 @@ public class DestructiveConsentGateTest
         // A value that fits is passed through untouched, so the common case stays exact.
         assertEquals("Catalog.Goods", DestructiveConsentGate.auditSafe("Catalog.Goods")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("", DestructiveConsentGate.auditSafe(null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void theAuditLineRecordsTheShapeOfAnExpressionAndNeverItsText()
+    {
+        // evaluate_expression's one "name" is the caller's own BSL, and the env-bypass audit
+        // line goes to <workspace>/.metadata/.log - a file that outlives the run, rotates into
+        // .bak_*.log and travels with bug reports. Sanitising is not redaction: a SHORT
+        // expression carrying a password passed auditSafe untouched and was written down.
+        String secret = "ConnectToDatabase(\"Password=hunter2;User=admin\")"; //$NON-NLS-1$
+        String line = DestructiveConsentGate.describe(ConsentPreview.withUnloggableNames(
+            "Evaluate a BSL expression", "runs in the paused application", 1, //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonList(secret)));
+
+        assertFalse("no part of the expression may reach the log: " + line, //$NON-NLS-1$
+            line.contains("hunter2")); //$NON-NLS-1$
+        assertFalse("nor the parameter that carried it: " + line, line.contains("Password")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor what it called: " + line, line.contains("ConnectToDatabase")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("but the line must still say what was allowed: " + line, //$NON-NLS-1$
+            line.contains("Evaluate a BSL expression")); //$NON-NLS-1$
+        assertTrue("and how much of it ran: " + line, //$NON-NLS-1$
+            line.contains(String.valueOf(secret.length())));
+    }
+
+    @Test
+    public void anOrdinaryPreviewStillNamesWhatWouldBeDestroyed()
+    {
+        // The other edge of the same change: redaction must not spread to the previews whose
+        // names are identifiers this server chose. For those the names ARE the evidence an
+        // unattended delete leaves behind, and a line that only counted them would be useless.
+        String line = DestructiveConsentGate.describe(new ConsentPreview(
+            "Delete metadata node", "removes it from the configuration", 2, //$NON-NLS-1$ //$NON-NLS-2$
+            Arrays.asList("Catalog.Goods", "Document.Invoice"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an ordinary preview must still name its targets: " + line, //$NON-NLS-1$
+            line.contains("Catalog.Goods")); //$NON-NLS-1$
+        assertTrue("all of them, up to the listing cap: " + line, //$NON-NLS-1$
+            line.contains("Document.Invoice")); //$NON-NLS-1$
     }
 
     @Test

@@ -653,19 +653,29 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     /**
      * A one-line, bounded rendering of a {@link ConsentPreview} for the env-bypass audit line.
      * <p>
-     * A preview's item names are CALLER-SUPPLIED - {@code evaluate_expression} puts the whole BSL
-     * expression there, which is the right thing to show a human in the dialog and the wrong
-     * thing to splice into a log verbatim: at up to the request-body limit it would bloat the
-     * log, and an embedded newline would forge what looks like a new {@code !ENTRY}. So every
-     * value goes through {@link #auditSafe} (control characters folded to spaces, elided past
-     * {@link #AUDIT_MAX_NAME_CHARS}) and only the first {@link #AUDIT_MAX_NAMES} are listed. The
-     * line stays an INDEX into what happened - the tool, the scale, the first few targets - not a
-     * transcript of it.
+     * A preview's item names are CALLER-SUPPLIED, and that cuts two ways. Every value goes
+     * through {@link #auditSafe} (control characters folded to spaces, elided past
+     * {@link #AUDIT_MAX_NAME_CHARS}) so a huge value cannot bloat the log and an embedded
+     * newline cannot forge what looks like a fresh {@code !ENTRY}; only the first
+     * {@link #AUDIT_MAX_NAMES} are listed.
+     * </p>
+     * <p>
+     * Sanitising is not enough when the names are the caller's own TEXT rather than identifiers
+     * this server chose - {@code evaluate_expression} sends BSL that may carry a password or a
+     * token, and a bounded, single-line secret is still a secret written to disk. Such a preview
+     * says so ({@link ConsentPreview#areNamesLoggable()}), and then the line records how many
+     * characters were allowed to run instead of any part of them.
+     * </p>
+     * <p>
+     * Either way the line stays an INDEX into what happened - the tool, the scale, and the
+     * targets when the targets are nameable - never a transcript of it. Package-visible so a
+     * test can pin the composed line, not just its parts.
+     * </p>
      *
      * @param preview the preview the gated tool computed, or {@code null}
      * @return a single line describing the pending operation; never {@code null}
      */
-    private static String describe(ConsentPreview preview)
+    static String describe(ConsentPreview preview)
     {
         if (preview == null)
         {
@@ -686,14 +696,26 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         if (!names.isEmpty())
         {
             sb.append(": "); //$NON-NLS-1$
-            int listed = Math.min(names.size(), AUDIT_MAX_NAMES);
-            for (int i = 0; i < listed; i++)
+            if (preview.areNamesLoggable())
             {
-                sb.append(i > 0 ? ", " : "").append(auditSafe(names.get(i))); //$NON-NLS-1$ //$NON-NLS-2$
+                int listed = Math.min(names.size(), AUDIT_MAX_NAMES);
+                for (int i = 0; i < listed; i++)
+                {
+                    sb.append(i > 0 ? ", " : "").append(auditSafe(names.get(i))); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                if (names.size() > listed)
+                {
+                    sb.append(", and ").append(names.size() - listed).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
             }
-            if (names.size() > listed)
+            else
             {
-                sb.append(", and ").append(names.size() - listed).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+                int chars = 0;
+                for (String name : names)
+                {
+                    chars += name == null ? 0 : name.length();
+                }
+                sb.append("content not logged, ").append(chars).append(" chars"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         return sb.append(')').toString();
