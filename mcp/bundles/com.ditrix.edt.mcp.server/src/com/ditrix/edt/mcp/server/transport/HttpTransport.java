@@ -114,22 +114,50 @@ public final class HttpTransport
      */
     public static boolean isAuthorized(HttpExchange exchange)
     {
-        String token = configuredAuthToken();
-        if (token == null || token.isEmpty())
+        return isAuthorized(configuredAuthToken(), exchange.getRequestHeaders().getFirst("Authorization")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same decision as a pure function of the two strings, so it is unit-testable without a
+     * preference store or an {@link HttpExchange}.
+     *
+     * @param configuredToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
+     * @param authorizationHeader the request's {@code Authorization} header (may be {@code null})
+     * @return true if authorized (or auth disabled), false otherwise
+     */
+    static boolean isAuthorized(String configuredToken, String authorizationHeader)
+    {
+        String token = normalizeToken(configuredToken);
+        if (token.isEmpty())
         {
             return true; // authentication disabled (default)
         }
-        String header = exchange.getRequestHeaders().getFirst("Authorization"); //$NON-NLS-1$
-        if (header == null)
+        if (authorizationHeader == null)
         {
             return false;
         }
         // Accept "Bearer <token>" (scheme case-insensitive per RFC 6750) or the raw token.
-        String trimmed = header.trim();
+        String trimmed = authorizationHeader.trim();
         String presented = trimmed.regionMatches(true, 0, "Bearer ", 0, 7) //$NON-NLS-1$
             ? trimmed.substring(7).trim()
             : trimmed;
         return constantTimeEquals(token, presented);
+    }
+
+    /**
+     * The one definition of what the configured token IS, shared with the remote-bind refusal in
+     * {@code McpServer} so the two cannot disagree. Surrounding whitespace is dropped because it
+     * cannot survive the trip: the presented credential is trimmed out of the header, so an
+     * untrimmed comparison would lock out every request while the server looked configured. By
+     * the same rule a whitespace-only preference is NOT a token — it leaves auth disabled here,
+     * and a remote bind with it is refused there.
+     *
+     * @param raw the stored preference value (may be {@code null})
+     * @return the token as it is compared; empty when no token is configured
+     */
+    public static String normalizeToken(String raw)
+    {
+        return raw == null ? "" : raw.trim(); //$NON-NLS-1$
     }
 
     private static String configuredAuthToken()

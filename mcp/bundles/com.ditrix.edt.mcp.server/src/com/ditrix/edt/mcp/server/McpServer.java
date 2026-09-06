@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.transport.HealthHandler;
+import com.ditrix.edt.mcp.server.transport.HttpTransport;
 import com.ditrix.edt.mcp.server.transport.InterruptibleToolExecutor;
 import com.ditrix.edt.mcp.server.transport.McpHttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -183,7 +184,10 @@ public class McpServer
      */
     static String remoteBindRefusal(boolean allowRemote, String authToken, int port)
     {
-        if (!allowRemote || (authToken != null && !authToken.trim().isEmpty()))
+        // What counts as "a token is set" is HttpTransport's definition, not a second one:
+        // a value this refusal accepted but the authorizer could never match would bind the
+        // port remotely and then reject every request.
+        if (!allowRemote || !HttpTransport.normalizeToken(authToken).isEmpty())
         {
             return null;
         }

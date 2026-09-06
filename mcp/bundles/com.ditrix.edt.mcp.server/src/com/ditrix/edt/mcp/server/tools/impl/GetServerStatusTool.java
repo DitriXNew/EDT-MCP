@@ -20,6 +20,7 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.transport.HttpTransport;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 
@@ -157,9 +158,11 @@ public class GetServerStatusTool implements IMcpTool
                     String checksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
                     checksFolderConfigured = checksFolder != null && !checksFolder.trim().isEmpty();
 
-                    // Only whether auth is on, never the token value.
+                    // Only whether auth is on, never the token value - and "on" means what the
+                    // authorizer means by it, so a preference of blanks reports auth OFF here
+                    // instead of promising a check that HttpTransport does not perform.
                     String authToken = store.getString(PreferenceConstants.PREF_AUTH_TOKEN);
-                    authEnabled = authToken != null && !authToken.isEmpty();
+                    authEnabled = !HttpTransport.normalizeToken(authToken).isEmpty();
                 }
             }
             result.put("plainTextMode", plainTextMode); //$NON-NLS-1$

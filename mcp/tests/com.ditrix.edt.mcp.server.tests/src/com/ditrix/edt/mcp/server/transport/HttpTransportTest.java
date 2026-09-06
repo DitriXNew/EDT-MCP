@@ -104,6 +104,48 @@ public class HttpTransportTest
         return bytes;
     }
 
+    @Test
+    public void testAConfiguredTokenWithSurroundingWhitespaceStillAuthorizes()
+    {
+        // The header can only ever carry the trimmed credential - the authorizer trims what is
+        // presented. Comparing it against an untrimmed preference would lock the operator out of
+        // a server that looks correctly configured, so the configured value is trimmed too.
+        assertTrue("a padded preference must accept the Bearer form", //$NON-NLS-1$
+            HttpTransport.isAuthorized("  s3cret  ", "Bearer s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a padded preference must accept the raw form", //$NON-NLS-1$
+            HttpTransport.isAuthorized("  s3cret  ", "s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the scheme is case-insensitive per RFC 6750", //$NON-NLS-1$
+            HttpTransport.isAuthorized(" s3cret ", "bearer s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTrimmingTheConfiguredTokenDoesNotWidenWhatItAccepts()
+    {
+        // The other edge of the same change: trimming must not turn the token into a prefix
+        // match or let a different secret through.
+        assertFalse("a different secret must still be rejected", //$NON-NLS-1$
+            HttpTransport.isAuthorized(" s3cret ", "Bearer s3cre")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("inner whitespace is part of the token, not padding", //$NON-NLS-1$
+            HttpTransport.isAuthorized(" s3 cret ", "Bearer s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a configured token still demands a header", //$NON-NLS-1$
+            HttpTransport.isAuthorized(" s3cret ", null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWhitespaceOnlyPreferenceIsNoTokenAtAll()
+    {
+        // Same rule as the remote-bind refusal in McpServer, which is why both read it from
+        // normalizeToken: a preference of blanks leaves authentication disabled here, and a
+        // remote bind carrying it is refused there rather than started with an unusable token.
+        assertTrue("blanks are not a token, so auth stays disabled", //$NON-NLS-1$
+            HttpTransport.isAuthorized("   ", null)); //$NON-NLS-1$
+        assertTrue("blanks are not a token, so any request is authorized", //$NON-NLS-1$
+            HttpTransport.isAuthorized("\t\n", "Bearer anything")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("", HttpTransport.normalizeToken(null)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("", HttpTransport.normalizeToken("  \t ")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("s3cret", HttpTransport.normalizeToken(" s3cret ")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /**
      * The smallest exchange {@link HttpTransport#readBody} can be asked about: the request
      * headers, the request body, and whether the body was opened at all. Everything else throws,

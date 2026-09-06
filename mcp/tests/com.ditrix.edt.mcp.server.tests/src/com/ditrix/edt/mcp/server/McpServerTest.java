@@ -16,6 +16,8 @@ import java.io.IOException;
 
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.transport.HttpTransport;
+
 /**
  * The start-time admission decision of {@link McpServer}. Binding every interface exposes the
  * whole tool surface - arbitrary BSL included - and the shared-token check is a no-op while the
@@ -56,6 +58,27 @@ public class McpServerTest
     public void testRemoteAccessWithATokenStarts()
     {
         assertNull(McpServer.remoteBindRefusal(true, "s3cret", PORT));
+    }
+
+    @Test
+    public void testTheBindAgreesWithTheAuthorizerAboutWhatCountsAsAToken()
+    {
+        // Two notions of "a token is set" would fail in the worst direction: the bind opens the
+        // port to the network on a value the authorizer trims away and then rejects, leaving a
+        // remotely reachable server that answers nothing. Both read HttpTransport.normalizeToken,
+        // and this pins them together on the values where they used to disagree.
+        for (String configured : new String[] { null, "", "   ", "\t\n", "s3cret", "  s3cret  " })
+        {
+            boolean bindPermitted = McpServer.remoteBindRefusal(true, configured, PORT) == null;
+            boolean authorizerSeesAToken = !HttpTransport.normalizeToken(configured).isEmpty();
+            assertEquals("the bind and the authorizer disagree about " + describe(configured),
+                authorizerSeesAToken, bindPermitted);
+        }
+    }
+
+    private static String describe(String token)
+    {
+        return token == null ? "null" : "'" + token + "'";
     }
 
     @Test
