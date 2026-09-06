@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
+import com.ditrix.edt.mcp.server.transport.HttpTransport;
 
 /**
  * General settings tab for MCP Server preferences.
@@ -447,7 +448,13 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, checksFolderText.getText());
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS, allowRemoteCheck.getSelection());
-        store.setValue(PreferenceConstants.PREF_AUTH_TOKEN, authTokenText.getText());
+        // Stored the way it is compared. Surrounding whitespace cannot travel in an HTTP header
+        // - the authorizer only ever sees the trimmed credential - so keeping it here would save
+        // a secret no client could present, and normalising it silently on every request would
+        // leave the field showing something other than the token in force.
+        String enteredToken = HttpTransport.normalizeToken(authTokenText.getText());
+        authTokenText.setText(enteredToken);
+        store.setValue(PreferenceConstants.PREF_AUTH_TOKEN, enteredToken);
         store.setValue(PreferenceConstants.PREF_ENHANCE_NAVIGATOR,
             enhanceNavigatorCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, showTagsCheck.getSelection());

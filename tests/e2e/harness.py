@@ -1104,7 +1104,25 @@ def _workspace_dir(list_projects_markdown=None):
         text = list_projects_markdown
     else:
         text = call("list_projects", {}).text or ""
-    for raw in re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text):
+    # list_projects is a markdown table, and spaces are ordinary Path-cell content. Parse that
+    # column with the same escape-aware splitter used by the e2e tests so a literal '\|' is data,
+    # not a delimiter. If this is arbitrary non-table text, retain the historical path mining.
+    rows = [split_markdown_row(line) for line in text.splitlines()]
+    path_column = None
+    header_row = None
+    for index, cells in enumerate(rows):
+        lowered = [cell.lower() for cell in cells]
+        if "path" in lowered:
+            path_column = lowered.index("path")
+            header_row = index
+            break
+    if path_column is None:
+        paths = re.findall(r"[A-Za-z]:\\[^|\s]+|/(?:[^/|\s]+/)*[^|\s]+", text)
+    else:
+        paths = [cells[path_column] for cells in rows[header_row + 1:]
+                 if len(cells) > path_column]
+
+    for raw in paths:
         candidate = raw.rstrip("\\/ `")
         for _ in range(4):
             candidate = os.path.dirname(candidate)

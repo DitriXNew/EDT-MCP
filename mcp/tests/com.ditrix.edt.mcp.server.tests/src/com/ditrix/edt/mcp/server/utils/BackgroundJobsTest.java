@@ -39,6 +39,16 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
 public class BackgroundJobsTest
 {
     /**
+     * One budget for every wait of a test that asserts ORDER rather than speed, so a machine slow
+     * enough to blow it slows the whole test uniformly instead of failing the one step that was
+     * given a hard limit while every other step had room to spare (#537).
+     */
+    private static final long AWAIT_BUDGET_MS = 5_000L;
+
+    /** Safety valve: a worker parked by a test whose assertion already failed still exits. */
+    private static final long WORKER_PARK_LIMIT_MS = 10_000L;
+
+    /**
      * Admission has to happen INSIDE the same lock as insertion. A caller that counts first
      * and starts afterwards has a window where several concurrent starts all see room, which
      * is exactly what a running limit exists to prevent.
@@ -134,17 +144,33 @@ public class BackgroundJobsTest
     {
         try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
         {
+            // What this test depends on is the ORDER - the deadline publishes FAILED, and only
+            // THEN does the work reach its commit. That order is established by this latch, which
+            // the test itself opens after observing FAILED, so no step of it races the scheduler.
+            // What it deliberately does NOT depend on is how fast the deadline's interrupt wakes
+            // the worker: the interrupt is absorbed below and the work keeps waiting for the
+            // release. Timing a post-interrupt wake-up against a fixed budget is what made this
+            // test fail on a loaded machine while the code under test was correct (#537).
+            CountDownLatch deadlinePublished = new CountDownLatch(1);
             CountDownLatch decided = new CountDownLatch(1);
             AtomicBoolean allowed = new AtomicBoolean(true);
             JobSnapshot started = jobs.start(50L, "start", progress -> { //$NON-NLS-1$
-                try
+                // Bounded so a failed assertion below can never leave this worker parked for good.
+                long giveUpAt = System.nanoTime()
+                    + TimeUnit.MILLISECONDS.toNanos(WORKER_PARK_LIMIT_MS);
+                boolean released = false;
+                long remaining;
+                while (!released && (remaining = giveUpAt - System.nanoTime()) > 0L)
                 {
-                    // The deadline interrupts the worker, which is how this returns early.
-                    Thread.sleep(10_000L);
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.interrupted();
+                    try
+                    {
+                        released = deadlinePublished.await(remaining, TimeUnit.NANOSECONDS);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        // The deadline interrupts its worker; that is not the signal under test.
+                        Thread.interrupted();
+                    }
                 }
                 allowed.set(progress.tryCommit());
                 decided.countDown();
@@ -152,8 +178,9 @@ public class BackgroundJobsTest
             });
             assertNotNull(started);
 
-            assertEquals(Status.FAILED, jobs.await(started.getId(), 5_000L).getStatus());
-            assertTrue(decided.await(5, TimeUnit.SECONDS));
+            assertEquals(Status.FAILED, jobs.await(started.getId(), AWAIT_BUDGET_MS).getStatus());
+            deadlinePublished.countDown();
+            assertTrue(decided.await(AWAIT_BUDGET_MS, TimeUnit.MILLISECONDS));
             assertTrue("a job the deadline already failed must refuse the commit", //$NON-NLS-1$
                 !allowed.get());
         }
@@ -492,8 +519,10 @@ public class BackgroundJobsTest
                 assertEquals(Status.RUNNING, cancellation.get().getSnapshot().getStatus());
 
                 releaseHandler.countDown();
+                // The same post-interrupt wait shape as #537: what is asserted is THAT the
+                // interrupt reaches the worker, never how quickly, so it gets the shared budget.
                 assertTrue("a verified late stop did not interrupt the worker", //$NON-NLS-1$
-                    workerInterrupted.await(2, TimeUnit.SECONDS));
+                    workerInterrupted.await(AWAIT_BUDGET_MS, TimeUnit.MILLISECONDS));
                 JobSnapshot cancelled = jobs.await(started.getId(), 2_000L);
                 assertEquals("the interrupted worker left the job running", //$NON-NLS-1$
                     Status.CANCELLED, cancelled.getStatus());

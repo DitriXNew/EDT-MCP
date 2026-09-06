@@ -1027,6 +1027,39 @@ class ResetSettleEvidenceTest(unittest.TestCase):
                          "the timeout must preserve the last list_projects poll that completed")
 
 
+class WorkspaceLocatorTest(unittest.TestCase):
+    def test_list_projects_path_cell_preserves_spaces_and_unescapes_pipes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = os.path.join(tmp, "Workspace With Space")
+            project = os.path.join(workspace, "Base")
+            os.makedirs(project)
+            os.makedirs(os.path.join(workspace, ".metadata"))
+
+            # A literal pipe is legal in a POSIX project path and is rendered as \| by
+            # MarkdownUtils.escapeForTable. The decoy need not exist on platforms that reject
+            # pipes in paths: recording the lookup proves the cell stayed whole and was unescaped.
+            pipe_workspace = os.path.join(tmp, "Workspace|WithPipe")
+            pipe_project = os.path.join(pipe_workspace, "Other")
+            projects_table = (
+                "| Name | State | Path | Open | EDT Project | Natures |\n"
+                "|---|---|---|---|---|---|\n"
+                "| Other | ready | %s | Yes | Yes | com.example.other |\n"
+                "| Base | ready | %s | Yes | Yes | com.example.base |\n"
+                % (pipe_project.replace("|", "\\|"), project))
+
+            real_isdir = os.path.isdir
+            with mock.patch.dict(os.environ, {}, clear=False), \
+                    mock.patch.object(HARNESS.os.path, "isdir", wraps=real_isdir) as isdir:
+                os.environ.pop("EDT_MCP_EDT_WORKSPACE", None)
+                located = HARNESS._workspace_dir(projects_table)
+
+            self.assertEqual(workspace, located)
+            self.assertIn(
+                mock.call(os.path.join(pipe_workspace, ".metadata")),
+                isdir.call_args_list,
+                "the escaped pipe must be restored inside the Path cell before probing it")
+
+
 class EvidenceLogTailTest(unittest.TestCase):
     """The evidence block must not be able to change the reset outcome, and that is EXECUTED here.
 

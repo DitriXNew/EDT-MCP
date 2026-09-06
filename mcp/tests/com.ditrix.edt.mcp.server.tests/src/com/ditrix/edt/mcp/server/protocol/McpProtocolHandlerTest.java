@@ -11,6 +11,7 @@ import static org.junit.Assert.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.After;
 import org.junit.Before;
@@ -18,6 +19,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.UserSignal.SignalType;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
@@ -126,6 +128,38 @@ public class McpProtocolHandlerTest
         assertEquals(expected, augmented);
         assertEquals("BACKGROUND", signal.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("still running", signal.get("message").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // === History timing ===
+
+    @Test
+    public void testTheOneArgumentOverloadTimesItsOwnParse()
+    {
+        DurationCapturingHandler timed = new DurationCapturingHandler();
+
+        timed.processRequest(buildJsonRpcRequest(1, "initialize", null)); //$NON-NLS-1$
+
+        // Lower bound only: load can only make this larger, never smaller.
+        assertTrue("the parse belongs inside the recorded duration, got " + timed.recordedDurationMs //$NON-NLS-1$
+            + "ms for a parse that alone takes " + DurationCapturingHandler.PARSE_MILLIS + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            timed.recordedDurationMs >= DurationCapturingHandler.PARSE_MILLIS);
+    }
+
+    @Test
+    public void testTheParsedOverloadTimesFromTheCallersClock()
+    {
+        // The transport parses first to decide the route, so it - not this method - knows when
+        // the exchange began. If the duration were taken here instead, everything the caller did
+        // before handing the request down would vanish from the history.
+        DurationCapturingHandler timed = new DurationCapturingHandler();
+        String request = buildJsonRpcRequest(1, "initialize", null); //$NON-NLS-1$
+        JsonRpcRequest parsed = timed.parse(request);
+        long startedFiveSecondsAgo = System.nanoTime() - TimeUnit.SECONDS.toNanos(5);
+
+        timed.processRequest(request, parsed, startedFiveSecondsAgo);
+
+        assertTrue("the caller's start must be what is measured, got " + timed.recordedDurationMs //$NON-NLS-1$
+            + "ms for an exchange that began 5000ms ago", timed.recordedDurationMs >= 5000L); //$NON-NLS-1$
     }
 
     // === Initialize ===
@@ -1489,6 +1523,39 @@ public class McpProtocolHandlerTest
         int recordCount()
         {
             return methods.size();
+        }
+    }
+
+    /**
+     * A handler that reports what the recorder was told, and whose parse is deliberately slow:
+     * the parse of a multi-megabyte tool call is real work, and the point of these two tests is
+     * that it lands INSIDE the duration the history reports, whichever overload was called.
+     */
+    private static class DurationCapturingHandler extends McpProtocolHandler
+    {
+        static final long PARSE_MILLIS = 60L;
+
+        long recordedDurationMs = -1L;
+
+        @Override
+        public JsonRpcRequest parse(String requestBody)
+        {
+            try
+            {
+                Thread.sleep(PARSE_MILLIS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return super.parse(requestBody);
+        }
+
+        @Override
+        void recordToHistory(String method, String toolName, String requestJson, String responseJson,
+            long durationMs)
+        {
+            recordedDurationMs = durationMs;
         }
     }
 
