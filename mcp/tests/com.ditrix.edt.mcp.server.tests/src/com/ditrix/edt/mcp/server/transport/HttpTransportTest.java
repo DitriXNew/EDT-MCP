@@ -104,18 +104,25 @@ public class HttpTransportTest
         return bytes;
     }
 
+    /** A loopback bind, where the shared token is optional. */
+    private static final boolean LOOPBACK = false;
+
+    /** A listener on every interface, which only opened because a token was set. */
+    private static final boolean REMOTE = true;
+
     @Test
     public void testAConfiguredTokenWithSurroundingWhitespaceStillAuthorizes()
     {
         // The header can only ever carry the trimmed credential - the authorizer trims what is
-        // presented. Comparing it against an untrimmed preference would lock the operator out of
-        // a server that looks correctly configured, so the configured value is trimmed too.
+        // presented, and an HTTP field value cannot preserve surrounding whitespace anyway.
+        // Comparing it against an untrimmed preference would lock the operator out of a server
+        // that looks correctly configured, so the configured value is trimmed too.
         assertTrue("a padded preference must accept the Bearer form", //$NON-NLS-1$
-            HttpTransport.isAuthorized("  s3cret  ", "Bearer s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+            HttpTransport.isAuthorized("  s3cret  ", "Bearer s3cret", LOOPBACK)); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("a padded preference must accept the raw form", //$NON-NLS-1$
-            HttpTransport.isAuthorized("  s3cret  ", "s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+            HttpTransport.isAuthorized("  s3cret  ", "s3cret", REMOTE)); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the scheme is case-insensitive per RFC 6750", //$NON-NLS-1$
-            HttpTransport.isAuthorized(" s3cret ", "bearer s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+            HttpTransport.isAuthorized(" s3cret ", "bearer s3cret", REMOTE)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -124,23 +131,48 @@ public class HttpTransportTest
         // The other edge of the same change: trimming must not turn the token into a prefix
         // match or let a different secret through.
         assertFalse("a different secret must still be rejected", //$NON-NLS-1$
-            HttpTransport.isAuthorized(" s3cret ", "Bearer s3cre")); //$NON-NLS-1$ //$NON-NLS-2$
+            HttpTransport.isAuthorized(" s3cret ", "Bearer s3cre", REMOTE)); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("inner whitespace is part of the token, not padding", //$NON-NLS-1$
-            HttpTransport.isAuthorized(" s3 cret ", "Bearer s3cret")); //$NON-NLS-1$ //$NON-NLS-2$
+            HttpTransport.isAuthorized(" s3 cret ", "Bearer s3cret", REMOTE)); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("a configured token still demands a header", //$NON-NLS-1$
-            HttpTransport.isAuthorized(" s3cret ", null)); //$NON-NLS-1$
+            HttpTransport.isAuthorized(" s3cret ", null, LOOPBACK)); //$NON-NLS-1$
     }
 
     @Test
-    public void testAWhitespaceOnlyPreferenceIsNoTokenAtAll()
+    public void testARemoteListenerRefusesEveryRequestOnceTheTokenIsGone()
     {
-        // Same rule as the remote-bind refusal in McpServer, which is why both read it from
-        // normalizeToken: a preference of blanks leaves authentication disabled here, and a
-        // remote bind carrying it is refused there rather than started with an unusable token.
-        assertTrue("blanks are not a token, so auth stays disabled", //$NON-NLS-1$
-            HttpTransport.isAuthorized("   ", null)); //$NON-NLS-1$
-        assertTrue("blanks are not a token, so any request is authorized", //$NON-NLS-1$
-            HttpTransport.isAuthorized("\t\n", "Bearer anything")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The preference page saves a changed token WITHOUT restarting the server, so a listener
+        // on every interface can outlive the token that allowed it to open. Whether the operator
+        // cleared the field or left blanks in it, the answer is the same: refuse, rather than
+        // serve the network unauthenticated because "no token means auth is off".
+        for (String erased : new String[] { null, "", "   ", "\t\n" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertFalse("a remote listener must not serve without a token", //$NON-NLS-1$
+                HttpTransport.isAuthorized(erased, null, REMOTE));
+            assertFalse("nor with any credential the caller invents", //$NON-NLS-1$
+                HttpTransport.isAuthorized(erased, "Bearer anything", REMOTE)); //$NON-NLS-1$
+            assertFalse("nor with an empty one, which must not match the empty preference", //$NON-NLS-1$
+                HttpTransport.isAuthorized(erased, "Bearer ", REMOTE)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testTheLoopbackDefaultStillNeedsNoToken()
+    {
+        // The other direction of the same rule: the default bind is protected by being loopback,
+        // and requiring a token there would break every existing local setup.
+        for (String erased : new String[] { null, "", "   ", "\t\n" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("no token on loopback means authentication is off", //$NON-NLS-1$
+                HttpTransport.isAuthorized(erased, null, LOOPBACK));
+            assertTrue("and a client sending one anyway is still served", //$NON-NLS-1$
+                HttpTransport.isAuthorized(erased, "Bearer anything", LOOPBACK)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testNormalizeTokenIsWhatBothDecisionsRead()
+    {
         assertEquals("", HttpTransport.normalizeToken(null)); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("", HttpTransport.normalizeToken("  \t ")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("s3cret", HttpTransport.normalizeToken(" s3cret ")); //$NON-NLS-1$ //$NON-NLS-2$

@@ -37,6 +37,15 @@ public class McpServer
     private HttpServer server;
     private int port;
     private volatile boolean running = false;
+
+    /**
+     * Whether the LISTENER that is up was bound to every interface. It is the snapshot that
+     * passed {@link #remoteBindRefusal}, not a preference read: the preference page persists a
+     * changed token without restarting the server, so the live value can no longer describe the
+     * socket that is open. The authorizer needs this one, or a token edited to nothing would
+     * turn authentication off underneath a listener the network can reach.
+     */
+    private volatile boolean boundRemotely = false;
     
     /** Request counter - use AtomicLong for thread safety */
     private final AtomicLong requestCount = new AtomicLong(0);
@@ -114,6 +123,7 @@ public class McpServer
             ? new InetSocketAddress(port)
             : new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
         server = HttpServer.create(bindAddress, 0);
+        boundRemotely = allowRemote;
         Activator.logInfo("MCP Server binding to " //$NON-NLS-1$
             + (allowRemote ? "all interfaces (remote access enabled)" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$
             + " on port " + port); //$NON-NLS-1$
@@ -246,6 +256,9 @@ public class McpServer
      */
     public synchronized void stop()
     {
+        // Cleared unconditionally: no listener is open after this, whichever way the last start
+        // ended, and a stale "bound remotely" must not outlive the socket it described.
+        boundRemotely = false;
         if (server != null)
         {
             server.stop(1);
@@ -298,6 +311,16 @@ public class McpServer
     public boolean isRunning()
     {
         return running;
+    }
+
+    /**
+     * Whether the open listener accepts connections from other hosts.
+     *
+     * @return true if the running server was bound to every interface
+     */
+    public boolean isBoundRemotely()
+    {
+        return boundRemotely;
     }
 
     /**

@@ -112,25 +112,32 @@ public final class HttpTransport
      * @param exchange the HTTP exchange
      * @return true if authorized (or auth disabled), false otherwise
      */
-    public static boolean isAuthorized(HttpExchange exchange)
+    public static boolean isAuthorized(HttpExchange exchange, boolean boundRemotely)
     {
-        return isAuthorized(configuredAuthToken(), exchange.getRequestHeaders().getFirst("Authorization")); //$NON-NLS-1$
+        return isAuthorized(configuredAuthToken(), exchange.getRequestHeaders().getFirst("Authorization"), //$NON-NLS-1$
+            boundRemotely);
     }
 
     /**
-     * The same decision as a pure function of the two strings, so it is unit-testable without a
+     * The same decision as a pure function of its inputs, so it is unit-testable without a
      * preference store or an {@link HttpExchange}.
      *
      * @param configuredToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
      * @param authorizationHeader the request's {@code Authorization} header (may be {@code null})
+     * @param boundRemotely whether the OPEN listener accepts connections from other hosts
      * @return true if authorized (or auth disabled), false otherwise
      */
-    static boolean isAuthorized(String configuredToken, String authorizationHeader)
+    static boolean isAuthorized(String configuredToken, String authorizationHeader, boolean boundRemotely)
     {
         String token = normalizeToken(configuredToken);
         if (token.isEmpty())
         {
-            return true; // authentication disabled (default)
+            // A listener on every interface exists only BECAUSE a token was set when it was
+            // bound - and the preference page saves a changed token without restarting the
+            // server, so by now the token may be gone. Refuse everything rather than serve the
+            // network unauthenticated; the operator restores service by setting a token again
+            // (or by restarting, which the bind refusal then answers for).
+            return !boundRemotely;
         }
         if (authorizationHeader == null)
         {
