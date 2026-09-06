@@ -71,7 +71,11 @@ jobs:
 
       - name: JaCoCo coverage report
         working-directory: mcp
-        run: mvn --batch-mode --no-transfer-progress -pl bundles/com.ditrix.edt.mcp.server jacoco:report
+        # targets/default is named alongside the bundle because Tycho 5 resolves the target
+        # platform even for a plain jacoco:report: with the bundle alone in the reactor it
+        # looks for com.ditrix.edt.mcp:default:target in the local repository, which verify
+        # never installs there. Keeping the module in the reactor supplies it.
+        run: mvn --batch-mode --no-transfer-progress -pl targets/default,bundles/com.ditrix.edt.mcp.server jacoco:report
 
       - name: SonarQube Cloud analysis
         if: env.SONAR_TOKEN != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
