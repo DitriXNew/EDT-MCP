@@ -35,12 +35,16 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *   <li><b>env {@code EDT_MCP_DESTRUCTIVE_CONSENT}</b> ({@code allow}/{@code ask},
  *       case-insensitive, read like {@code Toolsets.ENV_PROGRESSIVE_DISCLOSURE}) —
  *       {@code allow} WINS and returns {@link ConsentDecision#ALLOW} without any UI.
- *       This is the automated-run bypass the destructive e2e suite relies on.</li>
+ *       This is the automated-run bypass the destructive e2e suite relies on, and the
+ *       ONLY way a destructive operation proceeds with nobody watching; each such allow
+ *       logs an audit line naming the tool and its preview.</li>
  *   <li><b>Headless</b>: if there is no live workbench display or no active shell
  *       (via {@link LaunchLifecycleUtils#workbenchDisplayOrNull()} /
- *       {@link LaunchLifecycleUtils#grabActiveShell()}) → {@link ConsentDecision#ALLOW}
- *       plus a logged info line. NEVER {@code syncExec} against a null/disposed
- *       display; NEVER block.</li>
+ *       {@link LaunchLifecycleUtils#grabActiveShell()}) →
+ *       {@link ConsentDecision#UNATTENDED} plus a logged info line. NEVER
+ *       {@code syncExec} against a null/disposed display; NEVER block. This step
+ *       REFUSES: with no human to ask, consent for an unattended run is the operator's
+ *       to grant at launch (step 1), not the missing display's to grant for them.</li>
  *   <li><b>In-memory session-allow</b>: a per-tool {@link Set} populated by the
  *       dialog's "Allow for session" button. A gated tool the user allowed for the
  *       session this EDT run proceeds without a dialog.</li>
@@ -73,9 +77,10 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  * waits at most {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277); it NEVER blocks
  * at all in a headless / env-bypass / non-ASK (level-2/session/per-tool-allowed)
  * path; it does not deadlock when already on the UI thread; and a non-
- * {@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT} or
- * {@link ConsentDecision#TIMEOUT}) mutates nothing (it only returns the decision, and
- * the caller turns it into an error via {@link #consentDeniedMessage(ConsentDecision, String)}).
+ * {@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT},
+ * {@link ConsentDecision#TIMEOUT} or {@link ConsentDecision#UNATTENDED}) mutates nothing
+ * (it only returns the decision, and the caller turns it into an error via
+ * {@link #consentDeniedMessage(ConsentDecision, String)}).
  */
 public final class DestructiveConsentGate // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
@@ -113,15 +118,20 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
 
     /**
      * The frozen set of destructive tool NAMEs the gate protects: the five
-     * always-destructive tools plus {@code modify_metadata} and {@code dcs} (gated only for a
-     * destructive retype — each tool decides when to call, the gate does not).
+     * always-destructive tools plus the conditionally destructive ones —
+     * {@code modify_metadata} and {@code dcs} (gated only for a destructive retype),
+     * {@code git} (gated per write-capable subcommand) and {@code evaluate_expression}
+     * (gated always, because arbitrary BSL cannot be classified). Each tool decides
+     * when to call, the gate does not.
      *
      * <p>Related to but deliberately NOT equal to
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
      * {@code delete_launch_config} (which is cheap/recoverable and NOT gated) and
-     * omits {@code modify_metadata} (whose destructiveness is conditional). The exact
-     * relationship is asserted by {@code DestructiveConsentGateTest} so the two lists
-     * never silently drift.
+     * omits the conditional four, whose TYPICAL call is not destructive and whose hint
+     * therefore stays {@code false} — one hint per tool cannot say "this depends on the
+     * arguments", and marking a mostly-read tool destructive would steer clients away
+     * from it. The exact relationship is asserted by {@code DestructiveConsentGateTest}
+     * so the two lists never silently drift.
      */
     public static final Set<String> GATED_TOOLS = Set.of(
         "delete_metadata", //$NON-NLS-1$
@@ -135,7 +145,14 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since
         // whether one destroys work depends on git's per-subcommand option grammar - see
         // GitTool.destructiveForm.
-        "git" //$NON-NLS-1$
+        "git", //$NON-NLS-1$
+        // Arbitrary BSL in the running application: its own description says so ("executes
+        // arbitrary code in the running application - it can change state, not just read it"),
+        // and unlike every other entry here the damage is unbounded and undeclarable - the
+        // expression can call anything the 1C session can, so no preview can enumerate what it
+        // will touch. set_variable is deliberately NOT gated beside it: it assigns one named
+        // variable in one suspended frame, which IS bounded and IS shown to the caller.
+        "evaluate_expression" //$NON-NLS-1$
     );
 
     private static final DestructiveConsentGate INSTANCE = new DestructiveConsentGate();
@@ -174,7 +191,20 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
          * {@link DestructiveConsentGate#consentDeniedMessage(ConsentDecision, String)},
          * distinct from a human's explicit {@link #REJECT}.
          */
-        TIMEOUT
+        TIMEOUT,
+        /**
+         * There was nobody to ask: no live workbench display or shell (a headless EDT), or
+         * the display went away between the probe and the prompt. A REJECT-like verdict with
+         * its own actionable text naming the two ways to opt in.
+         *
+         * <p>This used to be an ALLOW. The gate exists to stop an agent destroying something
+         * without a human, and "no human is present" is the case it was least entitled to
+         * decide by itself: an agent that can start EDT headless removed the gate by doing so.
+         * Consent for an unattended run is now something the OPERATOR grants at launch
+         * ({@link DestructiveConsentGate#ENV_DESTRUCTIVE_CONSENT}{@code =allow}, step 1) rather
+         * than something the absence of a display grants on their behalf.</p>
+         */
+        UNATTENDED
     }
 
     /**
@@ -205,20 +235,28 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      */
     public ConsentDecision requireConsent(String toolName, ConsentPreview preview)
     {
-        // Step 1 — env bypass WINS (the automated-run / e2e path).
+        // Step 1 — env bypass WINS (the automated-run / e2e path). It leaves an audit line
+        // naming the tool and what it was about to do: this is the one path where a
+        // destructive operation proceeds with nobody watching, so the run must at least be
+        // readable afterwards in the EDT log.
         if (isEnvAllow())
         {
+            Activator.logInfo("Destructive-consent gate: " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
+                + "=allow bypassed the prompt for '" + toolName + "' — " + describe(preview)); //$NON-NLS-1$ //$NON-NLS-2$
             return ConsentDecision.ALLOW;
         }
 
-        // Step 2 — headless probe: never syncExec / block without a live display+shell.
+        // Step 2 — headless probe: never syncExec / block without a live display+shell. With no
+        // human to ask, the answer is NO. Consent for an unattended run comes from the operator
+        // at launch (step 1), not from the absence of a display.
         Display display = LaunchLifecycleUtils.workbenchDisplayOrNull();
         Shell shell = display != null ? LaunchLifecycleUtils.grabActiveShell() : null;
         if (display == null || display.isDisposed() || shell == null)
         {
-            Activator.logInfo("Destructive-consent gate: no active UI session — allowing '" //$NON-NLS-1$
-                + toolName + "' without a prompt (headless/unattended)."); //$NON-NLS-1$
-            return ConsentDecision.ALLOW;
+            Activator.logInfo("Destructive-consent gate: no active UI session — refusing '" //$NON-NLS-1$
+                + toolName + "' (headless/unattended; set " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
+                + "=allow at launch to permit it)."); //$NON-NLS-1$
+            return ConsentDecision.UNATTENDED;
         }
 
         // Steps 3-5 — pure decision from the resolved sources.
@@ -237,7 +275,9 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
     /**
      * Builds the {@link ToolResult#error(String)} text for a non-{@link ConsentDecision#ALLOW}
      * verdict from {@link #requireConsent}. Called at each gated tool's confirm-point in
-     * place of the previously-inlined literal, so both texts live in one place:
+     * place of the previously-inlined literal, so all three texts live in one place:
+     * {@link ConsentDecision#UNATTENDED} names the launch bypass that would have let the
+     * call through and the workbench that could confirm it;
      * {@link ConsentDecision#REJECT} keeps the original, unchanged
      * {@code "Operation declined by user"} text; {@link ConsentDecision#TIMEOUT} gets
      * its own actionable text naming the tool, the {@link #CONSENT_PROMPT_TIMEOUT_SECONDS}
@@ -253,6 +293,14 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      */
     public static String consentDeniedMessage(ConsentDecision decision, String toolName)
     {
+        if (decision == ConsentDecision.UNATTENDED)
+        {
+            return "Destructive operation '" + toolName + "' needs a human to confirm it, and this " //$NON-NLS-1$ //$NON-NLS-2$
+                + "EDT has no UI session to ask (headless or shutting down), so it was refused and " //$NON-NLS-1$
+                + "nothing was changed. To run it unattended, set " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
+                + "=allow on the EDT process at launch; otherwise re-run it on an EDT workbench " //$NON-NLS-1$
+                + "with a window open and answer the confirmation dialog."; //$NON-NLS-1$
+        }
         if (decision == ConsentDecision.TIMEOUT)
         {
             return "Destructive operation '" + toolName + "' was not confirmed within " //$NON-NLS-1$ //$NON-NLS-2$
@@ -353,7 +401,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         // the neighbouring SWT auto-confirmer). See #222 review.
         if (display.isDisposed())
         {
-            return allowOnDisposedDisplay(toolName);
+            return refuseOnDisposedDisplay(toolName);
         }
         return promptWithTimeout(toolName, preview, display, shell);
     }
@@ -448,7 +496,7 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         }
         catch (SWTException e) // NOSONAR display disposed in the gap between the check above and this call -> allow (headless fallback)
         {
-            return allowOnDisposedDisplay(toolName);
+            return refuseOnDisposedDisplay(toolName);
         }
 
         boolean decidedInTime;
@@ -579,17 +627,52 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
 
     /**
      * The disposed-display fallback: the workbench closed between the live-display check in
-     * {@link #requireConsent} and the prompt, so there is no UI to ask — allow (the same policy as
-     * the headless / no-shell path), logging it, never failing the destructive tool. See #222.
+     * {@link #requireConsent} and the prompt, so there is no UI to ask — the same policy as the
+     * headless / no-shell path, logged, never letting an {@link SWTException} escape as the
+     * tool's failure. See #222 for why this path exists at all; it answered ALLOW until #566,
+     * on the reasoning that a shutdown race should not fail a destructive tool. It should: a
+     * dialog that was never shown is not a human who agreed, and the caller can retry.
      *
      * @param toolName the tool being gated
-     * @return {@link ConsentDecision#ALLOW}
+     * @return {@link ConsentDecision#UNATTENDED}
      */
-    private static ConsentDecision allowOnDisposedDisplay(String toolName)
+    private static ConsentDecision refuseOnDisposedDisplay(String toolName)
     {
         Activator.logInfo("Destructive-consent gate: display disposed before/while prompting for '" //$NON-NLS-1$
-            + toolName + "'; allowing (headless fallback)."); //$NON-NLS-1$
-        return ConsentDecision.ALLOW;
+            + toolName + "'; refusing (nothing was confirmed)."); //$NON-NLS-1$
+        return ConsentDecision.UNATTENDED;
+    }
+
+    /**
+     * A one-line, bounded rendering of a {@link ConsentPreview} for the env-bypass audit line.
+     * The preview is already bounded (a title, a subtitle and a short list of top names), so
+     * this cannot flood the log with a large payload.
+     *
+     * @param preview the preview the gated tool computed, or {@code null}
+     * @return a single line describing the pending operation; never {@code null}
+     */
+    private static String describe(ConsentPreview preview)
+    {
+        if (preview == null)
+        {
+            return "no preview supplied"; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder();
+        if (preview.getTitle() != null)
+        {
+            sb.append(preview.getTitle());
+        }
+        if (preview.getSubtitle() != null)
+        {
+            sb.append(sb.length() > 0 ? ": " : "").append(preview.getSubtitle()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        sb.append(sb.length() > 0 ? " " : "").append('(').append(preview.getTotalCount()) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" item(s)"); //$NON-NLS-1$
+        if (!preview.getTopNames().isEmpty())
+        {
+            sb.append(": ").append(String.join(", ", preview.getTopNames())); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.append(')').toString();
     }
 
     /**

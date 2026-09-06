@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertNotEquals;
 
 import static org.junit.Assert.assertNull;
 
@@ -73,20 +74,33 @@ public class DestructiveConsentGateTest
     }
 
     // =====================================================================
-    // Step 2 — headless: no active UI session -> ALLOW (never blocks)
+    // Step 2 — headless: no active UI session -> UNATTENDED (never blocks, never allows)
     // =====================================================================
 
     @Test
-    public void headlessAllowsWithoutPrompt()
+    public void headlessRefusesWithoutPrompt()
     {
-        // In the headless unit-test JVM there is no workbench display / active shell,
-        // so requireConsent must take the headless path and ALLOW without any SWT.
-        // (The e2e-launch env is set on the EDT process, not on this test run, so
-        // step 1 does not mask this — but either way the verdict is ALLOW.)
+        // In the headless unit-test JVM there is no workbench display / active shell, so
+        // requireConsent takes the headless path with no SWT. It must REFUSE (issue #566):
+        // before that, the absence of a display granted consent on the operator's behalf, so
+        // an agent that started EDT headless removed the gate by doing so.
+        //
+        // Which verdict is correct depends on the environment this JVM was started with, and
+        // both branches are a real assertion: with the launch bypass set, step 1 wins BEFORE the
+        // headless probe is reached and the answer must still be ALLOW - that bypass is what the
+        // unattended e2e suite runs on and this test must not silently certify its removal.
         ConsentDecision decision =
             DestructiveConsentGate.getInstance().requireConsent(TOOL, null);
-        assertEquals("Headless / unattended must ALLOW, never block", //$NON-NLS-1$
-            ConsentDecision.ALLOW, decision);
+        if (DestructiveConsentGate.isEnvAllow())
+        {
+            assertEquals("with EDT_MCP_DESTRUCTIVE_CONSENT=allow, step 1 must still allow", //$NON-NLS-1$
+                ConsentDecision.ALLOW, decision);
+        }
+        else
+        {
+            assertEquals("Headless / unattended must REFUSE, and never block", //$NON-NLS-1$
+                ConsentDecision.UNATTENDED, decision);
+        }
     }
 
     // =====================================================================
@@ -167,7 +181,8 @@ public class DestructiveConsentGateTest
     {
         assertEquals("GATED_TOOLS must be exactly the frozen set", //$NON-NLS-1$
             Set.of("delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "delete_infobase", "update_database", "modify_metadata", "dcs", "git"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "delete_infobase", "update_database", "modify_metadata", "dcs", "git", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "evaluate_expression"), //$NON-NLS-1$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
@@ -176,10 +191,13 @@ public class DestructiveConsentGateTest
     {
         // Every gated tool is a destructive MCP write EXCEPT the CONDITIONALLY destructive ones:
         // modify_metadata (only a type/composite-type change), dcs (only a plain-attribute dynamic-list
-        // conversion), and git (only the commands that destroy work - see GitTool.destructiveForm).
-        // Those three carry their own annotations and are
-        // deliberately NOT in the always-destructive classifier list.
-        Set<String> conditionallyDestructive = Set.of("modify_metadata", "dcs", "git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // conversion), git (only the commands that destroy work - see GitTool.destructiveForm), and
+        // evaluate_expression (arbitrary BSL: usually a read, occasionally a mutation, and nothing
+        // in the call says which - which is exactly why the GATE asks every time while the HINT,
+        // one per tool, keeps describing the typical read). Those four carry their own annotations
+        // and are deliberately NOT in the always-destructive classifier list.
+        Set<String> conditionallyDestructive =
+            Set.of("modify_metadata", "dcs", "git", "evaluate_expression"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
         {
             boolean classifiedDestructive =
@@ -362,5 +380,40 @@ public class DestructiveConsentGateTest
             message.contains("EDT_MCP_DESTRUCTIVE_CONSENT")); //$NON-NLS-1$
         assertTrue("must mention re-running / answering promptly as the third remedy", //$NON-NLS-1$
             message.contains("re-run")); //$NON-NLS-1$
+    }
+
+    // =====================================================================
+    // Issue #566 — the headless path REFUSES, and says how to opt in
+    // =====================================================================
+
+    @Test
+    public void consentDeniedMessageForUnattendedNamesTheLaunchBypassAndTheWorkbench()
+    {
+        String message = DestructiveConsentGate.consentDeniedMessage(ConsentDecision.UNATTENDED, TOOL);
+
+        assertTrue("must name the tool", message.contains(TOOL)); //$NON-NLS-1$
+        assertTrue("must name the launch bypass that would have allowed it", //$NON-NLS-1$
+            message.contains("EDT_MCP_DESTRUCTIVE_CONSENT=allow")); //$NON-NLS-1$
+        assertTrue("must say the operation did NOT happen", //$NON-NLS-1$
+            message.contains("nothing was changed")); //$NON-NLS-1$
+        assertTrue("must point at the other remedy - an EDT with a window", //$NON-NLS-1$
+            message.contains("workbench")); //$NON-NLS-1$
+        assertNotEquals("it must not be the generic decline text - the operator did not decline", //$NON-NLS-1$
+            DestructiveConsentGate.consentDeniedMessage(ConsentDecision.REJECT, TOOL), message);
+    }
+
+    @Test
+    public void unattendedIsARefusalNotAnAllow()
+    {
+        // The whole point of #566: every caller tests `decision != ALLOW`, so the headless verdict
+        // has to be a value that is not ALLOW - if UNATTENDED ever became an alias for it, the
+        // gate would be fail-open again and every one of those call sites would proceed.
+        assertNotEquals(ConsentDecision.ALLOW, ConsentDecision.UNATTENDED);
+        for (ConsentDecision refusal : new ConsentDecision[] {ConsentDecision.REJECT,
+            ConsentDecision.TIMEOUT, ConsentDecision.UNATTENDED})
+        {
+            assertNotEquals("every refusal must be distinguishable from ALLOW", //$NON-NLS-1$
+                ConsentDecision.ALLOW, refusal);
+        }
     }
 }

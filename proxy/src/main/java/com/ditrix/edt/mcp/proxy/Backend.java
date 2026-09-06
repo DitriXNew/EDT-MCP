@@ -316,7 +316,19 @@ public final class Backend
         String body;
         try (InputStream in = response.body())
         {
-            body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // Bounded by the same cap the proxy applies everywhere else it buffers a body
+            // (McpProxyHandler.MAX_BODY_BYTES): this response is held whole in memory to strip
+            // its SSE framing, and it arrives on a discovery/fan-out worker where an
+            // unterminated or huge body would grow unopposed.
+            byte[] bytes = in.readNBytes(McpProxyHandler.MAX_BODY_BYTES + 1);
+            if (bytes.length > McpProxyHandler.MAX_BODY_BYTES)
+            {
+                throw new IOException("Response to '" + toolName + "' from backend port " + port //$NON-NLS-1$ //$NON-NLS-2$
+                    + " exceeds the " + McpProxyHandler.MAX_BODY_BYTES //$NON-NLS-1$
+                    + "-byte limit the proxy can buffer; call that backend directly for a result " //$NON-NLS-1$
+                    + "this large."); //$NON-NLS-1$
+            }
+            body = new String(bytes, StandardCharsets.UTF_8);
         }
         return stripSseFraming(body);
     }

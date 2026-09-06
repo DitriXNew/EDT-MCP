@@ -348,9 +348,12 @@ jobs:
           export EDT_MCP_AUTO_START=true
           export EDT_MCP_PORT="$MCP_PORT"
           # Destructive-consent gate bypass for automation: the e2e harness is HTTP-only and cannot set
-          # a server preference, so the bypass lives on the EDT PROCESS. Without it the destructive e2e
-          # tests (delete_metadata / rename_metadata_object / delete_project / delete_infobase /
-          # update_database / a type-change modify_metadata) would HANG forever on the default ASK dialog.
+          # a server preference, so the bypass lives on the EDT PROCESS. Without it every gated e2e
+          # test (delete_metadata / rename_metadata_object / delete_project / delete_infobase /
+          # update_database / a type-change modify_metadata / a write-capable git / a dcs retype /
+          # evaluate_expression) would FAIL here: this EDT is headless, and a gate with no human to
+          # ask now refuses instead of allowing (issue #566) - this variable is what grants consent
+          # for an unattended run, and it must stay set.
           export EDT_MCP_DESTRUCTIVE_CONSENT=allow
           # Three fixture projects, one per EDT project KIND: the base configuration, the
           # extension, and the external-objects project (issue #309 - a project whose roots are

@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.transport;
 
 import com.ditrix.edt.mcp.server.ActiveToolCall;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.protocol.ClientCapabilities;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
 import com.sun.net.httpserver.HttpExchange;
@@ -50,7 +51,7 @@ public class InterruptibleToolExecutor
         // The clock starts before the parse: the history reports the whole exchange.
         long startNanos = System.nanoTime();
         // Extract request ID and tool name for ActiveToolCall via the shared parser.
-        return execute(exchange, requestBody, protocolHandler.parse(requestBody), startNanos);
+        return execute(exchange, requestBody, protocolHandler.parse(requestBody), startNanos, null);
     }
 
     /**
@@ -62,10 +63,13 @@ public class InterruptibleToolExecutor
      * @param request the body parsed by the caller, or {@code null} on a JSON syntax error
      * @param startNanos {@link System#nanoTime()} as read by the caller before it parsed, so the
      *            recorded duration covers the parse the caller already did
+     * @param sessionCapabilities the capabilities of the session this call arrived on, or
+     *            {@code null} for a caller with no session
      * @return the response, or {@code null} if the response was already sent (interrupted)
      * @throws Exception if tool execution failed (propagated to the caller for error mapping)
      */
-    public String execute(HttpExchange exchange, String requestBody, JsonRpcRequest request, long startNanos) // NOSONAR propagates checked exceptions across the reflective boundary by design
+    public String execute(HttpExchange exchange, String requestBody, JsonRpcRequest request, long startNanos, // NOSONAR propagates checked exceptions across the reflective boundary by design
+        ClientCapabilities sessionCapabilities)
         throws Exception
     {
         Object requestId = request != null ? McpProtocolHandler.normalizeId(request.getId()) : null;
@@ -84,7 +88,8 @@ public class InterruptibleToolExecutor
         Thread executionThread = new Thread(() -> {
             try
             {
-                resultContainer[0] = protocolHandler.processRequest(requestBody, request, startNanos);
+                resultContainer[0] =
+                    protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities);
             }
             catch (Exception e)
             {

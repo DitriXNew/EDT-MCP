@@ -215,9 +215,10 @@ MODEL_RESET_BUDGET = int(os.environ.get(
 PROTOCOL_VERSION = os.environ.get("MCP_PROTOCOL_VERSION", "2025-11-25")
 
 _REQUEST_ID = 0
-# Captured from the server's InitializeResult response (Mcp-Session-Id header). When
-# the server issues one, every subsequent request MUST echo it (2025-11-25 spec).
-# Our server is currently session-less, so this stays None and nothing is sent.
+# Captured from the server's InitializeResult response (Mcp-Session-Id header). The server
+# issues one on every initialize and VALIDATES it from then on (400 without it, 404 for an
+# unknown or terminated one), so echoing it is not optional: without initialize() having run,
+# every call below would be refused.
 _SESSION_ID = None
 
 
