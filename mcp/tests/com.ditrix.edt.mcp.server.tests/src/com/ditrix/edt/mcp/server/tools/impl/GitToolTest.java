@@ -25,6 +25,7 @@ import java.util.List;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.tools.impl.GitTool.CommandRejectedException;
 
@@ -1509,6 +1510,25 @@ public class GitToolTest
         assertNotNull(GitTool.destructiveForm(argv("checkout", "--forc", "main"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNotNull(GitTool.destructiveForm(argv("merge", "--abort"))); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull(GitTool.destructiveForm(argv("stash", "pop"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void gitArgumentsAreShownToAHumanAndKeptOutOfTheLog()
+    {
+        // A git command carries the caller's own free text - commit -m, tag -m, stash save - and
+        // the unattended bypass writes its preview into <workspace>/.metadata/.log, a file that
+        // outlives the run and travels with bug reports. A credential URL is refused earlier by
+        // parseCommand, but nothing can prove a MESSAGE holds no token, so the arguments are
+        // marked unloggable.
+        ConsentPreview preview = GitTool.consentPreview("commit", //$NON-NLS-1$
+            argv("commit", "-m", "wip: token=ghp_secretvalue")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("git arguments are caller text and must not reach the audit line", //$NON-NLS-1$
+            preview.areNamesLoggable());
+        assertTrue("but the human deciding must still see the whole command", //$NON-NLS-1$
+            preview.getTopNames().get(0).contains("token=ghp_secretvalue")); //$NON-NLS-1$
+        assertTrue("and the subcommand stays in the title, which IS logged", //$NON-NLS-1$
+            preview.getTitle().contains("commit")); //$NON-NLS-1$
     }
 
     @Test

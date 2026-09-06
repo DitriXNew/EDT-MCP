@@ -865,10 +865,11 @@ Configure it in **Window → Preferences → MCP Server**:
 set the environment variable **`EDT_MCP_DESTRUCTIVE_CONSENT=allow`** on the EDT process before launch —
 it overrides the preference and lets every gated operation proceed without a dialog (the same knob the
 e2e suite uses). Every such allow is logged with the tool name and its preview, so an unattended run
-leaves an audit trail in the EDT log — with one deliberate omission: `evaluate_expression`'s preview
-*is* the caller's BSL, which can carry a password or a token, so its audit line records how many
-characters ran and never any part of them. The dialog only ever appears on a live UI session at the
-*Ask* level.
+leaves an audit trail in the EDT log — with one deliberate omission. Where a preview's content is the
+caller's OWN text — `evaluate_expression`'s BSL, `git`'s arguments — it can carry a password or a
+token, so the audit line records how many characters ran and never any part of them; the human at the
+dialog still sees the whole thing. The dialog only ever appears on a live UI session at the *Ask*
+level.
 
 **A headless EDT REFUSES a gated operation** (it still never blocks): with no workbench window there is
 nobody to ask, and the gate's job is to stop a destructive write that no human agreed to — so consent

@@ -3418,16 +3418,42 @@ public class GitTool implements IMcpTool
         {
             return null;
         }
-        ConsentPreview preview = new ConsentPreview("git " + destructiveForm, //$NON-NLS-1$
-            "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
-            List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
         DestructiveConsentGate.ConsentDecision decision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+            DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview(destructiveForm, argv));
         if (decision == DestructiveConsentGate.ConsentDecision.ALLOW)
         {
             return null;
         }
         return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+    }
+
+    /**
+     * The preview a human sees before a write-capable git command runs - and which the unattended
+     * bypass audits.
+     * <p>
+     * The arguments are shown in FULL: deciding whether to allow {@code push --force origin main}
+     * means reading it. They are marked UNLOGGABLE all the same, because a git command carries the
+     * caller's own free text - {@code commit -m}, {@code tag -m}, {@code stash save} - and nothing
+     * here can prove a message holds no token. What the command DID is not lost by that: unlike an
+     * evaluated expression, a git operation records itself in the repository (the reflog, the
+     * commit, the remote), while the audit line's own job - that this tool ran destructively with
+     * nobody watching, and which subcommand - is carried by the title.
+     * </p>
+     * <p>
+     * A credential URL is a separate and stricter story: {@code parseCommand} refuses one outright
+     * (userinfo, a {@code ?}/{@code #} credential, a transport helper, an unsafe scheme), so it
+     * never reaches this method at all.
+     * </p>
+     *
+     * @param destructiveForm the write-capable subcommand, as named by {@link #destructiveForm}
+     * @param argv the validated argument vector ({@code argv[0]} is git)
+     * @return the preview to put in front of the gate
+     */
+    static ConsentPreview consentPreview(String destructiveForm, List<String> argv)
+    {
+        return ConsentPreview.withUnloggableNames("git " + destructiveForm, //$NON-NLS-1$
+            "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
     }
 
     /**
