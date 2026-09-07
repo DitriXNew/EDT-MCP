@@ -7,12 +7,19 @@
 package com.ditrix.edt.mcp.server.groups.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import java.util.List;
 
 import javax.xml.parsers.DocumentBuilder;
@@ -58,7 +65,7 @@ public class GroupNavigatorContentDeclarationTest
 {
     private static final String GROUPS_CONTENT_ID = "com.ditrix.edt.mcp.server.groups.navigatorContent"; //$NON-NLS-1$
 
-    private static final String EDT_CONTENT_ID = "com._1c.g5.v8.dt.navigator.ui.v8model"; //$NON-NLS-1$
+    private static final String EDT_NAVIGATOR_VIEWER_ID = "com._1c.g5.v8.dt.ui2.navigator"; //$NON-NLS-1$
 
     private static final String GROUP_NODE_TYPE = "com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"; //$NON-NLS-1$
 
@@ -88,53 +95,138 @@ public class GroupNavigatorContentDeclarationTest
 
 
     @Test
-    public void groupNodesOutrankThePlatformsOwnNavigatorContent()
+    public void groupNodesOutrankEveryContentBoundToTheSameViewer()
     {
         // The floor above proves nothing can outrank us; it does not prove we outrank the tree's
         // ordinary contents, because a peer is free to take the floor as well. That is the part
-        // #521 is actually about, so it is asserted against the LIVE declaration in the running
-        // platform rather than a value copied into this file, which would go stale in silence.
-        String ours = registryPriorityOf(GROUPS_CONTENT_ID);
-        String platforms = registryPriorityOf(EDT_CONTENT_ID);
+        // #521 is actually about.
+        //
+        // Asked of the RUNNING platform, and asked structurally: not "is EDT's v8model still
+        // 'higher'" - an id we would be copying, which a future EDT is free to retire while
+        // leaving the old contribution registered - but "does anything BOUND TO THIS VIEWER
+        // declare a priority we do not beat". That is the population whose nodes share a tree with
+        // ours, however the platform names them.
+        Map<String, String> priorities = declaredPriorities();
+        Set<String> bound = contentIdsBoundTo(EDT_NAVIGATOR_VIEWER_ID, priorities.keySet());
 
-        assertNotNull("this test cannot see its own extension in the registry, so it would be " //$NON-NLS-1$
-            + "vacuous - the navigatorContent extension point is not populated in this runtime", //$NON-NLS-1$
-            ours);
-        assertNotNull("the registry has this plugin's navigator content but not EDT's " //$NON-NLS-1$
-            + EDT_CONTENT_ID + ", so the strict comparison cannot be made here", platforms); //$NON-NLS-1$
+        assertTrue("this test cannot see its own content extension bound to " //$NON-NLS-1$
+            + EDT_NAVIGATOR_VIEWER_ID + ", so it would be vacuous - the navigator extension " //$NON-NLS-1$
+            + "points are not populated in this runtime. Bound: " + bound, //$NON-NLS-1$
+            bound.contains(GROUPS_CONTENT_ID));
 
-        assertTrue("group nodes must sort strictly above the navigator's own contents: ours is '" //$NON-NLS-1$
-            + ours + "', the platform's is '" + platforms + "'. Equal priorities land in the same " //$NON-NLS-1$ //$NON-NLS-2$
-            + "band, where CNF orders by extension-id hash and ordinary nodes can come first - " //$NON-NLS-1$
-            + "which the declared floor alone cannot rule out. If the platform ever takes the " //$NON-NLS-1$
-            + "floor too, no priority can fix this and the placement needs a different mechanism.", //$NON-NLS-1$
-            Priority.get(ours).getValue() < Priority.get(platforms).getValue());
+        Set<String> others = new TreeSet<>(bound);
+        others.remove(GROUPS_CONTENT_ID);
+        assertFalse("nothing but our own content is bound to " + EDT_NAVIGATOR_VIEWER_ID //$NON-NLS-1$
+            + " in this runtime, so there is no ordinary content to outrank and the comparison " //$NON-NLS-1$
+            + "would prove nothing", others.isEmpty()); //$NON-NLS-1$
+
+        int ours = Priority.get(priorities.get(GROUPS_CONTENT_ID)).getValue();
+        for (String other : others)
+        {
+            int theirs = Priority.get(priorities.get(other)).getValue();
+            assertTrue("group nodes must sort strictly above every other content bound to the " //$NON-NLS-1$
+                + "same viewer: ours is " + ours + ", '" + other + "' declares " + theirs //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Equal values land in the same band, where CNF orders by extension-id hash " //$NON-NLS-1$
+                + "and the other side can come first - which the declared floor alone cannot rule " //$NON-NLS-1$
+                + "out. If something else takes the floor too, no priority can fix the placement " //$NON-NLS-1$
+                + "and it needs a different mechanism.", ours < theirs); //$NON-NLS-1$
+        }
     }
 
     /**
-     * The {@code priority} that the RUNNING platform's extension registry reports for a
-     * {@code navigatorContent} id, or {@code null} when no such contribution is present.
+     * Every {@code navigatorContent} the running platform declares, mapped to its declared
+     * {@code priority} (empty string when omitted, which CNF reads as NORMAL).
      *
-     * @param contentId the navigatorContent id
-     * @return the declared priority, or {@code null}
+     * @return id to priority, never {@code null}
      */
-    private static String registryPriorityOf(String contentId)
+    private static Map<String, String> declaredPriorities()
     {
+        Map<String, String> priorities = new HashMap<>();
         IExtensionRegistry registry = Platform.getExtensionRegistry();
         if (registry == null)
         {
-            return null;
+            return priorities;
         }
         for (IConfigurationElement element : registry
             .getConfigurationElementsFor("org.eclipse.ui.navigator.navigatorContent")) //$NON-NLS-1$
         {
-            if ("navigatorContent".equals(element.getName()) //$NON-NLS-1$
-                && contentId.equals(element.getAttribute("id"))) //$NON-NLS-1$
+            if ("navigatorContent".equals(element.getName()) && element.getAttribute("id") != null) //$NON-NLS-1$ //$NON-NLS-2$
             {
-                return element.getAttribute("priority"); //$NON-NLS-1$
+                String priority = element.getAttribute("priority"); //$NON-NLS-1$
+                priorities.put(element.getAttribute("id"), priority == null ? "" : priority); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        return null;
+        return priorities;
+    }
+
+    /**
+     * The content extension ids bound to a viewer, resolved the way CNF resolves them: every
+     * {@code <includes>} pattern of every {@code viewerContentBinding} for that viewer is a REGEX
+     * matched against the declared ids, minus anything an {@code <excludes>} pattern matches.
+     *
+     * @param viewerId the viewer to resolve bindings for
+     * @param declaredIds the ids to match the patterns against
+     * @return the bound subset, never {@code null}
+     */
+    private static Set<String> contentIdsBoundTo(String viewerId, Set<String> declaredIds)
+    {
+        Set<String> included = new TreeSet<>();
+        Set<String> excluded = new TreeSet<>();
+        IExtensionRegistry registry = Platform.getExtensionRegistry();
+        if (registry == null)
+        {
+            return included;
+        }
+        for (IConfigurationElement binding : registry
+            .getConfigurationElementsFor("org.eclipse.ui.navigator.viewer")) //$NON-NLS-1$
+        {
+            if (!"viewerContentBinding".equals(binding.getName()) //$NON-NLS-1$
+                || !viewerId.equals(binding.getAttribute("viewerId"))) //$NON-NLS-1$
+            {
+                continue;
+            }
+            collectPatternMatches(binding, "includes", declaredIds, included); //$NON-NLS-1$
+            collectPatternMatches(binding, "excludes", declaredIds, excluded); //$NON-NLS-1$
+        }
+        included.removeAll(excluded);
+        return included;
+    }
+
+    private static void collectPatternMatches(IConfigurationElement binding, String section,
+        Set<String> declaredIds, Set<String> into)
+    {
+        for (IConfigurationElement group : binding.getChildren(section))
+        {
+            for (IConfigurationElement contentExtension : group.getChildren("contentExtension")) //$NON-NLS-1$
+            {
+                String pattern = contentExtension.getAttribute("pattern"); //$NON-NLS-1$
+                if (pattern == null)
+                {
+                    continue;
+                }
+                for (String id : declaredIds)
+                {
+                    if (id.equals(pattern) || matchesPattern(pattern, id))
+                    {
+                        into.add(id);
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean matchesPattern(String pattern, String id)
+    {
+        try
+        {
+            return Pattern.matches(pattern, id);
+        }
+        catch (PatternSyntaxException e)
+        {
+            // A binding CNF itself would not compile cannot bind anything; the literal comparison
+            // in the caller has already had its say.
+            return false;
+        }
     }
     @Test
     public void theGroupsContentClaimsOnlyItsOwnNodesAsAPossibleChild() throws Exception
