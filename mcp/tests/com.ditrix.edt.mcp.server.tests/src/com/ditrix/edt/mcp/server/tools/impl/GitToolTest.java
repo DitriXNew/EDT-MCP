@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -1560,6 +1561,39 @@ public class GitToolTest
         // grammar. The failure mode of forgetting is a thinner audit line, never a leak.
         assertFalse("an unclassified subcommand must default to redacted", //$NON-NLS-1$
             GitTool.consentPreview("wibble", argv("wibble", "whatever")).areNamesLoggable()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void aTransmittedServerOptionIsCallerTextToo()
+    {
+        // push/fetch carry no message, but --push-option / --server-option transmit an arbitrary
+        // server-specific payload - a CI variable, say - which is the caller's text under a
+        // different spelling, and parseCommand does not refuse it. Both leave their own trace in
+        // the remote-tracking refs they move, so redacting them costs the audit little.
+        ConsentPreview push = GitTool.consentPreview("push", //$NON-NLS-1$
+            argv("push", "--push-option=ci.variable=TOKEN=s3cret", "origin", "main")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a transmitted push option may hold a secret and must not be logged", //$NON-NLS-1$
+            push.areNamesLoggable());
+        assertFalse("fetch transmits the same way", //$NON-NLS-1$
+            GitTool.consentPreview("fetch", argv("fetch", "--server-option=x")).areNamesLoggable()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void theAuditLineKeepsTheBoundariesBetweenArguments()
+    {
+        // Flattening argv with a plain join makes two DIFFERENT destructive operations produce the
+        // same record: restoring one path called 'a b' and restoring the two paths 'a' and 'b'.
+        // Since this line is the only record either leaves, they must not read alike.
+        String onePath = GitTool.consentPreview("restore", //$NON-NLS-1$
+            argv("restore", "--worktree", "a b")).getTopNames().get(0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String twoPaths = GitTool.consentPreview("restore", //$NON-NLS-1$
+            argv("restore", "--worktree", "a", "b")).getTopNames().get(0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertNotEquals("one path with a space must not read like two paths", onePath, twoPaths); //$NON-NLS-1$
+        assertTrue("and the one with a space must show where it ended: " + onePath, //$NON-NLS-1$
+            onePath.contains("\"a b\"")); //$NON-NLS-1$
+        assertEquals("while an ordinary command stays exactly what was sent", //$NON-NLS-1$
+            "restore --worktree a b", twoPaths); //$NON-NLS-1$
     }
 
     @Test

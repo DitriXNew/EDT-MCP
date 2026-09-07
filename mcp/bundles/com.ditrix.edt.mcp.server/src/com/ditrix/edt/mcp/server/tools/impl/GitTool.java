@@ -253,12 +253,16 @@ public class GitTool implements IMcpTool
      * deliberately absent - each accepts a message ({@code -m}, {@code -F}, or {@code stash save}
      * positionally), and the choice is per SUBCOMMAND rather than per invocation because judging
      * {@code tag -d} apart from {@code tag -m} means tracking git's per-option arity, which is
-     * exactly the thing this class refuses to reimplement elsewhere.
+     * exactly the thing this class refuses to reimplement elsewhere. {@code push} and {@code fetch} are
+     * absent for the same reason under a different spelling: {@code --push-option} /
+     * {@code --server-option} transmit an arbitrary server-specific payload (a CI variable, say),
+     * which is caller text and not a ref - and both leave their own trace anyway, in the
+     * remote-tracking refs they move.
      * </p>
      */
     private static final Set<String> LOGGABLE_ARGUMENT_SUBCOMMANDS = Set.of(
-        "restore", "checkout", "switch", "add", "branch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-        "push", "fetch", "remote", "revert", "cherry-pick"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "restore", "checkout", "switch", "add", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "branch", "remote", "revert", "cherry-pick"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /** How long the MCP call waits for the post-command workspace refresh before returning. */
     private static final long REFRESH_WAIT_SECONDS = 30;
@@ -3475,10 +3479,47 @@ public class GitTool implements IMcpTool
     {
         String title = "git " + destructiveForm; //$NON-NLS-1$
         String subtitle = "'git " + destructiveForm + "' is a write-capable subcommand."; //$NON-NLS-1$ //$NON-NLS-2$
-        List<String> arguments = List.of(String.join(" ", argv.subList(1, argv.size()))); //$NON-NLS-1$
+        List<String> arguments = List.of(renderArguments(argv.subList(1, argv.size())));
         return LOGGABLE_ARGUMENT_SUBCOMMANDS.contains(destructiveForm)
             ? new ConsentPreview(title, subtitle, 1, arguments)
             : ConsentPreview.withUnloggableNames(title, subtitle, 1, arguments);
+    }
+
+    /**
+     * Renders an argument vector as ONE line without losing where each argument ended.
+     * <p>
+     * A plain join cannot do that: restoring the single path {@code a b} and restoring the two
+     * paths {@code a} and {@code b} both flatten to {@code restore -- a b}, and since the audit
+     * line is the ONLY record those operations leave, it would not say which files were
+     * overwritten. So a token that holds whitespace, a quote, a backslash - or nothing at all -
+     * is quoted the way a shell would show it, and every other token is passed through unchanged
+     * so the common line stays exactly what the caller sent.
+     * </p>
+     *
+     * @param arguments the argument tokens, without the leading {@code git}
+     * @return a single line in which each token's boundaries survive
+     */
+    private static String renderArguments(List<String> arguments)
+    {
+        StringBuilder line = new StringBuilder();
+        for (String argument : arguments)
+        {
+            if (line.length() > 0)
+            {
+                line.append(' ');
+            }
+            if (argument.isEmpty() || argument.chars().anyMatch(
+                c -> Character.isWhitespace(c) || c == '"' || c == '\\'))
+            {
+                line.append('"').append(argument.replace("\\", "\\\\").replace("\"", "\\\"")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    .append('"');
+            }
+            else
+            {
+                line.append(argument);
+            }
+        }
+        return line.toString();
     }
 
     /**
