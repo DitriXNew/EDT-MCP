@@ -744,6 +744,21 @@ public class McpProtocolHandlerTest
         assertEquals(Boolean.TRUE, ToolCallResult.textWithStructured(failed, true).getIsError());
     }
 
+    @Test
+    public void testARefusalIsFlaggedAsAnErrorAndCarriesNoStructuredContent()
+    {
+        // The shape the disabled-tool branch answers with. It matters to the #574 invariant
+        // because enablement is the one input to the outputSchema promise that can change UNDER
+        // a client: a JSON tool can be listed with its schema and switched off before the next
+        // call, and only an error result is exempt from the obligation the schema created.
+        ToolCallResult r = ToolCallResult.refusal("Tool 'x' is disabled by the user.");
+
+        assertEquals("a refusal must be flagged as an error", Boolean.TRUE, r.getIsError());
+        assertNull("a refusal carries no structured payload - nothing ran", r.getStructuredContent());
+        assertTrue("the reason must reach the text channel",
+            r.getContent().get(0).getText().contains("disabled by the user"));
+    }
+
     /**
      * The single tool entry of a tools/list response, so a test can assert what was advertised
      * for it without restating the envelope.

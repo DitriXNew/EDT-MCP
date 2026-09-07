@@ -33,6 +33,9 @@ import org.eclipse.swt.widgets.Spinner;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.UpdateChecker;
@@ -515,19 +518,36 @@ public class GeneralTab
     /**
      * The server entry an MCP client's config file expects, ready to paste. Some agents have no UI
      * for this at all and are configured only by editing JSON, which is what #464 asked for.
+     * <p>
+     * When an auth token is set the snippet carries the {@code Authorization} header too, because
+     * without it every request to {@code /mcp} is a 401 and "ready to paste" would be a lie - and
+     * a token is mandatory for any remote-access setup, which is exactly when a config is most
+     * likely to be copied. The token is a secret, so this is the ONE place that emits it, on an
+     * explicit button press by the operator who owns it; the tooltip says so, and nothing else on
+     * this page or in any tool response ever reveals it.
+     * </p>
      *
-     * @return the JSON snippet naming this server and its URL
+     * @return the JSON snippet naming this server, its URL, and its auth header when there is one
      */
     private String mcpClientConfigJson()
     {
-        return "{\n" //$NON-NLS-1$
-            + "  \"mcpServers\": {\n" //$NON-NLS-1$
-            + "    \"EDT.MCP\": {\n" //$NON-NLS-1$
-            + "      \"type\": \"http\",\n" //$NON-NLS-1$
-            + "      \"url\": \"" + serviceUrl() + "\"\n" //$NON-NLS-1$ //$NON-NLS-2$
-            + "    }\n" //$NON-NLS-1$
-            + "  }\n" //$NON-NLS-1$
-            + "}"; //$NON-NLS-1$
+        JsonObject server = new JsonObject();
+        server.addProperty("type", "http"); //$NON-NLS-1$ //$NON-NLS-2$
+        server.addProperty("url", serviceUrl()); //$NON-NLS-1$
+        String token = HttpTransport.normalizeToken(authTokenText.getText());
+        if (!token.isEmpty())
+        {
+            JsonObject headers = new JsonObject();
+            headers.addProperty("Authorization", "Bearer " + token); //$NON-NLS-1$ //$NON-NLS-2$
+            server.add("headers", headers); //$NON-NLS-1$
+        }
+        JsonObject servers = new JsonObject();
+        servers.add("EDT.MCP", server); //$NON-NLS-1$
+        JsonObject root = new JsonObject();
+        root.add("mcpServers", servers); //$NON-NLS-1$
+        // Built through Gson rather than string concatenation so a token carrying a quote or a
+        // backslash produces valid JSON instead of a file the agent cannot parse.
+        return new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(root);
     }
 
     /**

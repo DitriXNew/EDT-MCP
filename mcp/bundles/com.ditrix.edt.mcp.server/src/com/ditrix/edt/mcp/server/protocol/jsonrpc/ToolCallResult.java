@@ -47,6 +47,29 @@ public class ToolCallResult
     }
 
     /**
+     * A refusal: the reason as text, flagged {@code isError:true}, and NO structuredContent.
+     * <p>
+     * For the case where the server declines to run a tool at all - today, a tool the user
+     * switched off. It is a refusal rather than a failure of the tool, but it is NOT a success:
+     * nothing ran, and a client told otherwise records an empty answer as the tool's output.
+     * The flag also matters to the {@code outputSchema} contract, because enablement is a
+     * MUTABLE input - a JSON tool can be listed with its schema and switched off before the next
+     * call - and an error result is exempt from that obligation, which a plain text success is
+     * not (#574).
+     * </p>
+     *
+     * @param message the reason, and what to do about it
+     * @return a text result flagged {@code isError:true}
+     */
+    public static ToolCallResult refusal(String message)
+    {
+        ToolCallResult result = new ToolCallResult();
+        result.content.add(ContentItem.text(message));
+        result.isError = Boolean.TRUE;
+        return result;
+    }
+
+    /**
      * Creates a successful JSON content result with structuredContent.
      */
     public static ToolCallResult json(Object structuredContent)

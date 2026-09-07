@@ -54,14 +54,21 @@ def test_ask_workmate_is_disabled_by_default_and_refused():
         raise AssertionError(
             "ask_workmate must be DISABLED by default: it appeared in tools/list.")
 
-    # The shared disabled-tool path answers with TEXT (not isError): a tool the user
-    # switched off is a configuration state, not a tool failure.
+    # The shared disabled-tool path answers with TEXT flagged isError and no structured
+    # payload: a refusal rather than a failure of the tool, but not a success either.
     r = call("ask_workmate", {"question": "anything"})
     expected = "Tool 'ask_workmate' is disabled by the user"
     if expected not in (r.text or ""):
         raise AssertionError(
             "a disabled tool must answer with the shared disabled-path message %r, got: %r"
             % (expected, (r.text or "")[:300]))
+    # ... and it is flagged as an error. Nothing ran, so a success would record an empty answer
+    # as this tool's output - and enablement can change between a client's tools/list and its
+    # next call, so a JSON tool's advertised outputSchema would otherwise be violated by a plain
+    # text success (#574). An error result is exempt from that obligation.
+    if not r.is_error:
+        raise AssertionError(
+            "a disabled tool must answer with isError:true, got a success: %r" % (r.text or "")[:300])
     if r.structured:
         raise AssertionError(
             "the disabled path carries no structured payload - anything here means the "

@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.jface.preference.IPreferenceStore;
@@ -185,7 +186,7 @@ public final class CheckDescriptionLoader
             {
                 return file;
             }
-            Path lower = folderPath.resolve(id.toLowerCase() + ".md"); //$NON-NLS-1$
+            Path lower = folderPath.resolve(lowerCase(id) + ".md"); //$NON-NLS-1$
             return Files.exists(lower) ? lower : null;
         }
         catch (RuntimeException e)
@@ -254,8 +255,26 @@ public final class CheckDescriptionLoader
         }
         // Same lower-case fallback the override folder gets, so a caller that upper-cases an id
         // is answered identically from either source.
-        String lower = id.toLowerCase();
+        String lower = lowerCase(id);
         return lower.equals(id) ? null : resolveShippedExact(lower);
+    }
+
+    /**
+     * Lower-cases an id the way the FILE NAMES are spelled, not the way the operator's locale
+     * spells things.
+     * <p>
+     * The default-locale {@code toLowerCase()} is a real trap here: under {@code tr_TR} it maps
+     * {@code I} to U+0131, so {@code BEGIN-TRANSACTION} would look for {@code beg\u0131n-transaction.md}
+     * and the shipped {@code begin-transaction.md} would read as undocumented - on that operator's
+     * machine only.
+     * </p>
+     *
+     * @param id the check id
+     * @return the id lower-cased under {@link Locale#ROOT}
+     */
+    private static String lowerCase(String id)
+    {
+        return id.toLowerCase(Locale.ROOT);
     }
 
     /**

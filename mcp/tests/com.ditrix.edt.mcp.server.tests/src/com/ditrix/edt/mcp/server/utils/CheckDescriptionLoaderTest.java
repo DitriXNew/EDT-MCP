@@ -12,6 +12,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Locale;
+
 import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
@@ -104,8 +106,10 @@ public class CheckDescriptionLoaderTest
     public void anUpperCasedIdResolvesToTheSameShippedFile()
     {
         // The lookup keeps the lower-case retry the pre-#31 folder lookup had, so a caller that
-        // upper-cases an id is not told the check is undocumented.
-        String upper = SHIPPED_CHECK.toUpperCase();
+        // upper-cases an id is not told the check is undocumented. Locale.ROOT on BOTH sides: the
+        // default-locale case mapping is the bug being guarded against (under tr_TR, 'i' and 'I'
+        // do not round-trip), so a test that used it would fail on the very machine it protects.
+        String upper = SHIPPED_CHECK.toUpperCase(Locale.ROOT);
         assertTrue("an upper-cased id must still resolve", CheckDescriptionLoader.has(upper)); //$NON-NLS-1$
         assertEquals("it must resolve to the same body", //$NON-NLS-1$
             CheckDescriptionLoader.load(SHIPPED_CHECK), CheckDescriptionLoader.load(upper));
