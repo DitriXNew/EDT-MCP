@@ -212,29 +212,35 @@ public final class HttpTransport
     }
 
     /**
-     * Whether a token can be put into an {@code Authorization} header at all.
+     * Whether a token can be put into an {@code Authorization} header AT ALL - by any client, not
+     * merely by a well-behaved one.
      * <p>
-     * A header field value is BYTES. A code point above {@code U+00FF} has no byte, so a
-     * spec-compliant client cannot send one: WHATWG {@code fetch} throws on a header value that
-     * is not a byte string, and the JDK's own {@code HttpClient} refuses it too. A Cyrillic
-     * token is therefore not a credential anybody can present, however configured it looks - and
-     * the endpoint stays locked with nothing on screen to say why. Control bytes are out for the
-     * same reason: they are not {@code field-content} (RFC 9110), so the request is rejected or
-     * rewritten before it arrives.
+     * Two things, and only two things, make that impossible, so only those two are here:
      * </p>
+     * <ul>
+     * <li>A code point above {@code U+00FF}. A header field value is bytes and this has none, so
+     * there is no request to send: WHATWG {@code fetch} throws on a header value that is not a
+     * byte string, the JDK's own {@code HttpClient} refuses it, and Python's {@code http.client}
+     * fails to encode it. A Cyrillic token is therefore not a credential anybody can present,
+     * however configured it looks, and the endpoint stays locked with nothing on screen to say
+     * why. That is the case this check exists for.</li>
+     * <li>A bare CR or LF, which every HTTP client blocks outright because it splits the request
+     * - header injection, not a credential.</li>
+     * </ul>
      * <p>
-     * The Latin-1 range IS deliberately allowed. It is a byte, and it survives with the clients
-     * that matter here - {@code fetch} and Python's {@code requests} both serialise a header
-     * value as ISO-8859-1, which is exactly how the JDK's server decodes it back. It is not
-     * universal (a client that writes the string's UTF-8 bytes sends two bytes for one
-     * character, and those will not compare equal), so ASCII is what the README recommends; but
-     * "some clients cannot use this" is not the same claim as "no client can", and only the
-     * second one belongs in a warning that tells someone to replace a working credential.
+     * Everything else stays in, INCLUDING things no careful client would send. Latin-1
+     * round-trips with the clients this page hands a config to ({@code fetch} and Python
+     * {@code requests} serialise a header value as ISO-8859-1, which is how the JDK's server
+     * decodes it back), and a control byte is passed through by Python's {@code http.client},
+     * which blocks only CR and LF - the listener then compares the very same character. Both
+     * would be refused by SOME clients and accepted by others, and "some clients cannot use
+     * this" is a different claim from "no client can". Only the second belongs in a warning
+     * whose advice is to replace the credential; the first belongs in the README, where it is.
      * </p>
      *
      * @param token the token as it is compared, i.e. already {@link #normalizeToken normalized}
      *            (may be {@code null})
-     * @return true when every character has a byte a client can put in the header
+     * @return true unless no client could carry this token in the header
      */
     public static boolean isTransportSafeToken(String token)
     {
@@ -245,8 +251,7 @@ public final class HttpTransport
         for (int i = 0; i < token.length(); i++)
         {
             char c = token.charAt(i);
-            boolean sendable = c == '\t' || (c >= 0x20 && c != 0x7F && c <= 0x00FF);
-            if (!sendable)
+            if (c > 0x00FF || c == '\r' || c == '\n')
             {
                 return false;
             }

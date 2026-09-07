@@ -193,9 +193,9 @@ public class HttpTransportTest
             HttpTransport.isTransportSafeToken("\u043f\u0430\u0440\u043e\u043b\u044c")); //$NON-NLS-1$
         assertFalse("nor does anything past the last byte-valued code point", //$NON-NLS-1$
             HttpTransport.isTransportSafeToken("\u0100")); //$NON-NLS-1$
-        assertFalse("nor is a control byte field-content", //$NON-NLS-1$
-            HttpTransport.isTransportSafeToken("a\u0001b")); //$NON-NLS-1$
-        assertFalse("DEL included", HttpTransport.isTransportSafeToken("a\u007fb")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor a bare CR, which every client blocks as request splitting", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("a\rb")); //$NON-NLS-1$
+        assertFalse("nor a bare LF", HttpTransport.isTransportSafeToken("a\nb")); //$NON-NLS-1$ //$NON-NLS-2$
 
         // The printable ASCII range is what a header carries - punctuation and spaces included,
         // since the credential is everything after "Bearer " and an inner space survives.
@@ -219,6 +219,12 @@ public class HttpTransportTest
             HttpTransport.isTransportSafeToken("\u00e9")); //$NON-NLS-1$
         assertTrue("and so is the very last byte-valued code point", //$NON-NLS-1$
             HttpTransport.isTransportSafeToken("\u00ff")); //$NON-NLS-1$
+        // A control byte is not something to CHOOSE, but Python's http.client blocks only CR and
+        // LF and passes this through, and the listener then compares the very same character. It
+        // is deliverable, so the page must not tell its owner the credential cannot work.
+        assertTrue("a control byte some client will actually deliver is not our business", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("a\u0001b")); //$NON-NLS-1$
+        assertTrue("nor is DEL", HttpTransport.isTransportSafeToken("a\u007fb")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("so the page must not warn about it on loopback", //$NON-NLS-1$
             HttpTransport.refusesItsOwnConfiguration("\u00e9", LOOPBACK)); //$NON-NLS-1$
         assertFalse("nor on a remote listener, where it authorizes just the same", //$NON-NLS-1$
