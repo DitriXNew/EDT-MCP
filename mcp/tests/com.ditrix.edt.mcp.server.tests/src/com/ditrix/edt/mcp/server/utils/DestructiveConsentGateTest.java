@@ -105,6 +105,51 @@ public class DestructiveConsentGateTest
         }
     }
 
+    @Test
+    public void aSessionAllowDoesNotOutrankTheHeadlessRefusal()
+    {
+        // Pins the ONE thing about requireConsent that the verdict table above cannot see: the
+        // headless probe runs BEFORE the policy, not after. Every other test here calls the pure
+        // decide() seam, which never learns whether there is a display; this one drives the whole
+        // method with the policy set to ALLOW, so the two steps disagree and the order decides.
+        //
+        // Before #566 the order genuinely did not matter - both steps answered ALLOW, so a
+        // disjunction commuted, and this branch reordered them to spare an already-allowed call
+        // the unbounded display.syncExec inside grabActiveShell. #566 killed that equivalence:
+        // the headless step now REFUSES, because the absence of a human is not entitled to grant
+        // consent on the operator's behalf. Reading the policy first would answer ALLOW here, and
+        // equally for ALLOW_ALL and for a Preferences-approved tool - re-opening the fail-open
+        // path on exactly the headless EDT #566 closed it for. No verdict-table test catches
+        // that: the test JVM has no preference store, so getLevel() answers ASK_ALWAYS, decide()
+        // yields PROMPT and the probe runs under either order. Session-allow is the one lever
+        // that needs no preference store, so it is the lever this test pulls.
+        DestructiveConsentGate gate = DestructiveConsentGate.getInstance();
+        gate.allowForSession(TOOL);
+
+        // Positive control. If allowForSession did not take, the policy would say PROMPT, the
+        // call would fall through to the probe and refuse under BOTH orders - the pin would pass
+        // while measuring nothing, which is precisely how the ratchet this test replaces came to
+        // guard the wrong order.
+        assertTrue("the policy must actually say ALLOW here, or this test proves nothing", //$NON-NLS-1$
+            gate.isSessionAllowed(TOOL));
+
+        ConsentDecision decision = gate.requireConsent(TOOL, null);
+        if (DestructiveConsentGate.isEnvAllow())
+        {
+            // The launch bypass is step 1 and outranks both; assert that it still does rather
+            // than skip, so this test cannot quietly certify its removal.
+            assertEquals("with EDT_MCP_DESTRUCTIVE_CONSENT=allow, step 1 must still win", //$NON-NLS-1$
+                ConsentDecision.ALLOW, decision);
+        }
+        else
+        {
+            assertEquals("the headless refusal must outrank a session-allow: with no display " //$NON-NLS-1$
+                + "there is nobody to have granted it, and settling the policy first would " //$NON-NLS-1$
+                + "return ALLOW for every session-allowed / ALLOW_ALL / per-tool-allowed call " //$NON-NLS-1$
+                + "on a headless EDT", ConsentDecision.UNATTENDED, decision); //$NON-NLS-1$
+        }
+    }
+
     // =====================================================================
     // Step 3 — in-memory per-tool session-allow
     // =====================================================================
