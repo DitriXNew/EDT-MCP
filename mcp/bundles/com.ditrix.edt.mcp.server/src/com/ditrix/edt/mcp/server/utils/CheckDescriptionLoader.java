@@ -181,13 +181,17 @@ public final class CheckDescriptionLoader
             {
                 return null;
             }
+            // isRegularFile, not exists: a DIRECTORY named "<id>.md" in the override folder would
+            // satisfy exists(), so has() would promise a description that readString then cannot
+            // produce - get_project_errors would flag hasDocumentation and get_check_description
+            // would answer "no description for" the same id. The two must never disagree.
             Path file = folderPath.resolve(id + ".md"); //$NON-NLS-1$
-            if (Files.exists(file))
+            if (Files.isRegularFile(file))
             {
                 return file;
             }
             Path lower = folderPath.resolve(lowerCase(id) + ".md"); //$NON-NLS-1$
-            return Files.exists(lower) ? lower : null;
+            return Files.isRegularFile(lower) ? lower : null;
         }
         catch (RuntimeException e)
         {

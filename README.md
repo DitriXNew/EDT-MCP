@@ -142,7 +142,7 @@ Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
 - **Enhance Navigator**: Controls this plugin’s contributions to the Navigator tree (groups and their filter). Turn it off to resolve conflicts with another plugin that patches the same panel
 - **Show tags in Navigator**: Display tags as decorations in the Navigator tree
 - **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
-- **Server control**: Start, stop, and restart the MCP server directly from preferences. The endpoint line shows the real URL for the port the server is actually serving, with **Copy URL** and **Copy config** buttons — the latter puts a ready `mcpServers` JSON entry on the clipboard for agents that are configured only by editing a file. If an auth token is set, that entry carries it as an `Authorization` header (it would get a 401 otherwise), so treat the copied text as a secret
+- **Server control**: Start, stop, and restart the MCP server directly from preferences. The endpoint line shows the real URL for the port the server is actually serving, with **Copy URL** and **Copy config (type/url)** buttons — the latter puts a ready `mcpServers` JSON entry on the clipboard for agents that are configured only by editing a file. That entry is the `type`/`url` form (Cursor, VS Code, Claude Code); **Cline**, **Antigravity** and **OpenCode** need the different shapes shown in their sections below. If an auth token is saved, the entry carries it as an `Authorization` header (it would get a 401 otherwise), so treat the copied text as a secret
 
 #### Tools Tab
 

@@ -469,9 +469,11 @@ public class GeneralTab
             }
         });
 
-        // The URL follows both inputs it is derived from while the page is open: the spinner, and
-        // whether a server is running (updateButtons runs on every start/stop/restart).
+        // The line follows every input it is derived from while the page is open: the spinner, the
+        // token field (an unsaved edit is called out), and whether a server is running
+        // (updateButtons runs on every start/stop/restart).
         portSpinner.addModifyListener(e -> updateEndpointLabel());
+        authTokenText.addModifyListener(e -> updateEndpointLabel());
 
         updateButtons();
     }
@@ -500,6 +502,24 @@ public class GeneralTab
     }
 
     /**
+     * The auth token the copy buttons speak for: the SAVED one, not what is currently typed.
+     * <p>
+     * Same rule as the port, for the same reason. {@code HttpTransport} reads this preference on
+     * every request, so a token becomes real the moment it is saved and not a keystroke earlier -
+     * copying an unsaved one would produce an entry the server rejects, which is the exact defect
+     * the header was added to fix. An unsaved edit is not hidden either: the endpoint line says
+     * so.
+     * </p>
+     *
+     * @return the saved token, trimmed; empty when authentication is off
+     */
+    private String effectiveAuthToken()
+    {
+        return store == null ? "" : HttpTransport.normalizeToken( //$NON-NLS-1$
+            store.getString(PreferenceConstants.PREF_AUTH_TOKEN));
+    }
+
+    /**
      * The port the endpoint line and the copy buttons speak for: the running server's, or the
      * spinner's when no server is running.
      *
@@ -516,8 +536,17 @@ public class GeneralTab
     }
 
     /**
-     * The server entry an MCP client's config file expects, ready to paste. Some agents have no UI
-     * for this at all and are configured only by editing JSON, which is what #464 asked for.
+     * The server entry a {@code mcpServers} + {@code type}/{@code url} config file expects, ready
+     * to paste. Some agents have no UI for this at all and are configured only by editing JSON,
+     * which is what #464 asked for.
+     * <p>
+     * This is ONE shape, not a universal one, and the button says so: Cursor, VS Code and Claude
+     * Code take it as written, while Cline wants {@code type: "streamableHttp"}, Antigravity a
+     * {@code serverUrl} field, and OpenCode an {@code mcp} wrapper with {@code type: "remote"} -
+     * see the README's per-client sections. Generating those from a picker would mean guessing
+     * whether each accepts an auth header, which their documented examples do not show, so it
+     * stays out until someone can verify it against the real clients.
+     * </p>
      * <p>
      * When an auth token is set the snippet carries the {@code Authorization} header too, because
      * without it every request to {@code /mcp} is a 401 and "ready to paste" would be a lie - and
@@ -534,7 +563,7 @@ public class GeneralTab
         JsonObject server = new JsonObject();
         server.addProperty("type", "http"); //$NON-NLS-1$ //$NON-NLS-2$
         server.addProperty("url", serviceUrl()); //$NON-NLS-1$
-        String token = HttpTransport.normalizeToken(authTokenText.getText());
+        String token = effectiveAuthToken();
         if (!token.isEmpty())
         {
             JsonObject headers = new JsonObject();
@@ -565,6 +594,10 @@ public class GeneralTab
         {
             text = text + " " + NLS.bind(Messages.GeneralTab_EndpointPending, //$NON-NLS-1$
                 Integer.valueOf(portSpinner.getSelection()));
+        }
+        if (!effectiveAuthToken().equals(HttpTransport.normalizeToken(authTokenText.getText())))
+        {
+            text = text + " " + Messages.GeneralTab_TokenPending; //$NON-NLS-1$
         }
         endpointLabel.setText(text);
         endpointLabel.getParent().layout();
@@ -609,6 +642,8 @@ public class GeneralTab
         String enteredToken = HttpTransport.normalizeToken(authTokenText.getText());
         authTokenText.setText(enteredToken);
         store.setValue(PreferenceConstants.PREF_AUTH_TOKEN, enteredToken);
+        // The token is now saved, so the "not saved yet" note must go.
+        updateEndpointLabel();
         store.setValue(PreferenceConstants.PREF_ENHANCE_NAVIGATOR,
             enhanceNavigatorCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, showTagsCheck.getSelection());
