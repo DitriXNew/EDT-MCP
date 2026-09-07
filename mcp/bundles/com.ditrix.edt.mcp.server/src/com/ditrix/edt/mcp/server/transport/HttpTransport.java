@@ -144,13 +144,19 @@ public final class HttpTransport
     /**
      * The same decision as a pure function of its inputs, so it is unit-testable without a
      * preference store or an {@link HttpExchange}.
+     * <p>
+     * Public so the preferences page can ask the REAL authorizer what would happen to a client
+     * it is about to hand a configuration to, rather than restating this rule in a second place
+     * that could then drift from it.
+     * </p>
      *
      * @param configuredToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
      * @param authorizationHeader the request's {@code Authorization} header (may be {@code null})
      * @param boundRemotely whether the OPEN listener accepts connections from other hosts
      * @return true if authorized (or auth disabled), false otherwise
      */
-    static boolean isAuthorized(String configuredToken, String authorizationHeader, boolean boundRemotely)
+    public static boolean isAuthorized(String configuredToken, String authorizationHeader,
+        boolean boundRemotely)
     {
         String token = normalizeToken(configuredToken);
         if (token.isEmpty())
@@ -172,6 +178,30 @@ public final class HttpTransport
             ? trimmed.substring(7).trim()
             : trimmed;
         return constantTimeEquals(token, presented);
+    }
+
+    /**
+     * Whether a listener would refuse the very client this configuration describes - an endpoint
+     * that is up and advertised, and unusable.
+     * <p>
+     * It reaches that state without anything failing: a remote listener may only be bound while a
+     * token is set, but clearing the token afterwards only stores a preference, and the running
+     * listener is never rebound. {@link #isAuthorized} then fails CLOSED on the empty token rather
+     * than serve the network unauthenticated - correct, and invisible from the outside. So the
+     * question is asked of the authorizer itself, with the exact credential the copied
+     * configuration would present (none, when no token is set), and the answer cannot drift from
+     * the rule it reports on.
+     * </p>
+     *
+     * @param configuredToken the stored {@code PREF_AUTH_TOKEN} (may be {@code null})
+     * @param boundRemotely whether the LIVE listener accepts connections from other hosts
+     * @return true when a client built from this configuration would be refused
+     */
+    public static boolean refusesItsOwnConfiguration(String configuredToken, boolean boundRemotely)
+    {
+        String token = normalizeToken(configuredToken);
+        return !isAuthorized(configuredToken, token.isEmpty() ? null : "Bearer " + token, //$NON-NLS-1$
+            boundRemotely);
     }
 
     /**

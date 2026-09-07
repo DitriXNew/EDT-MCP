@@ -38,6 +38,14 @@ public class McpServer
     private int port;
     private volatile boolean running = false;
 
+    /**
+     * Whether the LIVE listener was bound to every interface - the same snapshot the request
+     * handler authorizes against, not a fresh read of the preference. The two differ the moment
+     * the checkbox is changed without a restart, and only the snapshot describes what is
+     * actually listening.
+     */
+    private volatile boolean boundRemotely = false;
+
     
     /** Request counter - use AtomicLong for thread safety */
     private final AtomicLong requestCount = new AtomicLong(0);
@@ -129,6 +137,9 @@ public class McpServer
         // erased that answer authorizes it.
         server.createContext("/mcp", //$NON-NLS-1$
             new McpHttpHandler(this, protocolHandler, interruptibleExecutor, allowRemote));
+        // The same snapshot the handler got, kept so the preferences page can tell whether the
+        // endpoint it advertises is one this listener would still serve.
+        boundRemotely = allowRemote;
         server.createContext("/health", new HealthHandler()); //$NON-NLS-1$
 
         // Main thread pool for POST/OPTIONS/DELETE requests (finite-duration only).
@@ -257,6 +268,9 @@ public class McpServer
             server.stop(1);
             server = null;
             running = false;
+            // Nothing is bound any more, so nothing is bound remotely. Leaving it set would have
+            // the preferences page warn about a listener that no longer exists.
+            boundRemotely = false;
             if (mainExecutor != null)
             {
                 mainExecutor.shutdownNow();
@@ -309,12 +323,30 @@ public class McpServer
 
     /**
      * Returns the current port.
-     * 
+     *
      * @return port number
      */
     public int getPort()
     {
         return port;
+    }
+
+    /**
+     * Whether the running listener accepts connections from other hosts.
+     * <p>
+     * This is the bind SNAPSHOT, not {@code PREF_ALLOW_REMOTE_ACCESS}: the preference can be
+     * changed without a restart, and it is the snapshot that {@code HttpTransport.isAuthorized}
+     * decides on. Reading the preference instead would warn about a remote listener the moment
+     * the box was ticked (before any restart made one) and stay silent about a remote listener
+     * whose box has since been unticked - both backwards.
+     * </p>
+     *
+     * @return true when the live listener is bound to every interface; false when it is loopback
+     *         only, and when no server is running
+     */
+    public boolean isBoundRemotely()
+    {
+        return boundRemotely;
     }
 
     /**

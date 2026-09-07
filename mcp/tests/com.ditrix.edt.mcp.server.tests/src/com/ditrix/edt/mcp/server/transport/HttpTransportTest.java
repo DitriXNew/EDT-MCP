@@ -158,6 +158,30 @@ public class HttpTransportTest
     }
 
     @Test
+    public void testAnEndpointIsCalledOutExactlyWhenItWouldRefuseItsOwnClient()
+    {
+        // What the preferences page asks before it advertises a URL and hands out a config for
+        // it. The one state that answers yes is the one nothing else on that page can see: the
+        // listener is up on every interface, the token that allowed it to open has been cleared,
+        // and every request now fails closed.
+        for (String erased : new String[] { null, "", "   ", "\t\n" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("a remote listener with no token refuses the client it describes", //$NON-NLS-1$
+                HttpTransport.refusesItsOwnConfiguration(erased, REMOTE));
+            assertFalse("the same missing token on loopback is simply auth turned off", //$NON-NLS-1$
+                HttpTransport.refusesItsOwnConfiguration(erased, LOOPBACK));
+        }
+        assertFalse("a remote listener WITH a token serves the config that carries it", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("s3cret", REMOTE)); //$NON-NLS-1$
+        assertFalse("and so does a loopback one", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("s3cret", LOOPBACK)); //$NON-NLS-1$
+        // The credential it asks about is the one the copy button produces, blanks and all -
+        // a token stored with surrounding whitespace is presented trimmed and must still pass.
+        assertFalse("a padded token is presented as it is compared", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("  s3cret  ", REMOTE)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheLoopbackDefaultStillNeedsNoToken()
     {
         // The other direction of the same rule: the default bind is protected by being loopback,

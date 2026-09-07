@@ -520,6 +520,25 @@ public class GeneralTab
     }
 
     /**
+     * Whether the URL on this page is one the running server would refuse - so the line can say
+     * so instead of handing out an endpoint and a config that cannot work.
+     * <p>
+     * The reachable case is a remote listener whose token was cleared: the bind stands, the
+     * preference is empty, and {@code isAuthorized} fails closed on every request. Nothing in the
+     * page would otherwise show it - the port is right, the token field agrees with the store,
+     * and the copied entry carries no header because none is configured.
+     * </p>
+     *
+     * @return true when a client built from this page's own values would be refused
+     */
+    private boolean endpointRefusesItsOwnConfiguration()
+    {
+        McpServer server = Activator.getDefault() != null ? Activator.getDefault().getMcpServer() : null;
+        return server != null && server.isRunning()
+            && HttpTransport.refusesItsOwnConfiguration(effectiveAuthToken(), server.isBoundRemotely());
+    }
+
+    /**
      * The port the endpoint line and the copy buttons speak for: the running server's, or the
      * spinner's when no server is running.
      *
@@ -598,6 +617,10 @@ public class GeneralTab
         if (!effectiveAuthToken().equals(HttpTransport.normalizeToken(authTokenText.getText())))
         {
             text = text + " " + Messages.GeneralTab_TokenPending; //$NON-NLS-1$
+        }
+        if (endpointRefusesItsOwnConfiguration())
+        {
+            text = text + " " + Messages.GeneralTab_EndpointLockedOut; //$NON-NLS-1$
         }
         endpointLabel.setText(text);
         endpointLabel.getParent().layout();
