@@ -202,9 +202,9 @@ public final class HttpTransport
         String token = normalizeToken(configuredToken);
         if (!isTransportSafeToken(token))
         {
-            // The credential never reaches isAuthorized to be compared: the client cannot put it
-            // in a header in the first place, or puts bytes there that arrive as a different
-            // string. Either way the endpoint refuses every request from the config it describes.
+            // The credential never reaches isAuthorized to be compared - there is no header a
+            // client could build to carry it - so the endpoint refuses every request from the
+            // configuration it describes.
             return true;
         }
         return !isAuthorized(configuredToken, token.isEmpty() ? null : "Bearer " + token, //$NON-NLS-1$
@@ -212,23 +212,29 @@ public final class HttpTransport
     }
 
     /**
-     * Whether a token can survive the trip in an {@code Authorization} header.
+     * Whether a token can be put into an {@code Authorization} header at all.
      * <p>
-     * A header field value is bytes, not text. The JDK's HTTP server decodes what arrives as
-     * ISO-8859-1, while clients that will send anything at all send UTF-8 - so a token with a
-     * code point above US-ASCII arrives as a DIFFERENT string than the one stored and can never
-     * match, and many clients refuse to send it rather than guess. A Cyrillic or accented token
-     * therefore looks configured and locks the endpoint out silently, which is worth saying out
-     * loud rather than leaving to a run of unexplained 401s.
+     * A header field value is BYTES. A code point above {@code U+00FF} has no byte, so a
+     * spec-compliant client cannot send one: WHATWG {@code fetch} throws on a header value that
+     * is not a byte string, and the JDK's own {@code HttpClient} refuses it too. A Cyrillic
+     * token is therefore not a credential anybody can present, however configured it looks - and
+     * the endpoint stays locked with nothing on screen to say why. Control bytes are out for the
+     * same reason: they are not {@code field-content} (RFC 9110), so the request is rejected or
+     * rewritten before it arrives.
      * </p>
      * <p>
-     * Only the printable US-ASCII range qualifies. An empty token is safe by default: there is
-     * nothing to send, and no header is generated for it.
+     * The Latin-1 range IS deliberately allowed. It is a byte, and it survives with the clients
+     * that matter here - {@code fetch} and Python's {@code requests} both serialise a header
+     * value as ISO-8859-1, which is exactly how the JDK's server decodes it back. It is not
+     * universal (a client that writes the string's UTF-8 bytes sends two bytes for one
+     * character, and those will not compare equal), so ASCII is what the README recommends; but
+     * "some clients cannot use this" is not the same claim as "no client can", and only the
+     * second one belongs in a warning that tells someone to replace a working credential.
      * </p>
      *
      * @param token the token as it is compared, i.e. already {@link #normalizeToken normalized}
      *            (may be {@code null})
-     * @return true when every character can be presented and compared unchanged
+     * @return true when every character has a byte a client can put in the header
      */
     public static boolean isTransportSafeToken(String token)
     {
@@ -239,7 +245,8 @@ public final class HttpTransport
         for (int i = 0; i < token.length(); i++)
         {
             char c = token.charAt(i);
-            if (c < 0x20 || c > 0x7E)
+            boolean sendable = c == '\t' || (c >= 0x20 && c != 0x7F && c <= 0x00FF);
+            if (!sendable)
             {
                 return false;
             }

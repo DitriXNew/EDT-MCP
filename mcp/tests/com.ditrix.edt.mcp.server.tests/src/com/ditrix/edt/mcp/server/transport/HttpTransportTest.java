@@ -182,28 +182,51 @@ public class HttpTransportTest
     }
 
     @Test
-    public void testATokenThatCannotTravelInAHeaderIsNotAUsableOne()
+    public void testATokenWithNoBytesIsNotAUsableOne()
     {
-        // A header field value is bytes. The listener decodes what arrives as ISO-8859-1 while a
-        // client that sends anything at all sends UTF-8, so a token above US-ASCII arrives as a
-        // different string and can never match - and plenty of clients refuse to send it at all.
-        // Stored, it looks configured and silently refuses every request, which is the state the
-        // page must not advertise as ready to paste.
-        assertFalse("a Cyrillic token cannot be presented", //$NON-NLS-1$
+        // A header field value is BYTES. A code point above U+00FF has none, so no client can
+        // send one: WHATWG fetch throws on a header value that is not a byte string, and the
+        // JDK's own HttpClient refuses it too. Stored, such a token looks configured and locks
+        // the endpoint out with nothing on screen to say why - the state the page must not
+        // advertise as ready to paste.
+        assertFalse("a Cyrillic token has no bytes to send", //$NON-NLS-1$
             HttpTransport.isTransportSafeToken("\u043f\u0430\u0440\u043e\u043b\u044c")); //$NON-NLS-1$
-        assertFalse("nor can a Latin-1 one that is not ASCII", //$NON-NLS-1$
-            HttpTransport.isTransportSafeToken("\u00e9")); //$NON-NLS-1$
-        assertFalse("nor one carrying a control character", //$NON-NLS-1$
-            HttpTransport.isTransportSafeToken("a\tb")); //$NON-NLS-1$
+        assertFalse("nor does anything past the last byte-valued code point", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u0100")); //$NON-NLS-1$
+        assertFalse("nor is a control byte field-content", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("a\u0001b")); //$NON-NLS-1$
+        assertFalse("DEL included", HttpTransport.isTransportSafeToken("a\u007fb")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        // And the whole printable ASCII range is fine, punctuation and spaces included - the
-        // credential is everything after "Bearer ", so an inner space survives the trip.
+        // The printable ASCII range is what a header carries - punctuation and spaces included,
+        // since the credential is everything after "Bearer " and an inner space survives.
         assertTrue("printable ASCII is exactly what a header carries", //$NON-NLS-1$
             HttpTransport.isTransportSafeToken("s3cret-~!@#$%^&*()_+ =/")); //$NON-NLS-1$
         assertTrue("no token is nothing to send, so nothing can go wrong", //$NON-NLS-1$
             HttpTransport.isTransportSafeToken("")); //$NON-NLS-1$
         assertTrue("and an absent one is the same case", //$NON-NLS-1$
             HttpTransport.isTransportSafeToken(null));
+    }
+
+    @Test
+    public void testALatin1TokenIsNotCondemnedForBeingUnusualLookingAlone()
+    {
+        // The other edge of the same rule, and the one it is easy to get wrong by over-reaching.
+        // Latin-1 IS a byte, and it round-trips with the clients this page hands a config to:
+        // fetch and Python requests both serialise a header value as ISO-8859-1, which is how
+        // the JDK's server decodes it back. Warning here would tell someone to replace a
+        // credential that works, so the rule stops at the byte boundary and not at ASCII.
+        assertTrue("an accented token is a byte a client can send", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u00e9")); //$NON-NLS-1$
+        assertTrue("and so is the very last byte-valued code point", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u00ff")); //$NON-NLS-1$
+        assertFalse("so the page must not warn about it on loopback", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u00e9", LOOPBACK)); //$NON-NLS-1$
+        assertFalse("nor on a remote listener, where it authorizes just the same", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u00e9", REMOTE)); //$NON-NLS-1$
+        // Which is only true because the authorizer really does accept it - the gate must not be
+        // deciding something isAuthorized would answer differently.
+        assertTrue("the authorizer itself accepts the header that carries it", //$NON-NLS-1$
+            HttpTransport.isAuthorized("\u00e9", "Bearer \u00e9", REMOTE)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
