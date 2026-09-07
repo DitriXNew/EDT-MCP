@@ -21,6 +21,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.transport.HttpTransport;
+import com.ditrix.edt.mcp.server.utils.CheckDescriptionLoader;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe.NativeRenderMode;
 
@@ -154,9 +155,11 @@ public class GetServerStatusTool implements IMcpTool
                 {
                     plainTextMode = store.getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
 
-                    // Only whether a checks folder is configured, never the path.
-                    String checksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
-                    checksFolderConfigured = checksFolder != null && !checksFolder.trim().isEmpty();
+                    // Only whether a checks folder is configured, never the path. Since #31 the
+                    // descriptions SHIP with the plugin, so this reports an OVERRIDE being in
+                    // play - not whether get_check_description works. Read through the loader so
+                    // "configured" means here exactly what it means where it is acted on.
+                    checksFolderConfigured = CheckDescriptionLoader.hasOverrideFolder();
 
                     // Only whether auth is on, never the token value - and "on" means what the
                     // authorizer means by it, so a preference of blanks reports auth OFF here

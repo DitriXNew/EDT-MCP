@@ -136,7 +136,7 @@ Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
 #### General Tab
 
 - **Server Port**: HTTP port (default: 8765)
-- **Check descriptions folder**: Path to check description markdown files
+- **Check descriptions folder**: Optional override for the check descriptions that ship with the plugin. Leave it empty to use the bundled ones; point it at a folder to replace or translate individual checks (a file found there wins, per check)
 - **Auto-start**: Start server on EDT launch
 - **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
 - **Enhance Navigator**: Controls this plugin’s contributions to the Navigator tree (groups and their filter). Turn it off to resolve conflicts with another plugin that patches the same panel
