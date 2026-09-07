@@ -42,22 +42,13 @@ public class McpOriginValidatorTest
     }
 
     @Test
-    public void testFileOriginAllowed()
+    public void testIpv6LoopbackAllowed()
     {
-        assertTrue(McpOriginValidator.isValidOrigin("file:///C:/page.html"));
-    }
-
-    @Test
-    public void testNullLiteralAllowed()
-    {
-        // Local HTML files send the literal string "null" as Origin
-        assertTrue(McpOriginValidator.isValidOrigin("null"));
-    }
-
-    @Test
-    public void testVscodeWebviewAllowed()
-    {
-        assertTrue(McpOriginValidator.isValidOrigin("vscode-webview://abc123"));
+        // The bracketed IPv6 loopback is as much a loopback origin as 127.0.0.1, and a page
+        // served from http://[::1]:3000 could not reach this server while it was missing.
+        assertTrue(McpOriginValidator.isValidOrigin("http://[::1]"));
+        assertTrue(McpOriginValidator.isValidOrigin("http://[::1]:8765"));
+        assertTrue(McpOriginValidator.isValidOrigin("https://[::1]:8765"));
     }
 
     // === Rejected origins ===
@@ -78,6 +69,32 @@ public class McpOriginValidatorTest
     }
 
     @Test
+    public void testNullLiteralRejected()
+    {
+        // "null" is what a SANDBOXED IFRAME, a data: URL and a cross-origin redirect send - an
+        // attacker page produces it at will, so accepting it handed every tool to any page that
+        // can open an iframe. It is not a local-file-only marker, which is why it is gone.
+        assertFalse(McpOriginValidator.isValidOrigin("null"));
+    }
+
+    @Test
+    public void testFileOriginRejected()
+    {
+        // A page saved to disk is not a supported client of this server.
+        assertFalse(McpOriginValidator.isValidOrigin("file:///C:/page.html"));
+        assertFalse(McpOriginValidator.isValidOrigin("file://"));
+    }
+
+    @Test
+    public void testVscodeWebviewRejected()
+    {
+        // The host part is a per-webview UUID, not an extension id: the scheme identifies no
+        // particular extension, so it could never be narrowed to a trusted one. A VS Code
+        // extension reaches this server from its extension host, which sends no Origin at all.
+        assertFalse(McpOriginValidator.isValidOrigin("vscode-webview://abc123"));
+    }
+
+    @Test
     public void testEmptyStringRejected()
     {
         assertFalse(McpOriginValidator.isValidOrigin(""));
@@ -93,5 +110,7 @@ public class McpOriginValidatorTest
         assertFalse(McpOriginValidator.isValidOrigin("https://localhost.evil.example"));
         assertFalse(McpOriginValidator.isValidOrigin("http://localhostx"));
         assertFalse(McpOriginValidator.isValidOrigin("http://127.0.0.1.attacker.com:8765"));
+        assertFalse(McpOriginValidator.isValidOrigin("http://[::1].attacker.com"));
+        assertFalse(McpOriginValidator.isValidOrigin("http://[::1]x"));
     }
 }

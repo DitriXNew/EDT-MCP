@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -90,13 +91,28 @@ public final class McpProxyHandler implements HttpHandler
     private static final int ERROR_BACKEND_UNREACHABLE = -32000;
 
     /**
-     * Hard cap on a request body's size (issue #253 hardening): a body at or under this size is
+     * Hard cap on a buffered body's size (issue #253 hardening): a body at or under this size is
      * read in full; a bigger one is rejected with {@code 413} - either up front (from a declared
      * {@code Content-Length}) or as soon as the bounded read exceeds the cap - without ever
      * buffering more than {@code MAX_BODY_BYTES + 1} bytes, so an oversized or unbounded request
      * body cannot exhaust heap.
+     *
+     * <p>It governs EVERY read the proxy buffers, not only client requests: the same limit
+     * applies to the backend responses this class and {@link Backend} have to hold in memory
+     * (issue #567 - two of those read paths were unbounded while the other two were capped, so
+     * the proxy answered the same question two different ways). Backend responses that are
+     * merely RELAYED are streamed, never buffered, and are not subject to it.</p>
      */
-    private static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
+    static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+    /**
+     * In-flight + queued requests above which this handler sheds load with {@code 503} plus a
+     * {@code Retry-After}, mirroring the plugin's own admission control
+     * ({@code McpHttpHandler}). This ceiling, not the queue, is what bounds the work the proxy
+     * takes on: the pool's queue is unbounded precisely so that a burst is answered with a
+     * retryable 503 instead of a dropped connection (see {@code ProxyServer.start}).
+     */
+    static final int MAX_IN_FLIGHT_REQUESTS = 50;
 
     private static final String KEY_METHOD = "method"; //$NON-NLS-1$
     private static final String KEY_PARAMS = "params"; //$NON-NLS-1$
@@ -122,6 +138,14 @@ public final class McpProxyHandler implements HttpHandler
     private final AtomicLong eventIdCounter = new AtomicLong(0);
 
     /**
+     * The worker pool serving this handler, installed by {@link ProxyServer#start()} so
+     * {@link #overloaded()} can read its depth. {@code null} until then (and in a unit test that
+     * drives the handler directly), which disables shedding - a handler with no pool behind it
+     * has no queue to protect.
+     */
+    private volatile ThreadPoolExecutor workerPool;
+
+    /**
      * Creates the handler.
      *
      * @param cfg the proxy configuration, used to configure {@link RouterTools}' status fields
@@ -137,6 +161,42 @@ public final class McpProxyHandler implements HttpHandler
     }
 
     /**
+     * Installs the worker pool this handler sheds load against. Called by
+     * {@link ProxyServer#start()} once the pool exists; passing {@code null} disables shedding.
+     *
+     * @param pool the HTTP server's worker pool, or {@code null}
+     */
+    public void setWorkerPool(ThreadPoolExecutor pool)
+    {
+        this.workerPool = pool;
+    }
+
+    /**
+     * Whether the worker pool is carrying more than {@link #MAX_IN_FLIGHT_REQUESTS} requests,
+     * counting both the ones being served and the ones waiting. Read once per exchange; with no
+     * pool installed it always answers {@code false}.
+     *
+     * @return {@code true} when this exchange should be shed with {@code 503}
+     */
+    boolean overloaded()
+    {
+        ThreadPoolExecutor pool = workerPool;
+        if (pool == null)
+        {
+            return false;
+        }
+        int queued = pool.getQueue().size();
+        int active = pool.getActiveCount();
+        if (queued + active > MAX_IN_FLIGHT_REQUESTS)
+        {
+            LOG.warning("Proxy worker pool overloaded (active=" + active + ", queued=" + queued //$NON-NLS-1$ //$NON-NLS-2$
+                + "), returning 503"); //$NON-NLS-1$
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Handles one {@code /mcp} HTTP exchange. {@code POST} dispatches the MCP JSON-RPC
      * message, {@code DELETE} closes the caller's session, every other HTTP method is
      * rejected with {@code 405}. Never lets an exception escape: any failure not already
@@ -149,6 +209,16 @@ public final class McpProxyHandler implements HttpHandler
     {
         try
         {
+            // Admission control before any work: shed with a retryable 503 rather than let the
+            // pool's queue fill, because a full queue is an executor rejection and the caller
+            // sees a dropped connection instead of an answer.
+            if (overloaded())
+            {
+                exchange.getResponseHeaders().add("Retry-After", "2"); //$NON-NLS-1$ //$NON-NLS-2$
+                sendPlain(exchange, 503, buildSimpleError("Proxy overloaded, retry later")); //$NON-NLS-1$
+                return;
+            }
+
             String method = exchange.getRequestMethod();
             if (HTTP_METHOD_DELETE.equals(method))
             {
@@ -368,7 +438,21 @@ public final class McpProxyHandler implements HttpHandler
             String raw;
             try (InputStream in = response.body())
             {
-                raw = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                // Bounded like every other read in this class: the descriptor set has to be
+                // parsed and rewritten in memory here (the router tools are injected into it),
+                // so an oversized one would be buffered whole on a worker thread.
+                byte[] bytes = in.readNBytes(MAX_BODY_BYTES + 1);
+                if (bytes.length > MAX_BODY_BYTES)
+                {
+                    sendMcpResponse(exchange, 200, buildJsonRpcError(ERROR_INTERNAL,
+                        "The tools/list response from backend port " + backend.getPort() //$NON-NLS-1$
+                            + " is larger than " + MAX_BODY_BYTES //$NON-NLS-1$
+                            + " bytes, which the proxy cannot inject the router tools into. " //$NON-NLS-1$
+                            + "Reduce that backend's published tool set (progressive disclosure) " //$NON-NLS-1$
+                            + "or connect to it directly.", requestId), null); //$NON-NLS-1$
+                    return;
+                }
+                raw = new String(bytes, StandardCharsets.UTF_8);
             }
             String injected = RouterTools.injectIntoToolsList(Backend.stripSseFraming(raw));
             registry.cacheToolsListResponse(injected);

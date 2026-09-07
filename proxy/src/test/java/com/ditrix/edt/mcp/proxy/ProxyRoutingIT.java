@@ -577,6 +577,7 @@ public class ProxyRoutingIT
     {
         private final ProxyConfig config;
         private final BackendRegistry registry;
+        private final McpProxyHandler handler;
         private final ProxyServer server;
 
         /**
@@ -596,7 +597,19 @@ public class ProxyRoutingIT
                 "--timeout", "15" }, //$NON-NLS-1$ //$NON-NLS-2$
                 Map.of());
             registry = new BackendRegistry(config);
-            server = new ProxyServer(config, registry, new McpProxyHandler(config, registry, new SessionManager()));
+            handler = new McpProxyHandler(config, registry, new SessionManager());
+            server = new ProxyServer(config, registry, handler);
+        }
+
+        /**
+         * The {@code /mcp} handler this fixture serves with.
+         *
+         * @return the handler, so a test can reach a seam the wire does not expose (e.g. the
+         *         worker pool its admission control reads)
+         */
+        McpProxyHandler handler()
+        {
+            return handler;
         }
 
         /** Starts the HTTP server and performs ONE synchronous backend scan. */

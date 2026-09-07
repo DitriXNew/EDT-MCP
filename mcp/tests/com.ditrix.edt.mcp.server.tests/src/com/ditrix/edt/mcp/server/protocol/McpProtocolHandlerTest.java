@@ -326,6 +326,107 @@ public class McpProtocolHandlerTest
     }
 
     @Test
+    public void testAnOversizedCapabilitiesObjectIsNotRetained()
+    {
+        // Every open SESSION keeps the capabilities its client declared, so the size of that
+        // object is memory a caller can pin on its own word, multiplied by the session cap. A
+        // real capabilities object is a few hundred characters; one past the ceiling is treated
+        // exactly like a malformed one - the permissive default - rather than stored.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"roots\":{\"listChanged\":true},\"pad\":\"" + padding + "\"},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("an oversized capabilities object must not be retained", caps.isPresent());
+        assertFalse("and none of it may be readable afterwards", caps.has("roots"));
+        assertTrue("the refusal keeps the permissive default, it is not a failure",
+            caps.allowsStructuredContent());
+    }
+
+    @Test
+    public void testACapabilitiesObjectAtTheCeilingIsStillRetained()
+    {
+        // The other edge: the ceiling must admit anything a real client sends, so a capabilities
+        // object just under it is stored in full. Without this, a tightened limit could silently
+        // start discarding legitimate declarations and nothing would notice.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS - 200)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"roots\":{\"listChanged\":true},\"pad\":\"" + padding + "\"},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertTrue("a capabilities object under the ceiling must still be stored", caps.isPresent());
+        assertTrue("and remain readable", caps.has("roots"));
+    }
+
+    @Test
+    public void testAnOversizedCapabilitiesObjectStillHonoursAnExplicitOptOut()
+    {
+        // The ceiling bounds what the server RETAINS. It must not also decide what the client
+        // MEANT: dropping the whole object would turn an explicit
+        // experimental.structuredContent=false into the permissive default, so the one client
+        // that refused structuredContent would be the one client that receives it.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":false},"
+            + "\"roots\":{\"listChanged\":true},\"pad\":\"" + padding + "\"},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("an explicit opt-out must survive the size ceiling",
+            caps.allowsStructuredContent());
+        assertFalse("but the oversized declaration itself is still not retained",
+            caps.has("pad"));
+        assertFalse("nor anything else it declared alongside it", caps.has("roots"));
+    }
+
+    @Test
+    public void testWhatSurvivesAnOversizedDeclarationIsConstantSize()
+    {
+        // The other edge of the same change: honouring the opt-out must not become a way to
+        // retain the payload it arrived with. Whatever the client sent, what is kept is the
+        // flag - so the per-session memory cost stays constant no matter how large the
+        // declaration was.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS * 20)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":false,"
+            + "\"pad\":\"" + padding + "\"}},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("the opt-out is still honoured", caps.allowsStructuredContent());
+        assertNotNull("a distilled holder still exposes what it kept", caps.getRaw());
+        int retained = caps.getRaw().toString().length();
+        assertTrue("what is retained must not scale with the declaration: " + retained
+            + " characters", retained < 100);
+    }
+
+    @Test
     public void testGetClientCapabilitiesDefaultsToAbsentBeforeInitialize()
     {
         // (c) The stored capabilities are exposed for gating and have a safe,

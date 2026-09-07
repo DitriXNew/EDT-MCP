@@ -235,6 +235,35 @@ public class GitTool implements IMcpTool
         "blame", "LCM", //$NON-NLS-1$ //$NON-NLS-2$
         "ls-files", "x"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * The subcommands whose ARGUMENTS may be written to the unattended-bypass audit line: their
+     * grammar carries refs and paths - WHAT was destroyed - and no caller-authored message.
+     * <p>
+     * The distinction is needed because the two halves pull opposite ways. A message is the
+     * caller's own text and can hold a token, so it must not reach a log; but
+     * {@code restore --worktree <path>}, {@code branch -D <name>} and {@code checkout -- <path>}
+     * destroy something and leave NO other record - no commit, no reflog entry, no remote - so
+     * for those the audit line is the only place the target is written down at all, and a line
+     * carrying just a subcommand and a character count would be evidence of nothing.
+     * </p>
+     * <p>
+     * It is an ALLOW-list, so the default is redaction: a subcommand added to
+     * {@link #ALLOWED_SUBCOMMANDS} later is redacted until someone reads its grammar and puts it
+     * here. {@code commit}, {@code tag}, {@code stash}, {@code merge} and {@code pull} are
+     * deliberately absent - each accepts a message ({@code -m}, {@code -F}, or {@code stash save}
+     * positionally), and the choice is per SUBCOMMAND rather than per invocation because judging
+     * {@code tag -d} apart from {@code tag -m} means tracking git's per-option arity, which is
+     * exactly the thing this class refuses to reimplement elsewhere. {@code push} and {@code fetch} are
+     * absent for the same reason under a different spelling: {@code --push-option} /
+     * {@code --server-option} transmit an arbitrary server-specific payload (a CI variable, say),
+     * which is caller text and not a ref - and both leave their own trace anyway, in the
+     * remote-tracking refs they move.
+     * </p>
+     */
+    private static final Set<String> LOGGABLE_ARGUMENT_SUBCOMMANDS = Set.of(
+        "restore", "checkout", "switch", "add", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "branch", "remote", "revert", "cherry-pick"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
     /** How long the MCP call waits for the post-command workspace refresh before returning. */
     private static final long REFRESH_WAIT_SECONDS = 30;
 
@@ -3418,16 +3447,79 @@ public class GitTool implements IMcpTool
         {
             return null;
         }
-        ConsentPreview preview = new ConsentPreview("git " + destructiveForm, //$NON-NLS-1$
-            "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
-            List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
         DestructiveConsentGate.ConsentDecision decision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+            DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview(destructiveForm, argv));
         if (decision == DestructiveConsentGate.ConsentDecision.ALLOW)
         {
             return null;
         }
         return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+    }
+
+    /**
+     * The preview a human sees before a write-capable git command runs - and which the unattended
+     * bypass audits.
+     * <p>
+     * The arguments are always shown in FULL: deciding whether to allow
+     * {@code push --force origin main} means reading it. Whether they may also be WRITTEN DOWN is
+     * decided per subcommand by {@link #LOGGABLE_ARGUMENT_SUBCOMMANDS} - refs and paths are the
+     * record of what was destroyed, a message is the caller's own text and may hold a token.
+     * </p>
+     * <p>
+     * A credential URL is a separate and stricter story: {@code parseCommand} refuses one outright
+     * (userinfo, a {@code ?}/{@code #} credential, a transport helper, an unsafe scheme), so it
+     * never reaches this method at all.
+     * </p>
+     *
+     * @param destructiveForm the write-capable subcommand, as named by {@link #destructiveForm}
+     * @param argv the validated argument vector ({@code argv[0]} is git)
+     * @return the preview to put in front of the gate
+     */
+    static ConsentPreview consentPreview(String destructiveForm, List<String> argv)
+    {
+        String title = "git " + destructiveForm; //$NON-NLS-1$
+        String subtitle = "'git " + destructiveForm + "' is a write-capable subcommand."; //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> arguments = List.of(renderArguments(argv.subList(1, argv.size())));
+        return LOGGABLE_ARGUMENT_SUBCOMMANDS.contains(destructiveForm)
+            ? new ConsentPreview(title, subtitle, 1, arguments)
+            : ConsentPreview.withUnloggableNames(title, subtitle, 1, arguments);
+    }
+
+    /**
+     * Renders an argument vector as ONE line without losing where each argument ended.
+     * <p>
+     * A plain join cannot do that: restoring the single path {@code a b} and restoring the two
+     * paths {@code a} and {@code b} both flatten to {@code restore -- a b}, and since the audit
+     * line is the ONLY record those operations leave, it would not say which files were
+     * overwritten. So a token that holds whitespace, a quote, a backslash - or nothing at all -
+     * is quoted the way a shell would show it, and every other token is passed through unchanged
+     * so the common line stays exactly what the caller sent.
+     * </p>
+     *
+     * @param arguments the argument tokens, without the leading {@code git}
+     * @return a single line in which each token's boundaries survive
+     */
+    private static String renderArguments(List<String> arguments)
+    {
+        StringBuilder line = new StringBuilder();
+        for (String argument : arguments)
+        {
+            if (line.length() > 0)
+            {
+                line.append(' ');
+            }
+            if (argument.isEmpty() || argument.chars().anyMatch(
+                c -> Character.isWhitespace(c) || c == '"' || c == '\\'))
+            {
+                line.append('"').append(argument.replace("\\", "\\\\").replace("\"", "\\\"")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    .append('"');
+            }
+            else
+            {
+                line.append(argument);
+            }
+        }
+        return line.toString();
     }
 
     /**

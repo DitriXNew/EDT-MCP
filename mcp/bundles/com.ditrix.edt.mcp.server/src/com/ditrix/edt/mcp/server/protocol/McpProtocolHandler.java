@@ -80,17 +80,30 @@ public class McpProtocolHandler
 
     private static final String USER_SIGNAL_ELLIPSIS = "\u2026"; //$NON-NLS-1$
 
+    /**
+     * Largest serialized {@code capabilities} object the server will keep for a client. Every
+     * session retains the one its client declared, so without a ceiling a caller could pin a
+     * request-body-sized tree per session; a genuine MCP capabilities object is a few hundred
+     * characters. A bigger one is treated exactly like a malformed one: the permissive default.
+     */
+    static final int MAX_RETAINED_CAPABILITIES_CHARS = 4096;
+
     private final McpToolRegistry toolRegistry;
 
     /**
-     * Capabilities the connected client declared in its last {@code initialize}
-     * request. Server-scoped (NOT per session) because this EDT MCP server is
-     * effectively single-client over localhost: one EDT workbench serves one
-     * connected MCP client at a time, so the last initialize wins. {@code volatile}
-     * because initialize and tools/call can be processed on different transport
-     * threads. Defaults to {@link ClientCapabilities#ABSENT} so the behaviour
-     * before any initialize (and for a client that sends no capabilities) is the
-     * permissive default — in particular structuredContent stays emitted.
+     * Capabilities the last {@code initialize} declared, kept for callers that have no session
+     * of their own — the in-process bridge, and any caller of the session-less
+     * {@link #processRequest(String)} overloads.
+     * <p>
+     * The HTTP transport does NOT read this: it hands down the capabilities stored on the
+     * SESSION the request arrived on. This slot used to be the only answer, and being
+     * server-scoped it meant the last client to initialize decided how every other client's
+     * {@code tools/call} was formatted (issue #564).
+     * <p>
+     * {@code AtomicReference} because initialize and tools/call can be processed on different
+     * transport threads. Defaults to {@link ClientCapabilities#ABSENT} so the behaviour before
+     * any initialize (and for a client that sends no capabilities) is the permissive default —
+     * in particular structuredContent stays emitted.
      */
     private final AtomicReference<ClientCapabilities> clientCapabilities =
         new AtomicReference<>(ClientCapabilities.ABSENT);
@@ -122,12 +135,12 @@ public class McpProtocolHandler
      * / ping / resources) flows, so the request/response HISTORY recorder (#254) is
      * hooked here — once per message, in a {@code finally}, and strictly guarded so
      * it can never alter the returned response nor propagate a failure onto the wire
-     * path. The returned value is {@link #dispatch(JsonRpcRequest)}'s EXACT String (no
+     * path. The returned value is {@link #dispatch(JsonRpcRequest, ClientCapabilities)}'s EXACT String (no
      * envelope re-serialization).
      * <p>
      * The request is parsed ONCE here and the parsed form is reused for both dispatch
      * and the recorder, so a large tool-call payload is never parsed twice on this hot
-     * path — {@link #dispatch(JsonRpcRequest)} takes the already-parsed request and the
+     * path — {@link #dispatch(JsonRpcRequest, ClientCapabilities)} takes the already-parsed request and the
      * {@code finally} reads method/toolName from it instead of re-parsing.
      *
      * @param requestBody the JSON request body
@@ -163,10 +176,33 @@ public class McpProtocolHandler
      */
     public String processRequest(String requestBody, JsonRpcRequest request, long startNanos)
     {
+        return processRequest(requestBody, request, startNanos, null);
+    }
+
+    /**
+     * Same, for the HTTP transport, which knows WHICH client this request belongs to and hands
+     * down the capabilities that client declared at its own {@code initialize}.
+     * <p>
+     * A {@code null} here means "no session behind this call" - the in-process bridge, and every
+     * caller that predates sessions - and falls back to the server-scoped slot, which is what
+     * those callers have always been formatted by.
+     *
+     * @param requestBody the JSON request body
+     * @param request the body parsed by the caller, or {@code null} on a JSON syntax error
+     * @param startNanos {@link System#nanoTime()} as read by the caller before it parsed
+     * @param sessionCapabilities the capabilities of the session this request arrived on, or
+     *            {@code null} to use the server-scoped ones
+     * @return JSON response with correct id from request ({@code null} for a
+     *         notification answered with 202 Accepted)
+     */
+    public String processRequest(String requestBody, JsonRpcRequest request, long startNanos,
+        ClientCapabilities sessionCapabilities)
+    {
         String response = null;
         try
         {
-            response = dispatch(request);
+            response = dispatch(request,
+                sessionCapabilities != null ? sessionCapabilities : clientCapabilities.get());
         }
         finally
         {
@@ -263,10 +299,12 @@ public class McpProtocolHandler
      *
      * @param request the parsed JSON-RPC request, or {@code null} for an unparseable
      *        body (handled as an invalid request)
+     * @param capabilities the capabilities of the client this request belongs to (its session's,
+     *        or the server-scoped ones for a caller with no session)
      * @return JSON response with correct id from request ({@code null} for a
      *         notification answered with 202 Accepted)
      */
-    private String dispatch(JsonRpcRequest request)
+    private String dispatch(JsonRpcRequest request, ClientCapabilities capabilities)
     {
         // Per JSON-RPC 2.0: when the id cannot be determined (parse error /
         // invalid request) the error response id MUST be null. A real id from
@@ -319,7 +357,7 @@ public class McpProtocolHandler
             // Check for tools/call method
             if (McpConstants.METHOD_TOOLS_CALL.equals(method))
             {
-                return handleToolCall(request, requestId);
+                return handleToolCall(request, requestId, capabilities);
             }
 
             // Check for resources/list method (serves the per-tool guide:// docs)
@@ -399,7 +437,7 @@ public class McpProtocolHandler
     /**
      * Handles a tools/call request.
      */
-    private String handleToolCall(JsonRpcRequest request, Object requestId)
+    private String handleToolCall(JsonRpcRequest request, Object requestId, ClientCapabilities capabilities)
     {
         String toolName = request != null ? request.getToolName() : null;
         
@@ -454,7 +492,7 @@ public class McpProtocolHandler
                 .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
 
         // Return response based on tool's declared response type
-        return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params);
+        return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params, capabilities);
     }
 
     /**
@@ -546,10 +584,11 @@ public class McpProtocolHandler
      * @param plainTextMode whether Cursor-compatible plain-text mode is enabled
      * @param requestId the JSON-RPC request id to echo
      * @param params the tool params (used only for the result file name)
+     * @param capabilities the calling client's declared capabilities, consulted by the JSON path
      * @return the serialized JSON-RPC response
      */
     private String buildToolCallResponse(IMcpTool tool, String result, UserSignal signal,
-        boolean plainTextMode, Object requestId, Map<String, String> params)
+        boolean plainTextMode, Object requestId, Map<String, String> params, ClientCapabilities capabilities)
     {
         // Per-call response type: a tool whose caller can choose the output format (e.g.
         // list_projects' format=md|json) decides from the arguments; every other tool falls back to
@@ -557,7 +596,7 @@ public class McpProtocolHandler
         switch (tool.getResponseType(params))
         {
             case JSON:
-                return buildJsonToolResponse(tool, result, signal, plainTextMode, requestId);
+                return buildJsonToolResponse(tool, result, signal, plainTextMode, requestId, capabilities);
             case MARKDOWN:
                 return buildMarkdownToolResponse(tool, result, signal, plainTextMode, requestId,
                     params);
@@ -690,10 +729,12 @@ public class McpProtocolHandler
      * @param signal a user signal raised during execution, or {@code null}
      * @param plainTextMode whether Cursor-compatible plain-text mode is enabled
      * @param requestId the JSON-RPC request id to echo
+     * @param capabilities the calling client's declared capabilities; only an explicit opt-out
+     *        here suppresses the structured payload
      * @return the serialized JSON-RPC response
      */
     private String buildJsonToolResponse(IMcpTool tool, String result, UserSignal signal,
-        boolean plainTextMode, Object requestId)
+        boolean plainTextMode, Object requestId, ClientCapabilities capabilities)
     {
         // For JSON, add signal as a separate field if present
         if (signal != null)
@@ -714,7 +755,7 @@ public class McpProtocolHandler
         // no-regression guarantee. Only a client that EXPLICITLY declared it
         // cannot accept structuredContent suppresses it; the JSON payload is
         // then delivered as text so the data is still returned.
-        if (!clientCapabilities.get().allowsStructuredContent())
+        if (!capabilities.allowsStructuredContent())
         {
             return buildTextOnlyJsonResponse(result, requestId);
         }
@@ -978,10 +1019,15 @@ public class McpProtocolHandler
      * malformed (non-object) capabilities value yields {@link ClientCapabilities#ABSENT}
      * so the permissive default behaviour is preserved.
      *
+     * <p>Public and static because the HTTP transport parses the same initialize request to
+     * store the capabilities on the SESSION it is about to issue: reading them back off this
+     * handler afterwards would race a second client's initialize for the one slot, which is
+     * the very confusion per-session capabilities exist to end.</p>
+     *
      * @param request the parsed initialize request (may be {@code null})
      * @return the parsed capabilities, never {@code null}
      */
-    private ClientCapabilities parseClientCapabilities(JsonRpcRequest request)
+    public static ClientCapabilities parseClientCapabilities(JsonRpcRequest request)
     {
         Map<String, Object> params = request != null ? request.getParams() : null;
         if (params == null)
@@ -996,6 +1042,23 @@ public class McpProtocolHandler
         try
         {
             JsonElement tree = GsonProvider.get().toJsonTree(capabilities);
+            // A parsed capabilities object is RETAINED - by the server-scoped slot and, since
+            // sessions exist, by every open session - so its size is a per-session memory cost
+            // paid on a client's word. A real capabilities object is a few hundred bytes; this
+            // ceiling is orders of magnitude above anything a client legitimately declares and
+            // far below what a caller could otherwise pin (the whole request-body allowance,
+            // times the session cap). Over it, only the flags this server consults are kept.
+            int declaredSize = tree.toString().length();
+            if (declaredSize > MAX_RETAINED_CAPABILITIES_CHARS)
+            {
+                Activator.logInfo("Client declared a " + declaredSize //$NON-NLS-1$
+                    + "-character capabilities object, over the " + MAX_RETAINED_CAPABILITIES_CHARS //$NON-NLS-1$
+                    + "-character limit the server retains; keeping only the flags it consults."); //$NON-NLS-1$
+                // NOT the permissive default: the ceiling bounds what is RETAINED, and dropping
+                // the object outright would also discard an explicit opt-out the client sent
+                // inside it - handing that client the very structuredContent it refused.
+                return ClientCapabilities.distill(tree);
+            }
             return ClientCapabilities.from(tree);
         }
         catch (RuntimeException e)

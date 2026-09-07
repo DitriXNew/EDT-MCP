@@ -98,4 +98,33 @@ public final class Json
     {
         return GSON.toJson(e == null ? JsonNull.INSTANCE : e);
     }
+
+    /**
+     * Whether a body is a JSON-RPC response carrying an {@code error} member.
+     * <p>
+     * JSON-RPC reports failure INSIDE a {@code 200}, so an HTTP status alone cannot tell a
+     * completed call from a refused one. An unparseable or non-object body is not an error
+     * response - it is not a JSON-RPC response at all - and answers {@code false}.
+     *
+     * @param body the raw response body (may be {@code null})
+     * @return {@code true} when the body is an object with an {@code error} member
+     */
+    public static boolean isJsonRpcError(String body)
+    {
+        JsonObject parsed = parseObject(body);
+        return parsed != null && parsed.has("error"); //$NON-NLS-1$
+    }
+
+    /**
+     * The human-readable {@code error.message} of a JSON-RPC error response, for putting a
+     * backend's own words into the failure the caller sees instead of a generic one.
+     *
+     * @param body the raw response body (may be {@code null})
+     * @return the error message, or a short placeholder when there is none to read
+     */
+    public static String jsonRpcErrorMessage(String body)
+    {
+        String message = str(obj(parseObject(body), "error"), "message"); //$NON-NLS-1$ //$NON-NLS-2$
+        return message == null || message.isBlank() ? "no message given" : message; //$NON-NLS-1$
+    }
 }

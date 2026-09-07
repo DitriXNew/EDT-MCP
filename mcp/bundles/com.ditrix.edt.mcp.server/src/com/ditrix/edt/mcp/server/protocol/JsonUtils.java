@@ -33,8 +33,35 @@ public final class JsonUtils
     private static final String KEY_STATUS = "status"; //$NON-NLS-1$
 
     /**
+     * Whether a serialized JSON-RPC response reports failure.
+     * <p>
+     * JSON-RPC carries its errors in the body, so the transport cannot tell a completed call
+     * from a refused one by status alone - it has to look. An unparseable or non-object body
+     * is not a JSON-RPC response at all and answers {@code false}.
+     *
+     * @param response the serialized response (may be {@code null})
+     * @return {@code true} when the response carries an {@code error} member
+     */
+    public static boolean isErrorResponse(String response)
+    {
+        if (response == null || response.isBlank())
+        {
+            return false;
+        }
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(response);
+            return parsed.isJsonObject() && parsed.getAsJsonObject().has("error"); //$NON-NLS-1$
+        }
+        catch (RuntimeException notJson)
+        {
+            return false;
+        }
+    }
+
+    /**
      * Builds a JSON-RPC 2.0 error response.
-     * 
+     *
      * @param code the error code
      * @param message the error message
      * @param requestId the request ID (can be null)

@@ -138,8 +138,10 @@ public final class Backend
      * Ensures an MCP session against the backend, performing the lazy handshake on first
      * use: {@code initialize} (capturing the {@code Mcp-Session-Id} response header) followed
      * by {@code notifications/initialized}. The result is cached until
-     * {@link #invalidateSession()}; a session-less backend (no header issued) is cached too,
-     * so the handshake runs at most once per (in)validation cycle.
+     * {@link #invalidateSession()}; a session-less backend (no header issued, and no error
+     * reported) is cached too, so the handshake runs at most once per (in)validation cycle. A
+     * JSON-RPC error in the reply means the backend REFUSED - whether or not it minted a session
+     * on the way - and is thrown, never cached.
      *
      * @return the backend-issued session id, or {@code null} when the backend is session-less
      * @throws IOException when the handshake request fails or the backend rejects it
@@ -169,6 +171,26 @@ public final class Backend
                 + response.statusCode());
         }
         String issued = response.headers().firstValue(HEADER_SESSION_ID).orElse(null);
+        // A REFUSED handshake also arrives as 200: JSON-RPC puts its errors in the body, and the
+        // plugin answers its session-cap that way - 200, a JSON-RPC error, no session header.
+        // Caching that as "a backend that issues no sessions" would be wrong twice over: the
+        // refusal is discarded, and every later call would present no session, be answered 400,
+        // and be retried as if this were a pre-session plugin - two calls per request, forever,
+        // with the real reason never reaching the caller.
+        //
+        // Judged on the BODY alone, not on whether a session came with it. A backend is free to
+        // mint a session and still report the handshake as failed, and "it gave me an id" is no
+        // evidence that it agreed to talk - accepting that would send notifications/initialized
+        // and forward calls into an initialization that never completed.
+        // Through stripSseFraming, because this handshake asks for SSE like every other request
+        // and the payload therefore arrives inside a data: frame - reading the raw body would
+        // simply never parse, and the check would pass everything.
+        String handshakeBody = stripSseFraming(response.body());
+        if (Json.isJsonRpcError(handshakeBody))
+        {
+            throw new IOException("initialize against backend :" + port + " was refused: " //$NON-NLS-1$ //$NON-NLS-2$
+                + Json.jsonRpcErrorMessage(handshakeBody));
+        }
 
         String initialized = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}"; //$NON-NLS-1$
         client.send(newPostRequest(initialized, issued, HANDSHAKE_TIMEOUT_SECONDS),
@@ -256,7 +278,14 @@ public final class Backend
         String session = ensureSession();
         HttpResponse<InputStream> response = client.send(
             newPostRequest(rawBody, session, requestTimeoutSeconds, accept), HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() == 404)
+        // 404 means the session we presented is gone. 400 with NO session presented means the
+        // same thing one step earlier: this handshake was made with a plugin that issued no
+        // session id, that plugin has since been upgraded to one that requires it, and the
+        // cached handshake is now unusable. A Backend outlives a rescan by design, so without
+        // this the proxy would answer 400 to every routed call until someone restarted it.
+        // Narrow on purpose: a 400 for a request that DID carry a session is a real bad request
+        // and is returned as-is rather than retried.
+        if (response.statusCode() == 404 || (response.statusCode() == 400 && session == null))
         {
             closeQuietly(response.body());
             invalidateSessionIfCurrent(session);
@@ -316,7 +345,19 @@ public final class Backend
         String body;
         try (InputStream in = response.body())
         {
-            body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // Bounded by the same cap the proxy applies everywhere else it buffers a body
+            // (McpProxyHandler.MAX_BODY_BYTES): this response is held whole in memory to strip
+            // its SSE framing, and it arrives on a discovery/fan-out worker where an
+            // unterminated or huge body would grow unopposed.
+            byte[] bytes = in.readNBytes(McpProxyHandler.MAX_BODY_BYTES + 1);
+            if (bytes.length > McpProxyHandler.MAX_BODY_BYTES)
+            {
+                throw new IOException("Response to '" + toolName + "' from backend port " + port //$NON-NLS-1$ //$NON-NLS-2$
+                    + " exceeds the " + McpProxyHandler.MAX_BODY_BYTES //$NON-NLS-1$
+                    + "-byte limit the proxy can buffer; call that backend directly for a result " //$NON-NLS-1$
+                    + "this large."); //$NON-NLS-1$
+            }
+            body = new String(bytes, StandardCharsets.UTF_8);
         }
         return stripSseFraming(body);
     }
